@@ -315,6 +315,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// The particular arrangement of the input we expect to use,
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
+        /// An MFP that must be applied to results.
+        mfp_after: MapFilterProject,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
@@ -511,13 +513,17 @@ impl Arbitrary for Plan {
                     any::<KeyValPlan>(),
                     any::<ReducePlan>(),
                     any::<Option<Vec<MirScalarExpr>>>(),
+                    any::<MapFilterProject>(),
                 )
-                    .prop_map(|(input, key_val_plan, plan, input_key)| Plan::Reduce {
-                        input: input.into(),
-                        key_val_plan,
-                        plan,
-                        input_key,
-                    })
+                    .prop_map(
+                        |(input, key_val_plan, plan, input_key, mfp_after)| Plan::Reduce {
+                            input: input.into(),
+                            key_val_plan,
+                            plan,
+                            input_key,
+                            mfp_after,
+                        },
+                    )
                     .boxed(),
                 //Plan::TopK
                 (inner.clone(), any::<TopKPlan>())
@@ -695,12 +701,14 @@ impl RustType<ProtoPlan> for Plan {
                     key_val_plan,
                     plan,
                     input_key,
+                    mfp_after,
                 } => Reduce(
                     ProtoPlanReduce {
                         input: Some(input.into_proto()),
                         key_val_plan: Some(key_val_plan.into_proto()),
                         plan: Some(plan.into_proto()),
                         input_key: input_k_into(input_key.as_ref()),
+                        mfp_after: Some(mfp_after.into_proto()),
                     }
                     .into(),
                 ),
@@ -849,6 +857,9 @@ impl RustType<ProtoPlan> for Plan {
                     .into_rust_if_some("ProtoPlanReduce::key_val_plan")?,
                 plan: proto.plan.into_rust_if_some("ProtoPlanReduce::plan")?,
                 input_key: input_k_try_into(proto.input_key)?,
+                mfp_after: proto
+                    .mfp_after
+                    .into_rust_if_some("ProtoPlanReduce::mfp_after")?,
             },
             TopK(proto) => Plan::TopK {
                 input: proto.input.into_rust_if_some("ProtoPlanTopK::input")?,
@@ -1536,12 +1547,39 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
                 let output_keys = reduce_plan.keys(group_key.len(), output_arity);
                 // Return the plan, and the keys it produces.
+
+                // extract temporal predicates, as we cannot push them into `Reduce`.
+                let temporal_mfp = mfp.extract_temporal();
+                let non_temporal = mfp;
+                mfp = temporal_mfp;
+
+                // TODO: ensure we do not attempt to project away the key, as we cannot accomplish this.
+                // FOR NOW: Unpack MFP as MF followed by P' that removes all M column, then MP afterwards.
+                let input_arity = non_temporal.input_arity;
+                let (m, f, p) = non_temporal.into_map_filter_project();
+                let mut mfp_push = MapFilterProject::new(input_arity)
+                    .map(m.clone())
+                    .filter(f)
+                    .project(0..input_arity);
+                mfp_push.optimize();
+                // We still need to perform the map and projection for the actual output.
+                let mfp_left = MapFilterProject::new(input_arity).map(m).project(p);
+
+                // Compose the non-pushed MFP components.
+                mfp = MapFilterProject::compose(mfp_left, mfp);
+                mfp.optimize();
+
+                if !mfp_push.is_identity() {
+                    println!("Non-identity MPF pushed into Reduce: {:?}", mfp_push);
+                }
+
                 (
                     Plan::Reduce {
                         input: Box::new(input),
                         key_val_plan,
                         plan: reduce_plan,
                         input_key,
+                        mfp_after: mfp_push,
                     },
                     output_keys,
                 )
@@ -2272,6 +2310,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     key_val_plan,
                     plan,
                     input_key,
+                    mfp_after,
                 } => input
                     .partition_among(parts)
                     .into_iter()
@@ -2280,6 +2319,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input_key: input_key.clone(),
                         key_val_plan: key_val_plan.clone(),
                         plan: plan.clone(),
+                        mfp_after: mfp_after.clone(),
                     })
                     .collect(),
                 Plan::TopK { input, top_k_plan } => input
@@ -2409,6 +2449,7 @@ impl<T> CollectionPlan for Plan<T> {
                 key_val_plan: _,
                 plan: _,
                 input_key: _,
+                mfp_after: _,
             }
             | Plan::TopK {
                 input,

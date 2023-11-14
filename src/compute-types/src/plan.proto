@@ -126,6 +126,7 @@ message ProtoPlan {
         mz_compute_types.plan.reduce.ProtoKeyValPlan key_val_plan = 2;
         mz_compute_types.plan.reduce.ProtoReducePlan plan = 3;
         ProtoPlanInputKey input_key = 4;
+        mz_expr.linear.ProtoMapFilterProject mfp_after = 5;
    }
 
    message ProtoPlanTopK {

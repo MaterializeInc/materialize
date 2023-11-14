@@ -26,8 +26,11 @@ use mz_compute_types::plan::reduce::{
     reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
     MonotonicPlan, ReducePlan, ReductionType,
 };
-use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MirScalarExpr};
+use mz_expr::{
+    AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
+};
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
+use mz_repr::fixed_length::IntoRowByTypes;
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -63,7 +66,16 @@ where
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
         input_key: Option<Vec<MirScalarExpr>>,
+        mfp_after: Option<MapFilterProject>,
     ) -> CollectionBundle<G, T> {
+        // Convert `mfp_after` to an actionable plan.
+        let mfp_after = mfp_after.map(|m| {
+            m.into_plan()
+                .expect("MFP planning failed")
+                .into_nontemporal()
+                .expect("Reduce presented with temporal predicates")
+        });
+
         input.scope().region_named("Reduce", |inner| {
             let KeyValPlan {
                 mut key_plan,
@@ -147,7 +159,7 @@ where
             err = err.concat(&err_input);
 
             // Render the reduce plan
-            self.render_reduce_plan(reduce_plan, ok, err, key_arity)
+            self.render_reduce_plan(reduce_plan, ok, err, key_arity, mfp_after)
                 .leave_region()
         })
     }
@@ -163,12 +175,14 @@ where
         collection: Collection<S, (Row, Row), Diff>,
         err_input: Collection<S, DataflowError, Diff>,
         key_arity: usize,
+        mfp_after: Option<SafeMfpPlan>,
     ) -> CollectionBundle<S, T>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
         let mut errors = Default::default();
-        let arrangement = self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity);
+        let arrangement =
+            self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity, mfp_after);
         let errs: KeyCollection<_, _, _> = err_input.concatenate(errors).into();
         CollectionBundle::from_columns(
             0..key_arity,
@@ -182,6 +196,7 @@ where
         collection: Collection<S, (Row, Row), Diff>,
         errors: &mut Vec<Collection<S, DataflowError, Diff>>,
         key_arity: usize,
+        mfp_after: Option<SafeMfpPlan>,
     ) -> SpecializedArrangement<S>
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -192,34 +207,35 @@ where
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
             ReducePlan::Distinct => {
-                let (arranged_output, errs) = self.dispatch_build_distinct(collection);
+                let (arranged_output, errs) = self.dispatch_build_distinct(collection, mfp_after);
                 errors.push(errs);
                 arranged_output
             }
             ReducePlan::Accumulable(expr) => {
-                let (arranged_output, errs) = self.build_accumulable(collection, expr);
+                let (arranged_output, errs) = self.build_accumulable(collection, expr, mfp_after);
                 errors.push(errs);
                 SpecializedArrangement::RowRow(arranged_output)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
-                let (output, errs) = self.build_monotonic(collection, expr);
+                let (output, errs) = self.build_monotonic(collection, expr, mfp_after);
                 errors.push(errs);
                 SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
-                let (output, errs) = self.build_bucketed(collection, expr);
+                let (output, errs) = self.build_bucketed(collection, expr, mfp_after);
                 if let Some(e) = errs {
                     errors.push(e);
                 }
                 SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
-                let (output, errs) = self.build_basic_aggregate(collection, index, &aggr, true);
+                let (output, errs) =
+                    self.build_basic_aggregate(collection, index, &aggr, true, mfp_after);
                 errors.push(errs.expect("validation should have occurred as it was requested"));
                 SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
-                let (output, errs) = self.build_basic_aggregates(collection, aggrs);
+                let (output, errs) = self.build_basic_aggregates(collection, aggrs, mfp_after);
                 errors.push(errs);
                 SpecializedArrangement::RowRow(output)
             }
@@ -245,6 +261,7 @@ where
                         collection.clone(),
                         errors,
                         key_arity,
+                        None,
                     ) {
                         SpecializedArrangement::RowUnit(_) => {
                             unreachable!(
@@ -257,8 +274,12 @@ where
                 }
 
                 // Now we need to collate them together.
-                let (oks, errs) =
-                    self.build_collation(to_collate, expr.aggregate_types, &mut collection.scope());
+                let (oks, errs) = self.build_collation(
+                    to_collate,
+                    expr.aggregate_types,
+                    &mut collection.scope(),
+                    mfp_after,
+                );
                 errors.push(errs);
                 SpecializedArrangement::RowRow(oks)
             }
@@ -278,6 +299,7 @@ where
         arrangements: Vec<(ReductionType, RowRowArrangement<S>)>,
         aggregate_types: Vec<ReductionType>,
         scope: &mut S,
+        mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -310,6 +332,12 @@ where
         distinct_aggregate_types.dedup();
         let n_distinct_aggregate_types = distinct_aggregate_types.len();
 
+        // Allocations for the two closures.
+        let mut datums1 = DatumVec::new();
+        let mut datums2 = DatumVec::new();
+        let mfp_after1 = mfp_after.clone();
+        let mfp_after2 = mfp_after;
+
         let aggregate_types_err = aggregate_types.clone();
         use differential_dataflow::collection::concatenate;
         let (oks, errs) = concatenate(scope, to_concat)
@@ -318,7 +346,7 @@ where
                 "ReduceCollation",
                 "ReduceCollation Errors",
                 {
-                    move |_key, input, output| {
+                    move |key, input, output| {
                         // The inputs are pairs of a reduction type, and a row consisting of densely
                         // packed fused aggregate values.
                         //
@@ -348,10 +376,10 @@ where
                             }
                         }
 
+                        let temp_storage = RowArena::new();
+                        let mut datums_local = datums1.borrow_with(key);
+                        let key_len = datums_local.len();
                         // Merge results into the order they were asked for.
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
-                        let mut row_packer = row_builder.packer();
                         for typ in aggregate_types.iter() {
                             let datum = match typ {
                                 ReductionType::Accumulable => accumulable.next(),
@@ -359,18 +387,30 @@ where
                                 ReductionType::Basic => basic.next(),
                             };
                             let Some(datum) = datum else { return };
-                            row_packer.push(datum);
+                            datums_local.push(datum);
                         }
-                        // If we did not have enough values to stitch together, then we do not generate
-                        // an output row. Not outputting here corresponds to the semantics of an
-                        // equi-join on the key, similarly to the proposal in PR #17013.
-                        //
-                        // Note that we also do not want to have anything left over to stich.  If we do,
-                        // then we also have an error and would violate join semantics.
-                        if (accumulable.next(), hierarchical.next(), basic.next())
-                            == (None, None, None)
+                        if mfp_after1
+                            .as_ref()
+                            .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                            .unwrap_or(Ok(true))
+                            == Ok(true)
                         {
+                            let binding = SharedRow::get();
+                            let mut row_builder = binding.borrow_mut();
+                            let mut row_packer = row_builder.packer();
+                            row_packer.extend(&datums_local[key_len..]);
                             output.push((row_builder.clone(), 1));
+                            // If we did not have enough values to stitch together, then we do not generate
+                            // an output row. Not outputting here corresponds to the semantics of an
+                            // equi-join on the key, similarly to the proposal in PR #17013.
+                            //
+                            // Note that we also do not want to have anything left over to stich.  If we do,
+                            // then we also have an error and would violate join semantics.
+                            if (accumulable.next(), hierarchical.next(), basic.next())
+                                == (None, None, None)
+                            {
+                                output.push((row_builder.clone(), 1));
+                            }
                         }
                     }
                 },
@@ -405,34 +445,42 @@ where
                         }
                     }
 
+                    let temp_storage = RowArena::new();
+                    let mut datums_local = datums2.borrow_with(key);
+
                     for typ in aggregate_types_err.iter() {
                         let datum = match typ {
                             ReductionType::Accumulable => accumulable.next(),
                             ReductionType::Hierarchical => hierarchical.next(),
                             ReductionType::Basic => basic.next(),
                         };
-                        if datum.is_some() {
-                            continue;
+                        if let Some(datum) = datum {
+                            datums_local.push(datum);
+                        } else {
+                            // We cannot properly reconstruct a row if aggregates are missing.
+                            // This situation is not expected, so we log an error if it occurs.
+                            let message = "Missing value for key in ReduceCollation";
+                            error_logger.log(message, &format!("typ={typ:?}, key={key:?}"));
+                            output.push((EvalError::Internal(message.to_string()).into(), 1));
+                            return;
                         }
-
-                        // We cannot properly reconstruct a row if aggregates are missing.
-                        // This situation is not expected, so we log an error if it occurs.
-                        let message = "Missing value for key in ReduceCollation";
-                        error_logger.log(message, &format!("typ={typ:?}, key={key:?}"));
-                        output.push((EvalError::Internal(message.to_string()).into(), 1));
-                        return;
                     }
 
                     // Note that we also do not want to have anything left over to stich.
                     // If we do, then we also have an error and would violate join semantics.
-                    if (accumulable.next(), hierarchical.next(), basic.next()) == (None, None, None)
+                    if (accumulable.next(), hierarchical.next(), basic.next()) != (None, None, None)
                     {
-                        return;
+                        let message = "Rows too large for key in ReduceCollation";
+                        error_logger.log(message, &format!("key={key:?}"));
+                        output.push((EvalError::Internal(message.to_string()).into(), 1));
                     }
 
-                    let message = "Rows too large for key in ReduceCollation";
-                    error_logger.log(message, &format!("key={key:?}"));
-                    output.push((EvalError::Internal(message.to_string()).into(), 1));
+                    if let Some(Result::Err(e)) = mfp_after2
+                        .as_ref()
+                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                    {
+                        output.push((e.into(), 1));
+                    }
                 },
             );
         (oks, errs.as_collection(|_, v| v.into_owned()))
@@ -441,6 +489,7 @@ where
     fn dispatch_build_distinct<S>(
         &self,
         collection: Collection<S, (Row, Row), Diff>,
+        mfp_after: Option<SafeMfpPlan>,
     ) -> (
         SpecializedArrangement<S>,
         Collection<S, DataflowError, Diff>,
@@ -457,12 +506,15 @@ where
                 .build_distinct::<RowSpine<_, _>, RowValSpine<_, _, _>, _>(
                     collection,
                     " [val: empty]",
+                    mfp_after,
                 );
             (SpecializedArrangement::RowUnit(arrangement), errs)
         } else {
             let collection = collection.inspect(|((_, v), _, _)| assert!(v.is_empty()));
-            let (arrangement, errs) =
-                self.build_distinct::<RowRowSpine<_, _>, RowValSpine<_, _, _>, _>(collection, "");
+            let (arrangement, errs) = self
+                .build_distinct::<RowRowSpine<_, _>, RowValSpine<_, _, _>, _>(
+                    collection, "", mfp_after,
+                );
             (SpecializedArrangement::RowRow(arrangement), errs)
         }
     }
@@ -472,6 +524,7 @@ where
         &self,
         collection: Collection<S, (Row, T1::ValOwned), Diff>,
         tag: &str,
+        mfp_after: Option<SafeMfpPlan>,
     ) -> (
         Arranged<S, TraceAgent<T1>>,
         Collection<S, DataflowError, Diff>,
@@ -481,6 +534,7 @@ where
         T1: Trace<KeyOwned = Row, Time = G::Timestamp, Diff = Diff> + 'static,
         T1::Batch: Batch,
         T1::Batcher: Batcher<Item = ((Row, T1::ValOwned), G::Timestamp, Diff)>,
+        for<'a> T1::Key<'a>: std::fmt::Debug + IntoRowByTypes,
         T1::ValOwned: Columnation + ExchangeData + Default,
         Arranged<S, TraceAgent<T1>>: ArrangementSize,
         T2: for<'a> Trace<
@@ -501,27 +555,53 @@ where
             format!("DistinctBy{}", tag),
         );
 
+        // Allocations for the two closures.
+        let mut datums1 = DatumVec::new();
+        let mut datums2 = DatumVec::new();
+        let mfp_after1 = mfp_after.clone();
+        let mfp_after2 = mfp_after;
+
         let (output, errors) = collection
             .mz_arrange::<T1>(&input_name)
             .reduce_pair::<_, T1, _, T2>(
                 &output_name,
                 "DistinctByErrorCheck",
-                |_key, _input, output| {
-                    // We're pushing a unit value here because the key is implicitly added by the
-                    // arrangement, and the permutation logic takes care of using the key part of the
-                    // output.
-                    output.push((T1::ValOwned::default(), 1));
+                move |key, _input, output| {
+                    let temp_storage = RowArena::new();
+                    let mut datums_local = datums1.borrow();
+                    datums_local.extend(key.into_datum_iter(None));
+
+                    if mfp_after1
+                        .as_ref()
+                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                        .unwrap_or(Ok(true))
+                        == Ok(true)
+                    {
+                        // We're pushing a unit value here because the key is implicitly added by the
+                        // arrangement, and the permutation logic takes care of using the key part of the
+                        // output.
+                        output.push((T1::ValOwned::default(), 1));
+                    }
                 },
                 move |key, input: &[(_, Diff)], output| {
                     for (_, count) in input.iter() {
                         if count.is_positive() {
                             continue;
                         }
-                        let key = key.into_owned();
                         let message = "Non-positive multiplicity in DistinctBy";
                         error_logger.log(message, &format!("row={key:?}, count={count}"));
                         output.push((EvalError::Internal(message.to_string()).into(), 1));
                         return;
+                    }
+                    let temp_storage = RowArena::new();
+                    let datum_iter = key.into_datum_iter(None);
+                    let mut datums_local = datums2.borrow();
+                    datums_local.extend(datum_iter);
+                    if let Some(Result::Err(e)) = mfp_after2
+                        .as_ref()
+                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                    {
+                        output.push((e.into(), 1));
                     }
                 },
             );
@@ -539,6 +619,7 @@ where
         &self,
         input: Collection<S, (Row, Row), Diff>,
         aggrs: Vec<(usize, AggregateExpr)>,
+        mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -555,7 +636,7 @@ where
         let mut to_collect = Vec::new();
         for (index, aggr) in aggrs {
             let (result, errs) =
-                self.build_basic_aggregate(input.clone(), index, &aggr, err_output.is_none());
+                self.build_basic_aggregate(input.clone(), index, &aggr, err_output.is_none(), None);
             if errs.is_some() {
                 err_output = errs
             }
@@ -563,19 +644,33 @@ where
                 result.as_collection(move |key, val| (key.into_owned(), (index, val.into_owned()))),
             );
         }
+
+        let mut datums = DatumVec::new();
+
         let output = differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
             .mz_arrange::<RowValSpine<_, _, _>>("Arranged ReduceFuseBasic input")
             .mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceFuseBasic", {
-                move |_key, input, output| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let mut row_packer = row_builder.packer();
-                    for (item, _) in input.iter() {
-                        let row = &item.1;
-                        let datum = row.unpack_first();
-                        row_packer.push(datum);
+                move |key, input, output| {
+                    let temp_storage = RowArena::new();
+                    let mut datums_local = datums.borrow_with(key);
+                    let key_len = datums_local.len();
+
+                    for ((_, row), _) in input.iter() {
+                        datums_local.push(row.unpack_first());
                     }
-                    output.push((row_builder.clone(), 1));
+
+                    if mfp_after
+                        .as_ref()
+                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                        .unwrap_or(Ok(true))
+                        == Ok(true)
+                    {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
+                        let mut row_packer = row_builder.packer();
+                        row_packer.extend(&datums_local[key_len..]);
+                        output.push((row_builder.clone(), 1));
+                    }
                 }
             });
         (
@@ -593,6 +688,7 @@ where
         index: usize,
         aggr: &AggregateExpr,
         validating: bool,
+        mfp_after: Option<SafeMfpPlan>,
     ) -> (
         RowRowArrangement<S>,
         Option<Collection<S, DataflowError, Diff>>,
@@ -639,9 +735,16 @@ where
             }
         }
 
+        // Allocations for the two closures.
+        let mut datums1 = DatumVec::new();
+        let mut datums2 = DatumVec::new();
+        let mfp_after1 = mfp_after.clone();
+        let mfp_after2 = mfp_after;
+        let func2 = func.clone();
+
         let arranged = partial.mz_arrange::<RowRowSpine<_, _>>("Arranged ReduceInaccumulable");
         let oks = arranged.mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceInaccumulable", {
-            move |_key, source, target| {
+            move |key, source, target| {
                 // We respect the multiplicity here (unlike in hierarchical aggregation)
                 // because we don't know that the aggregation method is not sensitive
                 // to the number of records.
@@ -649,32 +752,44 @@ where
                     // Note that in the non-positive case, this is wrong, but harmless because
                     // our other reduction will produce an error.
                     let count = usize::try_from(*w).unwrap_or(0);
-                    use mz_repr::fixed_length::IntoRowByTypes;
                     std::iter::repeat(v.into_datum_iter(None).next().unwrap()).take(count)
                 });
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                row_builder.packer().push(
+
+                let temp_storage = RowArena::new();
+                let mut datums_local = datums1.borrow_with(key);
+                let key_len = datums_local.len();
+                datums_local.push(
                     // Note that this is not necessarily a window aggregation, in which case
                     // `eval_fast_window_agg` delegates to the normal `eval`.
                     func.eval_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
                         iter,
-                        &RowArena::new(),
+                        &temp_storage,
                     ),
                 );
-                target.push((row_builder.clone(), 1));
+                if mfp_after1
+                    .as_ref()
+                    .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                    .unwrap_or(Ok(true))
+                    == Ok(true)
+                {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let mut row_packer = row_builder.packer();
+                    row_packer.extend(&datums_local[key_len..]);
+                    target.push((row_builder.clone(), 1));
+                }
             }
         });
 
         // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here, but
         // we then wouldn't be able to do this error check conditionally.  See its documentation for the
         // rationale around using a second reduction here.
-        if validating && err_output.is_none() {
+        if (validating && err_output.is_none()) || mfp_after2.is_some() {
             let error_logger = self.error_logger();
 
             let errs = arranged.mz_reduce_abelian::<_, RowErrSpine<_, _>>(
                 "ReduceInaccumulable Error Check",
-                move |_key, source, target| {
+                move |key, source, target| {
                     // Negative counts would be surprising, but until we are 100% certain we won't
                     // see them, we should report when we do. We may want to bake even more info
                     // in here in the future.
@@ -687,6 +802,26 @@ where
                         error_logger.log(message, &format!("value={value:?}, count={count}"));
                         target.push((EvalError::Internal(message.to_string()).into(), 1));
                         return;
+                    }
+
+                    let iter = source.iter().flat_map(|(v, w)| {
+                        let count = usize::try_from(*w).unwrap_or(0);
+                        std::iter::repeat(v.iter().next().unwrap()).take(count)
+                    });
+
+                    let temp_storage = RowArena::new();
+                    let mut datums_local = datums2.borrow_with(key);
+                    datums_local.push(
+                        func2.eval_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
+                            iter,
+                            &temp_storage,
+                        ),
+                    );
+                    if let Some(Result::Err(e)) = mfp_after2
+                        .as_ref()
+                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                    {
+                        target.push((e.into(), 1));
                     }
                 },
             );
@@ -763,6 +898,7 @@ where
             skips,
             buckets,
         }: BucketedPlan,
+        mfp_after: Option<SafeMfpPlan>,
     ) -> (
         RowRowArrangement<S>,
         Option<Collection<S, DataflowError, Diff>>,
@@ -832,6 +968,13 @@ where
             // Discard the hash from the key and return to the format of the input data.
             let partial = stage.map(|((key, _hash), values)| (key, values));
 
+            // Allocations for the two closures.
+            let mut datums1 = DatumVec::new();
+            let mut datums2 = DatumVec::new();
+            let mfp_after1 = mfp_after.clone();
+            let mfp_after2 = mfp_after;
+            let aggr_funcs2 = aggr_funcs.clone();
+
             // Build a series of stages for the reduction
             // Arrange the final result into (key, Row)
             let error_logger = self.error_logger();
@@ -846,7 +989,7 @@ where
                 let errs = arranged
                     .mz_reduce_abelian::<_, RowErrSpine<_, _>>(
                         "ReduceMinsMaxes Error Check",
-                        move |_key, source, target| {
+                        move |key, source, target| {
                             // Negative counts would be surprising, but until we are 100% certain we wont
                             // see them, we should report when we do. We may want to bake even more info
                             // in here in the future.
@@ -860,6 +1003,21 @@ where
                                 target.push((EvalError::Internal(message.to_string()).into(), 1));
                                 return;
                             }
+
+                            let temp_storage = RowArena::new();
+                            let mut datums_local = datums2.borrow_with(key);
+                            for (aggr_index, func) in aggr_funcs2.iter().enumerate() {
+                                let iter = source.iter().map(|(values, _cnt)| {
+                                    values[aggr_index].iter().next().unwrap()
+                                });
+                                datums_local.push(func.eval(iter, &temp_storage));
+                            }
+                            if let Some(Result::Err(e)) = mfp_after2
+                                .as_ref()
+                                .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                            {
+                                target.push((e.into(), 1));
+                            }
                         },
                     )
                     .as_collection(|_, v| v.into_owned());
@@ -867,17 +1025,28 @@ where
             }
             arranged
                 .mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMinsMaxes", {
-                    move |_key, source, target| {
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
-                        let mut row_packer = row_builder.packer();
+                    move |key, source, target| {
+                        let temp_storage = RowArena::new();
+                        let mut datums_local = datums1.borrow_with(key);
+                        let key_len = datums_local.len();
                         for (aggr_index, func) in aggr_funcs.iter().enumerate() {
                             let iter = source
                                 .iter()
                                 .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                            row_packer.push(func.eval(iter, &RowArena::new()));
+                            datums_local.push(func.eval(iter, &temp_storage));
                         }
-                        target.push((row_builder.clone(), 1));
+                        if mfp_after1
+                            .as_ref()
+                            .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                            .unwrap_or(Ok(true))
+                            == Ok(true)
+                        {
+                            let binding = SharedRow::get();
+                            let mut row_builder = binding.borrow_mut();
+                            let mut row_packer = row_builder.packer();
+                            row_packer.extend(&datums_local[key_len..]);
+                            target.push((row_builder.clone(), 1));
+                        }
                     }
                 })
                 .leave_region()
@@ -967,6 +1136,7 @@ where
             skips,
             must_consolidate,
         }: MonotonicPlan,
+        mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -992,7 +1162,7 @@ where
 
         // It should be now possible to ensure that we have a monotonic collection.
         let error_logger = self.error_logger();
-        let (partial, errs) = collection.ensure_monotonic(move |data, diff| {
+        let (partial, mut errs) = collection.ensure_monotonic(move |data, diff| {
             error_logger.log(
                 "Non-monotonic input to ReduceMonotonic",
                 &format!("data={data:?}, diff={diff}"),
@@ -1012,21 +1182,68 @@ where
             }
             (key, output)
         });
+
+        // Allocations for the two closures.
+        let mut datums1 = DatumVec::new();
+        let mut datums2 = DatumVec::new();
+        let mfp_after1 = mfp_after.clone();
+        let mfp_after2 = mfp_after;
+
         let partial: KeyCollection<_, _, _> = partial.into();
-        let output = partial
-            .mz_arrange::<RowSpine<_, Vec<ReductionMonoid>>>("ArrangeMonotonic [val: empty]")
-            .mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMonotonic", {
-                move |_key, input, output| {
+        let arranged = partial
+            .mz_arrange::<RowSpine<_, Vec<ReductionMonoid>>>("ArrangeMonotonic [val: empty]");
+        let output = arranged.mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMonotonic", {
+            move |key, input, output| {
+                let temp_storage = RowArena::new();
+                let mut datums_local = datums1.borrow_with(key);
+                let key_len = datums_local.len();
+                let accum = &input[0].1;
+                for monoid in accum.iter() {
+                    datums_local.extend(monoid.finalize().iter());
+                }
+                if mfp_after1
+                    .as_ref()
+                    .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                    .unwrap_or(Ok(true))
+                    == Ok(true)
+                {
                     let binding = SharedRow::get();
                     let mut row_builder = binding.borrow_mut();
                     let mut row_packer = row_builder.packer();
-                    let accum = &input[0].1;
-                    for monoid in accum.iter() {
-                        row_packer.extend(monoid.finalize().iter());
-                    }
+                    row_packer.extend(&datums_local[key_len..]);
                     output.push((row_builder.clone(), 1));
                 }
-            });
+
+                //     let mut row_packer = row_buf.packer();
+                //     let accum = &input[0].1;
+                //     for monoid in accum.iter() {
+                //         row_packer.extend(monoid.finalize().iter());
+                //     }
+                //     output.push((row_buf.clone(), 1));
+            }
+        });
+
+        if let Some(mfp_after2) = mfp_after2 {
+            errs = errs.concat(
+                &arranged
+                    .mz_reduce_abelian::<_, RowErrSpine<_, _>>("ReduceMonotonic", {
+                        move |key, input, output| {
+                            let temp_storage = RowArena::new();
+                            let mut datums_local = datums2.borrow_with(key);
+                            let accum = &input[0].1;
+                            for monoid in accum.iter() {
+                                datums_local.extend(monoid.finalize().iter());
+                            }
+                            if let Result::Err(e) =
+                                mfp_after2.evaluate_inner(&mut datums_local, &temp_storage)
+                            {
+                                output.push((e.into(), 1));
+                            }
+                        }
+                    })
+                    .as_collection(|_k, v: &DataflowError| v.clone()),
+            );
+        }
         (output, errs)
     }
 
@@ -1044,6 +1261,7 @@ where
             simple_aggrs,
             distinct_aggrs,
         }: AccumulablePlan,
+        mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -1147,6 +1365,13 @@ where
             differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate)
         };
 
+        // Allocations for the two closures.
+        let mut datums1 = DatumVec::new();
+        let mut datums2 = DatumVec::new();
+        let mfp_after1 = mfp_after.clone();
+        let mfp_after2 = mfp_after;
+        let full_aggrs2 = full_aggrs.clone();
+
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
         let (arranged_output, arranged_errs) = collection
@@ -1155,16 +1380,28 @@ where
                 "ReduceAccumulable",
                 "AccumulableErrorCheck",
                 {
-                    move |_key, input, output| {
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
+                    move |key, input, output| {
                         let (ref accums, total) = input[0].1;
-                        let mut row_packer = row_builder.packer();
 
+                        let temp_storage = RowArena::new();
+                        let mut datums_local = datums1.borrow_with(key);
+                        let key_len = datums_local.len();
                         for (aggr, accum) in full_aggrs.iter().zip(accums) {
-                            row_packer.push(finalize_accum(&aggr.func, accum, total));
+                            datums_local.push(finalize_accum(&aggr.func, accum, total));
                         }
-                        output.push((row_builder.clone(), 1));
+
+                        if mfp_after1
+                            .as_ref()
+                            .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                            .unwrap_or(Ok(true))
+                            == Ok(true)
+                        {
+                            let binding = SharedRow::get();
+                            let mut row_builder = binding.borrow_mut();
+                            let mut row_packer = row_builder.packer();
+                            row_packer.extend(&datums_local[key_len..]);
+                            output.push((row_builder.clone(), 1));
+                        }
                     }
                 },
                 move |key, input, output| {
@@ -1201,6 +1438,18 @@ where
                             }
                             _ => (), // no more errors to check for at this point!
                         }
+                    }
+
+                    let temp_storage = RowArena::new();
+                    let mut datums_local = datums2.borrow_with(key);
+                    for (aggr, accum) in full_aggrs2.iter().zip(accums) {
+                        datums_local.push(finalize_accum(&aggr.func, accum, total));
+                    }
+                    if let Some(Result::Err(e)) = mfp_after2
+                        .as_ref()
+                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                    {
+                        output.push((e.into(), 1));
                     }
                 },
             );

@@ -219,6 +219,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 key_val_plan,
                 plan,
                 input_key,
+                mfp_after,
             } => {
                 use crate::plan::reduce::ReducePlan;
                 match plan {
@@ -259,6 +260,12 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         let key = CompactScalarSeq(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
                     }
+                    // ATTENTION: This is probably incorrect; have someone fix.
+                    if !mfp_after.is_identity() {
+                        writeln!(f, "{}mfp_after", ctx.indent)?;
+                        ctx.indented(|ctx| mfp_after.fmt_text(f, ctx))?;
+                    }
+
                     input.fmt_text(f, ctx)
                 })?;
             }

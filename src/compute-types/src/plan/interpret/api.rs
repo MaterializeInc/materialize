@@ -374,6 +374,7 @@ where
                     key_val_plan,
                     plan,
                     input_key,
+                    mfp_after: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -649,6 +650,7 @@ where
                     key_val_plan,
                     plan,
                     input_key,
+                    mfp_after: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
