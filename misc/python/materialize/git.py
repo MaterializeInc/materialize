@@ -233,12 +233,7 @@ def get_common_ancestor_commit(remote: str, branch: str, fetch_branch: bool) -> 
 
 def is_on_release_version() -> bool:
     git_tags = get_tags_of_current_commit()
-
-    for git_tag in git_tags:
-        if MzVersion.is_mz_version_string(git_tag):
-            return True
-
-    return False
+    return any(MzVersion.is_mz_version_string(git_tag) for git_tag in git_tags)
 
 
 def is_on_main_branch() -> bool:
