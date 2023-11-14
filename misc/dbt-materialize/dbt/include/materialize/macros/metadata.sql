@@ -14,36 +14,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
--- Most of these macros are direct copies of their PostgreSQL counterparts.
--- See: https://github.com/dbt-labs/dbt-core/blob/13b18654f/plugins/postgres/dbt/include/postgres/macros/adapters.sql
-
 {% macro materialize__get_relation_last_modified(information_schema, relations) -%}
-
-  {% set database = information_schema.database %}
-  {%- call statement('last_modified', fetch_result=True) -%}
-        select
-            s.name as schema,
-            o.name as identifier,
-            u.last_modified as last_modified,
-            {{ current_timestamp() }} as snapshotted_at
-        from mz_objects o
-        join mz_schemas s on o.schema_id = s.id
-        join mz_databases d on s.database_id = d.id and d.name = '{{ database }}'
-        join (
-            select
-                details->>'id' as id,
-                max(occurred_at) as last_modified
-            from mz_audit_events
-            group by 1
-        ) u on u.id = o.id
-        where (
-        {%- for relation in relations -%}
-            (upper(s.name) = upper('{{ relation.schema }}') and
-            upper(o.name) = upper('{{ relation.identifier }}')){%- if not loop.last %} or {% endif -%}
-        {%- endfor -%}
-        )
-  {%- endcall -%}
-
-  {{ return(load_result('last_modified')) }}
-
+  {{ exceptions.raise_not_implemented(
+    'get_relation_last_modified macro not implemented for adapter ' + adapter.type()) }}
 {% endmacro %}

@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-* Implement `materialize__get_relation_last_modified` to retrieve metadata freshness.
+* Include tests for relations `list_relations_without_caching`.
+* Disable `dbt source freshness`.
 
 ## 1.6.1 - 2023-11-03
 
