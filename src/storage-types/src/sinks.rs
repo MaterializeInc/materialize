@@ -234,7 +234,7 @@ impl<T: PartialOrder + Clone> SinkAsOf<T> {
     /// Forwards the since frontier of this `SinkAsOf`. If it is already
     /// sufficiently far advanced the downgrade is a no-op.
     pub fn downgrade(&mut self, other_since: &Antichain<T>) {
-        if PartialOrder::less_equal(&self.frontier, other_since) {
+        if PartialOrder::less_than(&self.frontier, other_since) {
             // TODO(aljoscha): Should this be meet_assign?
             self.frontier.clone_from(other_since);
             // If we're using the since, never read the snapshot
