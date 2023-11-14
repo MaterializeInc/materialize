@@ -21,8 +21,6 @@ mod frontend;
 mod params;
 mod sync;
 
-use mz_catalog::config::SystemParameterSyncConfig;
-
 pub use backend::SystemParameterBackend;
 pub use frontend::SystemParameterFrontend;
 pub use params::{ModifiedParameter, SynchronizedParameters};
@@ -30,7 +28,7 @@ pub use sync::system_parameter_sync;
 
 /// A factory for [SystemParameterFrontend] instances.
 #[derive(Clone, Debug)]
-pub struct SystemParameterSyncFactory {
+pub struct SystemParameterSyncConfig {
     /// The environment ID that should identify connected clients.
     env_id: EnvironmentId,
     /// Build info for the environment running this.
@@ -47,7 +45,7 @@ pub struct SystemParameterSyncFactory {
     ld_key_map: BTreeMap<String, String>,
 }
 
-impl SystemParameterSyncFactory {
+impl SystemParameterSyncConfig {
     /// Construct a new [SystemParameterFrontend] instance.
     pub fn new(
         env_id: EnvironmentId,
@@ -64,13 +62,6 @@ impl SystemParameterSyncFactory {
             now_fn,
             ld_sdk_key,
             ld_key_map,
-        }
-    }
-
-    pub fn launch_darkly_config(&self) -> SystemParameterSyncConfig {
-        SystemParameterSyncConfig {
-            ld_sdk_key: self.ld_sdk_key.clone(),
-            ld_key_map: self.ld_key_map.clone(),
         }
     }
 }

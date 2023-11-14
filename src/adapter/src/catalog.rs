@@ -28,7 +28,6 @@ use mz_catalog::builtin::{
     BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
-use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
 use mz_catalog::durable::{
     test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig, Transaction,
 };
@@ -90,6 +89,7 @@ use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
+pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config, StateConfig};
 pub use crate::catalog::open::BuiltinMigrationMetadata;
 pub use crate::catalog::state::CatalogState;
 use crate::command::CatalogDump;
@@ -99,6 +99,7 @@ use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
+mod config;
 pub(crate) mod consistency;
 mod migrate;
 
@@ -529,6 +530,7 @@ impl Catalog {
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
+            metrics_registry,
             secrets_reader,
             // when debugging, no reaping
             storage_usage_retention_period: None,
@@ -539,7 +541,6 @@ impl Catalog {
                 environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
                 now,
                 skip_migrations: true,
-                metrics_registry,
                 cluster_replica_sizes: Default::default(),
                 default_storage_cluster_size: None,
                 builtin_cluster_replica_size: "1".into(),
