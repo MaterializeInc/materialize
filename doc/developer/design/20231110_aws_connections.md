@@ -73,29 +73,57 @@ Users should then be able to add a trust policy in their AWS account to give acc
 ```
 
 ## Implementation
-TODO: Check with the cloud team on the external ID generation.
+We already have some [existing code](https://github.com/MaterializeInc/materialize/blob/v0.77.1/src/storage-types/src/connections/aws.rs), which can be re-used to
+handle the AssumeRole scenario as well.
+
+In the parser we already support `ROLE ARN` option which can be renamed to `ASSUME ROLE ARN` to better reflect the usage.
+We will need to add an `ASSUME ROLE SESSION NAME` option as well.
+
+The AWS Connection create statement with all the options will now look like:
+```sql
+CREATE CONNECTION <connector_name> TO AWS (
+  ACCESS KEY ID [[=] <value>], -- existing
+  SECRET ACCESS KEY [[=] SECRET <value>], -- existing
+  TOKEN [[=] SECRET <value>], -- existing
+  ASSUME ROLE ARN [[=] <value>], -- rename existing from ROLE ARN
+  ASSUME ROLE SESSION NAME [[=] <value>], -- new option
+  ENDPOINT [[=] <value>], -- existing
+  REGION [[=] <value>] -- existing
+);
+```
+
+#### External ID and principal
+We already have external ID prefix and principal provided in the catalog state.
+The connection ID will be appended to the external ID prefix to get the complete
+External ID and then stored in the new `mz_aws_connections` table for that connection ID.
+
+## Rollout and Testing
+We should put the AWS connection behind a feature flag.
+
+#### Testing During development
+Write cloudtests to test out the different AWS Connections. For the AssumeRole AWS Connection we should test that we are able to get temporary credentials.
+
+#### Testing after code is merged
+Switch on the feature flag for the staging environment and create an AWS Connection in staging followed by `VALIDATE CONNECTION`.
 
 ## Open questions
 
-#### What should be the principal?
-For users to be able to set up the trust policy on their end, we need to provide them
-with the principal and an External ID. The principal can be our AWS account id or a user/role
-we specifically create for this.
-
-TODO: Check what we do with existing aws private links where a similar principal is needed.
-
 #### What should be the behaviour for `VALIDATE CONNECTION` of an AWS connection?
-TODO: Is there an API in AWS SDK to validate if AssumeRole is set correctly or maybe we can
-try to fetch temporary credentials.
-Note: An AWS connection can be potentially re-used across multiple services like S3 or RDS.
-Having permission to an S3 bucket might not mean that RDS access is set up correctly.
+A `VALIDATE CONNECTION` of an AWS connection with AssumeRole can check if we are
+able to get temporary credentials with the given arn.
+
+In case of tokens though, what should we check in validate? Maybe that's a noop and
+it's fine, because usually tokens will not be used for actual production use cases.
+
+Also, an AWS connection can be potentially re-used across multiple services like S3 or RDS.
+Having permission to an S3 bucket might not mean that RDS access is set up correctly. So
+a validate connection will not be comprehensive and we'll probably do some additional check with the intended resources when we actually make use of this connection.
 
 Potentially later we can extend `VALIDATE CONNECTION` sql to optionally specify an S3 or a database url, like,
 `VALIDATE CONNECTION aws_conn WITH (S3 PATH = 's3://prefix')`
 
 Alternatively, we could have a higher level S3 connection using this AWS connection, something like
-`CREATE CONNECTION s3_conn TO S3 ( PREFIX = 'url') USING AWS CONNECTION aws_conn`. Validating s3_conn
-could verify if we are able to list the prefix, create and remove a file there.
-
-#### How should we test?
-TODO: Check with the cloud team if we can set up cloudtests.
+`CREATE CONNECTION s3_conn TO S3 ( PREFIX = 'url') USING AWS CONNECTION aws_conn`.
+Validating s3_conn could verify if we are able to list the prefix, create and
+remove a file there. This seems like an overkill though and a `VALIDATE CONNECTION ... WITH`
+mentioned above would probably be better.
