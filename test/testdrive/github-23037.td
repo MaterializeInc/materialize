@@ -7,8 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> DROP CLUSTER IF EXISTS gh_23037_cluster CASCADE;
+> CREATE CLUSTER gh_23037_cluster SIZE '1', REPLICATION FACTOR 1;
+
 > CREATE SOURCE auction_house
-  IN CLUSTER default
+  IN CLUSTER gh_23037_cluster
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '0.01s')
   FOR ALL TABLES
@@ -44,3 +47,6 @@ DROP DATABASE materialize
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 CREATE DATABASE materialize
+
+# Cleanup.
+> DROP CLUSTER gh_23037_cluster CASCADE;
