@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
+use maplit::{btreemap, btreeset};
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_catalog::SYSTEM_CONN_ID;
@@ -39,9 +40,8 @@ use mz_storage_client::controller::{ExportDescription, ReadPolicy};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::sinks::SinkAsOf;
-use mz_storage_types::sources::{GenericSourceConnection, Timeline};
+use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
-use timely::progress::Antichain;
 use tracing::{event, warn, Level};
 
 use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, Op, Sink, TransactionResult};
@@ -52,7 +52,7 @@ use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
-use crate::{catalog, flags, AdapterError, AdapterNotice};
+use crate::{catalog, flags, AdapterError, AdapterNotice, TimestampProvider};
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
@@ -900,23 +900,19 @@ impl Coordinator {
                 .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
         );
 
-        // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
-        // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
-        // that only things going forward are exported.
-        let timeline = self
-            .get_timeline_context(sink.from)
-            .timeline()
-            .cloned()
-            .unwrap_or(Timeline::EpochMilliseconds);
-        let now = self
-            .ensure_timeline_state(&timeline)
-            .await
-            .oracle
-            .read_ts()
-            .await;
-        let frontier = Antichain::from_elem(now);
+        // The AsOf is used to determine at what time to snapshot reading from
+        // the persist collection.  This is primarily relevant when we do _not_
+        // want to include the snapshot in the sink.
+        //
+        // We choose the smallest as_of that is legal, according to the sinked
+        // collection's since.
+        let id_bundle = crate::CollectionIdBundle {
+            storage_ids: btreeset! {sink.from},
+            compute_ids: btreemap! {},
+        };
+        let min_as_of = self.least_valid_read(&id_bundle);
         let as_of = SinkAsOf {
-            frontier,
+            frontier: min_as_of,
             strict: !sink.with_snapshot,
         };
 
