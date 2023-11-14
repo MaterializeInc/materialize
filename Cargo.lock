@@ -3093,9 +3093,9 @@ dependencies = [
 
 [[package]]
 name = "lgalloc"
-version = "0.1.5"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "914567ecbb55c70b5a8d3009c45dd684619b5e5d1e8d84eff140b53b8e136e60"
+checksum = "22763659eca028d9bf872e5cdf978c87dfaa4a379ba50abb8e94b48c9869e18e"
 dependencies = [
  "crossbeam-deque",
  "libc",
