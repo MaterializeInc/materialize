@@ -33,16 +33,8 @@ mz_options: dict[MzVersion, str] = {}
 SERVICES = [
     TestCerts(),
     Zookeeper(),
-    Kafka(
-        depends_on_extra=["test-certs"],
-        volumes=["secrets:/etc/kafka/secrets"],
-    ),
-    SchemaRegistry(
-        depends_on_extra=["test-certs"],
-        volumes=[
-            "secrets:/etc/schema-registry/secrets",
-        ],
-    ),
+    Kafka(),
+    SchemaRegistry(),
     Postgres(),
     Cockroach(setup_materialize=True),
     Materialized(
@@ -73,34 +65,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test upgrades from previous versions."""
 
     parser.add_argument(
-        "--tests",
-        choices=["all", "non-ssl", "ssl"],
-        default="all",
-        help="limit testing to certain scenarios",
-    )
-    parser.add_argument(
         "filter", nargs="?", default="*", help="limit to only the files matching filter"
     )
     args = parser.parse_args()
 
     tested_versions = version_list.minor_versions()[-2:]
 
-    if args.tests in ["all", "non-ssl"]:
-        for version in tested_versions:
-            priors = [v for v in all_versions if v <= version]
-            test_upgrade_from_version(c, f"{version}", priors, filter=args.filter)
+    for version in tested_versions:
+        priors = [v for v in all_versions if v <= version]
+        test_upgrade_from_version(c, f"{version}", priors, filter=args.filter)
 
-        test_upgrade_from_version(c, "current_source", priors=[], filter=args.filter)
-
-    if args.tests in ["all", "ssl"]:
-        kafka, schema_registry, testdrive = ssl_services()
-        with c.override(kafka, schema_registry, testdrive):
-            for version in tested_versions:
-                priors = [v for v in all_versions if v <= version]
-                test_upgrade_from_version(
-                    c, f"{version}", priors, filter=args.filter, style="ssl-"
-                )
-            # we don't test current_source -> current_source for `ssl-` tests
+    test_upgrade_from_version(c, "current_source", priors=[], filter=args.filter)
 
 
 def test_upgrade_from_version(
@@ -108,7 +83,6 @@ def test_upgrade_from_version(
     from_version: str,
     priors: list[MzVersion],
     filter: str,
-    style: str = "",
 ) -> None:
     print(f"+++ Testing upgrade from Materialize {from_version} to current_source.")
 
@@ -160,7 +134,7 @@ def test_upgrade_from_version(
         f"--var=upgrade-from-version={from_version}",
         temp_dir,
         seed,
-        f"create-{style}in-{version_glob}-{filter}.td",
+        f"create-in-{version_glob}-{filter}.td",
     )
 
     c.kill("materialized")
@@ -186,82 +160,5 @@ def test_upgrade_from_version(
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
             temp_dir,
             seed,
-            f"check-{style}from-{version_glob}-{filter}.td",
+            f"check-from-{version_glob}-{filter}.td",
         )
-
-
-def ssl_services() -> tuple[Kafka, SchemaRegistry, Testdrive]:
-    """sets"""
-
-    kafka = Kafka(
-        depends_on_extra=["test-certs"],
-        environment=[
-            # Default
-            "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
-            "KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false",
-            "KAFKA_MIN_INSYNC_REPLICAS=1",
-            "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
-            "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
-            "KAFKA_MESSAGE_MAX_BYTES=15728640",
-            "KAFKA_REPLICA_FETCH_MAX_BYTES=15728640",
-            # For this test
-            "KAFKA_SSL_KEYSTORE_FILENAME=kafka.keystore.jks",
-            "KAFKA_SSL_KEYSTORE_CREDENTIALS=cert_creds",
-            "KAFKA_SSL_KEY_CREDENTIALS=cert_creds",
-            "KAFKA_SSL_TRUSTSTORE_FILENAME=kafka.truststore.jks",
-            "KAFKA_SSL_TRUSTSTORE_CREDENTIALS=cert_creds",
-            "KAFKA_SSL_CLIENT_AUTH=required",
-            "KAFKA_SECURITY_INTER_BROKER_PROTOCOL=SSL",
-        ],
-        listener_type="SSL",
-        volumes=["secrets:/etc/kafka/secrets"],
-    )
-    schema_registry = SchemaRegistry(
-        depends_on_extra=["test-certs"],
-        environment=[
-            "SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS=10000",
-            "SCHEMA_REGISTRY_HOST_NAME=schema-registry",
-            "SCHEMA_REGISTRY_LISTENERS=https://0.0.0.0:8081",
-            "SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL=zookeeper:2181",
-            "SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL=SSL",
-            "SCHEMA_REGISTRY_KAFKASTORE_SSL_KEYSTORE_LOCATION=/etc/schema-registry/secrets/schema-registry.keystore.jks",
-            "SCHEMA_REGISTRY_SSL_KEYSTORE_LOCATION=/etc/schema-registry/secrets/schema-registry.keystore.jks",
-            "SCHEMA_REGISTRY_KAFKASTORE_SSL_KEYSTORE_PASSWORD=mzmzmz",
-            "SCHEMA_REGISTRY_SSL_KEYSTORE_PASSWORD=mzmzmz",
-            "SCHEMA_REGISTRY_KAFKASTORE_SSL_KEY_PASSWORD=mzmzmz",
-            "SCHEMA_REGISTRY_SSL_KEY_PASSWORD=mzmzmz",
-            "SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_LOCATION=/etc/schema-registry/secrets/schema-registry.truststore.jks",
-            "SCHEMA_REGISTRY_SSL_TRUSTSTORE_LOCATION=/etc/schema-registry/secrets/schema-registry.truststore.jks",
-            "SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_PASSWORD=mzmzmz",
-            "SCHEMA_REGISTRY_SSL_TRUSTSTORE_PASSWORD=mzmzmz",
-            "SCHEMA_REGISTRY_SCHEMA_REGISTRY_INTER_INSTANCE_PROTOCOL=https",
-            "SCHEMA_REGISTRY_SSL_CLIENT_AUTH=true",
-        ],
-        volumes=[
-            "secrets:/etc/schema-registry/secrets",
-        ],
-        bootstrap_server_type="SSL",
-    )
-    testdrive = Testdrive(
-        entrypoint=[
-            "bash",
-            "-c",
-            "cp /share/secrets/ca.crt /usr/local/share/ca-certificates/ca.crt && "
-            "update-ca-certificates && "
-            "testdrive "
-            "--kafka-addr=kafka:9092 "
-            "--schema-registry-url=https://schema-registry:8081 "
-            "--materialize-url=postgres://materialize@materialized:6875 "
-            "--cert=/share/secrets/producer.p12 "
-            "--cert-password=mzmzmz "
-            "--ccsr-password=sekurity "
-            "--ccsr-username=materialize "
-            '"$$@"',
-        ],
-        volumes_extra=["secrets:/share/secrets"],
-        # Required to install root certs above
-        propagate_uid_gid=False,
-        validate_postgres_stash=None,
-    )
-
-    return (kafka, schema_registry, testdrive)

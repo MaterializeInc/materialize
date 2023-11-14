@@ -27,19 +27,19 @@ statement ok
 CREATE TABLE not_a_secret (a int);
 
 statement ok
-CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker') WITH (VALIDATE = false);
+CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 statement error connection "materialize.public.kafka_conn" already exists
-CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker') WITH (VALIDATE = false);
+CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 statement ok
-CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER 'broker') WITH (VALIDATE = false);
+CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER 'broker', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 statement error materialize.public.not_a_secret is not a secret
-CREATE CONNECTION kafka_conn2 TO KAFKA (BROKER 'broker', SASL PASSWORD = SECRET not_a_secret) WITH (VALIDATE = false);
+CREATE CONNECTION kafka_conn2 TO KAFKA (BROKER 'broker', SECURITY PROTOCOL PLAINTEXT, SASL PASSWORD = SECRET not_a_secret) WITH (VALIDATE = false);
 
 statement error unknown catalog item 'not_an_object_at_all'
-CREATE CONNECTION kafka_conn2 TO KAFKA (BROKER 'broker', SASL PASSWORD = SECRET not_an_object_at_all) WITH (VALIDATE = false);
+CREATE CONNECTION kafka_conn2 TO KAFKA (BROKER 'broker', SECURITY PROTOCOL PLAINTEXT, SASL PASSWORD = SECRET not_an_object_at_all) WITH (VALIDATE = false);
 
 statement ok
 CREATE SECRET pgpass AS 'postgres'

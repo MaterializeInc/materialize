@@ -65,7 +65,7 @@ class CreateSource(Action):
                   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
                 > CREATE CONNECTION IF NOT EXISTS {self.source.name}_kafka_conn
-                  TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                  TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE {self.source.name}
                   IN CLUSTER {self.source.cluster_name}

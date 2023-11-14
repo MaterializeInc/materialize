@@ -87,7 +87,7 @@ def workflow_default(c: Composition) -> None:
                   TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}');
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
                 > INSERT INTO t1 SELECT generate_series, 1 FROM generate_series(1,1000000);
                 $ kafka-ingest format=avro key-format=avro topic=pubsub-disruption schema=${schema} key-schema=${keyschema} start-iteration=1 repeat=1000000

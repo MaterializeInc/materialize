@@ -29,7 +29,7 @@ $ schema-registry-wait subject=postgres.public.insert_multi_table2-value
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE insert_multi_table1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.insert_multi_table1')

@@ -23,11 +23,12 @@ class Kafka(Service):
         name: str = "kafka",
         image: str = "confluentinc/cp-kafka",
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
-        port: str | int = 9092,
+        ports: list[str | int] | None = None,
         allow_host_ports: bool = False,
         auto_create_topics: bool = False,
         broker_id: int = 1,
         offsets_topic_replication_factor: int = 1,
+        advertised_listeners: list[str] = [],
         environment: list[str] = [
             "KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181",
             "KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false",
@@ -41,17 +42,20 @@ class Kafka(Service):
         environment_extra: list[str] = [],
         depends_on_extra: list[str] = [],
         volumes: list[str] = [],
-        listener_type: str = "PLAINTEXT",
     ) -> None:
+        if not advertised_listeners:
+            advertised_listeners = [f"PLAINTEXT://{name}:9092"]
         environment = [
             *environment,
-            f"KAFKA_ADVERTISED_LISTENERS={listener_type}://{name}:{port}",
+            f"KAFKA_ADVERTISED_LISTENERS={','.join(advertised_listeners)}",
             f"KAFKA_BROKER_ID={broker_id}",
             *environment_extra,
         ]
+        if ports is None:
+            ports = [l.split(":")[-1] for l in advertised_listeners]
         config: ServiceConfig = {
             "image": f"{image}:{tag}",
-            "ports": [port],
+            "ports": ports,
             "allow_host_ports": allow_host_ports,
             "environment": [
                 *environment,

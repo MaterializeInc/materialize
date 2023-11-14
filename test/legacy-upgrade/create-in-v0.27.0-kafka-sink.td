@@ -9,8 +9,14 @@
 
 > CREATE MATERIALIZED VIEW static_view (f1) AS VALUES (1),(2),(3);
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
+    BROKER '${testdrive.kafka-addr}',
+    SECURITY PROTOCOL PLAINTEXT
+  )
+
+>[version<7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
+    BROKER '${testdrive.kafka-addr}'
+  )
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

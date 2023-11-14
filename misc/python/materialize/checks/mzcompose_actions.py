@@ -184,11 +184,15 @@ class ConfigureMz(MzcomposeAction):
                 + "\n".join(system_settings)
             )
 
+        kafka_broker = "BROKER '${testdrive.kafka-addr}'"
+        print(e.current_mz_version)
+        if e.current_mz_version >= MzVersion.parse("0.78.0-dev"):
+            kafka_broker += ", SECURITY PROTOCOL PLAINTEXT"
         input += dedent(
-            """
-            > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+            f"""
+            > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA {kafka_broker}
 
-            > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
+            > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
             """
         )
 

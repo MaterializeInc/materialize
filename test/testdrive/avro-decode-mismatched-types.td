@@ -34,7 +34,7 @@ $ kafka-ingest format=avro topic=avro-types-null2int schema=${null} timestamp=1
 {"f1": null}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE avro_types_null2int
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-null2int-${testdrive.seed}')

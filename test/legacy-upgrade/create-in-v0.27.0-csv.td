@@ -12,8 +12,14 @@ $ kafka-ingest topic=csv format=bytes
 id,value
 1,person
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
+    BROKER '${testdrive.kafka-addr}',
+    SECURITY PROTOCOL PLAINTEXT
+  )
+
+>[version<7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
+    BROKER '${testdrive.kafka-addr}'
+  )
 
 > CREATE SOURCE csv_upgrade_no_header
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csv-${testdrive.seed}')

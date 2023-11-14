@@ -75,7 +75,8 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
                     'customer-hostname-2:9092' USING AWS PRIVATELINK privatelinkconn (PORT 9093),
                     'customer-hostname-3:9092' USING AWS PRIVATELINK privatelinkconn (AVAILABILITY ZONE 'use1-az1', PORT 9093),
                     'customer-hostname-4:9094'
-                )
+                ),
+                SECURITY PROTOCOL PLAINTEXT
             ) WITH (VALIDATE = false);
             """
         )
@@ -145,7 +146,8 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
                 CREATE CONNECTION kafkaconn2 TO KAFKA (
                     BROKERS (
                         'customer-hostname-3:9092' USING AWS PRIVATELINK privatelinkconn (AVAILABILITY ZONE 'use1-az3', PORT 9093)
-                    )
+                    ),
+                    SECURITY PROTOCOL PLAINTEXT
                 ) WITH (VALIDATE = false);
                 """
             )

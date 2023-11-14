@@ -30,7 +30,7 @@ GRANT CREATE, USAGE ON SCHEMA public TO materialize
   );
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE SOURCE resolution_no_publish_writer
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-no-publish-writer-${testdrive.seed}')

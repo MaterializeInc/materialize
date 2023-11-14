@@ -183,7 +183,8 @@ t1
 # topic name.
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
     BROKER '${testdrive.kafka-addr}',
-    PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}'
+    PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}',
+    SECURITY PROTOCOL PLAINTEXT
   );
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (

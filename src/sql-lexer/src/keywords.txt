@@ -283,6 +283,7 @@ Privatelink
 Privileges
 Progress
 Protobuf
+Protocol
 Publication
 Query
 Quote
@@ -328,6 +329,7 @@ Second
 Seconds
 Secret
 Secrets
+Security
 Seed
 Select
 Sequences

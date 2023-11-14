@@ -46,7 +46,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"d": 0, "ts_millis": 65000000, "ts_micros": 65000000}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

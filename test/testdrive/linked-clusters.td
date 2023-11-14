@@ -87,7 +87,7 @@ materialize_public_lg2  linked  ${arg.default-storage-size}
 
 # Create a connection for use in sinks.
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 # Test that linked clusters cannot be dropped, nor can their replicas be
 # dropped, nor can new replicas be created, nor can they run queries,

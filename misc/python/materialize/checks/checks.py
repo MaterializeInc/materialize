@@ -29,6 +29,12 @@ class Check:
     def _can_run(self, e: Executor) -> bool:
         return True
 
+    def _kafka_broker(self) -> str:
+        result = "BROKER '${testdrive.kafka-addr}'"
+        if self.current_version >= MzVersion.parse("0.78.0-dev"):
+            result += ", SECURITY PROTOCOL PLAINTEXT"
+        return result
+
     def initialize(self) -> Testdrive:
         return Testdrive(TESTDRIVE_NOP)
 

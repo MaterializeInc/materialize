@@ -825,8 +825,8 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}')
@@ -862,8 +862,8 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
             """
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -902,8 +902,8 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
@@ -946,8 +946,8 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
@@ -1024,8 +1024,8 @@ class KafkaRestartBig(ScenarioBig):
     def init(self) -> Action:
         return TdAction(
             """
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${testdrive.seed}')
@@ -1086,8 +1086,8 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}')
@@ -1130,8 +1130,8 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
     def init(self) -> Action:
         return TdAction(
             f"""
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -1444,8 +1444,8 @@ ALTER SYSTEM SET max_sources = {self.n() * 2};
 ALTER SYSTEM SET max_sinks = {self.n() * 2};
 ALTER SYSTEM SET max_tables = {self.n() * 2};
 
-> CREATE CONNECTION IF NOT EXISTS s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

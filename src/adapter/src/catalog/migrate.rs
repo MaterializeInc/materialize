@@ -74,9 +74,13 @@ pub(crate) async fn migrate(
     let state = Catalog::load_catalog_items(txn, state)?;
     let conn_cat = state.for_system_session();
     rewrite_items(txn, Some(&conn_cat), |_tx, cat, item| {
+        let catalog_version = catalog_version.clone();
         Box::pin(async move {
             let _conn_cat = cat.expect("must provide access to conn catalog");
             ast_rewrite_create_connection_options_0_77_0(item)?;
+            if catalog_version <= Version::new(0, 77, u64::MAX) {
+                ast_rewrite_create_connection_options_0_78_0(item)?;
+            }
             Ok(())
         })
     })
@@ -130,6 +134,65 @@ fn ast_rewrite_create_connection_options_0_77_0(
         ) {
             node.with_options
                 .retain(|o| o.name != mz_sql::ast::CreateConnectionOptionName::Validate);
+        }
+    }
+
+    CreateConnectionRewriter.visit_statement_mut(stmt);
+    Ok(())
+}
+
+/// Add `SECURITY PROTOCOL` to all existing Kafka connections, based on the
+fn ast_rewrite_create_connection_options_0_78_0(
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::visit_mut::VisitMut;
+    use mz_sql::ast::ConnectionOptionName::*;
+    use mz_sql::ast::{
+        ConnectionOption, CreateConnectionStatement, CreateConnectionType, Value, WithOptionValue,
+    };
+
+    struct CreateConnectionRewriter;
+    impl<'ast> VisitMut<'ast, Raw> for CreateConnectionRewriter {
+        fn visit_create_connection_statement_mut(
+            &mut self,
+            node: &'ast mut CreateConnectionStatement<Raw>,
+        ) {
+            if node.connection_type != CreateConnectionType::Kafka {
+                return;
+            }
+            let has_security_protocol = node
+                .values
+                .iter()
+                .any(|o| matches!(o.name, SecurityProtocol));
+            let is_ssl = node
+                .values
+                .iter()
+                .any(|o| matches!(o.name, SslCertificate | SslKey));
+            let is_sasl = node
+                .values
+                .iter()
+                .any(|o| matches!(o.name, SaslMechanisms | SaslUsername | SaslPassword));
+            if has_security_protocol {
+                panic!(
+                    "Kafka connection has security protocol pre-v0.78.0: {:#?}",
+                    node.values
+                );
+            }
+            let security_protocol = match (is_ssl, is_sasl) {
+                (false, false) => "PLAINTEXT",
+                (true, false) => "SSL",
+                (false, true) => "SASL_SSL", // Pre-v0.78, any SASL option always meant SASL_SSL.
+                (true, true) => panic!(
+                    "impossible Kafka connection with both SSL and SASL options: {:#?}",
+                    node.values
+                ),
+            };
+            node.values.push(ConnectionOption {
+                name: SecurityProtocol,
+                value: Some(WithOptionValue::Value(Value::String(
+                    security_protocol.into(),
+                ))),
+            });
         }
     }
 

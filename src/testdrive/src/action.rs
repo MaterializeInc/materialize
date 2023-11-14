@@ -354,6 +354,9 @@ impl State {
             .context("resetting materialize state: SHOW DATABASES")?
         {
             let db_name: String = row.get(0);
+            if db_name.starts_with("testdrive_no_reset_") {
+                continue;
+            }
             let query = format!("DROP DATABASE {}", db_name);
             sql::print_query(&query, None);
             inner_client.batch_execute(&query).await.context(format!(
@@ -604,6 +607,7 @@ impl Run for PosCommand {
                     }
                     "set" => set::set_vars(builtin, state),
                     "set-from-sql" => set::run_set_from_sql(builtin, state).await,
+                    "set-from-file" => set::run_set_from_file(builtin, state).await,
                     "webhook-append" => webhook::run_append(builtin, state).await,
                     // "verify-timestamp-compaction" => Box::new(
                     //     verify_timestamp_compaction::run_verify_timestamp_compaction_action(

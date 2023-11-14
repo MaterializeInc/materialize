@@ -36,7 +36,7 @@ $ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE upsert_modification
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-modification-${testdrive.seed}')

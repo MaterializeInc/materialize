@@ -38,7 +38,7 @@ bids                    subsource      <null>                       <null>
 organizations           subsource      <null>                       <null>
 users                   subsource      <null>                       <null>
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 # Validate that the ID column of the load generator data is usable as a key.
 > CREATE SINK accounts_sink FROM accounts

@@ -160,7 +160,7 @@ $ kafka-ingest format=avro topic=input_dbz key-format=avro key-schema=${dbz-key-
 {"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -275,7 +275,8 @@ $ kafka-create-topic topic=progress-test-input
 
 > CREATE CONNECTION kafka_fixed TO KAFKA (
     BROKER '${testdrive.kafka-addr}',
-    PROGRESS TOPIC 'testdrive-progress-fixed-${testdrive.seed}'
+    PROGRESS TOPIC 'testdrive-progress-fixed-${testdrive.seed}',
+    SECURITY PROTOCOL PLAINTEXT
   );
 
 > CREATE SOURCE compaction_test_input

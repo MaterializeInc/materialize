@@ -395,6 +395,10 @@ $ set schema={
     }
 ```
 
+#### `$ set-from-file var=PATH`
+
+Sets the variable to the contents of the file at `PATH`.
+
 #### `$ set-from-sql var=NAME`
 
 Sets the variable to the result of a SQL query that returns one row containing

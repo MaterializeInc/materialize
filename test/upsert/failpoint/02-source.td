@@ -10,7 +10,7 @@
 $ kafka-create-topic topic=failpoint
 
 > CREATE CONNECTION conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+  FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT
 
 > CREATE SOURCE failpoint
   IN CLUSTER storage_cluster

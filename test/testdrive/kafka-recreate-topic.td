@@ -17,7 +17,7 @@ $ kafka-ingest key-format=bytes format=bytes key-terminator=: topic=topic0 repea
   );
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > DROP CLUSTER IF EXISTS to_recreate CASCADE;
 > CREATE CLUSTER to_recreate SIZE '1', REPLICATION FACTOR 1;

@@ -36,7 +36,7 @@ $ kafka-ingest format=avro topic=upsert-deletion key-format=avro key-schema=${ke
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE upsert_deletion
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-deletion-${testdrive.seed}')
