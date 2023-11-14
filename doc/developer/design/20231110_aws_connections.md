@@ -104,7 +104,8 @@ The connection ID will be appended to the external ID prefix to get the complete
 External ID and then stored in the new `mz_aws_connections` table for that connection ID.
 
 #### `VALIDATE CONNECTION`
-We can make use of the [GetCallerIdentity AWS API](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html) to check if the credentials are valid.
+We can make use of the [GetCallerIdentity AWS API](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html)
+to check if the credentials are valid.
 
 Optionally, with `ASSUME ROLE ARN` we can also try to get temporary credentials.
 
@@ -129,7 +130,8 @@ with the intended resources when we actually make use of this connection.
 Potentially later we can extend `VALIDATE CONNECTION` sql to optionally specify an S3 or a database url, like,
 `VALIDATE CONNECTION aws_conn WITH (S3 PATH = 's3://prefix')`
 
-Alternatively, we could have a higher level S3 connection using this AWS connection,something like `CREATE CONNECTION s3_conn TO S3 ( PREFIX = 'url') USING AWS CONNECTION aws_conn`.
+Alternatively, we could have a higher level S3 connection using this AWS connection,something
+like `CREATE CONNECTION s3_conn TO S3 ( PREFIX = 'url') USING AWS CONNECTION aws_conn`.
 Validating s3_conn could verify if we are able to list the prefix, create and
 remove a file there. This seems like an overkill though and a `VALIDATE CONNECTION ... WITH`
 mentioned above would probably be better.
