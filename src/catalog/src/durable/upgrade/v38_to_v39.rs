@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_stash_types::upgrade::{objects_v38 as v38, objects_v39 as v39};
+use mz_stash::upgrade::{wire_compatible, MigrationAction, WireCompatible};
+use mz_stash::{Transaction, TypedCollection};
+use mz_stash_types::StashError;
 
-use crate::upgrade::{wire_compatible, MigrationAction, WireCompatible};
-use crate::{StashError, Transaction, TypedCollection};
+use crate::durable::upgrade::{objects_v38 as v38, objects_v39 as v39};
 
 wire_compatible!(v38::RoleKey with v39::RoleKey);
 wire_compatible!(v38::RoleAttributes with v39::RoleAttributes);
@@ -50,7 +51,7 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Stash;
+    use mz_stash::Stash;
 
     const ROLES_COLLECTION_V39: TypedCollection<v39::RoleKey, v39::RoleValue> =
         TypedCollection::new("role");
@@ -117,7 +118,7 @@ mod tests {
                     })
                 })
                 .await
-                .unwrap();
+                .expect("transaction failed");
 
             let roles = ROLES_COLLECTION_V39
                 .peek_one(&mut stash)
@@ -205,6 +206,6 @@ mod tests {
         "###);
         })
         .await
-        .unwrap();
+        .expect("stash failed");
     }
 }

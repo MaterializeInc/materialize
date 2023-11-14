@@ -25,11 +25,10 @@ use mz_sql::names::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
-use mz_stash::USER_VERSION_KEY;
-use mz_stash_types::STASH_VERSION;
 use mz_storage_types::sources::Timeline;
 
 use crate::builtin::BUILTIN_ROLES;
+use crate::durable::upgrade::STASH_VERSION;
 use crate::durable::{
     BootstrapArgs, CatalogError, ClusterConfig, ClusterVariant, ClusterVariantManaged,
     DefaultPrivilege, ReplicaConfig, ReplicaLocation, Role, Schema, Transaction,
@@ -38,8 +37,10 @@ use crate::durable::{
     USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
-/// The key used within the "config" collection where we store the deploy generation.
+/// The key used within the "config" collection stores the deploy generation.
 pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
+/// The key within the "config" Collection that stores the version of the Stash.
+pub(crate) const USER_VERSION_KEY: &str = "user_version";
 
 /// The key used within the "config" collection where we store a mirror of the
 /// `enable_persist_txn_tables` "system var" value. This is mirrored so that we

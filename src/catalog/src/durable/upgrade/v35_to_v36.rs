@@ -9,10 +9,11 @@
 
 use std::collections::BTreeMap;
 
-use mz_stash_types::upgrade::{objects_v35 as v35, objects_v36 as v36};
+use mz_stash::upgrade::{wire_compatible, MigrationAction, WireCompatible};
+use mz_stash::{Transaction, TypedCollection};
+use mz_stash_types::StashError;
 
-use crate::upgrade::{wire_compatible, MigrationAction, WireCompatible};
-use crate::{StashError, Transaction, TypedCollection};
+use crate::durable::upgrade::{objects_v35 as v35, objects_v36 as v36};
 
 wire_compatible!(v35::ServerConfigurationKey with v36::ServerConfigurationKey);
 wire_compatible!(v35::ServerConfigurationValue with v36::ServerConfigurationValue);
@@ -77,7 +78,7 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::Stash;
+    use mz_stash::Stash;
 
     use super::*;
 
@@ -113,7 +114,7 @@ mod tests {
                     ],
                 )
                 .await
-                .unwrap();
+                .expect("insert failed");
 
             // Run the migration.
             stash
@@ -124,12 +125,12 @@ mod tests {
                     })
                 })
                 .await
-                .unwrap();
+                .expect("transaction failed");
 
             let mut system_configs: Vec<_> = SYSTEM_CONFIGURATION_COLLECTION_V36
                 .peek_one(&mut stash)
                 .await
-                .unwrap()
+                .expect("peek failed")
                 .into_iter()
                 .map(|(key, value)| (key.name, value.value))
                 .collect();
@@ -144,7 +145,7 @@ mod tests {
             );
         })
         .await
-        .unwrap();
+        .expect("stash failed");
     }
 
     #[mz_ore::test(tokio::test)]
@@ -154,7 +155,7 @@ mod tests {
             SYSTEM_CONFIGURATION_COLLECTION
                 .insert_without_overwrite(&mut stash, vec![])
                 .await
-                .unwrap();
+                .expect("insert failed");
 
             // Run the migration.
             stash
@@ -165,12 +166,12 @@ mod tests {
                     })
                 })
                 .await
-                .unwrap();
+                .expect("transaction failed");
 
             let mut system_configs: Vec<_> = SYSTEM_CONFIGURATION_COLLECTION_V36
                 .peek_one(&mut stash)
                 .await
-                .unwrap()
+                .expect("peek failed")
                 .into_iter()
                 .map(|(key, value)| (key.name, value.value))
                 .collect();
@@ -185,6 +186,6 @@ mod tests {
             );
         })
         .await
-        .unwrap();
+        .expect("stash failed");
     }
 }

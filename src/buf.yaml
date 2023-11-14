@@ -16,6 +16,16 @@ breaking:
     - WIRE
   ignore:
     # reason: does currently not require backward-compatibility
+    - catalog/protos/objects.proto
+    # reason: does currently not require backward-compatibility
+    - catalog/protos/objects_v40.proto
+    # reason: does currently not require backward-compatibility
+    - catalog/protos/objects_v41.proto
+    # reason: does currently not require backward-compatibility
+    - catalog/protos/objects_v42.proto
+    # reason: does currently not require backward-compatibility
+    - catalog/protos/objects_v43.proto
+    # reason: does currently not require backward-compatibility
     - cluster-client/src/client.proto
     # reason: does currently not require backward-compatibility
     - compute-client/src/logging.proto
@@ -31,16 +41,6 @@ breaking:
     - expr/src/relation.proto
     # reason: still under active development
     - persist-types/src/stats.proto
-    # reason: does currently not require backward-compatibility
-    - stash-types/protos/objects.proto
-    # reason: does currently not require backward-compatibility
-    - stash-types/protos/objects_v40.proto
-    # reason: does currently not require backward-compatibility
-    - stash-types/protos/objects_v41.proto
-    # reason: does currently not require backward-compatibility
-    - stash-types/protos/objects_v42.proto
-    # reason: does currently not require backward-compatibility
-    - stash-types/protos/objects_v43.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
     # reason: Ignored until #21887 is reverted

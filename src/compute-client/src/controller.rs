@@ -43,9 +43,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
-use mz_stash_types::objects::proto;
 use mz_storage_client::controller::{IntrospectionType, ReadPolicy, StorageController};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -107,22 +105,6 @@ impl ComputeReplicaLogging {
     /// Return whether logging is enabled.
     pub fn enabled(&self) -> bool {
         self.interval.is_some()
-    }
-}
-
-impl RustType<proto::ReplicaLogging> for ComputeReplicaLogging {
-    fn into_proto(&self) -> proto::ReplicaLogging {
-        proto::ReplicaLogging {
-            log_logging: self.log_logging,
-            interval: self.interval.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: proto::ReplicaLogging) -> Result<Self, TryFromProtoError> {
-        Ok(ComputeReplicaLogging {
-            log_logging: proto.log_logging,
-            interval: proto.interval.into_rust()?,
-        })
     }
 }
 

@@ -23,23 +23,23 @@ use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::TableTransaction;
-use mz_stash_types::objects::proto;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::builtin::BuiltinLog;
 use crate::durable::initialize::ENABLE_PERSIST_TXN_TABLES;
-use crate::durable::objects::ClusterConfig;
+use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
-    AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
-    CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
-    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
-    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig,
-    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
+    AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
+    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
+    ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
+    Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
+    DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    TimestampKey, TimestampValue,
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogState, Snapshot, SystemConfiguration,

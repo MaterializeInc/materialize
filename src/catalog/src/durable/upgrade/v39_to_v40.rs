@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_stash_types::upgrade::{objects_v39 as v39, objects_v40 as v40};
+use mz_stash::upgrade::{wire_compatible, MigrationAction, WireCompatible};
+use mz_stash::{Transaction, TypedCollection};
+use mz_stash_types::StashError;
 
-use crate::upgrade::{wire_compatible, MigrationAction, WireCompatible};
-use crate::{StashError, Transaction, TypedCollection};
+use crate::durable::upgrade::{objects_v39 as v39, objects_v40 as v40};
 
 wire_compatible!(v39::ClusterId with v40::ClusterId);
 wire_compatible!(v39::ClusterReplicaKey with v40::ClusterReplicaKey);
@@ -132,7 +133,7 @@ async fn migrate_audit_log(tx: &Transaction<'_>) -> Result<(), StashError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Stash;
+    use mz_stash::Stash;
 
     const AUDIT_LOG_COLLECTION_V40: TypedCollection<v40::AuditLogKey, ()> =
         TypedCollection::new("audit_log");
@@ -236,7 +237,7 @@ mod tests {
                     })
                 })
                 .await
-                .unwrap();
+                .expect("transaction failed");
 
             let roles = CLUSTER_REPLICA_COLLECTION_V40
                 .peek_one(&mut stash)
@@ -376,7 +377,7 @@ mod tests {
         "###);
         })
         .await
-        .unwrap();
+        .expect("stash failed");
     }
 
     #[mz_ore::test(tokio::test)]
@@ -427,7 +428,7 @@ mod tests {
                     })
                 })
                 .await
-                .unwrap();
+                .expect("transaction failed");
 
             let roles = AUDIT_LOG_COLLECTION_V40
                 .peek_one(&mut stash)
@@ -478,6 +479,6 @@ mod tests {
         "###);
         })
         .await
-        .unwrap();
+        .expect("stash failed");
     }
 }
