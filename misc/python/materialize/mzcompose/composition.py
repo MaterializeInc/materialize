@@ -474,7 +474,7 @@ class Composition:
             ui.header(f"mzcompose: test case {name} succeeded")
         except Exception as e:
             error = f"{str(type(e))}: {e}"
-            ui.header(f"mzcompose: test case {name} failed: {error}", file=sys.stderr)
+            ui.header(f"mzcompose: test case {name} failed: {error}")
 
             if not isinstance(e, UIError):
                 traceback.print_exc()
