@@ -97,7 +97,7 @@ class StartMz(MzcomposeAction):
             f"echo '{public_key}' > /etc/authorized_keys/mz",
         )
 
-        mz_version = MzVersion.parse_sql(c)
+        mz_version = MzVersion.parse_mz(c.query_mz_version())
         if self.tag:
             assert (
                 self.tag == mz_version

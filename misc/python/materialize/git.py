@@ -14,6 +14,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from materialize.util import MzVersion
+from materialize.version_list import INVALID_VERSIONS
+
 try:
     from semver.version import Version
 except ImportError:
@@ -228,6 +231,42 @@ def get_common_ancestor_commit(remote: str, branch: str, fetch_branch: bool) -> 
     return spawn.capture(command).strip()
 
 
+def is_on_release_version() -> bool:
+    git_tags = get_tags_of_current_commit()
+    return any(MzVersion.is_mz_version_string(git_tag) for git_tag in git_tags)
+
+
+def is_on_main_branch() -> bool:
+    return get_branch_name() == "main"
+
+
+def get_tagged_release_version() -> MzVersion | None:
+    """
+    This returns the release version if exactly this commit is tagged.
+    If multiple release versions are present, the highest one will be returned.
+    None will be returned if the commit is not tagged.
+    """
+    git_tags = get_tags_of_current_commit()
+
+    versions: list[MzVersion] = []
+
+    for git_tag in git_tags:
+        version = MzVersion.try_parse_mz(git_tag)
+
+        if version is not None:
+            versions.append(version)
+
+    if len(versions) == 0:
+        return None
+
+    if len(versions) > 1:
+        print(
+            "Warning! Commit is tagged with multiple release versions! Returning the highest."
+        )
+
+    return max(versions)
+
+
 def get_commit_message(commit_sha: str) -> str | None:
     try:
         command = ["git", "log", "-1", "--pretty=format:%s", commit_sha]
@@ -236,6 +275,30 @@ def get_commit_message(commit_sha: str) -> str | None:
         # Sometimes mz_version() will report a Git SHA that is not available
         # in the current repository
         return None
+
+
+def get_branch_name() -> str:
+    command = ["git", "branch", "--show-current"]
+    return spawn.capture(command).strip()
+
+
+def get_previous_version(version: MzVersion) -> Version:
+    if version.prerelease is not None and len(version.prerelease) > 0:
+        # simply drop the prerelease, do not try to find a decremented version
+        return MzVersion.create_mz(version.major, version.minor, version.patch)
+
+    # type must match for comparison
+    version_as_semver_version = version.to_semver()
+
+    all_versions = get_version_tags()
+    all_suitable_previous_versions = [
+        v
+        for v in all_versions
+        if v < version_as_semver_version
+        and (v.prerelease is None or len(v.prerelease) == 0)
+        and MzVersion.from_semver(v) not in INVALID_VERSIONS
+    ]
+    return max(all_suitable_previous_versions)
 
 
 # Work tree mutation

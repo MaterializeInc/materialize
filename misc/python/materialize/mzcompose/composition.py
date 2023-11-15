@@ -538,6 +538,9 @@ class Composition:
             cursor.execute(sql)
             return cursor.fetchall()
 
+    def query_mz_version(self) -> str:
+        return self.sql_query("SELECT mz_version()")[0][0]
+
     def run(
         self,
         service: str,
