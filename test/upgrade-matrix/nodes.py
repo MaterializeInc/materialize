@@ -11,7 +11,7 @@
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.mzcompose_actions import ConfigureMz, KillMz, StartMz
 from materialize.checks.scenarios import Scenario
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 
 class Node:

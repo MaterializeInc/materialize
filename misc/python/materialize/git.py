@@ -14,7 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 from materialize.version_list import INVALID_VERSIONS
 
 try:

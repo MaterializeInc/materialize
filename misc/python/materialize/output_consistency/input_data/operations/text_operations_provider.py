@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from materialize.mz_version import MzVersion
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.enum.enum_constant import EnumConstant
 from materialize.output_consistency.expression.expression import Expression
@@ -46,7 +47,6 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
     OperationRelevance,
 )
-from materialize.util import MzVersion
 
 TEXT_OPERATION_TYPES: list[DbOperationOrFunction] = []
 

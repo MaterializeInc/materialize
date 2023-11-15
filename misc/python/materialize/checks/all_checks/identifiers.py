@@ -16,7 +16,8 @@ from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
-from materialize.util import MzVersion, naughty_strings
+from materialize.mz_version import MzVersion
+from materialize.util import naughty_strings
 
 
 def dq(ident: str) -> str:

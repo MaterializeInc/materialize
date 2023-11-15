@@ -10,6 +10,7 @@
 
 from copy import copy
 
+from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
     DEFAULT_MZ_ENVIRONMENT_ID,
@@ -22,7 +23,6 @@ from materialize.mzcompose.service import (
     ServiceDependency,
 )
 from materialize.mzcompose.services.minio import MINIO_BLOB_URI
-from materialize.util import MzVersion
 
 
 class Materialized(Service):

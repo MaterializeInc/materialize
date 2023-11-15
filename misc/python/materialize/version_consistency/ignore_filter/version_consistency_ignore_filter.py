@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 from functools import partial
 
+from materialize.mz_version import MzVersion
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression import (
     Expression,
@@ -37,7 +38,6 @@ from materialize.output_consistency.operation.operation import (
     DbOperation,
 )
 from materialize.output_consistency.selection.selection import DataRowSelection
-from materialize.util import MzVersion
 
 MZ_VERSION_0_77_0 = MzVersion.parse_mz("v0.77.0")
 MZ_VERSION_0_78_0 = MzVersion.parse_mz("v0.78.0")

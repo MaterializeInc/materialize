@@ -15,6 +15,8 @@ from collections.abc import Generator
 
 import networkx as nx
 
+from materialize.util import all_subclasses
+
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
@@ -37,6 +39,7 @@ from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
@@ -46,7 +49,6 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
-from materialize.util import MzVersion, all_subclasses
 from materialize.version_list import VersionsFromDocs
 
 SERVICES = [

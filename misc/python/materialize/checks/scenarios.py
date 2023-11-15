@@ -36,7 +36,7 @@ from materialize.checks.mzcompose_actions import (
 from materialize.checks.mzcompose_actions import (
     RestartSourcePostgres as RestartSourcePostgresAction,
 )
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 
 class Scenario:

@@ -11,7 +11,7 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import TESTDRIVE_NOP, Check
 from materialize.checks.executors import Executor
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 
 class CreateReplica(Check):

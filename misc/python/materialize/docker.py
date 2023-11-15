@@ -11,7 +11,7 @@
 import subprocess
 
 from materialize import buildkite, git
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 try:
     from semver.version import Version
