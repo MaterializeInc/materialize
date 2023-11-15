@@ -18,17 +18,13 @@ from dbt.contracts.results import CatalogArtifact
 from dbt.tests.util import run_dbt
 from fixtures import (
     test_materialized_view,
+    test_seed,
+    test_sink,
+    test_source,
+    test_subsources,
     test_table_index,
     test_view_index,
 )
-
-MY_SEED = """
-id,value
-1,100
-2,200
-3,300
-""".strip()
-
 
 class TestCatalogRelationTypes:
     @pytest.fixture(scope="class", autouse=True)
@@ -38,9 +34,13 @@ class TestCatalogRelationTypes:
     @pytest.fixture(scope="class", autouse=True)
     def models(self):
         yield {
+            "test_materialized_view.sql": test_materialized_view,
+            "test_seed.sql": test_seed,
+            "test_sink.sql": test_sink,
+            "test_source.sql": test_source,
+            "test_subsource.sql": test_subsources,
             "test_table.sql": test_table_index,
             "test_view.sql": test_view_index,
-            "test_materialized_view.sql": test_materialized_view,
         }
 
     @pytest.fixture(scope="class", autouse=True)
@@ -53,11 +53,14 @@ class TestCatalogRelationTypes:
         "node_name,relation_type",
         [
             ("seed.test.test_seed", "table"),
+            ("model.test.test_materialized_view", "materializedview"),
+            ("model.test.sink", "sink"),
+            ("model.test.test_source", "source"),
+            ("model.test.test_subsource", "subsource"),
             # NOTE(dehume): Tables are materialized as materialized views
             # https://github.com/MaterializeInc/materialize/issues/5266
             ("model.test.test_table", "materializedview"),
             ("model.test.test_view", "view"),
-            ("model.test.test_materialized_view", "materializedview"),
         ],
     )
     def test_relation_types_populate_correctly(

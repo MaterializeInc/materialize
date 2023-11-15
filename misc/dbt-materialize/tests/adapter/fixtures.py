@@ -48,6 +48,13 @@ test_table_index = """
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
 """
 
+test_seed = """
+id,value
+1,100
+2,200
+3,300
+""".strip()
+
 test_source = """
 {{ config(
     materialized='source',
@@ -85,7 +92,10 @@ FOR ALL TABLES;
 """
 
 test_sink = """
-{{ config(materialized='sink') }}
+{{ config(
+    materialized='sink'
+    )
+}}
  CREATE SINK {{ this }}
  FROM {{ ref('test_materialized_view') }}
  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink')
