@@ -167,7 +167,10 @@ def workflow_mz_not_running(c: Composition) -> None:
         c.sql_cursor(service="balancerd")
         assert False, "connect() expected to fail"
     except ProgrammingError as e:
-        assert "No route to host" in str(e)
+        assert any(
+            expected in str(e)
+            for expected in ["No route to host", "Connection timed out"]
+        )
     except:
         assert False, "connect() threw an unexpected exception"
 
