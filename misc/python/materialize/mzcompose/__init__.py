@@ -65,8 +65,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_streaming_compaction_enabled": "true",
     "persist_streaming_snapshot_and_fetch_enabled": "true",
     "storage_source_decode_fuel": "100000",
-    # 128 MiB,
-    "compute_dataflow_max_inflight_bytes": "134217728",
     "enable_unified_clusters": "true",
     "enable_jemalloc_profiling": "true",
     "enable_comment": "true",
