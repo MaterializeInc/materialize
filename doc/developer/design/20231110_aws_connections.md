@@ -98,6 +98,9 @@ CREATE CONNECTION <connector_name> TO AWS (
 );
 ```
 
+Users should be able to provide either the `ACCESS KEY` options or the `ASSUME ROLE` options,
+but not both.
+
 #### External ID and principal
 We already have external ID prefix and principal provided in the catalog state.
 The connection ID will be appended to the external ID prefix to get the complete
@@ -114,21 +117,24 @@ We should put the AWS connection behind a feature flag.
 
 #### Testing During development
 Write cloudtests to test out the different AWS Connections. For the AssumeRole AWS
-Connection we should test that we are able to get temporary credentials.
+Connection we should test that the expected principal and external_id is populated
+in the `mz_aws_connections` table.
 
 #### Testing after code is merged
-Switch on the feature flag for the staging environment and create an AWS Connection in staging followed by `VALIDATE CONNECTION`.
+Switch on the feature flag for the staging environment and create an AWS Connection
+in staging followed by `VALIDATE CONNECTION`.
 
-## Open questions
+## Future work
 
-#### `VALIDATE CONNECTION` of an AWS connection will not be comprehensive.
+#### Extend `VALIDATE CONNECTION` of an AWS connection to be comprehensive.
 An AWS connection can be potentially re-used across multiple services like S3 or RDS.
 Having permission to an S3 bucket might not mean that RDS access is set up correctly. So
 a validate connection will not be comprehensive and we'll probably do some additional check
 with the intended resources when we actually make use of this connection.
 
-Potentially later we can extend `VALIDATE CONNECTION` sql to optionally specify an S3 or a database url, like,
-`VALIDATE CONNECTION aws_conn WITH (S3 PATH = 's3://prefix')`
+Hence, potentially later we can extend `VALIDATE CONNECTION` sql to optionally specify an S3 or a database url,
+like, `VALIDATE CONNECTION aws_conn WITH (S3 PATH = 's3://prefix')` so the user can correctly
+validate if the policies are set up correctly on their end in AWS.
 
 Alternatively, we could have a higher level S3 connection using this AWS connection,something
 like `CREATE CONNECTION s3_conn TO S3 ( PREFIX = 'url') USING AWS CONNECTION aws_conn`.
