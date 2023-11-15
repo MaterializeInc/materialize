@@ -2065,6 +2065,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_aws_connection,
+        desc: "CREATE CONNECTION ... TO AWS",
+        default: &true, // will set to false once we verify that nobody's using this
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Represents the input to a variable.
