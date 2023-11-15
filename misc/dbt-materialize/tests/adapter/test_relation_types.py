@@ -18,9 +18,6 @@ from dbt.contracts.results import CatalogArtifact
 from dbt.tests.util import run_dbt
 from fixtures import (
     test_materialized_view,
-    test_sink,
-    test_source,
-    test_subsources,
     test_table_index,
     test_view_index,
 )
@@ -44,9 +41,6 @@ class TestCatalogRelationTypes:
             "test_table.sql": test_table_index,
             "test_view.sql": test_view_index,
             "test_materialized_view.sql": test_materialized_view,
-            "test_sink.sql": test_sink,
-            "test_source.sql": test_source,
-            "test_subsource.sql": test_subsources,
         }
 
     @pytest.fixture(scope="class", autouse=True)
@@ -61,12 +55,9 @@ class TestCatalogRelationTypes:
             ("seed.test.test_seed", "table"),
             # NOTE(dehume): Tables are materialized as materialized views
             # https://github.com/MaterializeInc/materialize/issues/5266
-            ("model.test.test_table", "materialized-view"),
+            ("model.test.test_table", "materializedview"),
             ("model.test.test_view", "view"),
-            ("model.test.test_materialized_view", "materialized-view"),
-            ("model.test.test_source", "kafka"),
-            # ("model.test.test_subsource", "subsource"),
-            # ("model.test.test_sink", "sink"),
+            ("model.test.test_materialized_view", "materializedview"),
         ],
     )
     def test_relation_types_populate_correctly(

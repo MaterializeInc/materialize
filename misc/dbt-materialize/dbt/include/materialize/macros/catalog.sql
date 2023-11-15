@@ -48,6 +48,7 @@
             {%- for schema in schemas -%}
                 '{{ schema }}' {%- if not loop.last %}, {% endif -%}
             {%- endfor -%}
+        )
     {%- endcall -%}
     {{ return(load_result('catalog').table) }}
 {%- endmacro %}
