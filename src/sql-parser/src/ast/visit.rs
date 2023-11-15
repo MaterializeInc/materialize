@@ -138,8 +138,9 @@
 //!         collector.visit_statement(&stmt.ast);
 //!     }
 //!     assert_eq!(collector.idents, &[
-//!         &Ident::new("a"), &Ident::new("b"), &Ident::new("c"),
-//!         &Ident::new("d"), &Ident::new("e"),
+//!         &Ident::new_unchecked("a"), &Ident::new_unchecked("b"),
+//!         &Ident::new_unchecked("c"), &Ident::new_unchecked("d"),
+//!         &Ident::new_unchecked("e"),
 //!     ]);
 //!     Ok(())
 //! }

@@ -20,6 +20,7 @@ use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
     TableFactor, TableWithJoins, Value, WindowSpec,
 };
+use mz_sql_parser::ident;
 use uuid::Uuid;
 
 use crate::names::{Aug, PartialItemName, ResolvedDataType, ResolvedItemName};
@@ -412,7 +413,7 @@ impl<'a> FuncRewriter<'a> {
             } else {
                 return None;
             };
-            Some((Ident::new(name), expr))
+            Some((Ident::new_unchecked(name), expr))
         } else {
             None
         }
@@ -440,7 +441,7 @@ impl<'a> FuncRewriter<'a> {
                             self.scx
                                 .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, fn_ident]),
                         );
-                        Some((Ident::new(ident), expr))
+                        Some((Ident::new_unchecked(ident), expr))
                     }
                 }
             }
@@ -489,7 +490,7 @@ impl<'ast> VisitMut<'ast, Aug> for FuncRewriter<'_> {
                     if *with_ordinality {
                         select = select.project(SelectItem::Expr {
                             expr: Expr::Value(Value::Number("1".into())),
-                            alias: Some("ordinality".into()),
+                            alias: Some(ident!("ordinality")),
                         });
                     }
 
@@ -615,7 +616,7 @@ impl<'a> Desugarer<'a> {
         //
         // and analogously for other operators and ANY.
         if let Expr::AnyExpr { left, op, right } | Expr::AllExpr { left, op, right } = expr {
-            let binding = Ident::new("elem");
+            let binding = ident!("elem");
 
             let subquery = Query::select(
                 Select::default()
@@ -631,7 +632,7 @@ impl<'a> Desugarer<'a> {
                                 distinct: false,
                             },
                             alias: Some(TableAlias {
-                                name: Ident::new("_"),
+                                name: ident!("_"),
                                 columns: vec![binding.clone()],
                                 strict: true,
                             }),
@@ -684,14 +685,16 @@ impl<'a> Desugarer<'a> {
             };
 
             let bindings: Vec<_> = (0..arity)
-                .map(|_| Ident::new(format!("right_{}", Uuid::new_v4())))
+                // Note: using unchecked is okay here because we know the value will be less than
+                // our maximum length.
+                .map(|_| Ident::new_unchecked(format!("right_{}", Uuid::new_v4())))
                 .collect();
 
             let select = Select::default()
                 .from(TableWithJoins::subquery(
                     right.take(),
                     TableAlias {
-                        name: Ident::new("subquery"),
+                        name: ident!("subquery"),
                         columns: bindings.clone(),
                         strict: true,
                     },

@@ -30,7 +30,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
+use mz_sql_parser::ast::{Expr, Ident, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sources::SourceDesc;
@@ -1237,8 +1237,13 @@ impl<'a, T> ErsatzCatalog<'a, T> {
             None => sql_bail!("database {database} not found source"),
         };
 
+        // Note: Using unchecked here is okay because all of these values were originally Idents.
         Ok((
-            UnresolvedItemName::qualified(&[database, schema, &name.item]),
+            UnresolvedItemName::qualified(&[
+                Ident::new_unchecked(database),
+                Ident::new_unchecked(schema),
+                Ident::new_unchecked(&name.item),
+            ]),
             desc,
         ))
     }

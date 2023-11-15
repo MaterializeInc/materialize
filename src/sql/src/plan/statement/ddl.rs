@@ -41,6 +41,7 @@ use mz_sql_parser::ast::{
     MaterializedViewOptionName, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
     UnresolvedSchemaName, Value,
 };
+use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
@@ -2711,7 +2712,7 @@ pub fn plan_create_index(
                 .default_key()
                 .iter()
                 .map(|i| match on_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
+                    Some(n) => Expr::Identifier(vec![n.clone().into()]),
                     _ => Expr::Value(Value::Number((i + 1).to_string())),
                 })
                 .collect()
@@ -2747,7 +2748,7 @@ pub fn plan_create_index(
                 .join("_");
             write!(idx_name.item, "_{index_name_col_suffix}_idx")
                 .expect("write on strings cannot fail");
-            idx_name.item = normalize::ident(Ident::new(&idx_name.item))
+            idx_name.item = normalize::ident(Ident::new(&idx_name.item)?)
         }
 
         if !*if_not_exists {
@@ -2784,7 +2785,7 @@ pub fn plan_create_index(
     });
 
     // Normalize `stmt`.
-    *name = Some(Ident::new(index_name.item.clone()));
+    *name = Some(Ident::new(index_name.item.clone())?);
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
     if let ResolvedItemName::Item { print_id, .. } = &mut stmt.on_name {
@@ -4491,7 +4492,8 @@ where
     //
     // 'check' returns if the temp schema name would be valid.
     let check = |temp_suffix: &str| {
-        let temp_name = Ident::new(format!("mz_schema_swap_{temp_suffix}"));
+        let mut temp_name = ident!("mz_schema_swap_");
+        temp_name.append_lossy(temp_suffix);
         scx.resolve_schema_in_database(&db_spec, &temp_name)
             .is_err()
     };
@@ -4594,8 +4596,9 @@ where
     let cluster_b = scx.resolve_cluster(Some(&name_b))?;
 
     let check = |temp_suffix: &str| {
-        let name_temp = Ident::new(format!("mz_cluster_swap_{temp_suffix}"));
-        match scx.catalog.resolve_cluster(Some(name_temp.as_str())) {
+        let mut temp_name = ident!("mz_schema_swap_");
+        temp_name.append_lossy(temp_suffix);
+        match scx.catalog.resolve_cluster(Some(temp_name.as_str())) {
             // Temp name does not exist, so we can use it.
             Err(CatalogError::UnknownCluster(_)) => true,
             // Temp name already exists!
@@ -4629,7 +4632,7 @@ pub fn plan_alter_cluster_replica_rename(
                     cluster_id: cluster.id(),
                     replica_id: replica,
                     name: QualifiedReplica {
-                        cluster: cluster.name().into(),
+                        cluster: Ident::new(cluster.name())?,
                         replica: name.replica,
                     },
                     to_name: normalize::ident(to_item_name),

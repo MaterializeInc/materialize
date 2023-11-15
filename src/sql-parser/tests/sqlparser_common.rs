@@ -173,8 +173,11 @@ fn format_ident() {
         ("", "\"\"", "\"\""),
     ];
     for (name, formatted, forced_quotation) in cases {
-        assert_eq!(formatted, format!("{}", Ident::new(name)));
-        assert_eq!(forced_quotation, Ident::new(name).to_ast_string_stable());
+        assert_eq!(formatted, format!("{}", Ident::new(name).unwrap()));
+        assert_eq!(
+            forced_quotation,
+            Ident::new(name).unwrap().to_ast_string_stable()
+        );
     }
 }
 

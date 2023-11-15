@@ -2158,12 +2158,18 @@ fn generate_view_sql(
     // column name ambiguity in all cases, but we assume here that we
     // can adjust the (hopefully) small number of tests that eventually
     // challenge us in this particular way.
-    let name = UnresolvedItemName(vec![Ident::new(format!("v{}", view_uuid))]);
+    let name = UnresolvedItemName(vec![Ident::new_unchecked(format!("v{}", view_uuid))]);
     let projection = expected_column_names.map_or(
         num_attributes.map_or(vec![], |n| {
-            (1..=n).map(|i| Ident::new(format!("a{i}"))).collect()
+            (1..=n)
+                .map(|i| Ident::new_unchecked(format!("a{i}")))
+                .collect()
         }),
-        |cols| cols.iter().map(|c| Ident::new(c.as_str())).collect(),
+        |cols| {
+            cols.iter()
+                .map(|c| Ident::new_unchecked(c.as_str()))
+                .collect()
+        },
     );
     let columns: Vec<Ident> = projection
         .iter()
@@ -2385,8 +2391,10 @@ fn derive_order_by_from_projection(
                 } else {
                     // If the expression is not found in the
                     // projection, add extra column.
-                    let ident =
-                        Ident::new(format!("a{}", (projection.len() + extra_columns.len() + 1)));
+                    let ident = Ident::new_unchecked(format!(
+                        "a{}",
+                        (projection.len() + extra_columns.len() + 1)
+                    ));
                     extra_columns.push(SelectItem::Expr {
                         expr: query_expr.clone(),
                         alias: Some(ident.clone()),

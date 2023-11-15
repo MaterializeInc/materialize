@@ -18,7 +18,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql_parser::ast::QualifiedReplica;
+use mz_sql_parser::ast::{Ident, QualifiedReplica};
 use once_cell::sync::Lazy;
 use tracing::debug;
 
@@ -1379,9 +1379,11 @@ fn ownership_err(
                 ObjectId::ClusterReplica((cluster_id, replica_id)) => {
                     let cluster = catalog.get_cluster(cluster_id);
                     let replica = catalog.get_cluster_replica(cluster_id, replica_id);
+                    // Note: using unchecked here is okay because the values are coming from an
+                    // already existing name.
                     let name = QualifiedReplica {
-                        cluster: cluster.name().into(),
-                        replica: replica.name().into(),
+                        cluster: Ident::new_unchecked(cluster.name()),
+                        replica: Ident::new_unchecked(replica.name()),
                     };
                     (ObjectType::ClusterReplica, name.to_string())
                 }

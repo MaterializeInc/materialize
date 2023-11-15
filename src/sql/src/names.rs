@@ -22,6 +22,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::ColumnName;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
+use mz_sql_parser::ident;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -68,12 +69,13 @@ impl fmt::Display for FullItemName {
 
 impl From<FullItemName> for UnresolvedItemName {
     fn from(full_name: FullItemName) -> UnresolvedItemName {
+        // TODO(parkmycar): Change UnresolvedItemName to use `Ident` internally.
         let mut name_parts = Vec::new();
         if let RawDatabaseSpecifier::Name(database) = full_name.database {
-            name_parts.push(Ident::new(database));
+            name_parts.push(Ident::new_unchecked(database));
         }
-        name_parts.push(Ident::new(full_name.schema));
-        name_parts.push(Ident::new(full_name.item));
+        name_parts.push(Ident::new_unchecked(full_name.schema));
+        name_parts.push(Ident::new_unchecked(full_name.item));
         UnresolvedItemName(name_parts)
     }
 }
@@ -155,14 +157,15 @@ impl From<String> for PartialItemName {
 
 impl From<PartialItemName> for UnresolvedItemName {
     fn from(partial_name: PartialItemName) -> UnresolvedItemName {
+        // TODO(parkmycar): Change UnresolvedItemName to use `Ident` internally.
         let mut name_parts = Vec::new();
         if let Some(database) = partial_name.database {
-            name_parts.push(Ident::new(database));
+            name_parts.push(Ident::new_unchecked(database));
         }
         if let Some(schema) = partial_name.schema {
-            name_parts.push(Ident::new(schema));
+            name_parts.push(Ident::new_unchecked(schema));
         }
-        name_parts.push(Ident::new(partial_name.item));
+        name_parts.push(Ident::new_unchecked(partial_name.item));
         UnresolvedItemName(name_parts)
     }
 }
@@ -447,17 +450,17 @@ impl AstDisplay for ResolvedItemName {
                     f.write_str(format!("[{} AS ", id));
                 }
                 if let RawDatabaseSpecifier::Name(database) = &full_name.database {
-                    f.write_node(&Ident::new(database));
+                    f.write_node(&Ident::new_unchecked(database));
                     f.write_str(".");
                 }
-                f.write_node(&Ident::new(&full_name.schema));
+                f.write_node(&Ident::new_unchecked(&full_name.schema));
                 f.write_str(".");
-                f.write_node(&Ident::new(&full_name.item));
+                f.write_node(&Ident::new_unchecked(&full_name.item));
                 if *print_id {
                     f.write_str("]");
                 }
             }
-            ResolvedItemName::Cte { name, .. } => f.write_node(&Ident::new(name)),
+            ResolvedItemName::Cte { name, .. } => f.write_node(&Ident::new_unchecked(name)),
             ResolvedItemName::Error => {}
         }
     }
@@ -485,7 +488,7 @@ impl AstDisplay for ResolvedColumnName {
             ResolvedColumnName::Column { relation, name, .. } => {
                 f.write_node(relation);
                 f.write_str(".");
-                f.write_node(&Ident::new(name.as_str()));
+                f.write_node(&Ident::new_unchecked(name.as_str()));
             }
             ResolvedColumnName::Error => {}
         }
@@ -535,10 +538,10 @@ impl AstDisplay for ResolvedSchemaName {
         match self {
             ResolvedSchemaName::Schema { full_name, .. } => {
                 if let RawDatabaseSpecifier::Name(database) = &full_name.database {
-                    f.write_node(&Ident::new(database));
+                    f.write_node(&Ident::new_unchecked(database));
                     f.write_str(".");
                 }
-                f.write_node(&Ident::new(&full_name.schema));
+                f.write_node(&Ident::new_unchecked(&full_name.schema));
             }
             ResolvedSchemaName::Error => {}
         }
@@ -566,7 +569,9 @@ impl ResolvedDatabaseName {
 impl AstDisplay for ResolvedDatabaseName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ResolvedDatabaseName::Database { name, .. } => f.write_node(&Ident::new(name)),
+            ResolvedDatabaseName::Database { name, .. } => {
+                f.write_node(&Ident::new_unchecked(name))
+            }
             ResolvedDatabaseName::Error => {}
         }
     }
@@ -587,7 +592,7 @@ pub struct ResolvedClusterName {
 impl AstDisplay for ResolvedClusterName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         if let Some(print_name) = &self.print_name {
-            f.write_node(&Ident::new(print_name))
+            f.write_node(&Ident::new_unchecked(print_name))
         } else {
             f.write_str(format!("[{}]", self.id))
         }
@@ -651,14 +656,14 @@ impl AstDisplay for ResolvedDataType {
                     f.write_str(format!("[{} AS ", id));
                 }
                 if let RawDatabaseSpecifier::Name(database) = &full_name.database {
-                    f.write_node(&Ident::new(database));
+                    f.write_node(&Ident::new_unchecked(database));
                     f.write_str(".");
                 }
 
-                f.write_node(&Ident::new(&full_name.schema));
+                f.write_node(&Ident::new_unchecked(&full_name.schema));
                 f.write_str(".");
 
-                f.write_node(&Ident::new(&full_name.item));
+                f.write_node(&Ident::new_unchecked(&full_name.item));
                 if *print_id {
                     f.write_str("]");
                 }
@@ -1288,7 +1293,7 @@ impl<'a> NameResolver<'a> {
 
                 // Check if unqualified name refers to a CTE.
                 if raw_name.database.is_none() && raw_name.schema.is_none() {
-                    let norm_name = normalize::ident(Ident::new(&raw_name.item));
+                    let norm_name = normalize::ident(Ident::new_unchecked(&raw_name.item));
                     if let Some(id) = self.ctes.get(&norm_name) {
                         return ResolvedItemName::Cte {
                             id: *id,
@@ -1328,10 +1333,11 @@ impl<'a> NameResolver<'a> {
                                         Some((i, q)) if i.starts_with("json_") && q.len() < 2 => {
                                             let mut jsonb_version = q
                                                 .iter()
-                                                .map(|q| Ident::new(*q))
+                                                .map(|q| Ident::new_unchecked(*q))
                                                 .collect::<Vec<_>>();
-                                            jsonb_version
-                                                .push(Ident::new(i.replace("json_", "jsonb_")));
+                                            jsonb_version.push(Ident::new_unchecked(
+                                                i.replace("json_", "jsonb_"),
+                                            ));
                                             let jsonb_version = RawItemName::Name(
                                                 UnresolvedItemName(jsonb_version),
                                             );
@@ -1822,7 +1828,8 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             } => {
                 match &function.name {
                     RawItemName::Name(name) => {
-                        if *name == UnresolvedItemName::unqualified("values") && self.status.is_ok()
+                        if *name == UnresolvedItemName::unqualified(ident!("values"))
+                            && self.status.is_ok()
                         {
                             self.status = Err(PlanError::FromValueRequiresParen);
                         }

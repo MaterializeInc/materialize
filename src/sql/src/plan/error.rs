@@ -27,7 +27,7 @@ use mz_repr::adt::timestamp::InvalidTimestampPrecisionError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedItemName;
+use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
 
 use crate::catalog::{
@@ -104,6 +104,7 @@ pub enum PlanError {
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
     InvalidId(GlobalId),
+    InvalidIdent(IdentError),
     InvalidObject(Box<ResolvedItemName>),
     InvalidObjectType {
         expected_type: SystemObjectType,
@@ -475,6 +476,7 @@ impl fmt::Display for PlanError {
             Self::ParserStatement(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
             Self::InvalidId(id) => write!(f, "invalid id {}", id),
+            Self::InvalidIdent(err) => write!(f, "invalid identifier, {err}"),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidObjectType{expected_type, actual_type, object_name} => write!(f, "{actual_type} {object_name} is not a {expected_type}"),
             Self::InvalidPrivilegeTypes{ invalid_privileges, object_description, } => {
@@ -724,6 +726,12 @@ impl From<TestScriptSourcePurificationError> for PlanError {
 impl From<LoadGeneratorSourcePurificationError> for PlanError {
     fn from(e: LoadGeneratorSourcePurificationError) -> Self {
         PlanError::LoadGeneratorSourcePurification(e)
+    }
+}
+
+impl From<IdentError> for PlanError {
+    fn from(e: IdentError) -> Self {
+        PlanError::InvalidIdent(e)
     }
 }
 
