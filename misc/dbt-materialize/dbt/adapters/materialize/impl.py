@@ -86,8 +86,8 @@ class MaterializeAdapter(PostgresAdapter):
     }
 
     # NOTE(morsapaes): Materialize supports the functionality required to enable
-    # metadata source freshness checks, but the value of this feature in a
-    # real-time data warehouse is questionable, so we do not implement it.
+    # metadata source freshness checks, but the value of this feature in a data
+    # warehouse built for real-time is limited, so we do not implement it.
     _capabilities = CapabilityDict(
         {
             Capability.TableLastModifiedMetadata: CapabilitySupport(
