@@ -16,7 +16,7 @@
 
 {% macro materialize__get_catalog(information_schema, schemas) -%}
 
-    {% set database = information_schema.database %}
+  {% set database = information_schema.database %}
   {{ adapter.verify_database(database) }}
 
   {%- call statement('catalog', fetch_result=True) -%}
