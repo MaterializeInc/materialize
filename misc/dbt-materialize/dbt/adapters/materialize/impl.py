@@ -85,13 +85,13 @@ class MaterializeAdapter(PostgresAdapter):
         ConstraintType.foreign_key: ConstraintSupport.NOT_SUPPORTED,
     }
 
+    # NOTE(morsapaes): Materialize supports the functionality required to enable
+    # metadata source freshness checks, but the value of this feature in a
+    # real-time data warehouse is questionable, so we do not implement it.
     _capabilities = CapabilityDict(
         {
-            Capability.SchemaMetadataByRelations: CapabilitySupport(
-                support=Support.Full
-            ),
             Capability.TableLastModifiedMetadata: CapabilitySupport(
-                support=Support.Full
+                support=Support.NotImplemented
             ),
         }
     )
