@@ -76,6 +76,7 @@ use std::time::{Duration, Instant};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
+use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
@@ -1749,185 +1750,194 @@ impl Coordinator {
     /// and feedback from dataflow workers over `feedback_rx`.
     ///
     /// You must call `bootstrap` before calling this method.
-    async fn serve(
+    ///
+    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 92KB. This would
+    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
+    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    fn serve(
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
         group_commit_rx: appends::GroupCommitWaiter,
-    ) {
-        // Watcher that listens for and reports cluster service status changes.
-        let mut cluster_events = self.controller.events_stream();
+    ) -> LocalBoxFuture<'static, ()> {
+        async move {
+            // Watcher that listens for and reports cluster service status changes.
+            let mut cluster_events = self.controller.events_stream();
 
-        let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
-        let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
-        spawn(|| "coord watchdog", async move {
-            // Every 5 seconds, attempt to measure how long it takes for the
-            // coord select loop to be empty, because this message is the last
-            // processed. If it is idle, this will result in some microseconds
-            // of measurement.
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
-            // If we end up having to wait more than 5 seconds for the coord to respond, then the
-            // behavior of Delay results in the interval "restarting" from whenever we yield
-            // instead of trying to catch up.
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
+            let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
+            spawn(|| "coord watchdog", async move {
+                // Every 5 seconds, attempt to measure how long it takes for the
+                // coord select loop to be empty, because this message is the last
+                // processed. If it is idle, this will result in some microseconds
+                // of measurement.
+                let mut interval = tokio::time::interval(Duration::from_secs(5));
+                // If we end up having to wait more than 5 seconds for the coord to respond, then the
+                // behavior of Delay results in the interval "restarting" from whenever we yield
+                // instead of trying to catch up.
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-            // Track if we become stuck to de-dupe error reporting.
-            let mut coord_stuck = false;
+                // Track if we become stuck to de-dupe error reporting.
+                let mut coord_stuck = false;
+
+                loop {
+                    interval.tick().await;
+
+                    // Wait for space in the channel, if we timeout then the coordinator is stuck!
+                    let duration = tokio::time::Duration::from_secs(60);
+                    let timeout = tokio::time::timeout(duration, idle_tx.reserve()).await;
+                    let Ok(maybe_permit) = timeout else {
+                        // Only log the error if we're newly stuck, to prevent logging repeatedly.
+                        if !coord_stuck {
+                            tracing::error!(
+                                "Coordinator is stuck, did not respond after {duration:?}"
+                            );
+                        }
+                        coord_stuck = true;
+
+                        continue;
+                    };
+
+                    // We got a permit, we're not stuck!
+                    if coord_stuck {
+                        tracing::info!("Coordinator became unstuck");
+                    }
+                    coord_stuck = false;
+
+                    // If we failed to acquire a permit it's because we're shutting down.
+                    let Ok(permit) = maybe_permit else {
+                        break;
+                    };
+
+                    permit.send(idle_metric.start_timer());
+                }
+            });
+
+            self.schedule_storage_usage_collection().await;
+            self.spawn_statement_logging_task();
+            flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
+
+            // Report if the handling of a single message takes longer than this threshold.
+            let prometheus_threshold = self
+                .catalog
+                .system_config()
+                .coord_slow_message_reporting_threshold();
 
             loop {
-                interval.tick().await;
+                // Before adding a branch to this select loop, please ensure that the branch is
+                // cancellation safe and add a comment explaining why. You can refer here for more
+                // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
+                let msg = select! {
+                    // Order matters here. We want to process internal commands
+                    // before processing external commands.
+                    biased;
 
-                // Wait for space in the channel, if we timeout then the coordinator is stuck!
-                let duration = tokio::time::Duration::from_secs(60);
-                let timeout = tokio::time::timeout(duration, idle_tx.reserve()).await;
-                let Ok(maybe_permit) = timeout else {
-                    // Only log the error if we're newly stuck, to prevent logging repeatedly.
-                    if !coord_stuck {
-                        tracing::error!("Coordinator is stuck, did not respond after {duration:?}");
+                    // `recv()` on `UnboundedReceiver` is cancel-safe:
+                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                    Some(m) = internal_cmd_rx.recv() => m,
+                    // `next()` on any stream is cancel-safe:
+                    // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
+                    Some(event) = cluster_events.next() => Message::ClusterEvent(event),
+                    // See [`mz_controller::Controller::Controller::ready`] for notes
+                    // on why this is cancel-safe.
+                    () = self.controller.ready() => {
+                        Message::ControllerReady
                     }
-                    coord_stuck = true;
-
-                    continue;
-                };
-
-                // We got a permit, we're not stuck!
-                if coord_stuck {
-                    tracing::info!("Coordinator became unstuck");
-                }
-                coord_stuck = false;
-
-                // If we failed to acquire a permit it's because we're shutting down.
-                let Ok(permit) = maybe_permit else {
-                    break;
-                };
-
-                permit.send(idle_metric.start_timer());
-            }
-        });
-
-        self.schedule_storage_usage_collection().await;
-        self.spawn_statement_logging_task();
-        flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
-
-        // Report if the handling of a single message takes longer than this threshold.
-        let prometheus_threshold = self
-            .catalog
-            .system_config()
-            .coord_slow_message_reporting_threshold();
-
-        loop {
-            // Before adding a branch to this select loop, please ensure that the branch is
-            // cancellation safe and add a comment explaining why. You can refer here for more
-            // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
-            let msg = select! {
-                // Order matters here. We want to process internal commands
-                // before processing external commands.
-                biased;
-
-                // `recv()` on `UnboundedReceiver` is cancel-safe:
-                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
-                Some(m) = internal_cmd_rx.recv() => m,
-                // `next()` on any stream is cancel-safe:
-                // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
-                Some(event) = cluster_events.next() => Message::ClusterEvent(event),
-                // See [`mz_controller::Controller::Controller::ready`] for notes
-                // on why this is cancel-safe.
-                () = self.controller.ready() => {
-                    Message::ControllerReady
-                }
-                // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
-                permit = group_commit_rx.ready() => {
-                    // If we happen to have batched exactly one user write, use
-                    // that span so the `emit_trace_id_notice` hooks up.
-                    // Otherwise, the best we can do is invent a new root span
-                    // and make it follow from all the Spans in the pending
-                    // writes.
-                    let user_write_spans = self.pending_writes.iter().flat_map(|x| match x {
-                        PendingWriteTxn::User{span, ..} => Some(span),
-                        PendingWriteTxn::System{..} => None,
-                    });
-                    let span = match user_write_spans.exactly_one() {
-                        Ok(span) => span.clone(),
-                        Err(user_write_spans) => {
-                            let span = info_span!(parent: None, "group_commit_notify");
-                            for s in user_write_spans {
-                                span.follows_from(s);
+                    // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
+                    permit = group_commit_rx.ready() => {
+                        // If we happen to have batched exactly one user write, use
+                        // that span so the `emit_trace_id_notice` hooks up.
+                        // Otherwise, the best we can do is invent a new root span
+                        // and make it follow from all the Spans in the pending
+                        // writes.
+                        let user_write_spans = self.pending_writes.iter().flat_map(|x| match x {
+                            PendingWriteTxn::User{span, ..} => Some(span),
+                            PendingWriteTxn::System{..} => None,
+                        });
+                        let span = match user_write_spans.exactly_one() {
+                            Ok(span) => span.clone(),
+                            Err(user_write_spans) => {
+                                let span = info_span!(parent: None, "group_commit_notify");
+                                for s in user_write_spans {
+                                    span.follows_from(s);
+                                }
+                                span
                             }
-                            span
+                        };
+                        Message::GroupCommitInitiate(span, Some(permit))
+                    },
+                    // `recv()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                    m = cmd_rx.recv() => match m {
+                        None => break,
+                        Some(m) => Message::Command(m),
+                    },
+                    // `recv()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                    Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
+                        let mut pending_read_txns = vec![pending_read_txn];
+                        while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
+                            pending_read_txns.push(pending_read_txn);
                         }
-                    };
-                    Message::GroupCommitInitiate(span, Some(permit))
-                },
-                // `recv()` on `UnboundedReceiver` is cancellation safe:
-                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
-                m = cmd_rx.recv() => match m {
-                    None => break,
-                    Some(m) => Message::Command(m),
-                },
-                // `recv()` on `UnboundedReceiver` is cancellation safe:
-                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
-                Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
-                    let mut pending_read_txns = vec![pending_read_txn];
-                    while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
-                        pending_read_txns.push(pending_read_txn);
+                        Message::LinearizeReads(pending_read_txns)
                     }
-                    Message::LinearizeReads(pending_read_txns)
+                    // `tick()` on `Interval` is cancel-safe:
+                    // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                    _ = self.advance_timelines_interval.tick() => {
+                        let span = info_span!(parent: None, "advance_timelines_interval");
+                        span.follows_from(Span::current());
+                        Message::GroupCommitInitiate(span, None)
+                    },
+
+                    // Process the idle metric at the lowest priority to sample queue non-idle time.
+                    // `recv()` on `Receiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.Receiver.html#cancel-safety
+                    timer = idle_rx.recv() => {
+                        timer.expect("does not drop").observe_duration();
+                        continue;
+                    }
+                };
+
+                let msg_kind = msg.kind();
+                let span = span!(Level::DEBUG, "coordinator processing", kind = msg_kind);
+                let otel_context = span.context().span().span_context().clone();
+
+                let start = Instant::now();
+                self.handle_message(msg)
+                    // All message processing functions trace. Start a parent span for them to make
+                    // it easy to find slow messages.
+                    .instrument(span)
+                    .await;
+                let duration = start.elapsed();
+
+                // Report slow messages to Prometheus.
+                if duration > prometheus_threshold {
+                    self.metrics
+                        .slow_message_handling
+                        .with_label_values(&[msg_kind])
+                        .observe(duration.as_secs_f64());
                 }
-                // `tick()` on `Interval` is cancel-safe:
-                // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                _ = self.advance_timelines_interval.tick() => {
-                    let span = info_span!(parent: None, "advance_timelines_interval");
-                    span.follows_from(Span::current());
-                    Message::GroupCommitInitiate(span, None)
-                },
 
-                // Process the idle metric at the lowest priority to sample queue non-idle time.
-                // `recv()` on `Receiver` is cancellation safe:
-                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.Receiver.html#cancel-safety
-                timer = idle_rx.recv() => {
-                    timer.expect("does not drop").observe_duration();
-                    continue;
+                // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
+                let trace_id_threshold = Duration::from_secs(5).min(prometheus_threshold * 25);
+                if duration > trace_id_threshold && otel_context.is_valid() {
+                    let trace_id = otel_context.trace_id();
+                    tracing::warn!(
+                        ?msg_kind,
+                        ?trace_id,
+                        ?duration,
+                        "very slow coordinator message"
+                    );
                 }
-            };
-
-            let msg_kind = msg.kind();
-            let span = span!(Level::DEBUG, "coordinator processing", kind = msg_kind);
-            let otel_context = span.context().span().span_context().clone();
-
-            let start = Instant::now();
-            self.handle_message(msg)
-                // All message processing functions trace. Start a parent span for them to make
-                // it easy to find slow messages.
-                .instrument(span)
-                .await;
-            let duration = start.elapsed();
-
-            // Report slow messages to Prometheus.
-            if duration > prometheus_threshold {
-                self.metrics
-                    .slow_message_handling
-                    .with_label_values(&[msg_kind])
-                    .observe(duration.as_secs_f64());
             }
-
-            // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
-            let trace_id_threshold = Duration::from_secs(5).min(prometheus_threshold * 25);
-            if duration > trace_id_threshold && otel_context.is_valid() {
-                let trace_id = otel_context.trace_id();
-                tracing::warn!(
-                    ?msg_kind,
-                    ?trace_id,
-                    ?duration,
-                    "very slow coordinator message"
-                );
+            // Try and cleanup as a best effort. There may be some async tasks out there holding a
+            // reference that prevents us from cleaning up.
+            if let Some(catalog) = Arc::into_inner(self.catalog) {
+                catalog.expire().await;
             }
         }
-        // Try and cleanup as a best effort. There may be some async tasks out there holding a
-        // reference that prevents us from cleaning up.
-        if let Some(catalog) = Arc::into_inner(self.catalog) {
-            catalog.expire().await;
-        }
+        .boxed_local()
     }
 
     /// Obtain a read-only Catalog reference.
@@ -1983,11 +1993,11 @@ impl Coordinator {
 ///
 /// Returns a handle to the coordinator and a client to communicate with the
 /// coordinator.
-// TODO: This causes stack overflows during tests which can be fixed by setting
-// RUST_MIN_STACK=8388608, but we'd like to come up with a better solution, so
-// don't enable serve tracing for now.
-//#[tracing::instrument(name = "coord::serve", level = "info", skip_all)]
-pub async fn serve(
+///
+/// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 42KB. This would
+/// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
+/// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+pub fn serve(
     Config {
         dataflow_client,
         storage,
@@ -2018,188 +2028,192 @@ pub async fn serve(
         http_host_name,
         tracing_handle,
     }: Config,
-) -> Result<(Handle, Client), AdapterError> {
-    info!("coordinator init: beginning");
+) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
+    async move {
+        info!("coordinator init: beginning");
 
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-    let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
-    let (group_commit_tx, group_commit_rx) = appends::notifier();
-    let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+        let (group_commit_tx, group_commit_rx) = appends::notifier();
+        let (strict_serializable_reads_tx, strict_serializable_reads_rx) =
+            mpsc::unbounded_channel();
 
-    // Validate and process availability zones.
-    if !availability_zones.iter().all_unique() {
-        coord_bail!("availability zones must be unique");
-    }
-
-    let aws_principal_context = match (
-        aws_account_id,
-        connection_context.aws_external_id_prefix.clone(),
-    ) {
-        (Some(aws_account_id), Some(aws_external_id_prefix)) => Some(AwsPrincipalContext {
-            aws_account_id,
-            aws_external_id_prefix,
-        }),
-        _ => None,
-    };
-
-    let aws_privatelink_availability_zones = aws_privatelink_availability_zones
-        .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
-
-    info!("coordinator init: opening catalog");
-    let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
-        Catalog::open(catalog::Config {
-            storage,
-            metrics_registry: &metrics_registry,
-            secrets_reader: secrets_controller.reader(),
-            storage_usage_retention_period,
-            state: catalog::StateConfig {
-                unsafe_mode,
-                all_features,
-                build_info,
-                environment_id: environment_id.clone(),
-                now: now.clone(),
-                skip_migrations: false,
-                cluster_replica_sizes,
-                default_storage_cluster_size,
-                builtin_cluster_replica_size,
-                system_parameter_defaults,
-                availability_zones,
-                egress_ips,
-                aws_principal_context,
-                aws_privatelink_availability_zones,
-                system_parameter_sync_config,
-                connection_context: Some(connection_context.clone()),
-                active_connection_count,
-                http_host_name,
-            },
-        })
-        .await?;
-    let session_id = catalog.config().session_id;
-    let start_instant = catalog.config().start_instant;
-
-    // In order for the coordinator to support Rc and Refcell types, it cannot be
-    // sent across threads. Spawn it in a thread and have this parent thread wait
-    // for bootstrap completion before proceeding.
-    let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
-    let handle = TokioHandle::current();
-
-    let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
-    let metrics = Metrics::register_into(&metrics_registry);
-    let metrics_clone = metrics.clone();
-    let segment_client_clone = segment_client.clone();
-    let span = tracing::Span::current();
-    let coord_now = now.clone();
-    let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
-    let thread = thread::Builder::new()
-        // The Coordinator thread tends to keep a lot of data on its stack. To
-        // prevent a stack overflow we allocate a stack three times as big as the default
-        // stack.
-        .stack_size(3 * stack::STACK_SIZE)
-        .name("coordinator".to_string())
-        .spawn(move || {
-            let catalog = Arc::new(catalog);
-
-            let mut timestamp_oracles = BTreeMap::new();
-            for (timeline, initial_timestamp) in initial_timestamps {
-                let persistence =
-                    CatalogTimestampPersistence::new(timeline.clone(), Arc::clone(&catalog));
-
-                handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
-                    &timeline,
-                    initial_timestamp,
-                    coord_now.clone(),
-                    persistence,
-                    &mut timestamp_oracles,
-                ));
-            }
-
-            let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
-            let mut coord = Coordinator {
-                controller: dataflow_client,
-                view_optimizer: Optimizer::logical_optimizer(
-                    &mz_transform::typecheck::empty_context(),
-                ),
-                catalog,
-                internal_cmd_tx,
-                group_commit_tx,
-                strict_serializable_reads_tx,
-                global_timelines: timestamp_oracles,
-                transient_id_counter: 1,
-                active_conns: BTreeMap::new(),
-                storage_read_capabilities: Default::default(),
-                compute_read_capabilities: Default::default(),
-                txn_reads: Default::default(),
-                pending_peeks: BTreeMap::new(),
-                client_pending_peeks: BTreeMap::new(),
-                pending_real_time_recency_timestamp: BTreeMap::new(),
-                active_subscribes: BTreeMap::new(),
-                write_lock: Arc::new(tokio::sync::Mutex::new(())),
-                write_lock_wait_group: VecDeque::new(),
-                pending_writes: Vec::new(),
-                advance_timelines_interval,
-                secrets_controller,
-                caching_secrets_reader,
-                cloud_resource_controller,
-                connection_context,
-                transient_replica_metadata: BTreeMap::new(),
-                storage_usage_client,
-                storage_usage_collection_interval,
-                segment_client,
-                metrics,
-                tracing_handle,
-                statement_logging: StatementLogging::new(),
-                webhook_concurrency_limit,
-            };
-            let bootstrap = handle.block_on(async {
-                coord
-                    .bootstrap(builtin_migration_metadata, builtin_table_updates)
-                    .instrument(span)
-                    .await?;
-                coord
-                    .controller
-                    .remove_orphaned_replicas(
-                        coord.catalog().get_next_user_replica_id().await?,
-                        coord.catalog().get_next_system_replica_id().await?,
-                    )
-                    .await
-                    .map_err(AdapterError::Orchestrator)?;
-                Ok(())
-            });
-            let ok = bootstrap.is_ok();
-            bootstrap_tx
-                .send(bootstrap)
-                .expect("bootstrap_rx is not dropped until it receives this message");
-            if ok {
-                handle.block_on(coord.serve(
-                    internal_cmd_rx,
-                    strict_serializable_reads_rx,
-                    cmd_rx,
-                    group_commit_rx,
-                ));
-            }
-        })
-        .expect("failed to create coordinator thread");
-    match bootstrap_rx
-        .await
-        .expect("bootstrap_tx always sends a message or panics/halts")
-    {
-        Ok(()) => {
-            info!("coordinator init: complete");
-            let handle = Handle {
-                session_id,
-                start_instant,
-                _thread: thread.join_on_drop(),
-            };
-            let client = Client::new(
-                build_info,
-                cmd_tx.clone(),
-                metrics_clone,
-                now,
-                environment_id,
-                segment_client_clone,
-            );
-            Ok((handle, client))
+        // Validate and process availability zones.
+        if !availability_zones.iter().all_unique() {
+            coord_bail!("availability zones must be unique");
         }
-        Err(e) => Err(e),
+
+        let aws_principal_context = match (
+            aws_account_id,
+            connection_context.aws_external_id_prefix.clone(),
+        ) {
+            (Some(aws_account_id), Some(aws_external_id_prefix)) => Some(AwsPrincipalContext {
+                aws_account_id,
+                aws_external_id_prefix,
+            }),
+            _ => None,
+        };
+
+        let aws_privatelink_availability_zones = aws_privatelink_availability_zones
+            .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
+
+        info!("coordinator init: opening catalog");
+        let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
+            Catalog::open(catalog::Config {
+                storage,
+                metrics_registry: &metrics_registry,
+                secrets_reader: secrets_controller.reader(),
+                storage_usage_retention_period,
+                state: catalog::StateConfig {
+                    unsafe_mode,
+                    all_features,
+                    build_info,
+                    environment_id: environment_id.clone(),
+                    now: now.clone(),
+                    skip_migrations: false,
+                    cluster_replica_sizes,
+                    default_storage_cluster_size,
+                    builtin_cluster_replica_size,
+                    system_parameter_defaults,
+                    availability_zones,
+                    egress_ips,
+                    aws_principal_context,
+                    aws_privatelink_availability_zones,
+                    system_parameter_sync_config,
+                    connection_context: Some(connection_context.clone()),
+                    active_connection_count,
+                    http_host_name,
+                },
+            })
+            .await?;
+        let session_id = catalog.config().session_id;
+        let start_instant = catalog.config().start_instant;
+
+        // In order for the coordinator to support Rc and Refcell types, it cannot be
+        // sent across threads. Spawn it in a thread and have this parent thread wait
+        // for bootstrap completion before proceeding.
+        let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
+        let handle = TokioHandle::current();
+
+        let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
+        let metrics = Metrics::register_into(&metrics_registry);
+        let metrics_clone = metrics.clone();
+        let segment_client_clone = segment_client.clone();
+        let span = tracing::Span::current();
+        let coord_now = now.clone();
+        let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
+        let thread = thread::Builder::new()
+            // The Coordinator thread tends to keep a lot of data on its stack. To
+            // prevent a stack overflow we allocate a stack three times as big as the default
+            // stack.
+            .stack_size(3 * stack::STACK_SIZE)
+            .name("coordinator".to_string())
+            .spawn(move || {
+                let catalog = Arc::new(catalog);
+
+                let mut timestamp_oracles = BTreeMap::new();
+                for (timeline, initial_timestamp) in initial_timestamps {
+                    let persistence =
+                        CatalogTimestampPersistence::new(timeline.clone(), Arc::clone(&catalog));
+
+                    handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
+                        &timeline,
+                        initial_timestamp,
+                        coord_now.clone(),
+                        persistence,
+                        &mut timestamp_oracles,
+                    ));
+                }
+
+                let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
+                let mut coord = Coordinator {
+                    controller: dataflow_client,
+                    view_optimizer: Optimizer::logical_optimizer(
+                        &mz_transform::typecheck::empty_context(),
+                    ),
+                    catalog,
+                    internal_cmd_tx,
+                    group_commit_tx,
+                    strict_serializable_reads_tx,
+                    global_timelines: timestamp_oracles,
+                    transient_id_counter: 1,
+                    active_conns: BTreeMap::new(),
+                    storage_read_capabilities: Default::default(),
+                    compute_read_capabilities: Default::default(),
+                    txn_reads: Default::default(),
+                    pending_peeks: BTreeMap::new(),
+                    client_pending_peeks: BTreeMap::new(),
+                    pending_real_time_recency_timestamp: BTreeMap::new(),
+                    active_subscribes: BTreeMap::new(),
+                    write_lock: Arc::new(tokio::sync::Mutex::new(())),
+                    write_lock_wait_group: VecDeque::new(),
+                    pending_writes: Vec::new(),
+                    advance_timelines_interval,
+                    secrets_controller,
+                    caching_secrets_reader,
+                    cloud_resource_controller,
+                    connection_context,
+                    transient_replica_metadata: BTreeMap::new(),
+                    storage_usage_client,
+                    storage_usage_collection_interval,
+                    segment_client,
+                    metrics,
+                    tracing_handle,
+                    statement_logging: StatementLogging::new(),
+                    webhook_concurrency_limit,
+                };
+                let bootstrap = handle.block_on(async {
+                    coord
+                        .bootstrap(builtin_migration_metadata, builtin_table_updates)
+                        .instrument(span)
+                        .await?;
+                    coord
+                        .controller
+                        .remove_orphaned_replicas(
+                            coord.catalog().get_next_user_replica_id().await?,
+                            coord.catalog().get_next_system_replica_id().await?,
+                        )
+                        .await
+                        .map_err(AdapterError::Orchestrator)?;
+                    Ok(())
+                });
+                let ok = bootstrap.is_ok();
+                bootstrap_tx
+                    .send(bootstrap)
+                    .expect("bootstrap_rx is not dropped until it receives this message");
+                if ok {
+                    handle.block_on(coord.serve(
+                        internal_cmd_rx,
+                        strict_serializable_reads_rx,
+                        cmd_rx,
+                        group_commit_rx,
+                    ));
+                }
+            })
+            .expect("failed to create coordinator thread");
+        match bootstrap_rx
+            .await
+            .expect("bootstrap_tx always sends a message or panics/halts")
+        {
+            Ok(()) => {
+                info!("coordinator init: complete");
+                let handle = Handle {
+                    session_id,
+                    start_instant,
+                    _thread: thread.join_on_drop(),
+                };
+                let client = Client::new(
+                    build_info,
+                    cmd_tx.clone(),
+                    metrics_clone,
+                    now,
+                    environment_id,
+                    segment_client_clone,
+                );
+                Ok((handle, client))
+            }
+            Err(e) => Err(e),
+        }
     }
+    .boxed()
 }
