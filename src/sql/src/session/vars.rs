@@ -1989,7 +1989,7 @@ feature_flags!(
     {
         name: enable_jemalloc_profiling,
         desc: "jemalloc heap memory profiling",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
