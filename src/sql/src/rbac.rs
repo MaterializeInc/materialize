@@ -457,7 +457,6 @@ fn generate_rbac_requirements(
         Plan::CreateSink(plan::CreateSinkPlan {
             name,
             sink,
-            with_snapshot: _,
             if_not_exists: _,
             cluster_config,
         }) => {

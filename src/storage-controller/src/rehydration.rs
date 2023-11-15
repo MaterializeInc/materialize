@@ -446,7 +446,7 @@ where
                 for (id, frontier) in frontiers {
                     match self.sinks.get_mut(id) {
                         Some(export) => {
-                            export.description.as_of.downgrade(frontier);
+                            export.description.as_of.clone_from(frontier);
                         }
                         None if self.sources.contains_key(id) => continue,
                         None => panic!("AllowCompaction command for non-existent {id}"),

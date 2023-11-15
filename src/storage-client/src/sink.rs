@@ -31,6 +31,8 @@ use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::{ClientContext, Message, Offset, TopicPartitionList};
 use serde::{Deserialize, Serialize};
+use timely::progress::{Antichain, Timestamp as _};
+use timely::PartialOrder;
 use tracing::{info, warn};
 
 /// Formatter for Kafka group.id setting
@@ -235,16 +237,26 @@ async fn publish_kafka_schemas(
     Ok((key_schema_id, value_schema_id))
 }
 
+/// A sink connection for which all the external dependencies have been resolved (e.g topics
+/// created, schemas registered) and is ready to start sinking.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PurifiedKafkaSinkConnection {
+    /// The purified connection object
+    pub connection: KafkaSinkConnection,
+    /// The frontier at which we should start producing data at
+    pub resume_upper: Antichain<Timestamp>,
+}
+
 /// Ensures that the Kafka sink's data and consistency collateral exist.
 ///
 /// # Errors
 /// - If the [`KafkaSinkConnection`]'s consistency collateral exists and
 ///   contains data for this sink, but the sink's data topic does not exist.
-pub async fn build_kafka(
+pub async fn purify_kafka_sink(
     sink_id: mz_repr::GlobalId,
-    connection: &mut KafkaSinkConnection,
+    mut connection: KafkaSinkConnection,
     connection_cx: &ConnectionContext,
-) -> Result<(), ContextCreationError> {
+) -> Result<PurifiedKafkaSinkConnection, ContextCreationError> {
     let client: AdminClient<_> = connection
         .connection
         .create_with_context(connection_cx, MzClientContext::default(), &BTreeMap::new())
@@ -261,16 +273,13 @@ pub async fn build_kafka(
         .check_ssh_status(client.inner().context())
         .add_context("fetching metadata")?;
 
-    // Check if the broker's metadata already contains the progress topic.
     let progress_topic = match &connection.consistency_config {
-        KafkaConsistencyConfig::Progress { topic } => {
-            meta.topics().iter().find(|t| t.name() == topic)
-        }
+        KafkaConsistencyConfig::Progress { topic } => topic,
     };
 
-    // If the consistency topic exists, check to see if it contains this sink's
-    // data.
-    if let Some(progress_topic) = progress_topic {
+    // Check if the broker's metadata already contains the progress topic.
+    let resume_upper = if meta.topics().iter().any(|t| t.name() == progress_topic) {
+        // If the progress topic exists, check to see if it contains this sink's data.
         let progress_client: BaseConsumer<_> = connection
             .connection
             .create_with_context(
@@ -287,23 +296,43 @@ pub async fn build_kafka(
             .await?;
 
         let progress_client = Arc::new(progress_client);
-        let latest_ts = determine_latest_progress_record(
+        let maybe_resume_upper = determine_sink_upper(
             format!("build_kafka_{}", sink_id),
-            progress_topic.name().to_string(),
+            progress_topic.clone(),
             ProgressKey::new(sink_id),
             Arc::clone(&progress_client),
         )
         .await
         .check_ssh_status(progress_client.client().context())?;
 
-        // If we have progress data, we should have the topic listed in the
-        // broker's metadata. If we don't, error.
-        if latest_ts.is_some() && !meta.topics().iter().any(|t| t.name() == connection.topic) {
-            Err(anyhow::anyhow!(
-                "sink progress data exists, but sink data topic is missing"
-            ))?
+        match maybe_resume_upper {
+            // If we have progress data, we should have the topic listed in the broker's metadata.
+            // If we don't, error.
+            Some(resume_upper) => {
+                if !meta.topics().iter().any(|t| t.name() == connection.topic) {
+                    Err(anyhow::anyhow!(
+                        "sink progress data exists, but sink data topic is missing"
+                    ))?
+                }
+                resume_upper
+            }
+            None => Antichain::from_elem(Timestamp::minimum()),
         }
-    }
+    } else {
+        // Otherwise create it
+        ensure_kafka_topic(
+            &client,
+            progress_topic,
+            1,
+            connection.replication_factor,
+            KafkaSinkConnectionRetention::default(),
+        )
+        .await
+        .check_ssh_status(client.inner().context())
+        .add_context("error registering kafka consistency topic for sink")?;
+
+        Antichain::from_elem(Timestamp::minimum())
+    };
 
     // Create Kafka topic.
     ensure_kafka_topic(
@@ -343,44 +372,39 @@ pub async fn build_kafka(
         KafkaSinkFormat::Avro(_) | KafkaSinkFormat::Json => {}
     }
 
-    match &connection.consistency_config {
-        KafkaConsistencyConfig::Progress { topic } => ensure_kafka_topic(
-            &client,
-            topic,
-            1,
-            connection.replication_factor,
-            KafkaSinkConnectionRetention::default(),
-        )
-        .await
-        .check_ssh_status(client.inner().context())
-        .add_context("error registering kafka consistency topic for sink")?,
-    };
-
-    Ok(())
+    Ok(PurifiedKafkaSinkConnection {
+        connection,
+        resume_upper,
+    })
 }
 
-#[derive(Serialize, Deserialize)]
-/// This struct is emitted as part of a transactional produce, and captures the information we
-/// need to resume the Kafka sink at the correct place in the sunk collection. (Currently, all
-/// we need is the timestamp... this is a record to make it easier to add more metadata in the
-/// future if needed.) It's encoded as JSON to make it easier to introspect while debugging, and
-/// because we expect it to remain small.
-///
-/// Unlike the old consistency topic, this is not intended to be a user-facing feature; it's there
-/// purely so the sink can maintain its transactional guarantees. Any future user-facing consistency
-/// information should be added elsewhere instead of overloading this record.
-pub struct ProgressRecord {
+/// This is the legacy struct that used to be emitted as part of a transactional produce and
+/// contains the largest timestamp within the batch committed. Since it is just a timestamp it
+/// cannot encode the fact that a sink has finished and deviates from upper frontier semantics.
+/// Materialize no longer produces this record but it's possible that we encounter this in topics
+/// written by older versions. In those cases we convert it into upper semantics by stepping the
+/// timestamp forward.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct LegacyProgressRecord {
     pub timestamp: Timestamp,
 }
 
-/// Determines the latest progress record from the specified topic for the given
-/// key (e.g. akin to a sink's GlobalId).
-pub async fn determine_latest_progress_record(
+/// This struct is emitted as part of a transactional produce, and contains the upper frontier of
+/// the batch committed. It is used to recover the frontier a sink needs to resume at.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProgressRecord {
+    pub frontier: Vec<Timestamp>,
+}
+
+/// Determines the latest upper frontier from the specified topic for the given key (e.g. akin to a
+/// sink's GlobalId). If the topic is empty this method returns `None` which should be interpreted
+/// as "The frontier is at minimum and the topic needs to be initialized".
+pub async fn determine_sink_upper(
     name: String,
     progress_topic: String,
     progress_key: String,
     progress_client: Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>,
-) -> Result<Option<Timestamp>, anyhow::Error> {
+) -> Result<Option<Antichain<Timestamp>>, anyhow::Error> {
     // Polls a message from a Kafka Source.  Blocking so should always be called on background
     // thread.
     fn get_next_message<C>(
@@ -407,12 +431,12 @@ pub async fn determine_latest_progress_record(
 
     // Retrieves the latest committed timestamp from the progress topic.  Blocking so should
     // always be called on background thread
-    fn get_latest_ts<C>(
+    fn get_latest_upper<C>(
         progress_topic: &str,
         progress_key: &str,
         progress_client: &BaseConsumer<C>,
         timeout: Duration,
-    ) -> Result<Option<Timestamp>, anyhow::Error>
+    ) -> Result<Option<Antichain<Timestamp>>, anyhow::Error>
     where
         C: ConsumerContext,
     {
@@ -473,26 +497,37 @@ pub async fn determine_latest_progress_record(
             return Ok(None);
         }
 
-        let mut latest_ts = None;
-        let mut latest_offset = None;
+        let mut maybe_upper = None;
+        let mut offset_upper = 0;
         while let Some((key, message, offset)) = get_next_message(progress_client, timeout)? {
-            assert!(latest_offset < Some(offset));
-            latest_offset = Some(offset);
+            assert!(offset_upper <= offset);
+            offset_upper = offset + 1;
 
             if &key != progress_key.as_bytes() {
                 continue;
             }
 
-            let ProgressRecord { timestamp } = serde_json::from_slice(&message)?;
-            match latest_ts {
-                Some(prev_ts) if timestamp < prev_ts => {
-                    bail!(
-                        "timestamp regressed in topic {progress_topic}:{partition} \
-                         from {prev_ts} to {timestamp}"
-                    );
-                }
-                _ => latest_ts = Some(timestamp),
+            let new_upper = match serde_json::from_slice::<ProgressRecord>(&message) {
+                Ok(progress) => Antichain::from(progress.frontier),
+                // If we fail to deserialize we might be reading a legacy progress record
+                Err(_) => match serde_json::from_slice::<LegacyProgressRecord>(&message) {
+                    Ok(legacy) => Antichain::from_elem(legacy.timestamp.step_forward()),
+                    Err(_) => match std::str::from_utf8(&message) {
+                        Ok(message) => bail!("invalid progress record: {message}"),
+                        Err(_) => bail!("invalid progress record bytes: {message:?}"),
+                    },
+                },
             };
+
+            match maybe_upper.as_mut() {
+                Some(prev_upper) if !PartialOrder::less_equal(prev_upper, &new_upper) => {
+                    bail!(
+                        "frontier regressed in topic {progress_topic}:{partition}: \
+                          !({prev_upper:?} ≤ {new_upper:?})"
+                    )
+                }
+                _ => maybe_upper = Some(new_upper),
+            }
 
             let position = progress_client
                 .position()?
@@ -516,7 +551,7 @@ pub async fn determine_latest_progress_record(
         // We must check that we indeed read all messages until the high watermark because the
         // previous loop could early exit due to a timeout or partition EOF.
         match position {
-            Offset::Offset(upper) if hi <= upper => Ok(latest_ts),
+            Offset::Offset(upper) if hi <= upper => Ok(maybe_upper),
             _ => Err(anyhow!(
                 "failed to reach high watermark of non-empty \
                  topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}"
@@ -535,7 +570,7 @@ pub async fn determine_latest_progress_record(
             task::spawn_blocking(
                 || format!("get_latest_ts:{name}"),
                 move || {
-                    get_latest_ts(
+                    get_latest_upper(
                         &progress_topic,
                         &progress_key,
                         &progress_client,
@@ -547,4 +582,34 @@ pub async fn determine_latest_progress_record(
             .unwrap_or_else(|e| bail!(e))
         })
         .await
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[mz_ore::test]
+    fn progress_record_migration() {
+        let empty_bytes = b"{}";
+        assert!(serde_json::from_slice::<ProgressRecord>(empty_bytes).is_err());
+        assert!(serde_json::from_slice::<LegacyProgressRecord>(empty_bytes).is_err());
+
+        let legacy_bytes = b"{\"timestamp\":1}";
+        assert!(serde_json::from_slice::<ProgressRecord>(legacy_bytes).is_err());
+        assert_eq!(
+            serde_json::from_slice::<LegacyProgressRecord>(legacy_bytes).unwrap(),
+            LegacyProgressRecord {
+                timestamp: 1.into()
+            }
+        );
+
+        let new_bytes = b"{\"frontier\":[1]}";
+        assert_eq!(
+            serde_json::from_slice::<ProgressRecord>(new_bytes).unwrap(),
+            ProgressRecord {
+                frontier: vec![1.into()]
+            }
+        );
+        assert!(serde_json::from_slice::<LegacyProgressRecord>(new_bytes).is_err());
+    }
 }

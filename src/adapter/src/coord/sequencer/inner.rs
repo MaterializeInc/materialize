@@ -724,7 +724,6 @@ impl Coordinator {
         let plan::CreateSinkPlan {
             name,
             sink,
-            with_snapshot,
             if_not_exists,
             cluster_config: plan_cluster_config,
         } = plan;
@@ -751,7 +750,7 @@ impl Coordinator {
             from: sink.from,
             connection: sink.connection,
             envelope: sink.envelope,
-            with_snapshot,
+            with_snapshot: sink.with_snapshot,
             resolved_ids,
             cluster_id,
         };

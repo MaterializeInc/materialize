@@ -11,12 +11,11 @@
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.collections.rs"));
 
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId as RustGlobalId, Timestamp as RustTimestamp};
 use timely::progress::Antichain;
 
 use crate::controller::DurableCollectionMetadata as RustDurableCollectionMetadata;
-use crate::sinks::SinkAsOf as RustSinkAsOf;
 
 impl RustType<GlobalId> for RustGlobalId {
     fn into_proto(&self) -> GlobalId {
@@ -76,23 +75,6 @@ where
             .collect::<Result<_, _>>()?;
 
         Ok(Antichain::from_iter(elements))
-    }
-}
-
-impl RustType<SinkAsOf> for RustSinkAsOf<mz_repr::Timestamp> {
-    fn into_proto(&self) -> SinkAsOf {
-        SinkAsOf {
-            frontier: Some(self.frontier.into_proto()),
-            strict: self.strict,
-        }
-    }
-
-    fn from_proto(proto: SinkAsOf) -> Result<Self, TryFromProtoError> {
-        let frontier = proto.frontier.into_rust_if_some("SinkAsOf::frontier")?;
-        Ok(RustSinkAsOf {
-            frontier,
-            strict: proto.strict,
-        })
     }
 }
 

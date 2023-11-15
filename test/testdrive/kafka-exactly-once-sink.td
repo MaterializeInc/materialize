@@ -300,7 +300,7 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 1	{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
 $ kafka-verify-data format=json key=false topic=testdrive-progress-fixed-${testdrive.seed}
-{"timestamp": 1}
+{"frontier": [2]}
 
 # verify output with real-time timestamps
 

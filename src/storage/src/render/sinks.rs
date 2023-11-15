@@ -52,7 +52,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         sink.from,
         Arc::clone(&storage_state.persist_clients),
         sink.from_storage_metadata.clone(),
-        Some(sink.as_of.frontier.clone()),
+        Some(sink.as_of.clone()),
         timely::progress::Antichain::new(),
         None,
         None,

@@ -962,7 +962,6 @@ impl CatalogState {
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
-                with_snapshot,
                 cluster_config,
                 ..
             }) => CatalogItem::Sink(Sink {
@@ -970,7 +969,7 @@ impl CatalogState {
                 from: sink.from,
                 connection: sink.connection,
                 envelope: sink.envelope,
-                with_snapshot,
+                with_snapshot: sink.with_snapshot,
                 resolved_ids,
                 cluster_id: match cluster_config {
                     plan::SourceSinkClusterConfig::Existing { id } => id,

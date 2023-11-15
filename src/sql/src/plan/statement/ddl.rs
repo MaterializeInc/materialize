@@ -2320,7 +2320,7 @@ pub fn plan_create_sink(
         return Err(PlanError::UpsertSinkWithoutKey);
     }
 
-    let connection_builder = match connection {
+    let connection = match connection {
         CreateSinkConnection::Kafka { connection, .. } => kafka_sink_builder(
             scx,
             connection,
@@ -2349,10 +2349,10 @@ pub fn plan_create_sink(
         sink: Sink {
             create_sql,
             from: from.id(),
-            connection: connection_builder,
+            connection,
             envelope,
+            with_snapshot,
         },
-        with_snapshot,
         if_not_exists,
         cluster_config,
     }))
@@ -2667,7 +2667,6 @@ fn kafka_sink_builder(
         consistency_config,
         partition_count,
         replication_factor,
-        fuel: 10000,
         relation_key_indices,
         key_desc_and_indices,
         value_desc,

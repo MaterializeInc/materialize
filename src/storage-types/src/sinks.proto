@@ -20,13 +20,15 @@ import "storage-types/src/connections.proto";
 package mz_storage_types.sinks;
 
 message ProtoStorageSinkDesc {
+    reserved 5;
     mz_repr.global_id.ProtoGlobalId from = 1;
     mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
     ProtoStorageSinkConnection connection = 3;
     optional ProtoSinkEnvelope envelope = 4;
-    ProtoSinkAsOf as_of = 5;
     optional mz_storage_types.controller.ProtoCollectionMetadata from_storage_metadata = 6;
     optional string status_id = 7;
+    mz_repr.antichain.ProtoU64Antichain as_of = 8;
+    bool with_snapshot = 9;
 }
 
 message ProtoSinkEnvelope {
@@ -43,11 +45,6 @@ message ProtoStorageSinkConnection {
     oneof kind {
         ProtoKafkaSinkConnectionV2 kafka_v2 = 2;
     }
-}
-
-message ProtoSinkAsOf {
-    mz_repr.antichain.ProtoU64Antichain frontier = 1;
-    bool strict = 2;
 }
 
 message ProtoKafkaSinkFormat {
@@ -91,6 +88,7 @@ message ProtoKafkaSinkConnectionRetention {
 }
 
 message ProtoKafkaSinkConnectionV2 {
+    reserved 7;
     message ProtoKeyDescAndIndices {
         mz_repr.relation_and_scalar.ProtoRelationDesc desc = 1;
         repeated uint64 indices = 2;
@@ -106,7 +104,6 @@ message ProtoKafkaSinkConnectionV2 {
     optional ProtoKeyDescAndIndices key_desc_and_indices = 4;
     optional ProtoRelationKeyIndicesVec relation_key_indices = 5;
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 6;
-    uint64 fuel = 7;
     ProtoKafkaSinkConnectionRetention retention = 8;
     int32 replication_factor = 9;
     ProtoKafkaConsistencyConfig consistency_config = 10;
@@ -118,9 +115,4 @@ message ProtoKafkaSinkConnectionV2 {
 message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
     mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
-}
-
-message ProtoDurableExportMetadata {
-    // This message is persisted to disk. Changes must be backwards compatible.
-    mz_storage_types.sinks.ProtoSinkAsOf initial_as_of = 1;
 }

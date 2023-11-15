@@ -629,7 +629,6 @@ pub struct CreateSecretPlan {
 pub struct CreateSinkPlan {
     pub name: QualifiedItemName,
     pub sink: Sink,
-    pub with_snapshot: bool,
     pub if_not_exists: bool,
     pub cluster_config: SourceSinkClusterConfig,
 }
@@ -1403,6 +1402,7 @@ pub struct Sink {
     pub from: GlobalId,
     pub connection: StorageSinkConnection<ReferencedConnection>,
     pub envelope: SinkEnvelope,
+    pub with_snapshot: bool,
 }
 
 #[derive(Clone, Debug)]
