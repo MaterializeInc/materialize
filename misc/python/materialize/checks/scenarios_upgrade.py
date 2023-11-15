@@ -120,7 +120,7 @@ class UpgradeEntireMzFourVersions(Scenario):
     def actions(self) -> list[Action]:
         minor_minus_2 = minor_versions[-2]
         minor_minus_1 = minor_versions[-1]
-        # TODO(def-) This version was bad, see #23160, can be removed after the next release
+        # TODO(def-) This version was bad, see 23160, can be removed after the next release
         if minor_minus_2 == MzVersion.parse("0.75.3"):
             minor_minus_2 = None
             minor_minus_1 = None
