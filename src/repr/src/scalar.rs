@@ -2837,13 +2837,40 @@ impl ScalarType {
             ])
         });
         static UINT16: Lazy<Row> = Lazy::new(|| {
-            Row::pack_slice(&[Datum::UInt16(0), Datum::UInt16(1), Datum::UInt16(u16::MAX)])
+            Row::pack_slice(&[
+                Datum::UInt16(0),
+                Datum::UInt16(1),
+                Datum::UInt16(u16::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                Datum::UInt16(255),
+                Datum::UInt16(256),
+            ])
         });
         static UINT32: Lazy<Row> = Lazy::new(|| {
-            Row::pack_slice(&[Datum::UInt32(0), Datum::UInt32(1), Datum::UInt32(u32::MAX)])
+            Row::pack_slice(&[
+                Datum::UInt32(0),
+                Datum::UInt32(1),
+                Datum::UInt32(u32::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                Datum::UInt32(32767),
+                Datum::UInt32(32768),
+            ])
         });
         static UINT64: Lazy<Row> = Lazy::new(|| {
-            Row::pack_slice(&[Datum::UInt64(0), Datum::UInt64(1), Datum::UInt64(u64::MAX)])
+            Row::pack_slice(&[
+                Datum::UInt64(0),
+                Datum::UInt64(1),
+                Datum::UInt64(u64::MAX),
+                // The following datums are
+                // around the boundaries introduced by
+                // variable-length int encoding
+                Datum::UInt64(2147483647),
+                Datum::UInt64(2147483648),
+            ])
         });
         static FLOAT32: Lazy<Row> = Lazy::new(|| {
             Row::pack_slice(&[
