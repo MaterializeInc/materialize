@@ -132,7 +132,7 @@ def run_one_scenario(
         )
 
         if tag == "common-ancestor":
-            tag = docker.resolve_ancestor_image_tag_for_comparison()
+            tag = docker.resolve_ancestor_image_tag()
 
         entrypoint_host = "balancerd" if balancerd else "materialized"
 

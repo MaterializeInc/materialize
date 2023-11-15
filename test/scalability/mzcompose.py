@@ -244,7 +244,7 @@ def get_baseline_and_other_endpoints(
             )
         else:
             if target == "common-ancestor":
-                target = docker.resolve_ancestor_image_tag_for_comparison()
+                target = docker.resolve_ancestor_image_tag()
             endpoint = MaterializeContainer(
                 composition=c,
                 specified_target=original_target,

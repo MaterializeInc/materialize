@@ -18,13 +18,13 @@ except ImportError:
     from semver import VersionInfo as Version  # type: ignore
 
 
-def resolve_ancestor_image_tag_for_comparison() -> str:
-    image_tag, context = _resolve_ancestor_image_tag_for_comparison()
+def resolve_ancestor_image_tag() -> str:
+    image_tag, context = _resolve_ancestor_image_tag()
     print(f"Using {image_tag} as image tag for comparison (context: {context})")
     return image_tag
 
 
-def _resolve_ancestor_image_tag_for_comparison() -> tuple[str, str]:
+def _resolve_ancestor_image_tag() -> tuple[str, str]:
     if buildkite.is_in_buildkite():
         if buildkite.is_in_pull_request():
             # return the merge base

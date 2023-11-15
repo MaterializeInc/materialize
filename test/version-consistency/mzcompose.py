@@ -53,7 +53,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     name_mz_this, name_mz_other = "mz_this", "mz_other"
     port_mz_internal, port_mz_this, port_mz_other = 6875, 6875, 16875
-    tag_mz_other = docker.resolve_ancestor_image_tag_for_comparison()
+    tag_mz_other = docker.resolve_ancestor_image_tag()
 
     print(f"Using {tag_mz_other} as tag for other mz version")
 
