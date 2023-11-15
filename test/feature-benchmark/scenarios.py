@@ -862,8 +862,8 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
             """
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
