@@ -654,7 +654,7 @@ steps:
     artifact_paths: junit_*.xml
     timeout_in_minutes: 3600
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: bounded-memory
