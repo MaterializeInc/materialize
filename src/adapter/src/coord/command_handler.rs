@@ -13,6 +13,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use futures::future::LocalBoxFuture;
+use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::now::NowFn;
@@ -55,25 +57,16 @@ use crate::{catalog, metrics, ExecuteContext};
 use super::ExecuteContextExtra;
 
 impl Coordinator {
-    pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
-        if let Some(session) = cmd.session_mut() {
-            session.apply_external_metadata_updates();
-        }
-        match cmd {
-            Command::Startup {
-                cancel_tx,
-                tx,
-                set_setting_keys,
-                user,
-                conn_id,
-                secret_key,
-                uuid,
-                application_name,
-                notice_tx,
-            } => {
-                // Note: We purposefully do not use a ClientTransmitter here because startup
-                // handles errors and cleanup of sessions itself.
-                self.handle_startup(
+    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
+    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
+    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    pub(crate) fn handle_command<'a>(&'a mut self, mut cmd: Command) -> LocalBoxFuture<'a, ()> {
+        async move {
+            if let Some(session) = cmd.session_mut() {
+                session.apply_external_metadata_updates();
+            }
+            match cmd {
+                Command::Startup {
                     cancel_tx,
                     tx,
                     set_setting_keys,
@@ -83,142 +76,158 @@ impl Coordinator {
                     uuid,
                     application_name,
                     notice_tx,
-                )
-                .await;
-            }
-
-            Command::Execute {
-                portal_name,
-                session,
-                tx,
-                span,
-                outer_ctx_extra,
-            } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                let span = span.or_current();
-                tracing::Span::current().add_link(span.context().span().span_context().clone());
-
-                self.handle_execute(portal_name, session, tx, outer_ctx_extra)
-                    .instrument(span)
+                } => {
+                    // Note: We purposefully do not use a ClientTransmitter here because startup
+                    // handles errors and cleanup of sessions itself.
+                    self.handle_startup(
+                        cancel_tx,
+                        tx,
+                        set_setting_keys,
+                        user,
+                        conn_id,
+                        secret_key,
+                        uuid,
+                        application_name,
+                        notice_tx,
+                    )
                     .await;
-            }
+                }
 
-            Command::RetireExecute { data, reason } => self.retire_execution(reason, data),
+                Command::Execute {
+                    portal_name,
+                    session,
+                    tx,
+                    span,
+                    outer_ctx_extra,
+                } => {
+                    let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                    let span = span.or_current();
+                    tracing::Span::current().add_link(span.context().span().span_context().clone());
 
-            Command::CancelRequest {
-                conn_id,
-                secret_key,
-            } => {
-                self.handle_cancel(conn_id, secret_key);
-            }
+                    self.handle_execute(portal_name, session, tx, outer_ctx_extra)
+                        .instrument(span)
+                        .await;
+                }
 
-            Command::PrivilegedCancelRequest { conn_id } => {
-                self.handle_privileged_cancel(conn_id);
-            }
+                Command::RetireExecute { data, reason } => self.retire_execution(reason, data),
 
-            Command::AppendWebhook {
-                database,
-                schema,
-                name,
-                conn_id,
-                tx,
-            } => {
-                self.handle_append_webhook(database, schema, name, conn_id, tx);
-            }
+                Command::CancelRequest {
+                    conn_id,
+                    secret_key,
+                } => {
+                    self.handle_cancel(conn_id, secret_key);
+                }
 
-            Command::GetSystemVars { conn_id, tx } => {
-                let conn = &self.active_conns[&conn_id];
-                let vars =
-                    GetVariablesResponse::new(self.catalog.system_config().iter().filter(|var| {
-                        var.visible(conn.user(), Some(self.catalog.system_config()))
-                            .is_ok()
-                    }));
-                let _ = tx.send(Ok(vars));
-            }
+                Command::PrivilegedCancelRequest { conn_id } => {
+                    self.handle_privileged_cancel(conn_id);
+                }
 
-            Command::SetSystemVars { vars, conn_id, tx } => {
-                let mut ops = Vec::with_capacity(vars.len());
-                let conn = &self.active_conns[&conn_id];
+                Command::AppendWebhook {
+                    database,
+                    schema,
+                    name,
+                    conn_id,
+                    tx,
+                } => {
+                    self.handle_append_webhook(database, schema, name, conn_id, tx);
+                }
 
-                for (name, value) in vars {
-                    if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
-                        var.visible(conn.user(), Some(self.catalog.system_config()))
-                    }) {
-                        let _ = tx.send(Err(e.into()));
-                        return;
+                Command::GetSystemVars { conn_id, tx } => {
+                    let conn = &self.active_conns[&conn_id];
+                    let vars = GetVariablesResponse::new(
+                        self.catalog.system_config().iter().filter(|var| {
+                            var.visible(conn.user(), Some(self.catalog.system_config()))
+                                .is_ok()
+                        }),
+                    );
+                    let _ = tx.send(Ok(vars));
+                }
+
+                Command::SetSystemVars { vars, conn_id, tx } => {
+                    let mut ops = Vec::with_capacity(vars.len());
+                    let conn = &self.active_conns[&conn_id];
+
+                    for (name, value) in vars {
+                        if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
+                            var.visible(conn.user(), Some(self.catalog.system_config()))
+                        }) {
+                            let _ = tx.send(Err(e.into()));
+                            return;
+                        }
+
+                        ops.push(catalog::Op::UpdateSystemConfiguration {
+                            name,
+                            value: OwnedVarInput::Flat(value),
+                        });
                     }
 
-                    ops.push(catalog::Op::UpdateSystemConfiguration {
-                        name,
-                        value: OwnedVarInput::Flat(value),
+                    let result = self.catalog_transact_conn(Some(&conn_id), ops).await;
+                    let _ = tx.send(result);
+                }
+
+                Command::Terminate { conn_id, tx } => {
+                    self.handle_terminate(conn_id).await;
+                    // Note: We purposefully do not use a ClientTransmitter here because we're already
+                    // terminating the provided session.
+                    if let Some(tx) = tx {
+                        let _ = tx.send(Ok(()));
+                    }
+                }
+
+                Command::Commit {
+                    action,
+                    session,
+                    tx,
+                    otel_ctx,
+                } => {
+                    let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                    // We reach here not through a statement execution, but from the
+                    // "commit" pgwire command. Thus, we just generate a default statement
+                    // execution context (once statement logging is implemented, this will cause nothing to be logged
+                    // when the execution finishes.)
+                    let ctx = ExecuteContext::from_parts(
+                        tx,
+                        self.internal_cmd_tx.clone(),
+                        session,
+                        Default::default(),
+                    );
+                    let plan = match action {
+                        EndTransactionAction::Commit => {
+                            Plan::CommitTransaction(CommitTransactionPlan {
+                                transaction_type: TransactionType::Implicit,
+                            })
+                        }
+                        EndTransactionAction::Rollback => {
+                            Plan::AbortTransaction(AbortTransactionPlan {
+                                transaction_type: TransactionType::Implicit,
+                            })
+                        }
+                    };
+                    // TODO: We need a Span that is not none for the otel_ctx to
+                    // attach the parent relationship to. If we do the TODO to swap
+                    // otel_ctx in `Command::Commit` for a Span, we can downgrade
+                    // this to a debug_span.
+                    let span = tracing::info_span!("message_command (commit)").or_current();
+                    span.in_scope(|| otel_ctx.attach_as_parent());
+                    tracing::Span::current().add_link(span.context().span().span_context().clone());
+
+                    self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                        .instrument(span)
+                        .await;
+                }
+
+                Command::CatalogSnapshot { tx } => {
+                    let _ = tx.send(CatalogSnapshot {
+                        catalog: self.owned_catalog(),
                     });
                 }
 
-                let result = self.catalog_transact_conn(Some(&conn_id), ops).await;
-                let _ = tx.send(result);
-            }
-
-            Command::Terminate { conn_id, tx } => {
-                self.handle_terminate(conn_id).await;
-                // Note: We purposefully do not use a ClientTransmitter here because we're already
-                // terminating the provided session.
-                if let Some(tx) = tx {
-                    let _ = tx.send(Ok(()));
+                Command::CheckConsistency { tx } => {
+                    let _ = tx.send(self.check_consistency());
                 }
             }
-
-            Command::Commit {
-                action,
-                session,
-                tx,
-                otel_ctx,
-            } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                // We reach here not through a statement execution, but from the
-                // "commit" pgwire command. Thus, we just generate a default statement
-                // execution context (once statement logging is implemented, this will cause nothing to be logged
-                // when the execution finishes.)
-                let ctx = ExecuteContext::from_parts(
-                    tx,
-                    self.internal_cmd_tx.clone(),
-                    session,
-                    Default::default(),
-                );
-                let plan = match action {
-                    EndTransactionAction::Commit => {
-                        Plan::CommitTransaction(CommitTransactionPlan {
-                            transaction_type: TransactionType::Implicit,
-                        })
-                    }
-                    EndTransactionAction::Rollback => {
-                        Plan::AbortTransaction(AbortTransactionPlan {
-                            transaction_type: TransactionType::Implicit,
-                        })
-                    }
-                };
-                // TODO: We need a Span that is not none for the otel_ctx to
-                // attach the parent relationship to. If we do the TODO to swap
-                // otel_ctx in `Command::Commit` for a Span, we can downgrade
-                // this to a debug_span.
-                let span = tracing::info_span!("message_command (commit)").or_current();
-                span.in_scope(|| otel_ctx.attach_as_parent());
-                tracing::Span::current().add_link(span.context().span().span_context().clone());
-
-                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
-                    .instrument(span)
-                    .await;
-            }
-
-            Command::CatalogSnapshot { tx } => {
-                let _ = tx.send(CatalogSnapshot {
-                    catalog: self.owned_catalog(),
-                });
-            }
-
-            Command::CheckConsistency { tx } => {
-                let _ = tx.send(self.check_consistency());
-            }
         }
+        .boxed_local()
     }
 
     #[tracing::instrument(level = "debug", skip(self, cancel_tx, tx, secret_key, notice_tx))]

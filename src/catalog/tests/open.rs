@@ -77,8 +77,9 @@
 
 use mz_catalog::durable::objects::serialization::proto::RoleKey;
 use mz_catalog::durable::{
-    persist_backed_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
-    test_stash_backed_catalog_state, CatalogError, Epoch, OpenableDurableCatalogState, StashConfig,
+    persist_backed_catalog_state, shadow_catalog_state, stash_backed_catalog_state,
+    test_bootstrap_args, test_stash_backed_catalog_state, CatalogError, Epoch,
+    OpenableDurableCatalogState, StashConfig,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
@@ -383,6 +384,36 @@ async fn test_persist_open_read_only() {
     .await;
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_shadow_read_only_open() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let (debug_factory, stash_config) = stash_config().await;
+
+    let shadow_openable_state1 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state2 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state3 =
+        shadow_catalog_state(stash_config.clone(), persist_client, organization_id).await;
+    test_open_read_only(
+        shadow_openable_state1,
+        shadow_openable_state2,
+        shadow_openable_state3,
+    )
+    .await;
+    debug_factory.drop().await;
+}
+
 async fn test_open_read_only(
     openable_state1: impl OpenableDurableCatalogState,
     openable_state2: impl OpenableDurableCatalogState,
@@ -495,6 +526,36 @@ async fn test_persist_open() {
         persist_openable_state3,
     )
     .await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_shadow_open() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let (debug_factory, stash_config) = stash_config().await;
+
+    let shadow_openable_state1 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state2 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state3 =
+        shadow_catalog_state(stash_config.clone(), persist_client, organization_id).await;
+    test_open(
+        shadow_openable_state1,
+        shadow_openable_state2,
+        shadow_openable_state3,
+    )
+    .await;
+    debug_factory.drop().await;
 }
 
 async fn test_open(
