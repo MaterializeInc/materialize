@@ -10,17 +10,23 @@
 //! Interfaces for reading txn shards as well as data shards.
 
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_client::read::{Cursor, ReadHandle, Since};
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::ShardId;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, instrument};
+use tokio::sync::{mpsc, oneshot};
+use tracing::{debug, instrument, warn};
+
+use crate::txn_cache::TxnsCache;
+use crate::{TxnsCodec, TxnsCodecDefault};
 
 /// A token exchangeable for a data shard snapshot.
 ///
@@ -197,7 +203,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
 
 /// The next action to take in a data shard `Listen`.
 ///
-/// See [TxnsCache::data_listen_next].
+/// See [crate::txn_cache::TxnsCacheState::data_listen_next].
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub enum DataListenNext<T> {
@@ -215,4 +221,129 @@ pub enum DataListenNext<T> {
     /// We've lost historical distinctions and can no longer answer queries
     /// about times before the returned one.
     CompactedTo(T),
+}
+
+/// A shared [TxnsCache] running in a task and communicated with over a channel.
+#[derive(Debug, Clone)]
+pub struct TxnsRead<T> {
+    tx: mpsc::Sender<TxnsReadCmd<T>>,
+    _task: Arc<AbortOnDropHandle<()>>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
+    pub(crate) fn start<C>(client: PersistClient, txns_id: ShardId) -> Self
+    where
+        T: TotalOrder + StepForward,
+        C: TxnsCodec,
+    {
+        let (tx, rx) = mpsc::channel(128);
+        let task = mz_ore::task::spawn(|| "persist-txn::cache", async move {
+            let cache = TxnsCache::<T, C>::open(&client, txns_id, None).await;
+            let mut task = TxnsReadTask { cache, rx };
+            task.run().await
+        });
+        TxnsRead {
+            tx,
+            _task: Arc::new(task.abort_on_drop()),
+        }
+    }
+
+    /// See [crate::txn_cache::TxnsCacheState::data_snapshot].
+    pub async fn data_snapshot(&self, data_id: ShardId, as_of: T) -> DataSnapshot<T> {
+        self.send(|tx| TxnsReadCmd::DataSnapshot { data_id, as_of, tx })
+            .await
+    }
+
+    /// See [crate::txn_cache::TxnsCacheState::data_listen_next].
+    pub async fn data_listen_next(&self, data_id: ShardId, ts: T) -> DataListenNext<T> {
+        self.send(|tx| TxnsReadCmd::DataListenNext { data_id, ts, tx })
+            .await
+    }
+
+    /// See [TxnsCache::update_ge].
+    pub(crate) async fn update_ge(&self, ts: T) {
+        let ts = WaitTs::GreaterEqual(ts);
+        self.send(|tx| TxnsReadCmd::Wait { ts, tx }).await
+    }
+
+    /// See [TxnsCache::update_gt].
+    pub async fn update_gt(&self, ts: T) {
+        let ts = WaitTs::GreaterThan(ts);
+        self.send(|tx| TxnsReadCmd::Wait { ts, tx }).await
+    }
+
+    async fn send<R: std::fmt::Debug>(
+        &self,
+        cmd: impl FnOnce(oneshot::Sender<R>) -> TxnsReadCmd<T>,
+    ) -> R {
+        let (tx, rx) = oneshot::channel();
+        let req = cmd(tx);
+        let () = self
+            .tx
+            .send(req)
+            .await
+            .expect("task unexpectedly shut down");
+        rx.await.expect("task unexpectedly shut down")
+    }
+}
+
+#[derive(Debug)]
+enum TxnsReadCmd<T> {
+    DataSnapshot {
+        data_id: ShardId,
+        as_of: T,
+        tx: oneshot::Sender<DataSnapshot<T>>,
+    },
+    DataListenNext {
+        data_id: ShardId,
+        ts: T,
+        tx: oneshot::Sender<DataListenNext<T>>,
+    },
+    Wait {
+        ts: WaitTs<T>,
+        tx: oneshot::Sender<()>,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum WaitTs<T> {
+    GreaterEqual(T),
+    GreaterThan(T),
+}
+
+#[derive(Debug)]
+struct TxnsReadTask<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
+    rx: mpsc::Receiver<TxnsReadCmd<T>>,
+    cache: TxnsCache<T, C>,
+}
+
+impl<T, C> TxnsReadTask<T, C>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    C: TxnsCodec,
+{
+    async fn run(&mut self) {
+        while let Some(cmd) = self.rx.recv().await {
+            match cmd {
+                TxnsReadCmd::DataSnapshot { data_id, as_of, tx } => {
+                    let res = self.cache.data_snapshot(data_id, as_of.clone());
+                    let _ = tx.send(res);
+                }
+                TxnsReadCmd::DataListenNext { data_id, ts, tx } => {
+                    let res = self.cache.data_listen_next(&data_id, ts);
+                    let _ = tx.send(res);
+                }
+                TxnsReadCmd::Wait { ts, tx } => {
+                    // TODO(txn): This could be arbitrarily far in the future.
+                    // Don't block other commands on this.
+                    let res = match &ts {
+                        WaitTs::GreaterEqual(ts) => self.cache.update_ge(ts).await,
+                        WaitTs::GreaterThan(ts) => self.cache.update_gt(ts).await,
+                    };
+                    let _ = tx.send(res);
+                }
+            }
+        }
+        warn!("TxnsReadTask shutting down");
+    }
 }

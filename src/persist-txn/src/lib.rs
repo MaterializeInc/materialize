@@ -173,7 +173,7 @@
 //!     the txns shard contains the set of txns that need to be applied (as well
 //!     as the set of registered data shards).
 //!
-//! [TxnsCache]: crate::txn_read::TxnsCache
+//! [TxnsCache]: crate::txn_cache::TxnsCache
 //!
 //! # Usage
 //!
