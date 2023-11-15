@@ -64,7 +64,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "minio",
         "materialized",
     ]
-    c.up(*service_names)
+    catalog_store = (
+        "stash"
+        if args.scenario in (Scenario.Kill, Scenario.BackupRestore)
+        else "shadow"
+    )
+    with c.override(
+        Materialized(
+            external_cockroach=True,
+            restart="on-failure",
+            external_minio=True,
+            ports=["6975:6875", "6976:6876", "6977:6877"],
+            catalog_store=catalog_store,
+        )
+    ):
+        c.up(*service_names)
     c.up("mc", persistent=True)
     c.exec(
         "mc",
