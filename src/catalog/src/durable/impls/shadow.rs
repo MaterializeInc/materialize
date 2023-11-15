@@ -90,9 +90,7 @@ where
         );
         let stash = stash?;
         let persist = persist?;
-        let mut state = ShadowCatalogState { stash, persist };
-        state.fix_timestamps().await?;
-        Ok(Box::new(state))
+        Ok(Box::new(ShadowCatalogState::new(stash, persist).await?))
     }
 
     async fn open_read_only(
@@ -110,7 +108,7 @@ where
         );
         let stash = stash?;
         let persist = persist?;
-        Ok(Box::new(ShadowCatalogState { stash, persist }))
+        Ok(Box::new(ShadowCatalogState::new_read_only(stash, persist)))
     }
 
     async fn open(
@@ -133,9 +131,7 @@ where
         );
         let stash = stash?;
         let persist = persist?;
-        let mut state = ShadowCatalogState { stash, persist };
-        state.fix_timestamps().await?;
-        Ok(Box::new(state))
+        Ok(Box::new(ShadowCatalogState::new(stash, persist).await?))
     }
 
     async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
@@ -170,6 +166,22 @@ pub struct ShadowCatalogState {
 }
 
 impl ShadowCatalogState {
+    async fn new(
+        stash: Box<dyn DurableCatalogState>,
+        persist: Box<dyn DurableCatalogState>,
+    ) -> Result<ShadowCatalogState, CatalogError> {
+        let mut state = ShadowCatalogState { stash, persist };
+        state.fix_timestamps().await?;
+        Ok(state)
+    }
+
+    fn new_read_only(
+        stash: Box<dyn DurableCatalogState>,
+        persist: Box<dyn DurableCatalogState>,
+    ) -> ShadowCatalogState {
+        ShadowCatalogState { stash, persist }
+    }
+
     /// The Coordinator will update the timestamps of every timeline continuously on an interval.
     /// If we shut down the Coordinator while it's updating the timestamps, then it's possible that
     /// only one catalog implementation is updated, while the other is not. This will leave the two
