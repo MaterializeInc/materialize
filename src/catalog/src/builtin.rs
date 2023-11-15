@@ -185,8 +185,17 @@ pub struct BuiltinFunc {
 pub struct BuiltinIndex {
     pub name: &'static str,
     pub schema: &'static str,
+    /// SQL fragment for the index, following `CREATE INDEX [name]`
+    ///
+    /// Format: `IN CLUSTER [cluster_name] ON [table_name] ([column_exprs])`
     pub sql: &'static str,
     pub is_retained_metrics_object: bool,
+}
+
+impl BuiltinIndex {
+    pub fn create_sql(&self) -> String {
+        format!("CREATE INDEX {}\n{}", self.name, self.sql)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -273,7 +282,7 @@ impl Fingerprint for &BuiltinSource {
 
 impl Fingerprint for &BuiltinIndex {
     fn fingerprint(&self) -> String {
-        self.sql.to_string()
+        self.create_sql()
     }
 }
 
@@ -5398,8 +5407,7 @@ JOIN root_times r USING (id)",
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_databases_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_databases (name)",
     is_retained_metrics_object: false,
 };
@@ -5407,8 +5415,7 @@ ON mz_catalog.mz_databases (name)",
 pub const MZ_SHOW_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_schemas_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_schemas_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_schemas (database_id)",
     is_retained_metrics_object: false,
 };
@@ -5416,8 +5423,7 @@ ON mz_catalog.mz_schemas (database_id)",
 pub const MZ_SHOW_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_connections_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_connections_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_connections (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -5425,8 +5431,7 @@ ON mz_catalog.mz_connections (schema_id)",
 pub const MZ_SHOW_TABLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_tables_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_tables_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_tables (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -5434,8 +5439,7 @@ ON mz_catalog.mz_tables (schema_id)",
 pub const MZ_SHOW_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_sources_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_sources_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_show_sources (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -5443,8 +5447,7 @@ ON mz_internal.mz_show_sources (schema_id)",
 pub const MZ_SHOW_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_views_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_views_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_views (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -5452,8 +5455,7 @@ ON mz_catalog.mz_views (schema_id)",
 pub const MZ_SHOW_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_materialized_views_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_materialized_views_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_show_materialized_views (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -5461,8 +5463,7 @@ ON mz_internal.mz_show_materialized_views (schema_id)",
 pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_sinks_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_sinks_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_show_sinks (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -5470,8 +5471,7 @@ ON mz_internal.mz_show_sinks (schema_id)",
 pub const MZ_SHOW_TYPES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_types_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_types_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_types (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -5479,8 +5479,7 @@ ON mz_catalog.mz_types (schema_id)",
 pub const MZ_SHOW_ALL_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_all_objects_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_all_objects_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_objects (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -5488,8 +5487,7 @@ ON mz_catalog.mz_objects (schema_id)",
 pub const MZ_SHOW_INDEXES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_indexes_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_indexes_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_show_indexes (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -5497,8 +5495,7 @@ ON mz_internal.mz_show_indexes (schema_id)",
 pub const MZ_SHOW_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_columns_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_columns_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_columns (id)",
     is_retained_metrics_object: false,
 };
@@ -5506,8 +5503,7 @@ ON mz_catalog.mz_columns (id)",
 pub const MZ_SHOW_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_clusters_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_clusters_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_clusters (name)",
     is_retained_metrics_object: false,
 };
@@ -5515,8 +5511,7 @@ ON mz_catalog.mz_clusters (name)",
 pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_cluster_replicas_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_cluster_replicas_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_show_cluster_replicas (cluster)",
     is_retained_metrics_object: false,
 };
@@ -5524,8 +5519,7 @@ ON mz_internal.mz_show_cluster_replicas (cluster)",
 pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_secrets_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_show_secrets_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_secrets (schema_id)",
     is_retained_metrics_object: false,
 };
@@ -5533,8 +5527,7 @@ ON mz_catalog.mz_secrets (schema_id)",
 pub const MZ_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_clusters_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_clusters_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_clusters (id)",
     is_retained_metrics_object: false,
 };
@@ -5542,8 +5535,7 @@ ON mz_catalog.mz_clusters (id)",
 pub const MZ_INDEXES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_indexes_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_indexes_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_indexes (id)",
     is_retained_metrics_object: false,
 };
@@ -5551,8 +5543,7 @@ ON mz_catalog.mz_indexes (id)",
 pub const MZ_ROLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_roles_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_roles_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_roles (id)",
     is_retained_metrics_object: false,
 };
@@ -5560,8 +5551,7 @@ ON mz_catalog.mz_roles (id)",
 pub const MZ_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sources_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_sources_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_sources (id)",
     is_retained_metrics_object: false,
 };
@@ -5569,8 +5559,7 @@ ON mz_catalog.mz_sources (id)",
 pub const MZ_SINKS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sinks_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_sinks_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_sinks (id)",
     is_retained_metrics_object: false,
 };
@@ -5578,8 +5567,7 @@ ON mz_catalog.mz_sinks (id)",
 pub const MZ_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_materialized_views_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_materialized_views_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_materialized_views (id)",
     is_retained_metrics_object: false,
 };
@@ -5587,8 +5575,7 @@ ON mz_catalog.mz_materialized_views (id)",
 pub const MZ_CLUSTER_LINKS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_links_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_cluster_links_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_cluster_links (cluster_id)",
     is_retained_metrics_object: false,
 };
@@ -5596,8 +5583,7 @@ ON mz_internal.mz_cluster_links (cluster_id)",
 pub const MZ_SOURCE_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_source_statuses_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_source_statuses (id)",
     is_retained_metrics_object: false,
 };
@@ -5605,8 +5591,7 @@ ON mz_internal.mz_source_statuses (id)",
 pub const MZ_SINK_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sink_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_sink_statuses_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_sink_statuses (id)",
     is_retained_metrics_object: false,
 };
@@ -5614,8 +5599,7 @@ ON mz_internal.mz_sink_statuses (id)",
 pub const MZ_SOURCE_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_status_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_source_status_history_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_source_status_history (source_id)",
     is_retained_metrics_object: false,
 };
@@ -5623,8 +5607,7 @@ ON mz_internal.mz_source_status_history (source_id)",
 pub const MZ_SINK_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sink_status_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_sink_status_history_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_sink_status_history (sink_id)",
     is_retained_metrics_object: false,
 };
@@ -5632,8 +5615,7 @@ ON mz_internal.mz_sink_status_history (sink_id)",
 pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_source_statistics_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_source_statistics (id)",
     is_retained_metrics_object: false,
 };
@@ -5641,8 +5623,7 @@ ON mz_internal.mz_source_statistics (id)",
 pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sink_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_sink_statistics_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_sink_statistics (id)",
     is_retained_metrics_object: false,
 };
@@ -5650,8 +5631,7 @@ ON mz_internal.mz_sink_statistics (id)",
 pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replicas_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_cluster_replicas_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_cluster_replicas (id)",
     is_retained_metrics_object: true,
 };
@@ -5659,8 +5639,7 @@ ON mz_catalog.mz_cluster_replicas (id)",
 pub const MZ_CLUSTER_REPLICA_SIZES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_sizes_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_cluster_replica_sizes_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_cluster_replica_sizes (size)",
     is_retained_metrics_object: true,
 };
@@ -5668,8 +5647,7 @@ ON mz_internal.mz_cluster_replica_sizes (size)",
 pub const MZ_CLUSTER_REPLICA_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_cluster_replica_statuses_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_cluster_replica_statuses (replica_id)",
     is_retained_metrics_object: true,
 };
@@ -5677,8 +5655,7 @@ ON mz_internal.mz_cluster_replica_statuses (replica_id)",
 pub const MZ_CLUSTER_REPLICA_METRICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_metrics_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_cluster_replica_metrics_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_cluster_replica_metrics (replica_id)",
     is_retained_metrics_object: true,
 };
@@ -5686,8 +5663,7 @@ ON mz_internal.mz_cluster_replica_metrics (replica_id)",
 pub const MZ_CLUSTER_REPLICA_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_cluster_replica_history_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_cluster_replica_history (dropped_at)",
     is_retained_metrics_object: true,
 };
@@ -5695,8 +5671,7 @@ ON mz_internal.mz_cluster_replica_history (dropped_at)",
 pub const MZ_OBJECT_LIFETIMES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_lifetimes_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_object_lifetimes_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_object_lifetimes (id)",
     is_retained_metrics_object: false,
 };
@@ -5704,8 +5679,7 @@ ON mz_internal.mz_object_lifetimes (id)",
 pub const MZ_OBJECT_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_dependencies_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_object_dependencies_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_object_dependencies (object_id)",
     is_retained_metrics_object: false,
 };
@@ -5713,8 +5687,7 @@ ON mz_internal.mz_object_dependencies (object_id)",
 pub const MZ_COMPUTE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_compute_dependencies_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_compute_dependencies_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_compute_dependencies (dependency_id)",
     is_retained_metrics_object: false,
 };
@@ -5722,8 +5695,7 @@ ON mz_internal.mz_compute_dependencies (dependency_id)",
 pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_transitive_dependencies_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_object_transitive_dependencies_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_object_transitive_dependencies (object_id)",
     is_retained_metrics_object: false,
 };
@@ -5731,8 +5703,7 @@ ON mz_internal.mz_object_transitive_dependencies (object_id)",
 pub const MZ_FRONTIERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_frontiers_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE INDEX mz_frontiers_ind
-IN CLUSTER mz_introspection
+    sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_frontiers (object_id)",
     is_retained_metrics_object: false,
 };

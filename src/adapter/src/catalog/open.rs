@@ -746,7 +746,7 @@ impl Catalog {
                     let mut item = state
                         .parse_item(
                             id,
-                            index.sql.into(),
+                            index.create_sql(),
                             None,
                             index.is_retained_metrics_object,
                             if index.is_retained_metrics_object { Some(state.system_config().metrics_retention()) } else { None },
