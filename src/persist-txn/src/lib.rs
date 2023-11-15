@@ -284,6 +284,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error, instrument};
 
 pub mod operator;
+pub mod txn_cache;
 pub mod txn_read;
 pub mod txn_write;
 pub mod txns;
