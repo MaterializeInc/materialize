@@ -95,7 +95,7 @@ make sure to read the [documentation](https://docs.getdbt.com/docs/build/custom-
 ### Sources
 
 You can instruct dbt to create a [`dbt source`](https://docs.getdbt.com/docs/build/sources)
-in Materialize using the custom[source] materialization, which allows for
+in Materialize using the custom [source] materialization, which allows for
 injecting the complete source statement into your .sql file.
 
 `source freshness` is not supported because using Materialize, your sources will
