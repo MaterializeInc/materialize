@@ -81,8 +81,10 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
+use mz_catalog::memory::objects::CatalogEntry;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -1224,6 +1226,13 @@ impl Coordinator {
             "items not cleared from queue {entries_awaiting_dependent:?}, {entries_awaiting_dependencies:?}"
         );
 
+        debug!("coordinator init: optimizing dataflow plans");
+        self.bootstrap_dataflow_plans(&entries)?;
+
+        // Discover what indexes MVs depend on. Needed for as-of selection below.
+        // This step relies on the dataflow plans created by `bootstrap_dataflow_plans`.
+        let mut index_dependent_matviews = self.collect_index_dependent_matviews();
+
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog().resolve_builtin_log(log))
             .collect();
@@ -1279,50 +1288,23 @@ impl Coordinator {
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else {
-                        // Collect optimizer parameters.
-                        let compute_instance = self
-                            .instance_snapshot(idx.cluster_id)
-                            .expect("compute instance does not exist");
-                        let optimizer_config =
-                            OptimizerConfig::from(self.catalog().system_config());
+                        let mut df_desc = self
+                            .catalog()
+                            .try_get_physical_plan(&entry.id())
+                            .expect("added in `bootstrap_dataflow_plans`")
+                            .clone();
 
-                        // Build an optimizer for this INDEX.
-                        let mut optimizer = optimize::index::Optimizer::new(
-                            self.owned_catalog(),
-                            compute_instance,
-                            entry.id(),
-                            optimizer_config,
-                        );
-
-                        // MIR ⇒ MIR optimization (global)
-                        let index_plan =
-                            optimize::index::Index::new(entry.name(), &idx.on, &idx.keys);
-                        let global_mir_plan = optimizer.optimize(index_plan)?;
-                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
                         // Timestamp selection
+                        let dependent_matviews = index_dependent_matviews
+                            .remove(&entry.id())
+                            .expect("all index dependants were collected");
                         let as_of = self.bootstrap_index_as_of(
-                            global_mir_plan.df_desc(),
-                            optimizer.cluster_id(),
+                            &df_desc,
+                            idx.cluster_id,
                             idx.is_retained_metrics_object,
+                            dependent_matviews,
                         );
-                        let global_lir_plan = global_lir_plan.resolve(as_of);
-
-                        // Note: ideally, the optimized_plan should be computed
-                        // and set when the CatalogItem is re-constructed (in
-                        // parse_item).
-                        //
-                        // However, it's not clear how exactly to change
-                        // `load_catalog_items` in order to accommodate for the
-                        // optimizer pipeline executed above.
-                        self.catalog_mut()
-                            .set_optimized_plan(entry.id(), global_mir_plan.df_desc().clone());
-                        self.catalog_mut()
-                            .set_physical_plan(entry.id(), global_lir_plan.df_desc().clone());
-                        self.catalog_mut()
-                            .set_dataflow_metainfo(entry.id(), global_lir_plan.df_meta().clone());
-
-                        let df_desc = global_lir_plan.unapply().0;
+                        df_desc.set_as_of(as_of);
 
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
@@ -1346,55 +1328,16 @@ impl Coordinator {
                         .storage_ids
                         .insert(entry.id());
 
-                    // Collect optimizer parameters.
-                    let compute_instance = self
-                        .instance_snapshot(mview.cluster_id)
-                        .expect("compute instance does not exist");
-                    let internal_view_id = self.allocate_transient_id()?;
-                    let debug_name = self
+                    let mut df_desc = self
                         .catalog()
-                        .resolve_full_name(entry.name(), None)
-                        .to_string();
-                    let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
+                        .try_get_physical_plan(&entry.id())
+                        .expect("added in `bootstrap_dataflow_plans`")
+                        .clone();
 
-                    // Build an optimizer for this MATERIALIZED VIEW.
-                    let mut optimizer = optimize::materialized_view::Optimizer::new(
-                        self.owned_catalog(),
-                        compute_instance,
-                        entry.id(),
-                        internal_view_id,
-                        mview.desc.iter_names().cloned().collect(),
-                        mview.non_null_assertions.clone(),
-                        debug_name,
-                        optimizer_config,
-                    );
-
-                    // MIR ⇒ MIR optimization (global)
-                    let global_mir_plan = optimizer.optimize(mview.optimized_expr.clone())?;
-                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                    let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
                     // Timestamp selection
-                    let as_of = self.bootstrap_materialized_view_as_of(
-                        global_mir_plan.df_desc(),
-                        optimizer.cluster_id(),
-                    );
-                    let global_lir_plan = global_lir_plan.resolve(as_of);
+                    let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
+                    df_desc.set_as_of(as_of);
 
-                    // Note: ideally, the optimized_plan should be computed
-                    // and set when the CatalogItem is re-constructed (in
-                    // parse_item).
-                    //
-                    // However, it's not clear how exactly to change
-                    // `load_catalog_items` in order to accommodate for the
-                    // optimizer pipeline executed above.
-                    self.catalog_mut()
-                        .set_optimized_plan(entry.id(), global_mir_plan.df_desc().clone());
-                    self.catalog_mut()
-                        .set_physical_plan(entry.id(), global_lir_plan.df_desc().clone());
-                    self.catalog_mut()
-                        .set_dataflow_metainfo(entry.id(), global_lir_plan.df_meta().clone());
-
-                    let df_desc = global_lir_plan.unapply().0;
                     self.ship_dataflow_new(df_desc, mview.cluster_id).await;
                 }
                 CatalogItem::Sink(sink) => {
@@ -1634,12 +1577,202 @@ impl Coordinator {
         self.apply_local_write(register_ts).await;
     }
 
+    /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
+    /// resulting dataflow plans into the catalog state.
+    ///
+    /// `ordered_catalog_entries` must by sorted in dependency order, with dependencies ordered
+    /// before their dependants.
+    ///
+    /// This method does not perform timestamp selection for the dataflows, nor does it create them
+    /// in the compute controller. Both of these steps happen later during bootstrapping.
+    fn bootstrap_dataflow_plans(
+        &mut self,
+        ordered_catalog_entries: &[CatalogEntry],
+    ) -> Result<(), AdapterError> {
+        // The optimizer expects to be able to query its `ComputeInstanceSnapshot` for
+        // collections the current dataflow can depend on. But since we don't yet install anything
+        // on compute instances, the snapshot information is incomplete. We fix that by manually
+        // updating `ComputeInstanceSnapshot` objects to ensure they contain collections previously
+        // optimized.
+        let mut instance_snapshots = BTreeMap::new();
+
+        let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
+
+        for entry in ordered_catalog_entries {
+            let id = entry.id();
+            match entry.item() {
+                CatalogItem::Index(idx) => {
+                    // Collect optimizer parameters.
+                    let compute_instance =
+                        instance_snapshots.entry(idx.cluster_id).or_insert_with(|| {
+                            self.instance_snapshot(idx.cluster_id)
+                                .expect("compute instance exists")
+                        });
+
+                    // The index may already be installed on the compute instance. For example,
+                    // this is the case for introspection indexes.
+                    if compute_instance.contains_collection(&id) {
+                        continue;
+                    }
+
+                    // Build an optimizer for this INDEX.
+                    let mut optimizer = optimize::index::Optimizer::new(
+                        self.owned_catalog(),
+                        compute_instance.clone(),
+                        entry.id(),
+                        optimizer_config.clone(),
+                    );
+
+                    // MIR ⇒ MIR optimization (global)
+                    let index_plan = optimize::index::Index::new(entry.name(), &idx.on, &idx.keys);
+                    let global_mir_plan = optimizer.optimize(index_plan)?;
+                    let optimized_plan = global_mir_plan.df_desc().clone();
+
+                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                    let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+                    let (physical_plan, metainfo) = global_lir_plan.unapply();
+
+                    let catalog = self.catalog_mut();
+                    catalog.set_optimized_plan(id, optimized_plan);
+                    catalog.set_physical_plan(id, physical_plan);
+                    catalog.set_dataflow_metainfo(id, metainfo);
+
+                    compute_instance.insert_collection(id);
+                }
+                CatalogItem::MaterializedView(mv) => {
+                    // Collect optimizer parameters.
+                    let compute_instance =
+                        instance_snapshots.entry(mv.cluster_id).or_insert_with(|| {
+                            self.instance_snapshot(mv.cluster_id)
+                                .expect("compute instance exists")
+                        });
+                    let internal_view_id = self.allocate_transient_id()?;
+                    let debug_name = self
+                        .catalog()
+                        .resolve_full_name(entry.name(), None)
+                        .to_string();
+
+                    // Build an optimizer for this MATERIALIZED VIEW.
+                    let mut optimizer = optimize::materialized_view::Optimizer::new(
+                        self.owned_catalog(),
+                        compute_instance.clone(),
+                        entry.id(),
+                        internal_view_id,
+                        mv.desc.iter_names().cloned().collect(),
+                        mv.non_null_assertions.clone(),
+                        debug_name,
+                        optimizer_config.clone(),
+                    );
+
+                    // MIR ⇒ MIR optimization (global)
+                    let global_mir_plan = optimizer.optimize(mv.optimized_expr.clone())?;
+                    let optimized_plan = global_mir_plan.df_desc().clone();
+
+                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                    let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+                    let (physical_plan, metainfo) = global_lir_plan.unapply();
+
+                    let catalog = self.catalog_mut();
+                    catalog.set_optimized_plan(id, optimized_plan);
+                    catalog.set_physical_plan(id, physical_plan);
+                    catalog.set_dataflow_metainfo(id, metainfo);
+
+                    compute_instance.insert_collection(id);
+                }
+                _ => (),
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Collects for each index the materialized views that depend on it, either directly or
+    /// transitively through other indexes (but not through other MVs).
+    ///
+    /// The returned information is required during coordinator bootstrap for index as-of
+    /// selection, to ensure that selected as-ofs satisfy the requirements of downstream MVs.
+    ///
+    /// This method expects all dataflow plans to be available, so it must run after
+    /// [`Coordinator::bootstrap_dataflow_plans`].
+    fn collect_index_dependent_matviews(&self) -> BTreeMap<GlobalId, BTreeSet<GlobalId>> {
+        // Collect imports of all indexes and MVs in the catalog.
+        let mut index_imports = BTreeMap::new();
+        let mut mv_imports = BTreeMap::new();
+        let catalog = self.catalog();
+        for entry in catalog.entries() {
+            let id = entry.id();
+            if let Some(plan) = catalog.try_get_physical_plan(&id) {
+                let imports: Vec<_> = plan.import_ids().collect();
+                if entry.is_index() {
+                    index_imports.insert(id, imports);
+                } else if entry.is_materialized_view() {
+                    mv_imports.insert(id, imports);
+                }
+            }
+        }
+
+        // Start with an empty set of dependants for each index.
+        let mut dependants: BTreeMap<_, _> = index_imports
+            .keys()
+            .map(|id| (*id, BTreeSet::new()))
+            .collect();
+
+        // Collect direct dependants first.
+        for (mv_id, mv_deps) in &mv_imports {
+            for dep_id in mv_deps {
+                if let Some(ids) = dependants.get_mut(dep_id) {
+                    ids.insert(*mv_id);
+                } else {
+                    // `dep_id` references a source import.
+                    // We ignore it since we only want to collect dependants on indexes.
+                }
+            }
+        }
+
+        // Collect transitive dependants.
+        loop {
+            let mut changed = false;
+
+            // Objects with larger IDs tend to depend on objects with smaller IDs. We don't want to
+            // rely on that being true, but we can use it to be more efficient.
+            for (idx_id, idx_deps) in index_imports.iter().rev() {
+                // For each dependency of this index, and each MV depending on this index, add the
+                // transitive dependency to `dependants`.
+                //
+                // I.e., if `dep_id <- idx_id` and `idx_id <- mv_id`, then we add `dep_id <- mv_id`
+                // to `dependants`.
+
+                let mv_ids = dependants.get(idx_id).expect("inserted above").clone();
+                if mv_ids.is_empty() {
+                    continue;
+                }
+
+                for dep_id in idx_deps {
+                    if let Some(ids) = dependants.get_mut(dep_id) {
+                        changed |= mv_ids.iter().any(|mv_id| ids.insert(*mv_id));
+                    } else {
+                        // `dep_id` references a source import.
+                    }
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        dependants
+    }
+
     /// Returns an `as_of` suitable for bootstrapping the given index dataflow.
     fn bootstrap_index_as_of(
         &self,
-        dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
+        dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
         is_retained_metrics_index: bool,
+        dependent_matviews: BTreeSet<GlobalId>,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
@@ -1687,18 +1820,32 @@ impl Coordinator {
 
         let time = write_frontier.clone().into_option().expect("checked above");
         let time = time.saturating_sub(lag);
-        let max_as_of = Antichain::from_elem(time);
+        let max_compaction_frontier = Antichain::from_elem(time);
 
-        let as_of = min_as_of.join(&max_as_of);
+        // We must not select an `as_of` that is beyond any times that have not yet been written to
+        // downstream materialized views. If we would, we might skip times in the output of these
+        // materialized views, violating correctness. So our chosen `as_of` must be at most the
+        // meet of the `upper`s of all dependent materialized views.
+        let id_bundle = CollectionIdBundle {
+            storage_ids: dependent_matviews,
+            ..Default::default()
+        };
+        let max_as_of = self.least_valid_write(&id_bundle);
+
+        let mut as_of = min_as_of.clone();
+        as_of.join_assign(&max_compaction_frontier);
+        as_of.meet_assign(&max_as_of);
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
             %cluster_id,
+            as_of = ?as_of.elements(),
             min_as_of = ?min_as_of.elements(),
+            max_as_of = ?max_as_of.elements(),
             write_frontier = ?write_frontier.elements(),
             %lag,
-            "selecting index `as_of` as {:?}",
-            as_of.elements(),
+            max_compaction_frontier = ?max_compaction_frontier.elements(),
+            "bootstrapping index `as_of`",
         );
 
         as_of
@@ -1707,7 +1854,7 @@ impl Coordinator {
     /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
     fn bootstrap_materialized_view_as_of(
         &self,
-        dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
+        dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
@@ -1736,10 +1883,10 @@ impl Coordinator {
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
             %cluster_id,
+            as_of = ?as_of.elements(),
             min_as_of = ?min_as_of.elements(),
             write_frontier = ?write_frontier.elements(),
-            "selecting materialized view `as_of` as {:?}",
-            as_of.elements(),
+            "bootstrapping materialized view `as_of`",
         );
 
         as_of
