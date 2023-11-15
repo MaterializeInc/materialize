@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import random
+from enum import Enum
 from pathlib import Path
 from typing import TypeVar
 
@@ -44,3 +45,9 @@ def naughty_strings() -> list[str]:
         with open(MZ_ROOT / "misc" / "python" / "materialize" / "blns.json") as f:
             NAUGHTY_STRINGS = json.load(f)
     return NAUGHTY_STRINGS
+
+
+class YesNoOnce(Enum):
+    YES = 1
+    NO = 2
+    ONCE = 3
