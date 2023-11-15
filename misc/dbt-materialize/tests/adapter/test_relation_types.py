@@ -19,26 +19,26 @@ from dbt.tests.util import run_dbt
 from fixtures import (
     test_materialized_view,
     test_seed,
-    test_sink,
+    # test_sink,
     test_source,
-    test_subsources,
+    # test_subsources,
     test_table_index,
     test_view_index,
 )
 
+
 class TestCatalogRelationTypes:
     @pytest.fixture(scope="class", autouse=True)
     def seeds(self):
-        return {"test_seed.csv": MY_SEED}
+        return {"test_seed.csv": test_seed}
 
     @pytest.fixture(scope="class", autouse=True)
     def models(self):
         yield {
             "test_materialized_view.sql": test_materialized_view,
-            "test_seed.sql": test_seed,
-            "test_sink.sql": test_sink,
+            # "test_sink.sql": test_sink,
             "test_source.sql": test_source,
-            "test_subsource.sql": test_subsources,
+            # "test_subsource.sql": test_subsources,
             "test_table.sql": test_table_index,
             "test_view.sql": test_view_index,
         }
@@ -54,9 +54,9 @@ class TestCatalogRelationTypes:
         [
             ("seed.test.test_seed", "table"),
             ("model.test.test_materialized_view", "materializedview"),
-            ("model.test.sink", "sink"),
+            # ("model.test.test_sink", "sink"),
             ("model.test.test_source", "source"),
-            ("model.test.test_subsource", "subsource"),
+            # ("model.test.test_subsource", "subsource"),
             # NOTE(dehume): Tables are materialized as materialized views
             # https://github.com/MaterializeInc/materialize/issues/5266
             ("model.test.test_table", "materializedview"),

@@ -28,7 +28,8 @@
                  --This macro is used for the dbt documentation. We use
                  --the source type in mz_sources here instead of that
                  --in mz_objects to correctly report subsources.
-                 when o.type = 'source' then so.type
+                 when o.type = 'source' and so.type = 'subsource' then so.type
+                 when o.type = 'source' and so.type = 'progress' then so.type
                  else o.type end as table_type,
             obj_desc.comment as table_comment,
             c.name as column_name,
