@@ -34,7 +34,8 @@ use timely::worker::Worker;
 use timely::{Data, WorkerConfig};
 use tracing::{debug, trace};
 
-use crate::txn_read::{DataListenNext, TxnsCache};
+use crate::txn_cache::TxnsCache;
+use crate::txn_read::DataListenNext;
 use crate::{TxnsCodec, TxnsCodecDefault};
 
 /// An operator for translating physical data shard frontiers into logical ones.

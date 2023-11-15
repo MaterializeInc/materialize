@@ -9,26 +9,18 @@
 
 //! Interfaces for reading txn shards as well as data shards.
 
-use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
-use mz_ore::collections::HashMap;
-use mz_persist_client::fetch::LeasedBatchPart;
-use mz_persist_client::read::{Cursor, ListenEvent, ReadHandle, Since, Subscribe};
+use mz_persist_client::read::{Cursor, ReadHandle, Since};
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::{Codec, Codec64, StepForward};
+use mz_persist_client::ShardId;
+use mz_persist_types::{Codec, Codec64};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, instrument};
-
-use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
 /// A token exchangeable for a data shard snapshot.
 ///
@@ -39,14 +31,14 @@ use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 #[cfg_attr(test, derive(PartialEq))]
 pub struct DataSnapshot<T> {
     /// The id of the data shard this snapshot is for.
-    data_id: ShardId,
+    pub(crate) data_id: ShardId,
     /// The latest possibly unapplied write <= as_of. None if there are no
     /// writes via txns or if they're all known to be applied.
-    latest_write: Option<T>,
+    pub(crate) latest_write: Option<T>,
     /// The as_of asked for.
-    as_of: T,
+    pub(crate) as_of: T,
     /// An upper bound on the times known to be empty of writes via txns.
-    empty_to: T,
+    pub(crate) empty_to: T,
 }
 
 impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
@@ -184,7 +176,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
             .await
     }
 
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if let Some(latest_write) = self.latest_write.as_ref() {
             if !(latest_write <= &self.as_of) {
                 return Err(format!(

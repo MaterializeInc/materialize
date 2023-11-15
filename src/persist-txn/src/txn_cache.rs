@@ -9,6 +9,26 @@
 
 //! A cache of the txn shard contents.
 
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap, VecDeque};
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use differential_dataflow::hashable::Hashable;
+use differential_dataflow::lattice::Lattice;
+use mz_ore::collections::HashMap;
+use mz_persist_client::fetch::LeasedBatchPart;
+use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
+use mz_persist_client::write::WriteHandle;
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::{Codec64, StepForward};
+use timely::order::TotalOrder;
+use timely::progress::Timestamp;
+use tracing::{debug, instrument};
+
+use crate::txn_read::{DataListenNext, DataSnapshot};
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
+
 /// A cache of the txn shard contents, optimized for various in-memory
 /// operations.
 ///

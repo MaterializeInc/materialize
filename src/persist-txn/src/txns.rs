@@ -25,7 +25,7 @@ use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tracing::{debug, instrument};
 
-use crate::txn_read::TxnsCache;
+use crate::txn_cache::TxnsCache;
 use crate::txn_write::Txn;
 use crate::{TxnsCodec, TxnsCodecDefault};
 
