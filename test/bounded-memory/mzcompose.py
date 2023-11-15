@@ -13,6 +13,7 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
@@ -27,7 +28,8 @@ REPEAT = 16 * 1024
 ITERATIONS = 128
 
 SERVICES = [
-    Materialized(),
+    Cockroach(setup_materialize=True),
+    Materialized(external_cockroach=True),
     Testdrive(no_reset=True, seed=1, default_timeout="3600s"),
     Redpanda(),
     Postgres(),
