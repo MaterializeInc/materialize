@@ -187,7 +187,7 @@ pub struct BuiltinIndex {
     pub schema: &'static str,
     /// SQL fragment for the index, following `CREATE INDEX [name]`
     ///
-    /// Format: `IN CLUSTER [cluster_name] ON [table_name] ([column_name])`
+    /// Format: `IN CLUSTER [cluster_name] ON [table_name] ([column_exprs])`
     pub sql: &'static str,
     pub is_retained_metrics_object: bool,
 }
