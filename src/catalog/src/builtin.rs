@@ -2758,7 +2758,7 @@ UNION ALL
 pub const MZ_OBJECT_FULLY_QUALIFIED_NAMES: BuiltinView = BuiltinView {
     name: "mz_object_fully_qualified_names",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_object_fully_qualified_names (id, name, object_type, schema_name, database_name) AS
+    sql: "CREATE VIEW mz_internal.mz_object_fully_qualified_names (id, name, object_type, schema_name, database_name) AS
     SELECT o.id, o.name, o.type, sc.name as schema_name, db.name as database_name
     FROM mz_catalog.mz_objects o
     INNER JOIN mz_catalog.mz_schemas sc ON sc.id = o.schema_id
@@ -4061,7 +4061,7 @@ FROM
 pub const MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_parents_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_operator_parents_per_worker AS
+    sql: "CREATE VIEW mz_internal.mz_dataflow_operator_parents_per_worker AS
 WITH operator_addrs AS(
     SELECT
         id, address, worker_id
@@ -4087,7 +4087,7 @@ FROM parent_addrs AS pa
 pub const MZ_DATAFLOW_OPERATOR_PARENTS: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_parents",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_operator_parents AS
+    sql: "CREATE VIEW mz_internal.mz_dataflow_operator_parents AS
 SELECT id, parent_id
 FROM mz_internal.mz_dataflow_operator_parents_per_worker
 WHERE worker_id = 0",
