@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
-from typing import Any
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
@@ -79,14 +78,8 @@ class Check:
 
 
 def disabled(ignore_reason: str):
-    class ClassWrapper:
-        def __init__(self, cls: type[Check]):
-            assert issubclass(cls, Check)
-            self.check_class = cls
-            self.check_class.enabled = False
+    def decorator(cls):
+        cls.enabled = False
+        return cls
 
-        def __call__(self, *cls_ars: Any):
-            check = self.check_class(*cls_ars)
-            return check
-
-    return ClassWrapper
+    return decorator
