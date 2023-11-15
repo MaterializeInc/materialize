@@ -109,7 +109,9 @@ For principal, refer to the [open question below](#what-should-be-the-principal-
 
 #### `VALIDATE CONNECTION`
 We can make use of the [GetCallerIdentity AWS API](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html)
-to check if the credentials are valid.
+to check if the credentials are valid. We should make the call with the given External ID and without
+to make sure that the user has a secure setup. If we are able to access without the External ID,
+we should treat that as an error.
 
 Optionally, with `ASSUME ROLE ARN` we can also try to get temporary credentials.
 
