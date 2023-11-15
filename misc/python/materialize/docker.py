@@ -8,9 +8,10 @@
 # by the Apache License, Version 2.0.
 
 """Docker utilities."""
-
+import subprocess
 
 from materialize import buildkite, git
+from materialize.util import MzVersion
 
 try:
     from semver.version import Version
@@ -37,16 +38,18 @@ def _resolve_ancestor_image_tag() -> tuple[str, str]:
             # return the previous release
             tagged_release_version = git.get_tagged_release_version()
             assert tagged_release_version is not None
-            previous_release_version = git.get_previous_version(tagged_release_version)
+            previous_release_version = get_previous_published_version(
+                tagged_release_version
+            )
             return (
-                _mz_version_to_image_tag(previous_release_version),
+                _version_to_image_tag(previous_release_version),
                 f"previous release because on release branch {tagged_release_version}",
             )
         else:
             # return the latest release
-            latest_version = git.get_latest_version()
+            latest_version = get_latest_published_version()
             return (
-                _mz_version_to_image_tag(latest_version),
+                _version_to_image_tag(latest_version),
                 "latest release because not in a pull request and not on a release branch",
             )
     else:
@@ -54,16 +57,18 @@ def _resolve_ancestor_image_tag() -> tuple[str, str]:
             # return the previous release
             tagged_release_version = git.get_tagged_release_version()
             assert tagged_release_version is not None
-            previous_release_version = git.get_previous_version(tagged_release_version)
+            previous_release_version = get_previous_published_version(
+                tagged_release_version
+            )
             return (
-                _mz_version_to_image_tag(previous_release_version),
+                _version_to_image_tag(previous_release_version),
                 f"previous release because on local release branch {tagged_release_version}",
             )
         elif git.is_on_main_branch():
             # return the latest release
-            latest_version = git.get_latest_version()
+            latest_version = get_latest_published_version()
             return (
-                _mz_version_to_image_tag(latest_version),
+                _version_to_image_tag(latest_version),
                 "latest release because on local main branch",
             )
         else:
@@ -75,9 +80,64 @@ def _resolve_ancestor_image_tag() -> tuple[str, str]:
             )
 
 
+def get_latest_published_version() -> Version:
+    excluded_versions = set()
+
+    while True:
+        latest_published_version = git.get_latest_version(
+            excluded_versions=excluded_versions
+        )
+
+        if _image_of_release_version_exists(latest_published_version):
+            return latest_published_version
+        else:
+            print(f"Skipping version {latest_published_version} (image not found)")
+            excluded_versions.add(latest_published_version)
+
+        return latest_published_version
+
+
+def get_previous_published_version(release_version: MzVersion) -> Version:
+    excluded_versions = set()
+
+    while True:
+        previous_published_version = git.get_previous_version(
+            release_version, excluded_versions=excluded_versions
+        )
+
+        if _image_of_release_version_exists(previous_published_version):
+            return previous_published_version
+        else:
+            print(f"Skipping version {previous_published_version} (image not found)")
+            excluded_versions.add(previous_published_version)
+
+
+def _image_of_release_version_exists(version: Version) -> bool:
+    assert isinstance(version, Version)
+    return _mz_image_tag_exists(_version_to_image_tag(version))
+
+
+def _mz_image_tag_exists(image_tag: str) -> bool:
+    image = f"materialize/materialized:{image_tag}"
+    command = [
+        "docker",
+        "pull",
+        image,
+    ]
+
+    print(f"Trying to pull image: {image}")
+
+    try:
+        subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        return "not found: manifest unknown: manifest unknown" not in e.output
+
+
 def _commit_to_image_tag(commit_hash: str) -> str:
     return f"devel-{commit_hash}"
 
 
-def _mz_version_to_image_tag(version: Version) -> str:
+def _version_to_image_tag(version: Version) -> str:
+    assert isinstance(version, Version)
     return f"v{version}"
