@@ -55,6 +55,6 @@ const fn make_fixed_offset(utc_offset_secs: i32) -> FixedOffset {
 
 include!(concat!(env!("OUT_DIR"), "/abbrev.gen.rs"));
 
-/// The SQL definition of the contents of the `pg_timezone_abbrevs` view.
-pub const PG_CATALOG_TIMEZONE_ABBREVS_SQL: &str =
+/// The SQL definition of the contents of the `mz_timezone_abbreviations` view.
+pub const MZ_CATALOG_TIMEZONE_ABBREVIATIONS_SQL: &str =
     include_str!(concat!(env!("OUT_DIR"), "/abbrev.gen.sql"));

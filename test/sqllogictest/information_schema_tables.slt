@@ -225,6 +225,14 @@ mz_tables
 BASE TABLE
 materialize
 mz_catalog
+mz_timezone_abbreviations
+VIEW
+materialize
+mz_catalog
+mz_timezone_names
+VIEW
+materialize
+mz_catalog
 mz_types
 BASE TABLE
 materialize
