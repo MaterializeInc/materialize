@@ -12,6 +12,7 @@ import random
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.debezium_capabilities import (
     DebeziumRunning,
     DebeziumSourceExists,
@@ -53,7 +54,13 @@ class CreateDebeziumSource(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, StoragedRunning, KafkaRunning, PostgresTableExists}
+        return {
+            BalancerdIsRunning,
+            MzIsRunning,
+            StoragedRunning,
+            KafkaRunning,
+            PostgresTableExists,
+        }
 
     def __init__(self, capabilities: Capabilities) -> None:
         # To avoid conflicts, we make sure the postgres table and the debezium source have matching names

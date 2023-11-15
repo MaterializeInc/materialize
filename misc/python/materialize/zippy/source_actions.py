@@ -11,6 +11,7 @@ import random
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.kafka_capabilities import KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
@@ -24,7 +25,13 @@ class CreateSourceParameterized(ActionFactory):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, StoragedRunning, KafkaRunning, TopicExists}
+        return {
+            BalancerdIsRunning,
+            MzIsRunning,
+            StoragedRunning,
+            KafkaRunning,
+            TopicExists,
+        }
 
     def __init__(self, max_sources: int = 10) -> None:
         self.max_sources = max_sources

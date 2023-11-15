@@ -9,50 +9,54 @@
 
 
 from materialize.mzcompose.composition import Composition
-from materialize.zippy.crdb_capabilities import CockroachIsRunning
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, Capability
-from materialize.zippy.minio_capabilities import MinioIsRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
-from materialize.zippy.storaged_capabilities import StoragedRunning
 
 
-class StoragedStart(Action):
-    """Starts a storaged clusterd instance."""
+class BalancerdStart(Action):
+    """Starts balancerd"""
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {CockroachIsRunning, MinioIsRunning}
+        return {MzIsRunning}
 
     @classmethod
     def incompatible_with(cls) -> set[type[Capability]]:
-        return {StoragedRunning}
+        return {BalancerdIsRunning}
 
     def run(self, c: Composition) -> None:
-        c.up("storaged")
+        c.up("balancerd")
 
     def provides(self) -> list[Capability]:
-        return [StoragedRunning()]
+        return [BalancerdIsRunning()]
 
 
-class StoragedRestart(Action):
-    """Restarts the entire storaged clusterd instance."""
+class BalancerdStop(Action):
+    """Stops balancerd"""
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, StoragedRunning}
+        # Technically speaking, we do not need Mz to be up in order to kill balancerd
+        # However, without this protection we frequently end up in a situation where
+        # both are down and Zippy enters a prolonged period of restarting one or the
+        # other and no other useful work can be performed in the meantime.
+        return {BalancerdIsRunning, MzIsRunning}
 
     def run(self, c: Composition) -> None:
-        c.kill("storaged")
-        c.up("storaged")
-
-
-class StoragedKill(Action):
-    @classmethod
-    def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, StoragedRunning}
-
-    def run(self, c: Composition) -> None:
-        c.kill("storaged")
+        c.kill("balancerd")
 
     def withholds(self) -> set[type[Capability]]:
-        return {StoragedRunning}
+        return {BalancerdIsRunning}
+
+
+class BalancerdRestart(Action):
+    """Restarts balancerd"""
+
+    @classmethod
+    def requires(cls) -> set[type[Capability]]:
+        return {BalancerdIsRunning, MzIsRunning}
+
+    def run(self, c: Composition) -> None:
+        c.kill("balancerd")
+        c.up("balancerd")

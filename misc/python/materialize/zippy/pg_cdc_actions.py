@@ -12,6 +12,7 @@ import random
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
@@ -25,7 +26,13 @@ class CreatePostgresCdcTable(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, StoragedRunning, PostgresRunning, PostgresTableExists}
+        return {
+            BalancerdIsRunning,
+            MzIsRunning,
+            StoragedRunning,
+            PostgresRunning,
+            PostgresTableExists,
+        }
 
     def __init__(self, capabilities: Capabilities) -> None:
         postgres_table = random.choice(capabilities.get(PostgresTableExists))
