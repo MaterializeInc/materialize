@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::time::Duration;
 
@@ -88,7 +90,9 @@ where
         );
         let stash = stash?;
         let persist = persist?;
-        Ok(Box::new(ShadowCatalogState { stash, persist }))
+        let mut state = ShadowCatalogState { stash, persist };
+        state.fix_timestamps().await?;
+        Ok(Box::new(state))
     }
 
     async fn open_read_only(
@@ -129,7 +133,9 @@ where
         );
         let stash = stash?;
         let persist = persist?;
-        Ok(Box::new(ShadowCatalogState { stash, persist }))
+        let mut state = ShadowCatalogState { stash, persist };
+        state.fix_timestamps().await?;
+        Ok(Box::new(state))
     }
 
     async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
@@ -161,6 +167,40 @@ where
 pub struct ShadowCatalogState {
     pub stash: Box<dyn DurableCatalogState>,
     pub persist: Box<dyn DurableCatalogState>,
+}
+
+impl ShadowCatalogState {
+    /// The Coordinator will update the timestamps of every timeline continuously on an interval.
+    /// If we shut down the Coordinator while it's updating the timestamps, then it's possible that
+    /// only one catalog implementation is updated, while the other is not. This will leave the two
+    /// catalogs in an inconsistent state. Since this implementation is just used for tests, and
+    /// that specific inconsistency is expected, we fix it during open.
+    async fn fix_timestamps(&mut self) -> Result<(), CatalogError> {
+        let mut stash_timelines: BTreeMap<_, _> = self
+            .stash
+            .get_timestamps()
+            .await?
+            .into_iter()
+            .map(|timeline_timestamp| (timeline_timestamp.timeline, timeline_timestamp.ts))
+            .collect();
+
+        for TimelineTimestamp { timeline, ts } in self.persist.get_timestamps().await? {
+            match stash_timelines.remove(&timeline) {
+                Some(stash_ts) => match stash_ts.cmp(&ts) {
+                    Ordering::Less => self.stash.set_timestamp(&timeline, ts).await?,
+                    Ordering::Greater => self.persist.set_timestamp(&timeline, ts).await?,
+                    Ordering::Equal => {}
+                },
+                None => self.stash.set_timestamp(&timeline, ts).await?,
+            }
+        }
+
+        for (timeline, ts) in stash_timelines {
+            self.persist.set_timestamp(&timeline, ts).await?;
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
