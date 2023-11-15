@@ -20,6 +20,12 @@ from typing import Any, Dict, List, Optional
 import dbt.exceptions
 from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport
 from dbt.adapters.base.meta import available
+from dbt.adapters.capability import (
+    Capability,
+    CapabilityDict,
+    CapabilitySupport,
+    Support,
+)
 from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
@@ -84,6 +90,9 @@ class MaterializeAdapter(PostgresAdapter):
     # warehouse built for real-time is limited, so we do not implement it.
     _capabilities = CapabilityDict(
         {
+            Capability.SchemaMetadataByRelations: CapabilitySupport(
+                support=Support.NotImplemented
+            ),
             Capability.TableLastModifiedMetadata: CapabilitySupport(
                 support=Support.NotImplemented
             ),
