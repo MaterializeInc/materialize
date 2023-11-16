@@ -240,11 +240,13 @@ class PSUploadSources(PreImage):
             "--ignore-failed-read",
         ]
 
-        p1 = subprocess.Popen(cmd1, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        p2 = subprocess.Popen(
-            cmd2, stdin=p1.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
+        p1 = subprocess.Popen(cmd1, stdout=subprocess.PIPE)
+        p2 = subprocess.Popen(cmd2, stdin=p1.stdout, stdout=subprocess.PIPE)
+
+        # This causes p1 to receive SIGPIPE if p2 exits early,
+        # like in the shell
         p1.stdout.close()
+
         for p in [p1, p2]:
             if p.returncode:
                 raise subprocess.CalledProcessError(p.returncode, p.args)
