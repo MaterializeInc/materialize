@@ -7,20 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use futures::TryFutureExt as _;
 use maplit::btreemap;
 use mz_kafka_util::client::{
     GetPartitionsError, MzClientContext, TunnelingClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
 };
 use mz_ore::collections::CollectionExt;
-use mz_ore::retry::Retry;
+use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
-use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::connections::{ConnectionContext, KafkaConnection};
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt};
 use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
@@ -28,10 +30,22 @@ use mz_storage_types::sinks::{
 };
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::error::KafkaError;
+use rdkafka::error::{KafkaError, KafkaResult};
+use rdkafka::message::{OwnedMessage, ToBytes};
+use rdkafka::producer::{
+    BaseRecord, DeliveryResult, Producer as _, ProducerContext, ThreadedProducer,
+};
 use rdkafka::{ClientContext, Message, Offset, TopicPartitionList};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 use tracing::{info, warn};
+
+use crate::sink::kafka::SinkMetrics;
+
+// 30s is a good maximum backoff for network operations. Long enough to reduce
+// load on an upstream system, but short enough that we can respond quickly when
+// the upstream system comes back online.
+pub(super) const BACKOFF_CLAMP: Duration = Duration::from_secs(30);
 
 /// Formatter for Kafka group.id setting
 pub struct SinkGroupId;
@@ -554,4 +568,251 @@ pub async fn determine_latest_progress_record(
             .unwrap_or_else(|e| bail!(e))
         })
         .await
+}
+
+#[derive(Clone)]
+pub(super) struct SinkProducerContext {
+    pub metrics: Arc<SinkMetrics>,
+    pub retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
+    pub inner: MzClientContext,
+}
+
+impl ClientContext for SinkProducerContext {
+    // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
+    // implementation.
+    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+        self.inner.log(level, fac, log_message)
+    }
+    fn error(&self, error: KafkaError, reason: &str) {
+        self.inner.error(error, reason)
+    }
+}
+
+impl ProducerContext for SinkProducerContext {
+    type DeliveryOpaque = ();
+
+    fn delivery(&self, result: &DeliveryResult, _: Self::DeliveryOpaque) {
+        match result {
+            Ok(_) => self.retry_manager.blocking_lock().record_success(),
+            Err((e, msg)) => {
+                self.metrics.message_delivery_errors_counter.inc();
+                // TODO: figure out a good way to back these retries off.  Should be okay without
+                // because we seem to very rarely end up in a constant state where rdkafka::send
+                // works but everything is immediately rejected and hits this branch.
+                warn!("Kafka producer delivery error {:?} for {:?}", e, msg);
+                self.retry_manager
+                    .blocking_lock()
+                    .record_error(msg.detach());
+            }
+        }
+    }
+}
+
+pub(super) struct KafkaTxProducerConfig<'a> {
+    pub name: String,
+    pub connection: &'a KafkaConnection,
+    pub connection_context: &'a ConnectionContext,
+    pub producer_context: SinkProducerContext,
+    pub sink_id: GlobalId,
+    pub worker_id: String,
+}
+
+#[derive(Clone)]
+pub(super) struct KafkaTxProducer {
+    pub name: String,
+    pub inner: Arc<ThreadedProducer<TunnelingClientContext<SinkProducerContext>>>,
+    pub timeout: Duration,
+}
+
+impl KafkaTxProducer {
+    pub async fn new<'a>(
+        KafkaTxProducerConfig {
+            name,
+            connection,
+            connection_context,
+            producer_context,
+            sink_id,
+            worker_id,
+        }: KafkaTxProducerConfig<'a>,
+    ) -> Result<KafkaTxProducer, ContextCreationError> {
+        let producer = connection
+            .create_with_context(
+                connection_context,
+                producer_context,
+                &btreemap! {
+                    // Ensure that messages are sinked in order and without
+                    // duplicates. Note that this only applies to a single
+                    // instance of a producer - in the case of restarts, all
+                    // bets are off and full exactly once support is required.
+                    "enable.idempotence" => "true".into(),
+                    // Increase limits for the Kafka producer's internal
+                    // buffering of messages Currently we don't have a great
+                    // backpressure mechanism to tell indexes or views to slow
+                    // down, so the only thing we can do with a message that we
+                    // can't immediately send is to put it in a buffer and
+                    // there's no point having buffers within the dataflow layer
+                    // and Kafka If the sink starts falling behind and the
+                    // buffers start consuming too much memory the best thing to
+                    // do is to drop the sink Sets the buffer size to be 16 GB
+                    // (note that this setting is in KB)
+                    "queue.buffering.max.kbytes" => format!("{}", 16 << 20),
+                    // Set the max messages buffered by the producer at any time
+                    // to 10MM which is the maximum allowed value.
+                    "queue.buffering.max.messages" => format!("{}", 10_000_000),
+                    // Make the Kafka producer wait at least 10 ms before
+                    // sending out MessageSets TODO(rkhaitan): experiment with
+                    // different settings for this value to see if it makes a
+                    // big difference.
+                    "queue.buffering.max.ms" => format!("{}", 10),
+                    "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
+                },
+            )
+            .await?;
+
+        Ok(KafkaTxProducer {
+            name,
+            inner: Arc::new(producer),
+            timeout: Duration::from_secs(5),
+        })
+    }
+
+    pub fn init_transactions(&self) -> impl Future<Output = KafkaResult<()>> {
+        let self_producer = Arc::clone(&self.inner);
+        let self_timeout = self.timeout;
+        task::spawn_blocking(
+            || format!("init_transactions:{}", self.name),
+            move || self_producer.init_transactions(self_timeout),
+        )
+        .unwrap_or_else(|_| Err(KafkaError::Canceled))
+    }
+
+    pub fn begin_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
+        let self_producer = Arc::clone(&self.inner);
+        task::spawn_blocking(
+            || format!("begin_transaction:{}", self.name),
+            move || self_producer.begin_transaction(),
+        )
+        .unwrap_or_else(|_| Err(KafkaError::Canceled))
+    }
+
+    pub fn commit_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
+        let self_producer = Arc::clone(&self.inner);
+        let self_timeout = self.timeout;
+        task::spawn_blocking(
+            || format!("commit_transaction:{}", self.name),
+            move || self_producer.commit_transaction(self_timeout),
+        )
+        .unwrap_or_else(|_| Err(KafkaError::Canceled))
+    }
+
+    pub fn abort_transaction(&self) -> impl Future<Output = KafkaResult<()>> {
+        let self_producer = Arc::clone(&self.inner);
+        let self_timeout = self.timeout;
+        task::spawn_blocking(
+            || format!("abort_transaction:{}", self.name),
+            move || self_producer.abort_transaction(self_timeout),
+        )
+        .unwrap_or_else(|_| Err(KafkaError::Canceled))
+    }
+
+    pub fn flush(&self) -> impl Future<Output = KafkaResult<()>> {
+        let self_producer = Arc::clone(&self.inner);
+        let self_timeout = self.timeout;
+        task::spawn_blocking(
+            || format!("flush:{}", self.name),
+            move || self_producer.flush(self_timeout),
+        )
+        .unwrap_or_else(|_| Err(KafkaError::Canceled))
+    }
+
+    pub fn send<'a, K, P>(
+        &self,
+        record: BaseRecord<'a, K, P>,
+    ) -> Result<(), (KafkaError, Box<BaseRecord<'a, K, P>>)>
+    where
+        K: ToBytes + ?Sized,
+        P: ToBytes + ?Sized,
+    {
+        self.inner
+            .send(record)
+            // box the entire record the rdkakfa crate gives us back
+            .map_err(|(e, record)| (e, Box::new(record)))
+    }
+
+    pub async fn retry_on_txn_error<'a, F, Fut, T>(&self, f: F) -> Result<T, anyhow::Error>
+    where
+        F: Fn(KafkaTxProducer) -> Fut,
+        Fut: Future<Output = KafkaResult<T>>,
+    {
+        Retry::default()
+            .clamp_backoff(BACKOFF_CLAMP)
+            .max_tries(3)
+            .retry_async(|_| async {
+                match f(self.clone()).await {
+                    Ok(value) => RetryResult::Ok(value),
+                    Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
+                        // Make one attempt at aborting the transaction before letting the error
+                        // percolate up and the process exit. Aborting allows the consumers of the
+                        // topic to skip over any messages we've written in the transaction, so it's
+                        // polite to do... but if it fails, the transaction will be aborted either
+                        // when fenced out by a future version of this producer or by the
+                        // broker-side timeout.
+                        if let Err(e) = self.abort_transaction().await {
+                            warn!(
+                                error =? e,
+                                "failed to abort transaction after an error that required it"
+                            );
+                        }
+                        RetryResult::FatalErr(
+                            anyhow!(e).context("transaction error requiring abort"),
+                        )
+                    }
+                    Err(KafkaError::Transaction(e)) if e.is_retriable() => {
+                        RetryResult::RetryableErr(anyhow!(e).context("retriable transaction error"))
+                    }
+                    Err(e) => {
+                        RetryResult::FatalErr(anyhow!(e).context("non-retriable transaction error"))
+                    }
+                }
+            })
+            .await
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct KafkaSinkSendRetryManager {
+    // Because we flush this fully before moving onto the next timestamp, this queue cannot contain
+    // more messages than are contained in a single timely timestamp.  It's also unlikely to get
+    // beyond the size of the rdkafka internal message queue because that seems to stop accepting
+    // new messages when errors are being returned by the delivery callback -- though we should not
+    // rely on that fact if/when we eventually (tm) get around to making our queues bounded.
+    //
+    // If perf becomes an issue, we can do something slightly more complex with a crossbeam channel
+    pub q: VecDeque<OwnedMessage>,
+    pub outstanding_send_count: u64,
+}
+
+impl KafkaSinkSendRetryManager {
+    pub fn new() -> Self {
+        Self {
+            q: VecDeque::new(),
+            outstanding_send_count: 0,
+        }
+    }
+    pub fn record_send(&mut self) {
+        self.outstanding_send_count += 1;
+    }
+    pub fn record_error(&mut self, msg: OwnedMessage) {
+        self.q.push_back(msg);
+        self.outstanding_send_count -= 1;
+    }
+    pub fn record_success(&mut self) {
+        self.outstanding_send_count -= 1;
+    }
+    pub fn sends_flushed(&mut self) -> bool {
+        self.outstanding_send_count == 0 && self.q.is_empty()
+    }
+    pub fn pop_retry(&mut self) -> Option<OwnedMessage> {
+        self.q.pop_front()
+    }
 }
