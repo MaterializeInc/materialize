@@ -51,6 +51,10 @@ message ProtoInstanceConfig {
     logging.ProtoLoggingConfig logging = 1;
 }
 
+message ProtoPersistTarget {
+    mz_storage_types.controller.ProtoCollectionMetadata metadata = 8;
+}
+
 message ProtoPeek {
     mz_repr.global_id.ProtoGlobalId id = 1;
     repeated mz_repr.row.ProtoRow key = 2;
@@ -59,7 +63,9 @@ message ProtoPeek {
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
     map<string, string> otel_ctx = 7;
-    mz_storage_types.controller.ProtoCollectionMetadata collection_meta = 8;
+    oneof target {
+        ProtoPersistTarget persist = 8;
+    }
 }
 
 message ProtoComputeParameters {

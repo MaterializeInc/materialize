@@ -16,27 +16,34 @@ use std::time::Duration;
 
 use bytesize::ByteSize;
 use differential_dataflow::trace::{Cursor, TraceReader};
-use differential_dataflow::Data;
+use differential_dataflow::{Data, Hashable};
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
-    ComputeCommand, ComputeParameters, InstanceConfig, Peek,
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
+use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
+use mz_ore::task::{AbortHandleExt, AbortOnDropAbortHandle};
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::read::ReadHandle;
+use mz_persist_client::Diagnostics;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
-use mz_repr::{ColumnType, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{ColumnType, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::sources::SourceData;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::oneshot;
 use tracing::{error, info, span, warn, Level};
 use uuid::Uuid;
 
@@ -345,43 +352,35 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     #[tracing::instrument(level = "debug", skip(self))]
     fn handle_peek(&mut self, peek: Peek) {
-        // Acquire a copy of the trace suitable for fulfilling the peek.
-        let mut trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
-        let timestamp_frontier = Antichain::from_elem(peek.timestamp);
-        let empty_frontier = Antichain::new();
-        trace_bundle
-            .oks_mut()
-            .set_logical_compaction(timestamp_frontier.borrow());
-        trace_bundle
-            .errs_mut()
-            .set_logical_compaction(timestamp_frontier.borrow());
-        trace_bundle
-            .oks_mut()
-            .set_physical_compaction(empty_frontier.borrow());
-        trace_bundle
-            .errs_mut()
-            .set_physical_compaction(empty_frontier.borrow());
-        // Prepare a description of the peek work to do.
-        let mut peek = PendingPeek {
-            peek,
-            trace_bundle,
-            span: tracing::Span::current(),
+        let pending = match &peek.target {
+            PeekTarget::Index => {
+                // Acquire a copy of the trace suitable for fulfilling the peek.
+                let trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
+                PendingPeek::index(peek, trace_bundle)
+            }
+            PeekTarget::Persist { metadata } => {
+                let active_worker = {
+                    // Choose the worker that does the actual peek arbitrarily but consistently.
+                    let chosen_index =
+                        usize::cast_from(peek.uuid.hashed()) % self.timely_worker.peers();
+                    chosen_index == self.timely_worker.index()
+                };
+                let metadata = metadata.clone();
+                PendingPeek::persist(
+                    peek,
+                    Arc::clone(&self.compute_state.persist_clients),
+                    metadata,
+                    active_worker,
+                )
+            }
         };
+
         // Log the receipt of the peek.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            logger.log(ComputeEvent::Peek(peek.as_log_event(), true));
+            logger.log(ComputeEvent::Peek(pending.as_log_event(), true));
         }
-        // Attempt to fulfill the peek.
-        if let Some(response) =
-            peek.seek_fulfillment(&mut Antichain::new(), self.compute_state.max_result_size)
-        {
-            self.send_peek_response(peek, response);
-        } else {
-            peek.span = span!(parent: &peek.span, Level::DEBUG, "pending peek");
-            self.compute_state
-                .pending_peeks
-                .insert(peek.peek.uuid, peek);
-        }
+
+        self.process_peek(&mut Antichain::new(), pending);
     }
 
     fn handle_cancel_peek(&mut self, uuid: Uuid) {
@@ -542,19 +541,30 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
+    /// Either complete the peek (and send the response) or put it in the pending set.
+    fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
+        let response = match &mut peek {
+            PendingPeek::Index(peek) => {
+                peek.seek_fulfillment(upper, self.compute_state.max_result_size)
+            }
+            PendingPeek::Persist(peek) => peek.result.try_recv().ok(),
+        };
+
+        if let Some(response) = response {
+            let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek").entered();
+            self.send_peek_response(peek, response)
+        } else {
+            let uuid = peek.peek().uuid;
+            self.compute_state.pending_peeks.insert(uuid, peek);
+        }
+    }
+
     /// Scan pending peeks and attempt to retire each.
     pub fn process_peeks(&mut self) {
         let mut upper = Antichain::new();
         let pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
-        for (uuid, mut peek) in pending_peeks {
-            if let Some(response) =
-                peek.seek_fulfillment(&mut upper, self.compute_state.max_result_size)
-            {
-                let _span = tracing::info_span!(parent: &peek.span,  "process_peek").entered();
-                self.send_peek_response(peek, response);
-            } else {
-                self.compute_state.pending_peeks.insert(uuid, peek);
-            }
+        for (_uuid, peek) in pending_peeks {
+            self.process_peek(&mut upper, peek);
         }
     }
 
@@ -567,7 +577,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let log_event = peek.as_log_event();
         // Respond with the response.
         self.send_compute_response(ComputeResponse::PeekResponse(
-            peek.peek.uuid,
+            peek.peek().uuid,
             response,
             OpenTelemetryContext::obtain(),
         ));
@@ -644,11 +654,187 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 }
 
-/// An in-progress peek, and data to eventually fulfill it.
+/// A peek against either an index or a Persist collection.
+pub enum PendingPeek {
+    /// A peek against an index. (Possibly a temporary index created for the purpose.)
+    Index(IndexPeek),
+    /// A peek against a Persist-backed collection.
+    Persist(PersistPeek),
+}
+
+impl PendingPeek {
+    /// Produces a corresponding log event.
+    pub fn as_log_event(&self) -> logging::compute::Peek {
+        let peek = self.peek();
+        logging::compute::Peek::new(peek.id, peek.timestamp, peek.uuid)
+    }
+
+    fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {
+        let empty_frontier = Antichain::new();
+        let timestamp_frontier = Antichain::from_elem(peek.timestamp);
+        trace_bundle
+            .oks_mut()
+            .set_logical_compaction(timestamp_frontier.borrow());
+        trace_bundle
+            .errs_mut()
+            .set_logical_compaction(timestamp_frontier.borrow());
+        trace_bundle
+            .oks_mut()
+            .set_physical_compaction(empty_frontier.borrow());
+        trace_bundle
+            .errs_mut()
+            .set_physical_compaction(empty_frontier.borrow());
+
+        PendingPeek::Index(IndexPeek {
+            peek,
+            trace_bundle,
+            span: tracing::Span::current(),
+        })
+    }
+
+    fn persist(
+        peek: Peek,
+        persist_clients: Arc<PersistClientCache>,
+        metadata: CollectionMetadata,
+        active_worker: bool,
+    ) -> Self {
+        let (result_tx, result_rx) = oneshot::channel();
+        let timestamp = peek.timestamp;
+        let mfp_plan = peek.map_filter_project.clone();
+        let max_results_needed = peek.finishing.limit.unwrap_or(usize::MAX) + peek.finishing.offset;
+
+        let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {
+            let result = if active_worker {
+                PersistPeek::do_peek(
+                    &persist_clients,
+                    metadata,
+                    timestamp,
+                    mfp_plan,
+                    max_results_needed,
+                )
+                .await
+            } else {
+                Ok(vec![])
+            };
+            let result = match result {
+                Ok(rows) => PeekResponse::Rows(rows),
+                Err(e) => PeekResponse::Error(e.to_string()),
+            };
+            let _ = result_tx.send(result);
+        });
+        PendingPeek::Persist(PersistPeek {
+            peek,
+            _abort_handle: task_handle.abort_handle().abort_on_drop(),
+            result: result_rx,
+            span: tracing::Span::current(),
+        })
+    }
+
+    fn span(&self) -> &tracing::Span {
+        match self {
+            PendingPeek::Index(p) => &p.span,
+            PendingPeek::Persist(p) => &p.span,
+        }
+    }
+
+    pub(crate) fn peek(&self) -> &Peek {
+        match self {
+            PendingPeek::Index(p) => &p.peek,
+            PendingPeek::Persist(p) => &p.peek,
+        }
+    }
+}
+
+/// An in-progress Persist peek.
 ///
 /// Note that `PendingPeek` intentionally does not implement or derive `Clone`,
 /// as each `PendingPeek` is meant to be dropped after it's responded to.
-pub struct PendingPeek {
+pub struct PersistPeek {
+    pub(crate) peek: Peek,
+    /// A background task that's responsible for producing the peek results.
+    /// If we're no longer interested in the results, we abort the task.
+    _abort_handle: AbortOnDropAbortHandle,
+    /// The result of the background task, eventually.
+    result: oneshot::Receiver<PeekResponse>,
+    /// The `tracing::Span` tracking this peek's operation
+    span: tracing::Span,
+}
+
+impl PersistPeek {
+    async fn do_peek(
+        persist_clients: &PersistClientCache,
+        metadata: CollectionMetadata,
+        as_of: Timestamp,
+        mfp_plan: SafeMfpPlan,
+        mut limit_remaining: usize,
+    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+        let client = persist_clients
+            .open(metadata.persist_location)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut reader: ReadHandle<SourceData, (), Timestamp, Diff> = client
+            .open_leased_reader(
+                metadata.data_shard,
+                Arc::new(metadata.relation_desc),
+                Arc::new(UnitSchema),
+                Diagnostics::from_purpose("persist::peek"),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut cursor = reader
+            .snapshot_cursor(Antichain::from_elem(as_of))
+            .await
+            .map_err(|since| {
+                format!("attempted to peek at {as_of}, but the since has advanced to {since:?}")
+            })?;
+
+        // Re-used state for processing and building rows.
+        let mut result = vec![];
+        let mut datum_vec = DatumVec::new();
+        let mut row_builder = Row::default();
+        let arena = RowArena::new();
+
+        while limit_remaining > 0 {
+            let Some(batch) = cursor.next().await else {
+                break;
+            };
+            for ((k, v), _, d) in batch {
+                let row = k?.0.map_err(|e| e.to_string())?;
+                let () = v?;
+                let count: usize = d.try_into().map_err(|_| {
+                    format!(
+                        "Invalid data in source, saw retractions ({}) for row that does not exist",
+                        d * -1,
+                    )
+                })?;
+                let Some(count) = NonZeroUsize::new(count) else {
+                    continue;
+                };
+                let mut datum_local = datum_vec.borrow_with(&row);
+                let eval_result = mfp_plan
+                    .evaluate_into(&mut datum_local, &arena, &mut row_builder)
+                    .map_err(|e| e.to_string())?;
+                if let Some(row) = eval_result {
+                    result.push((row, count));
+                    limit_remaining = limit_remaining.saturating_sub(count.get());
+                    if limit_remaining == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+/// An in-progress index-backed peek, and data to eventually fulfill it.
+///
+/// Note that `PendingPeek` intentionally does not implement or derive `Clone`,
+/// as each `PendingPeek` is meant to be dropped after it's responded to.
+pub struct IndexPeek {
     peek: Peek,
     /// The data from which the trace derives.
     trace_bundle: TraceBundle,
@@ -656,12 +842,7 @@ pub struct PendingPeek {
     span: tracing::Span,
 }
 
-impl PendingPeek {
-    /// Produces a corresponding log event.
-    pub fn as_log_event(&self) -> crate::logging::compute::Peek {
-        crate::logging::compute::Peek::new(self.peek.id, self.peek.timestamp, self.peek.uuid)
-    }
-
+impl IndexPeek {
     /// Attempts to fulfill the peek and reports success.
     ///
     /// To produce output at `peek.timestamp`, we must be certain that
@@ -783,7 +964,6 @@ impl PendingPeek {
         let max_results = peek.finishing.limit.map(|l| l + peek.finishing.offset);
 
         use mz_ore::result::ResultExt;
-        use mz_repr::{DatumVec, RowArena};
 
         let mut row_builder = Row::default();
         let mut datum_vec = DatumVec::new();

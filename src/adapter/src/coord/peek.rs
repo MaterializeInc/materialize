@@ -12,15 +12,15 @@
 //! This module determines if a dataflow can be short-cut, by returning constant values
 //! or by reading out of existing arrangements, and implements the appropriate plan.
 
-use differential_dataflow::consolidation::consolidate;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::num::NonZeroUsize;
-use std::time::{Duration, Instant};
-use std::{fmt, mem};
 
+use differential_dataflow::consolidation::consolidate;
 use futures::TryFutureExt;
 use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
+use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
 use mz_compute_types::ComputeInstanceId;
@@ -33,16 +33,13 @@ use mz_ore::str::{separated, Indent, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, UsedIndexes};
-use mz_repr::{DatumVec, Diff, GlobalId, RelationType, Row, RowArena};
+use mz_repr::{Diff, GlobalId, RelationType, Row};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
-use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::coord::Message;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
@@ -455,109 +452,13 @@ impl crate::coord::Coordinator {
             self.set_statement_execution_timestamp(id, timestamp)
         }
 
-        if let PeekPlan::FastPath(FastPathPlan::PeekPersist(id, mfp_plan)) = fast_path {
-            let mut cursor = self
-                .controller
-                .storage
-                .snapshot_cursor(id, timestamp)
-                .await?;
-
-            let metrics = self.metrics.clone();
-            let handle: JoinHandle<Result<PeekResponseUnary, String>> =
-                mz_ore::task::spawn(|| "persist::peek", async move {
-                    let mut limit_remaining =
-                        finishing.limit.unwrap_or(usize::MAX) + finishing.offset;
-
-                    // Re-used state for processing and building rows.
-                    let mut accum = vec![];
-                    let mut datum_vec = DatumVec::new();
-                    let mut row_builder = Row::default();
-                    let arena = RowArena::new();
-
-                    let start = Instant::now();
-                    let mut last_fetch = Duration::ZERO;
-                    while limit_remaining > 0 {
-                        let Some(batch) = cursor.next().await else {
-                            break;
-                        };
-                        last_fetch = start.elapsed();
-                        for ((k, v), _, d) in batch {
-                            let row = k?.0.map_err(|e| e.to_string())?;
-                            let () = v?;
-                            let count: usize = d
-                                .try_into()
-                                .map_err(|_| "Negative count for thing in snapshot".to_owned())?;
-                            let Some(count) = NonZeroUsize::new(count) else {
-                                continue;
-                            };
-                            let mut datum_local = datum_vec.borrow_with(&row);
-                            let eval_result = mfp_plan
-                                .evaluate_into(&mut datum_local, &arena, &mut row_builder)
-                                .map_err(|e| e.to_string())?;
-                            if let Some(row) = eval_result {
-                                accum.push((row, count));
-                                limit_remaining = limit_remaining.saturating_sub(count.get());
-                                if limit_remaining == 0 {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    let res = finishing.finish(accum, max_result_size)?;
-                    let total_duration = start.elapsed();
-                    metrics
-                        .persist_peek_seconds
-                        .observe(total_duration.as_secs_f64());
-                    info!(
-                        collection =? id,
-                        fetch_duration =? last_fetch,
-                        total_duration =? total_duration,
-                        "persist peek success"
-                    );
-                    Ok(PeekResponseUnary::Rows(res))
-                });
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let ctx_extra = mem::take(ctx_extra);
-            return Ok(ExecuteResponse::SendingRows {
-                future: Box::pin(async move {
-                    let res = match handle.await {
-                        Ok(Ok(res)) => res,
-                        Ok(Err(err)) => PeekResponseUnary::Error(err.to_string()),
-                        Err(_join_error) => PeekResponseUnary::Canceled,
-                    };
-
-                    let reason = match &res {
-                        PeekResponseUnary::Rows(rows) => StatementEndedExecutionReason::Success {
-                            rows_returned: Some(u64::cast_from(rows.len())),
-                            execution_strategy: Some(StatementExecutionStrategy::PersistFastPath),
-                        },
-                        PeekResponseUnary::Error(e) => {
-                            StatementEndedExecutionReason::Errored { error: e.clone() }
-                        }
-                        PeekResponseUnary::Canceled => StatementEndedExecutionReason::Canceled,
-                    };
-
-                    if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
-                        data: ctx_extra,
-                        reason,
-                    }) {
-                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                    }
-
-                    res
-                }),
-                span: tracing::Span::current(),
-            });
-        }
-
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
         // In both cases we will want to peek, and the main difference is that we might want to
         // build a dataflow and drop it once the peek is issued. The peeks are also constructed
         // differently.
 
         // If we must build the view, ship the dataflow.
-        let (peek_command, drop_dataflow, is_fast_path) = match fast_path {
+        let (peek_command, drop_dataflow, is_fast_path, peek_target) = match fast_path {
             PeekPlan::FastPath(FastPathPlan::PeekExisting(
                 _coll_id,
                 idx_id,
@@ -567,7 +468,19 @@ impl crate::coord::Coordinator {
                 (idx_id, literal_constraints, timestamp, map_filter_project),
                 None,
                 true,
+                PeekTarget::Index,
             ),
+            PeekPlan::FastPath(FastPathPlan::PeekPersist(coll_id, map_filter_project)) => {
+                let peek_command = (coll_id, None, timestamp, map_filter_project);
+                let metadata = self
+                    .controller
+                    .storage
+                    .collection(coll_id)
+                    .expect("storage collection for fast-path peek")
+                    .collection_metadata
+                    .clone();
+                (peek_command, None, true, PeekTarget::Persist { metadata })
+            }
             PeekPlan::SlowPath(PeekDataflowPlan {
                 desc: dataflow,
                 // n.b. this index_id identifies a transient index the
@@ -608,6 +521,7 @@ impl crate::coord::Coordinator {
                     ),
                     Some(index_id),
                     false,
+                    PeekTarget::Index,
                 )
             }
             _ => {
@@ -655,6 +569,7 @@ impl crate::coord::Coordinator {
                 finishing.clone(),
                 map_filter_project,
                 target_replica,
+                peek_target,
             )
             .unwrap_or_terminate("cannot fail to peek");
 

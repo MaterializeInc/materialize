@@ -477,7 +477,20 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     }
 }
 
-/// Peek at an arrangement.
+/// Metadata specific to the peek variant.
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum PeekTarget {
+    /// This peek is against an index. Since this should be held in memory on
+    /// the target cluster, no additional coordinates are necessary.
+    Index,
+    /// This peek is against a Persist collection.
+    Persist {
+        /// The identifying metadata of the Persist shard.
+        metadata: CollectionMetadata,
+    },
+}
+
+/// Peek a collection, either in an arrangement or Persist.
 ///
 /// This request elicits data from the worker, by naming an
 /// arrangement and some actions to apply to the results before
@@ -513,9 +526,8 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// the compute controller and the compute worker.
     #[proptest(strategy = "empty_otel_ctx()")]
     pub otel_ctx: OpenTelemetryContext,
-    /// If this peek is for a Persist shard, the collection metadata for that shard.
-    /// (If absent, this is a standard peek against an arrangement.)
-    pub collection_meta: Option<CollectionMetadata>,
+    /// Target-specific metadata.
+    pub target: PeekTarget,
 }
 
 impl RustType<ProtoPeek> for Peek {
@@ -536,7 +548,14 @@ impl RustType<ProtoPeek> for Peek {
             finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
             otel_ctx: self.otel_ctx.clone().into(),
-            collection_meta: self.collection_meta.into_proto(),
+            target: match &self.target {
+                PeekTarget::Index => None,
+                PeekTarget::Persist { metadata } => {
+                    Some(proto_peek::Target::Persist(ProtoPersistTarget {
+                        metadata: Some(metadata.into_proto()),
+                    }))
+                }
+            },
         }
     }
 
@@ -558,7 +577,12 @@ impl RustType<ProtoPeek> for Peek {
                 .map_filter_project
                 .into_rust_if_some("ProtoPeek::map_filter_project")?,
             otel_ctx: x.otel_ctx.into(),
-            collection_meta: x.collection_meta.into_rust()?,
+            target: match x.target {
+                Some(proto_peek::Target::Persist(p)) => PeekTarget::Persist {
+                    metadata: p.metadata.into_rust_if_some("ProtoPeek::target")?,
+                },
+                None => PeekTarget::Index,
+            },
         })
     }
 }

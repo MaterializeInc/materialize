@@ -40,7 +40,9 @@ use crate::controller::{
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
 use crate::metrics::UIntGauge;
-use crate::protocol::command::{ComputeCommand, ComputeParameters, InstanceConfig, Peek};
+use crate::protocol::command::{
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
+};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -882,18 +884,20 @@ where
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
+        peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
-        let collection_meta = if let Ok(state) = self.compute.collection(id) {
-            let since = state.read_capabilities.frontier();
-            if !since.less_equal(&timestamp) {
-                Err(PeekError::SinceViolation(id))?;
-            }
-            None
-        } else if let Ok(state) = self.storage_controller.collection(id) {
-            Some(state.collection_metadata.clone())
-        } else {
-            return Err(PeekError::CollectionMissing(id));
+        let since = match &peek_target {
+            PeekTarget::Index => self.compute.collection(id)?.read_capabilities.frontier(),
+            PeekTarget::Persist { .. } => self
+                .storage_controller
+                .collection(id)
+                .map_err(|_| PeekError::CollectionMissing(id))?
+                .implied_capability
+                .borrow(),
         };
+        if !since.less_equal(&timestamp) {
+            return Err(PeekError::SinceViolation(id));
+        }
 
         if let Some(target) = target_replica {
             if !self.compute.replica_exists(target) {
@@ -929,7 +933,7 @@ where
             // Obtain an `OpenTelemetryContext` from the thread-local tracing
             // tree to forward it on to the compute worker.
             otel_ctx,
-            collection_meta,
+            target: peek_target,
         }));
 
         Ok(())
