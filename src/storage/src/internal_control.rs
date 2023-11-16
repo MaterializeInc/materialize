@@ -123,7 +123,7 @@ pub enum InternalStorageCommand {
         source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     },
     /// Render a sink dataflow.
-    CreateSinkDataflow(
+    RunSinkDataflow(
         GlobalId,
         StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
     ),

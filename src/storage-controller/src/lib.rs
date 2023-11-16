@@ -1132,7 +1132,7 @@ where
                 .expect("poisoned")
                 .insert(id, statistics::StatsInitState(BTreeMap::new()));
 
-            client.send(StorageCommand::CreateSinks(vec![cmd]));
+            client.send(StorageCommand::RunSinks(vec![cmd]));
         }
         Ok(())
     }
@@ -1211,7 +1211,7 @@ where
                 .expect("poisoned")
                 .insert(id, statistics::StatsInitState(BTreeMap::new()));
 
-            client.send(StorageCommand::CreateSinks(vec![cmd]));
+            client.send(StorageCommand::RunSinks(vec![cmd]));
         }
         Ok(())
     }

@@ -52,7 +52,7 @@ message ProtoRunSinkCommand {
     bool update = 3;
 }
 
-message ProtoCreateSinks {
+message ProtoRunSinks {
     repeated ProtoRunSinkCommand sinks = 1;
 }
 
@@ -76,7 +76,7 @@ message ProtoStorageCommand {
         ProtoCreateSources create_sources = 1;
         ProtoAllowCompaction allow_compaction = 2;
         google.protobuf.Empty initialization_complete = 3;
-        ProtoCreateSinks create_sinks = 4;
+        ProtoRunSinks run_sinks = 4;
         mz_storage_types.parameters.ProtoStorageParameters update_configuration = 5;
     }
 }
