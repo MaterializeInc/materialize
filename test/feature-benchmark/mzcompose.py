@@ -139,11 +139,6 @@ def run_one_scenario(
         c.up("testdrive", persistent=True)
 
         additional_system_parameter_defaults = {}
-        # TODO(def-) Remove when v0.75 is released, workaround for https://github.com/MaterializeInc/materialize/pull/22472
-        if instance == "other" and tag == "latest":
-            additional_system_parameter_defaults[
-                "enable_specialized_arrangements"
-            ] = "false"
 
         if params is not None:
             for param in params.split(";"):
