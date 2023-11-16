@@ -15,7 +15,7 @@ pre-image:
     strip: true
     split_debuginfo: true
   - type: s3-upload-debuginfo
-    bin: balancerd
+    bin: mz-balancerd
     bucket: materialize-debuginfo
   - type: ps-upload-sources
-    bin: balancerd.debug
+    bin: mz-balancerd.debug
