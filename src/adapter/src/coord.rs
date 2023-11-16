@@ -118,6 +118,7 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
+use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -1827,11 +1828,24 @@ impl Coordinator {
         // downstream materialized views. If we would, we might skip times in the output of these
         // materialized views, violating correctness. So our chosen `as_of` must be at most the
         // meet of the `upper`s of all dependent materialized views.
-        let id_bundle = CollectionIdBundle {
-            storage_ids: dependent_matviews,
-            ..Default::default()
-        };
-        let max_as_of = self.least_valid_write(&id_bundle);
+        //
+        // An exception are materialized views that have an `upper` that's less than their `since`
+        // (most likely because they have not yet produced their snapshot). For these views we only
+        // need to provide output starting from their `since`s, so these serve as upper bounds for
+        // our `as_of`.
+        let mut max_as_of = Antichain::new();
+        for mv_id in dependent_matviews {
+            let since = self.storage_implied_capability(mv_id);
+            let upper = self.storage_write_frontier(mv_id);
+            max_as_of.meet_assign(&since.join(upper));
+        }
+
+        assert!(
+            PartialOrder::less_equal(&min_as_of, &max_as_of),
+            "error bootrapping index `as_of`: min_as_of {:?} greater than max_as_of {:?}",
+            min_as_of.elements(),
+            max_as_of.elements(),
+        );
 
         let mut as_of = min_as_of.clone();
         as_of.join_assign(&max_compaction_frontier);
