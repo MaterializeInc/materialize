@@ -513,6 +513,9 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// the compute controller and the compute worker.
     #[proptest(strategy = "empty_otel_ctx()")]
     pub otel_ctx: OpenTelemetryContext,
+    /// If this peek is for a Persist shard, the collection metadata for that shard.
+    /// (If absent, this is a standard peek against an arrangement.)
+    pub collection_meta: Option<CollectionMetadata>,
 }
 
 impl RustType<ProtoPeek> for Peek {
@@ -533,6 +536,7 @@ impl RustType<ProtoPeek> for Peek {
             finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
             otel_ctx: self.otel_ctx.clone().into(),
+            collection_meta: self.collection_meta.into_proto(),
         }
     }
 
@@ -554,6 +558,7 @@ impl RustType<ProtoPeek> for Peek {
                 .map_filter_project
                 .into_rust_if_some("ProtoPeek::map_filter_project")?,
             otel_ctx: x.otel_ctx.into(),
+            collection_meta: x.collection_meta.into_rust()?,
         })
     }
 }

@@ -883,10 +883,17 @@ where
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), PeekError> {
-        let since = self.compute.collection(id)?.read_capabilities.frontier();
-        if !since.less_equal(&timestamp) {
-            Err(PeekError::SinceViolation(id))?;
-        }
+        let collection_meta = if let Ok(state) = self.compute.collection(id) {
+            let since = state.read_capabilities.frontier();
+            if !since.less_equal(&timestamp) {
+                Err(PeekError::SinceViolation(id))?;
+            }
+            None
+        } else if let Ok(state) = self.storage_controller.collection(id) {
+            Some(state.collection_metadata.clone())
+        } else {
+            return Err(PeekError::CollectionMissing(id));
+        };
 
         if let Some(target) = target_replica {
             if !self.compute.replica_exists(target) {
@@ -922,6 +929,7 @@ where
             // Obtain an `OpenTelemetryContext` from the thread-local tracing
             // tree to forward it on to the compute worker.
             otel_ctx,
+            collection_meta,
         }));
 
         Ok(())

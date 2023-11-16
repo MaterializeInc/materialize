@@ -22,7 +22,7 @@ import "repr/src/row.proto";
 import "cluster-client/src/client.proto";
 import "service/src/params.proto";
 import "storage-client/src/client.proto";
-import "storage-types/src/parameters.proto";
+import "storage-types/src/controller.proto";
 import "tracing/src/params.proto";
 
 import "google/protobuf/empty.proto";
@@ -59,6 +59,7 @@ message ProtoPeek {
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
     map<string, string> otel_ctx = 7;
+    mz_storage_types.controller.ProtoCollectionMetadata collection_meta = 8;
 }
 
 message ProtoComputeParameters {
