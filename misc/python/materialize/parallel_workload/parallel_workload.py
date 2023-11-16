@@ -303,7 +303,7 @@ def run(
                 print(f"{thread.name} still running: {worker.exe.last_log}")
         print("Threads have not stopped within 5 minutes, exiting hard")
         # TODO(def-): Switch to failing exit code when https://github.com/MaterializeInc/materialize/issues/22717 is fixed
-        os._exit(0)
+        os._exit(1)
 
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
