@@ -253,7 +253,24 @@ class SQLsmithAction(Action):
                     rm=True,
                 )
                 try:
-                    data = json.loads(result.stdout)
+                    result = self.composition.run(
+                        "sqlsmith",
+                        "--max-joins=0",
+                        "--target=host=materialized port=6875 dbname=materialize user=materialize",
+                        "--read-state",
+                        "--dry-run",
+                        "--max-queries=100",
+                        stdin=exe.db.sqlsmith_state,
+                        capture=True,
+                        capture_stderr=True,
+                        rm=True,
+                    )
+                    try:
+                        data = json.loads(result.stdout)
+                    except:
+                        print(f"Failed to load json:\n{result.stdout}")
+                        raise
+                    self.queries.extend(data["queries"])
                 except:
                     print(f"Loading json failed: {result.stdout}")
                     raise
