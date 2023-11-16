@@ -159,7 +159,7 @@ class ServiceConfig(TypedDict, total=False):
     restart: str
     """Restart policy."""
 
-    labels: list[str]
+    labels: dict[str, Any]
     """Container labels."""
 
 
