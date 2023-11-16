@@ -23,6 +23,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
@@ -531,6 +532,10 @@ pub trait StorageController: Debug + Send {
     /// good and there is no possibility of the old code running concurrently
     /// with the new code.
     async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
+
+    /// Returns the timestamp of the latest row for each id in the
+    /// privatelink_connection_status_history table seen on startup
+    fn get_privatelink_status_table_latest(&self) -> &Option<BTreeMap<GlobalId, DateTime<Utc>>>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.

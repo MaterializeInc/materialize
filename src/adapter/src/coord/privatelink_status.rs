@@ -26,13 +26,21 @@ use super::Message;
 impl Coordinator {
     pub(crate) fn spawn_privatelink_vpc_endpoints_watch_task(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let rate_quota: i32 = self
+        let rate_quota: u32 = self
             .catalog
             .system_config()
-            .privatelink_status_update_quota_per_minute()
-            .try_into()
-            .expect("value coouldn't be converted to i32");
+            .privatelink_status_update_quota_per_minute();
+
         if let Some(controller) = &self.cloud_resource_controller {
+            // Retrieve the timestamp of the last event written to the status table for each id
+            // to avoid writing duplicate rows
+            let mut last_written_events = self
+                .controller
+                .storage
+                .get_privatelink_status_table_latest()
+                .clone()
+                .unwrap_or_else(BTreeMap::new);
+
             let controller = Arc::clone(controller);
             spawn(|| "privatelink_vpc_endpoint_watch", async move {
                 let mut stream = controller.watch_vpc_endpoints().await;
@@ -43,19 +51,33 @@ impl Coordinator {
 
                 loop {
                     // Wait for an event to become available
-                    if let Some(event) = stream.next().await {
+                    if let Some(next_event) = stream.next().await {
                         // Wait until we're permitted to tell the coordinator about the event
                         rate_limiter.until_ready().await;
 
-                        // Drain any additional events from the queue that accumulated while
-                        // waiting for the rate limiter, deduplicating by connection_id.
+                        // Events to be written, de-duped by connection_id
                         let mut events = BTreeMap::new();
-                        events.insert(event.connection_id, event);
+
+                        let mut add_event = |event: VpcEndpointEvent| {
+                            match last_written_events.get(&event.connection_id) {
+                                // Ignore if an event with this time was already written
+                                Some(time) if time >= &event.time => {}
+                                _ => {
+                                    last_written_events
+                                        .insert(event.connection_id.clone(), event.time.clone());
+                                    events.insert(event.connection_id, event);
+                                }
+                            }
+                        };
+
+                        add_event(next_event);
+                        // Drain any additional events from the queue that accumulated while
+                        // waiting for the rate limiter
                         while let Some(event) = stream.next().now_or_never().and_then(|e| e) {
-                            events.insert(event.connection_id, event);
+                            add_event(event);
                         }
 
-                        // Send the event batch to the coordinator.
+                        // Send the event batch to the coordinator to be written
                         let _ = internal_cmd_tx.send(Message::PrivateLinkVpcEndpointEvents(events));
                     }
                 }

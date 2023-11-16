@@ -87,6 +87,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::BufMut;
+use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
 use itertools::Itertools;
@@ -107,6 +108,7 @@ use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
@@ -383,6 +385,10 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Write frontiers that have been recorded in the `ReplicaFrontiers` collection, kept to be
     /// able to retract old rows.
     recorded_replica_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<T>>,
+
+    /// The latest timestamp for each id in the mz_privatelink_connection_status_history
+    /// table, read on startup by the adapter to initialize the privatelink vpce watch task
+    privatelink_status_table_latest: Option<BTreeMap<GlobalId, DateTime<Utc>>>,
 }
 
 #[async_trait(?Send)]
@@ -918,10 +924,11 @@ where
                             .await;
                         }
                         IntrospectionType::PrivatelinkConnectionStatusHistory => {
-                            self.partially_truncate_status_history(
-                                IntrospectionType::PrivatelinkConnectionStatusHistory,
-                            )
-                            .await;
+                            self.privatelink_status_table_latest = self
+                                .partially_truncate_status_history(
+                                    IntrospectionType::PrivatelinkConnectionStatusHistory,
+                                )
+                                .await;
                         }
 
                         // Truncate compute-maintained collections.
@@ -2139,6 +2146,10 @@ where
         self.txns_init_run = true;
         Ok(())
     }
+
+    fn get_privatelink_status_table_latest(&self) -> &Option<BTreeMap<GlobalId, DateTime<Utc>>> {
+        &self.privatelink_status_table_latest
+    }
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
@@ -2359,6 +2370,7 @@ where
             metrics: StorageControllerMetrics::new(metrics_registry),
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
+            privatelink_status_table_latest: None,
         }
     }
 
@@ -2616,7 +2628,11 @@ where
 
     /// Effectively truncates the source status history shard except for the most recent updates
     /// from each ID.
-    async fn partially_truncate_status_history(&mut self, collection: IntrospectionType) {
+    /// Returns a map with the timestamp of the latest row per id
+    async fn partially_truncate_status_history(
+        &mut self,
+        collection: IntrospectionType,
+    ) -> Option<BTreeMap<GlobalId, DateTime<Utc>>> {
         let (keep_n, occurred_at_col, id_col) = match collection {
             IntrospectionType::SourceStatusHistory => (
                 self.config.keep_n_source_status_history_entries,
@@ -2664,12 +2680,16 @@ where
             }
             // If collection is closed or the frontier is the minimum, we cannot
             // or don't need to truncate (respectively).
-            _ => return,
+            _ => return None,
         };
 
         // BTreeMap<Id, MinHeap<(OccurredAt, Row)>>, to track the
         // earliest events for each id.
         let mut last_n_entries_per_id: BTreeMap<Datum, BinaryHeap<Reverse<(Datum, Vec<Datum>)>>> =
+            BTreeMap::new();
+
+        // BTreeMap to keep track of the row with the latest timestamp for each id
+        let mut latest_row_per_id: BTreeMap<Datum, CheckedTimestamp<DateTime<Utc>>> =
             BTreeMap::new();
 
         // Consolidate the snapshot, so we can process it correctly below.
@@ -2692,6 +2712,15 @@ where
                 id,
                 collection
             );
+
+            // Keep track of the timestamp of the latest row per id
+            let timestamp = occurred_at.unwrap_timestamptz();
+            match latest_row_per_id.get(&id) {
+                Some(existing) if existing > &timestamp => {}
+                _ => {
+                    latest_row_per_id.insert(id, timestamp);
+                }
+            }
 
             // Consider duplicated rows separately.
             for _ in 0..*diff {
@@ -2731,6 +2760,19 @@ where
             .collect();
 
         self.append_to_managed_collection(id, updates).await;
+
+        Some(
+            latest_row_per_id
+                .into_iter()
+                .filter_map(|(key, timestamp)| {
+                    match GlobalId::from_str(key.unwrap_str()) {
+                        Ok(id) => Some((id, timestamp.into())),
+                        // Ignore any rows that can't be unwrapped correctly
+                        Err(_) => None,
+                    }
+                })
+                .collect(),
+        )
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.
