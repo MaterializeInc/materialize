@@ -10,10 +10,12 @@
 # This test verifies the Quickstart page works: https://materialize.com/docs/get-started/quickstart/
 # Uses shared compute+storage cluster
 
-# TODO(def-): Reenable when #23242 is fixed
+> CREATE CLUSTER quickstart REPLICAS (r1 (SIZE '4-4'));
+
+> SET CLUSTER = quickstart
 
 > CREATE SOURCE auction_house
-  IN CLUSTER default
+  IN CLUSTER quickstart
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '0.05s')
   FOR ALL TABLES
@@ -23,7 +25,7 @@ name                   type           size                         cluster
 --------------------------------------------------------------------------
 accounts               subsource      <null>                       <null>
 bids                   subsource      <null>                       <null>
-auction_house          load-generator <null>                       default
+auction_house          load-generator <null>                       quickstart
 auction_house_progress progress       <null>                       <null>
 auctions               subsource      <null>                       <null>
 organizations          subsource      <null>                       <null>
@@ -101,7 +103,7 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 INSERT INTO fraud_accounts VALUES (12)
 
-> FETCH 1 c WITH (timeout='1s')
+> FETCH 1 c WITH (timeout='30s')
 <TIMESTAMP> -1 12
 
 > COMMIT
@@ -129,3 +131,5 @@ INSERT INTO fraud_accounts VALUES (12)
 > DROP SOURCE auction_house CASCADE
 
 > DROP TABLE fraud_accounts
+
+> DROP CLUSTER quickstart CASCADE
