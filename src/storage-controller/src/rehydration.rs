@@ -15,7 +15,6 @@
 //! with the underlying client, it will reconnect the client and replay the
 //! command stream.
 
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
 use std::time::Duration;
@@ -413,49 +412,21 @@ where
             }
             StorageCommand::RunIngestions(ingestions) => {
                 for ingestion in ingestions {
-                    let prev = self.sources.insert(ingestion.id, ingestion.clone());
-                    assert!(
-                        prev.is_some() == ingestion.update,
-                        "can only and must update source if RunIngestion is update"
-                    );
+                    self.sources.insert(ingestion.id, ingestion.clone());
 
                     for id in ingestion.description.subsource_ids() {
-                        match self.uppers.entry(id) {
-                            Entry::Occupied(_) => {
-                                assert!(ingestion.update, "tried to re-insert frontier for {}", id)
-                            }
-                            Entry::Vacant(v) => {
-                                v.insert(Antichain::from_elem(T::minimum()));
-                            }
-                        };
+                        self.uppers
+                            .entry(id)
+                            .or_insert(Antichain::from_elem(T::minimum()));
                     }
                 }
             }
             StorageCommand::RunSinks(exports) => {
                 for export in exports {
-                    let prev = self.sinks.insert(export.id, export.clone());
-                    assert!(
-                        prev.is_some() == export.update,
-                        "can only and must update source if RunSinkCommand is update"
-                    );
-
-                    if export.update {
-                        assert!(
-                            self.uppers.contains_key(&export.id),
-                            "tried to update description of sink {} without tracked upper",
-                            export.id
-                        )
-                    } else {
-                        // Initialize the uppers we are tracking
-                        let prev = self
-                            .uppers
-                            .insert(export.id, Antichain::from_elem(T::minimum()));
-
-                        assert!(
-                            prev.is_some() == export.update,
-                            "can only and must update uppers if RunSinkCommand is update"
-                        );
-                    }
+                    self.sinks.insert(export.id, export.clone());
+                    self.uppers
+                        .entry(export.id)
+                        .or_insert(Antichain::from_elem(T::minimum()));
                 }
             }
             StorageCommand::AllowCompaction(frontiers) => {

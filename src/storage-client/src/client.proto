@@ -37,9 +37,11 @@ message ProtoAllowCompaction {
 }
 
 message ProtoRunIngestionCommand {
+    reserved 3;
+    reserved "update";
+
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_storage_types.sources.ProtoIngestionDescription description = 2;
-    bool update = 3;
 }
 
 message ProtoCreateSources {
@@ -47,9 +49,11 @@ message ProtoCreateSources {
 }
 
 message ProtoRunSinkCommand {
+    reserved 3;
+    reserved "update";
+
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_storage_types.sinks.ProtoStorageSinkDesc description = 2;
-    bool update = 3;
 }
 
 message ProtoRunSinks {

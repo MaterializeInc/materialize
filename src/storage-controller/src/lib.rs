@@ -817,11 +817,7 @@ where
                                 storage_instance_id: description.instance_id,
                                 ingestion_id: id,
                             })?;
-                    let augmented_ingestion = RunIngestionCommand {
-                        id,
-                        description,
-                        update: false,
-                    };
+                    let augmented_ingestion = RunIngestionCommand { id, description };
 
                     client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
@@ -974,7 +970,6 @@ where
             client.send(StorageCommand::RunIngestions(vec![RunIngestionCommand {
                 id,
                 description,
-                update: true,
             }]));
         }
 
@@ -1115,7 +1110,6 @@ where
                     status_id,
                     from_storage_metadata,
                 },
-                update: false,
             };
 
             // Fetch the client for this exports's cluster.
@@ -1195,17 +1189,12 @@ where
                     status_id,
                     from_storage_metadata,
                 },
-                update: true,
             };
 
-            // Fetch the client for this exports's cluster.
-            let client = self
-                .clients
-                .get_mut(&export.description.instance_id)
-                .ok_or_else(|| StorageError::ExportInstanceMissing {
-                    storage_instance_id: export.description.instance_id,
-                    export_id: id,
-                })?;
+            let update = updates_by_instance
+                .entry(export.description.instance_id)
+                .or_default();
+            update.push((cmd, export));
 
             self.sink_statistics
                 .lock()
