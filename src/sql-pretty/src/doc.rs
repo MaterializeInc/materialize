@@ -280,8 +280,7 @@ fn doc_set_expr<T: AstInfo>(v: &SetExpr<T>) -> RcDoc {
 fn doc_values<T: AstInfo>(v: &Values<T>) -> RcDoc {
     let rows =
         v.0.iter()
-            .map(|row| bracket("(", comma_separate(doc_expr, row), ")"))
-            .collect();
+            .map(|row| bracket("(", comma_separate(doc_expr, row), ")"));
     RcDoc::concat([RcDoc::text("VALUES"), RcDoc::line(), comma_separated(rows)])
         .nest(TAB)
         .group()
@@ -329,10 +328,8 @@ fn doc_table_factor<T: AstInfo>(v: &TableFactor<T>) -> RcDoc {
             subquery,
             alias,
         } => {
-            if *lateral {
-                return doc_display(v, "table factor lateral");
-            }
-            let mut docs = vec![bracket("(", doc_query(subquery), ")")];
+            let prefix = if *lateral { "LATERAL (" } else { "(" };
+            let mut docs = vec![bracket(prefix, doc_query(subquery), ")")];
             if let Some(alias) = alias {
                 docs.push(RcDoc::text(format!("AS {}", alias)));
             }
@@ -341,13 +338,17 @@ fn doc_table_factor<T: AstInfo>(v: &TableFactor<T>) -> RcDoc {
         TableFactor::NestedJoin { join, alias } => {
             let mut doc = bracket("(", doc_table_with_joins(join), ")");
             if let Some(alias) = alias {
-                doc = RcDoc::intersperse([doc, RcDoc::text(format!("AS {}", alias))], Doc::line())
-                    .nest(TAB)
-                    .group()
+                doc = nest(doc, RcDoc::text(format!("AS {}", alias)));
             }
             doc
         }
-        TableFactor::Table { .. } => doc_display_pass(v),
+        TableFactor::Table { name, alias } => {
+            let mut doc = doc_display_pass(name);
+            if let Some(alias) = alias {
+                doc = nest(doc, RcDoc::text(format!("AS {}", alias)));
+            }
+            doc
+        }
         _ => doc_display(v, "table factor variant"),
     }
 }
@@ -417,6 +418,27 @@ fn doc_expr<T: AstInfo>(v: &Expr<T>) -> RcDoc {
             } else {
                 RcDoc::concat([RcDoc::text(format!("{} ", op)), doc_expr(expr1)])
             }
+        }
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => {
+            let mut docs = Vec::new();
+            if let Some(operand) = operand {
+                docs.push(doc_expr(operand));
+            }
+            for (c, r) in conditions.iter().zip(results) {
+                let when = nest_title("WHEN", doc_expr(c));
+                let then = nest_title("THEN", doc_expr(r));
+                docs.push(nest(when, then));
+            }
+            if let Some(else_result) = else_result {
+                docs.push(nest_title("ELSE", doc_expr(else_result)));
+            }
+            let doc = RcDoc::intersperse(docs, RcDoc::line()).nest(TAB).group();
+            bracket("CASE", doc, "END")
         }
         Expr::Cast { expr, data_type } => bracket(
             "CAST(",
@@ -504,6 +526,18 @@ fn doc_expr<T: AstInfo>(v: &Expr<T>) -> RcDoc {
             RcDoc::line(),
         ),
         Expr::Row { exprs } => bracket("ROW(", comma_separate(doc_expr, exprs), ")"),
+        Expr::NullIf { l_expr, r_expr } => bracket(
+            "NULLIF (",
+            comma_separate(doc_expr, [&**l_expr, &**r_expr]),
+            ")",
+        ),
+        Expr::HomogenizingFunction { function, exprs } => {
+            bracket(format!("{function}("), comma_separate(doc_expr, exprs), ")")
+        }
+        Expr::ArraySubquery(s) => bracket("ARRAY(", doc_query(s), ")"),
+        Expr::ListSubquery(s) => bracket("LIST(", doc_query(s), ")"),
+        Expr::Array(exprs) => bracket("ARRAY[", comma_separate(doc_expr, exprs), "]"),
+        Expr::List(exprs) => bracket("LIST[", comma_separate(doc_expr, exprs), "]"),
         _ => doc_display(v, "expr variant"),
     }
     .group()

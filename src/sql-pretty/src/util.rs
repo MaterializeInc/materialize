@@ -28,7 +28,7 @@ where
 
 pub(crate) fn title_comma_separate<'a, F, T, S>(title: S, f: F, v: &'a [T]) -> RcDoc<'a, ()>
 where
-    F: Fn(&'a T) -> RcDoc<'a, ()>,
+    F: Fn(&'a T) -> RcDoc,
     S: Into<String>,
 {
     let title = RcDoc::text(title.into());
@@ -39,22 +39,31 @@ where
     }
 }
 
-pub(crate) fn nest_comma_separate<'a, F, T>(title: RcDoc<'a, ()>, f: F, v: &'a [T]) -> RcDoc<'a, ()>
+pub(crate) fn nest_comma_separate<'a, F, T: 'a, I>(
+    title: RcDoc<'a, ()>,
+    f: F,
+    v: I,
+) -> RcDoc<'a, ()>
 where
-    F: Fn(&'a T) -> RcDoc<'a, ()>,
+    F: Fn(&'a T) -> RcDoc,
+    I: IntoIterator<Item = &'a T>,
 {
     nest(title, comma_separate(f, v))
 }
 
-pub(crate) fn comma_separate<'a, F, T>(f: F, v: &'a [T]) -> RcDoc<'a, ()>
+pub(crate) fn comma_separate<'a, F, T: 'a, I>(f: F, v: I) -> RcDoc<'a, ()>
 where
-    F: Fn(&'a T) -> RcDoc<'a, ()>,
+    F: Fn(&'a T) -> RcDoc,
+    I: IntoIterator<Item = &'a T>,
 {
-    let docs = v.iter().map(f).collect();
+    let docs = v.into_iter().map(f);
     comma_separated(docs)
 }
 
-pub(crate) fn comma_separated(v: Vec<RcDoc>) -> RcDoc {
+pub(crate) fn comma_separated<'a, I>(v: I) -> RcDoc<'a, ()>
+where
+    I: IntoIterator<Item = RcDoc<'a, ()>>,
+{
     RcDoc::intersperse(v, RcDoc::concat([RcDoc::text(","), RcDoc::line()])).group()
 }
 
