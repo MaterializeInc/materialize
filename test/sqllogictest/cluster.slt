@@ -796,4 +796,63 @@ DROP CLUSTER REPLICA t1.r1;
 statement ok
 DROP CLUSTER t1
 
+statement ok
+CREATE CLUSTER storage_a SIZE = '1';
+
+statement ok
+CREATE CLUSTER storage_b SIZE = '1';
+
+statement ok
+CREATE SOURCE storage_a_loadgen IN CLUSTER storage_a FROM LOAD GENERATOR COUNTER;
+
+statement ok
+CREATE SOURCE storage_b_loadgen IN CLUSTER storage_b FROM LOAD GENERATOR COUNTER;
+
+statement ok
+CREATE CLUSTER compute_a SIZE = '1';
+
+statement ok
+CREATE CLUSTER compute_b SIZE = '1';
+
+statement ok
+CREATE TABLE compute_t1 (x int);
+
+statement ok
+INSERT INTO compute_t1 VALUES (100), (200), (300);
+
+statement ok
+CREATE MATERIALIZED VIEW compute_a_mv1 IN CLUSTER compute_a AS ( SELECT AVG(x) FROM compute_t1 );
+
+statement ok
+CREATE MATERIALIZED VIEW compute_b_mv1 IN CLUSTER compute_b AS ( SELECT MIN(x) FROM compute_t1 );
+
+statement ok
+SET cluster TO storage_a;
+
+simple
+SELECT * FROM compute_t1;
+----
+db error: ERROR: cannot execute queries on cluster containing sources or sinks
+HINT: Clusters that do not contain sources or sinks: "default","compute_a","compute_b".
+
+statement ok
+SET cluster to default;
+
+simple
+CREATE MATERIALIZED VIEW storage_a_mv_1 IN CLUSTER storage_a AS ( SELECT MAX(x) FROM compute_t1 );
+----
+db error: ERROR: cannot create this kind of item in a cluster that contains sources or sinks
+
+statement ok
+DROP CLUSTER storage_a CASCADE;
+
+statement ok
+DROP CLUSTER storage_b CASCADE;
+
+statement ok
+DROP CLUSTER compute_a CASCADE;
+
+statement ok
+DROP CLUSTER compute_b CASCADE;
+
 reset-server

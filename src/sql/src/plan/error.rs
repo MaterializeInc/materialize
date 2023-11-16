@@ -228,6 +228,16 @@ pub enum PlanError {
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
     MissingName(CatalogItemType),
+    InvalidClusterContainsCompute {
+        /// Type of object that we tried to create.
+        object_type: &'static str,
+        /// Clusters that you could create this source on.
+        alternatives: Vec<String>,
+    },
+    InvalidClusterContainsStorage {
+        /// Clusters that you could run this query on.
+        alternatives: Vec<String>,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -366,6 +376,24 @@ impl PlanError {
                         let similar = names.into_iter().map(|column| ColumnDisplay { table, column }).join(", ");
                         Some(format!("There are similarly named columns that do exist: {similar}. {suffix}"))
                     }
+                }
+            }
+            Self::InvalidClusterContainsCompute { alternatives, object_type } => {
+                if !alternatives.is_empty() {
+                    let alternatives = alternatives.into_iter().take(8).map(|name| name.quoted());
+                    let cluster_names = mz_ore::str::separated(",", alternatives);
+                    Some(format!("Clusters that you can create {object_type}: {cluster_names}."))
+                } else {
+                    None
+                }
+            }
+            Self::InvalidClusterContainsStorage { alternatives } => {
+                if !alternatives.is_empty() {
+                    let alternatives = alternatives.into_iter().take(8).map(|name| name.quoted());
+                    let cluster_names = mz_ore::str::separated(",", alternatives);
+                    Some(format!("Clusters that do not contain sources or sinks: {cluster_names}."))
+                } else {
+                    None
                 }
             }
             _ => None,
@@ -595,6 +623,12 @@ impl fmt::Display for PlanError {
             }
             Self::MissingName(item_type) => {
                 write!(f, "unspecified name for {item_type}")
+            }
+            Self::InvalidClusterContainsCompute { object_type, .. } => {
+                write!(f, "cannot create {object_type} in cluster containing indexes or materialized views")
+            }
+            Self::InvalidClusterContainsStorage { .. } => {
+                write!(f, "cannot execute queries on cluster containing sources or sinks")
             }
         }
     }

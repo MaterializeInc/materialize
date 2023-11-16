@@ -73,7 +73,8 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
-    PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
+    PlanContext, PlanError, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig,
+    StatementDesc,
 };
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -781,17 +782,34 @@ impl Catalog {
             .system_vars()
             .enable_unified_clusters()
         {
+            let contains_storage_objects = |cluster: &dyn CatalogCluster| {
+                cluster.bound_objects().iter().any(|id| {
+                    matches!(
+                        self.get_entry(id).item_type(),
+                        CatalogItemType::Source | CatalogItemType::Sink
+                    )
+                })
+            };
+
             // Disallow queries on storage clusters. There's no technical reason for
             // this restriction, just a philosophical one: we want all crashes in
             // a storage cluster to be the result of sources and sinks, not user
             // queries.
-            if cluster.bound_objects.iter().any(|id| {
-                matches!(
-                    self.get_entry(id).item_type(),
-                    CatalogItemType::Source | CatalogItemType::Sink
-                )
-            }) {
-                coord_bail!("cannot execute queries on cluster containing sources or sinks");
+            if contains_storage_objects(cluster) {
+                let alternatives = self
+                    .clusters()
+                    .filter(|cluster| cluster.id().is_user())
+                    .filter_map(|cluster| {
+                        if contains_storage_objects(cluster) {
+                            None
+                        } else {
+                            Some(cluster.name.clone())
+                        }
+                    })
+                    .collect();
+                return Err(AdapterError::PlanError(
+                    PlanError::InvalidClusterContainsStorage { alternatives },
+                ));
             }
         }
         Ok(cluster)

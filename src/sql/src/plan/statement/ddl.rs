@@ -3657,21 +3657,43 @@ fn ensure_cluster_can_host_storage_item(
     cluster_id: ClusterId,
     ty: &'static str,
 ) -> Result<(), PlanError> {
+    let contains_only_storage_objects = |cluster: &dyn CatalogCluster| {
+        cluster.bound_objects().iter().all(|id| {
+            matches!(
+                scx.catalog.get_item(id).item_type(),
+                CatalogItemType::Source | CatalogItemType::Sink
+            )
+        })
+    };
+
     let cluster = scx.catalog.get_cluster(cluster_id);
+
     // At most 1 replica
     if cluster.replica_ids().len() > 1 {
         sql_bail!("cannot create {ty} in cluster with more than one replica")
     }
     let enable_unified_cluster = scx.catalog.system_vars().enable_unified_clusters();
-    let only_storage_objects = cluster.bound_objects().iter().all(|id| {
-        matches!(
-            scx.catalog.get_item(id).item_type(),
-            CatalogItemType::Source | CatalogItemType::Sink
-        )
-    });
+    let only_storage_objects = contains_only_storage_objects(cluster);
+
     // unified clusters or only storage objects on cluster
     if !enable_unified_cluster && !only_storage_objects {
-        sql_bail!("cannot create {ty} in cluster containing indexes or materialized views");
+        let alternatives = scx
+            .catalog
+            .get_clusters()
+            .iter()
+            .filter(|cluster| cluster.id().is_user())
+            .filter_map(|cluster| {
+                if contains_only_storage_objects(*cluster) {
+                    None
+                } else {
+                    Some(cluster.name().to_string())
+                }
+            })
+            .collect();
+        return Err(PlanError::InvalidClusterContainsCompute {
+            object_type: ty,
+            alternatives,
+        });
     }
     Ok(())
 }
