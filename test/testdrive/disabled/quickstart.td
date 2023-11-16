@@ -10,6 +10,8 @@
 # This test verifies the Quickstart page works: https://materialize.com/docs/get-started/quickstart/
 # Uses shared compute+storage cluster
 
+# TODO(def-): Reenable when #23242 is fixed
+
 > CREATE SOURCE auction_house
   IN CLUSTER default
   FROM LOAD GENERATOR AUCTION
