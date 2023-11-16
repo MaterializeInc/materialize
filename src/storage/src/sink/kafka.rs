@@ -33,7 +33,6 @@ use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_client::client::SinkStatisticsUpdate;
-use mz_storage_client::sink::ProgressRecord;
 use mz_storage_types::connections::{ConnectionContext, KafkaConnection};
 use mz_storage_types::errors::{ContextCreationError, DataflowError};
 use mz_storage_types::sinks::{
@@ -61,6 +60,8 @@ use crate::render::sinks::SinkRender;
 use crate::sink::KafkaBaseMetrics;
 use crate::statistics::{SinkStatisticsMetrics, StorageStatistics};
 use crate::storage_state::StorageState;
+
+mod util;
 
 // 30s is a good maximum backoff for network operations. Long enough to reduce
 // load on an upstream system, but short enough that we can respond quickly when
@@ -523,7 +524,7 @@ impl KafkaSinkState {
                     connection_context,
                     MzClientContext::default(),
                     &btreemap! {
-                        "group.id" => mz_storage_client::sink::SinkGroupId::new(sink_id),
+                        "group.id" => util::SinkGroupId::new(sink_id),
                         "isolation.level" => "read_committed".into(),
                         "enable.auto.commit" => "false".into(),
                         "auto.offset.reset" => "earliest".into(),
@@ -546,7 +547,7 @@ impl KafkaSinkState {
             progress_topic: match connection.consistency_config {
                 KafkaConsistencyConfig::Progress { topic } => topic,
             },
-            progress_key: mz_storage_client::sink::ProgressKey::new(sink_id),
+            progress_key: util::ProgressKey::new(sink_id),
             progress_client: Some(Arc::new(progress_client)),
             healthchecker,
             gate_ts,
@@ -631,7 +632,7 @@ impl KafkaSinkState {
     }
 
     async fn send_progress_record(&self, transaction_id: Timestamp) {
-        let encoded = serde_json::to_vec(&ProgressRecord {
+        let encoded = serde_json::to_vec(&util::ProgressRecord {
             timestamp: transaction_id,
         })
         .expect("serialization to vec cannot fail");
@@ -987,7 +988,7 @@ where
         )
         .await;
 
-        let latest_ts = mz_storage_client::sink::determine_latest_progress_record(
+        let latest_ts = util::determine_latest_progress_record(
             s.name.clone(),
             s.progress_topic.clone(),
             s.progress_key.clone(),
@@ -1268,8 +1269,7 @@ where
 
         let _ = halt_on_err(
             &healthchecker,
-            mz_storage_client::sink::build_kafka(sink_id, &mut connection, &connection_context)
-                .await,
+            util::build_kafka(sink_id, &mut connection, &connection_context).await,
             None,
         )
         .await;

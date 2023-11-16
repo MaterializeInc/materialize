@@ -81,5 +81,4 @@ pub mod client;
 pub mod controller;
 pub mod healthcheck;
 pub mod metrics;
-pub mod sink;
 pub mod util;
