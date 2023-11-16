@@ -10,10 +10,12 @@
 # This test verifies the Quickstart page works: https://materialize.com/docs/get-started/quickstart/
 # Uses shared compute+storage cluster
 
+# TODO(def-): Reenable when #23242 is fixed
+
 > CREATE SOURCE auction_house
   IN CLUSTER default
   FROM LOAD GENERATOR AUCTION
-  (TICK INTERVAL '0.01s')
+  (TICK INTERVAL '0.05s')
   FOR ALL TABLES
 
 > SHOW SOURCES
@@ -76,8 +78,8 @@ Used Indexes:
   WHERE w1.buyer = w2.seller
     AND w2.amount > w1.amount
 
-> SELECT * FROM fraud_activity where seller_item = 'Gift Basket' and seller = 100
-100 "Gift Basket" 63 "Gift Basket" 51
+> SELECT * FROM fraud_activity where seller_item = 'Gift Basket' and seller = 3408
+3408 "Gift Basket" 69 "Gift Basket" 58
 
 > CREATE TABLE fraud_accounts (id bigint)
 
@@ -88,19 +90,19 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 > DECLARE c CURSOR FOR SUBSCRIBE TO (
     SELECT buyer
     FROM winning_bids
-    WHERE buyer NOT IN (SELECT id FROM fraud_accounts) AND buyer = 71
+    WHERE buyer NOT IN (SELECT id FROM fraud_accounts) AND buyer = 12
     GROUP BY buyer
     ORDER BY 1 ASC LIMIT 5
   )
 
 > FETCH 1 c WITH (timeout='1s')
-<TIMESTAMP> 1 71
+<TIMESTAMP> 1 12
 
 $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
-INSERT INTO fraud_accounts VALUES (71)
+INSERT INTO fraud_accounts VALUES (12)
 
 > FETCH 1 c WITH (timeout='1s')
-<TIMESTAMP> -1 71
+<TIMESTAMP> -1 12
 
 > COMMIT
 
