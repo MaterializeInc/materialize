@@ -105,13 +105,32 @@ but not both.
 We already have external ID prefix provided in the catalog state.
 The connection ID will be appended to the external ID prefix to get the complete
 External ID and then stored in the new `mz_aws_connections` table for that connection ID.
-For principal, refer to the [open question below](#what-should-be-the-principal-for-this-connection).
+
+For principal, we'll create one global role which all environmentd/clusterd-s can assume.
+This will add some good restrictions on who could assume the customers role and also
+allows for migration between environment clusters.
+
+Note: There's a hard limit of 1 hour on the session duration when [Role chaining in AWS](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html).
+This can be revisited for workarounds if we hit this issue.
+
+Other alternative solutions were:
+1. Using our root account `arn:aws:iam::<account_id>:root`. This would work but this is not
+secure enough since any user/role in this account can assume the customer's role.
+2. An IAM user `arn:aws:iam::<account_id>:user/<id>` created for the customer's environment similar
+to [Snowflake](https://docs.snowflake.com/en/user-guide/data-load-s3-config-storage-integration#step-4-retrieve-the-aws-iam-user-for-your-snowflake-account).
+This could work if we keep them in a secret and rotate regularly, this would give
+each customer a unique principal. But we'd have to rotate very frequently and we may also
+need to coordinate that role across all users of the credentials which sounds hard.
+3. An IAM role `arn:aws:iam::<account_id>:role/<id>` we create for each customer environment. This
+will not scale, there's a maximum limit of [5000 roles]
+(https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html#reference_iam-quotas-entities)
+we can create per account.
 
 #### `VALIDATE CONNECTION`
 We can make use of the [GetCallerIdentity AWS API](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html)
-to check if the credentials are valid. We should make the call with the given External ID and without
-to make sure that the user has a secure setup. If we are able to access without the External ID,
-we should treat that as an error.
+to check if the credentials are valid. We should make the call with the given External ID and
+without to make sure that the user has a secure setup. If we are able to access without the External
+ID, we should treat that as an error.
 
 Optionally, with `ASSUME ROLE ARN` we can also try to get temporary credentials.
 
@@ -144,21 +163,3 @@ like `CREATE CONNECTION s3_conn TO S3 ( PREFIX = 'url') USING AWS CONNECTION aws
 Validating s3_conn could verify if we are able to list the prefix, create and
 remove a file there. This seems like an overkill though and a `VALIDATE CONNECTION ... WITH`
 mentioned above would probably be better.
-
-## Open Questions
-#### What should be the `principal` for this connection?
-For an AssumeRole to work, we need to provide the principal to the user using which we'll try to assume the role.
-I had initially assumed that the principal we generate for AWS Privatelink might work, but that does not seem to be the case.
-Among many things, the principal can be
-1. Our account ID, corresponding to `arn:aws:iam::<account_id>:root`
-2. An IAM user `arn:aws:iam::<account_id>:user/<id>` we create for each user environment
-3. An IAM role `arn:aws:iam::<account_id>:role/<id>` we create for each user environment
-
-We could simplify and directly use the root account ID (Option 1). But this seems insecure that any materialize role/user
-belonging to this account would be able to assume this user's role.
-
-Option 3 will not scale, there's a maximum limit of [5000 roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html#reference_iam-quotas-entities) we can create per account.
-
-Snowflake uses Option 2, they create [one IAM user per user](https://docs.snowflake.com/en/user-guide/data-load-s3-config-storage-integration#step-4-retrieve-the-aws-iam-user-for-your-snowflake-account).
-If we want to do this, this will require additional work on the cloud's side to create this user and
-also how would access and auth work in environmentd/clusterd.
