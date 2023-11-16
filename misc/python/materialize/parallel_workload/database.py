@@ -35,6 +35,7 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.util import naughty_strings
 
 MAX_COLUMNS = 10
+MAX_INDEXES = 1000
 MAX_INCLUDE_HEADERS = 5
 MAX_ROWS = 1000
 MAX_CLUSTERS = 1
