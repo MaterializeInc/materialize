@@ -414,9 +414,9 @@ class Composition:
                     not in self.compose["services"]["materialized"]["labels"]
                 ):
                     print("sanity_restart disabled by override(), keeping it disabled")
-                    old_compose["services"]["materialized"]["labels"].remove(
+                    del old_compose["services"]["materialized"]["labels"][
                         "sanity_restart"
-                    )
+                    ]
 
             # Restore the old composition.
             self.compose = old_compose
