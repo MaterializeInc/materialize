@@ -2,20 +2,18 @@
 
 ## Unreleased
 
-* Mark `dbt source freshness` as not supported. Materialize supports the
-  functionality required to enable column- and metadata-based source freshness
-  checks, but the value of this feature in a real-time data warehouse is
-  limited.
+* Support specifying the materialization type used to store test failures via
+  the new [`store_failures_as` configuration](https://docs.getdbt.com/reference/resource-configs/store_failures_as).
+  Accepted values: `materialized_view` (default), `view`, `ephemeral`.
 
-* Support for `store_failures_as` which can be `table`, `view`,`ephemeral` or `materialized_view` (like models, a `table` will be a `materialized_view`).
-
-  * Project level
+  * **Project level**
   ```yaml
   tests:
     my_project:
-      +store_failures_as: table
+      +store_failures_as: view
   ```
-  * Model level
+
+  * **Model level**
   ```yaml
   models:
     - name: my_model
@@ -27,8 +25,16 @@
                   store_failures_as: view
             - unique:
                 config:
-                  store_failures_as: materialized_view
+                  store_failures_as: ephemeral
   ```
+
+  If both [`store_failures`](https://docs.getdbt.com/reference/resource-configs/store_failures)
+  and `store_failures_as` are specified, `store_failures_as` takes precedence.
+
+* Mark `dbt source freshness` as not supported. Materialize supports the
+  functionality required to enable column- and metadata-based source freshness
+  checks, but the value of this feature in a real-time data warehouse is
+  limited.
 
 ## 1.6.1 - 2023-11-03
 
