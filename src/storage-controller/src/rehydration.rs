@@ -313,7 +313,7 @@ where
             timely_command,
             StorageCommand::UpdateConfiguration(self.config.clone()),
             StorageCommand::RunIngestions(self.sources.values().cloned().collect()),
-            StorageCommand::CreateSinks(self.sinks.values().cloned().collect()),
+            StorageCommand::RunSinks(self.sinks.values().cloned().collect()),
             StorageCommand::AllowCompaction(
                 self.sinces
                     .iter()
@@ -431,7 +431,7 @@ where
                     }
                 }
             }
-            StorageCommand::CreateSinks(exports) => {
+            StorageCommand::RunSinks(exports) => {
                 for export in exports {
                     let prev = self.sinks.insert(export.id, export.clone());
                     assert!(

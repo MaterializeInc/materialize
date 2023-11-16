@@ -709,7 +709,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // the internal command fabric, to ensure consistent
                     // ordering of dataflow rendering across all workers.
                     if self.timely_worker.index() == 0 {
-                        internal_cmd_tx.broadcast(InternalStorageCommand::CreateSinkDataflow(
+                        internal_cmd_tx.broadcast(InternalStorageCommand::RunSinkDataflow(
                             id,
                             sink_description,
                         ));
@@ -812,7 +812,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     source_resume_uppers,
                 );
             }
-            InternalStorageCommand::CreateSinkDataflow(sink_id, sink_description) => {
+            InternalStorageCommand::RunSinkDataflow(sink_id, sink_description) => {
                 info!(
                     "worker {}/{} trying to (re-)start sink {sink_id}",
                     self.timely_worker.index(),
@@ -1042,7 +1042,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     }
                 }
-                StorageCommand::CreateSinks(exports) => {
+                StorageCommand::RunSinks(exports) => {
                     // Ensure that exports are forward-rolling alter compatible.
                     for export in exports {
                         let prev = running_exports_descriptions
@@ -1100,7 +1100,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     })
                 }
-                StorageCommand::CreateSinks(exports) => {
+                StorageCommand::RunSinks(exports) => {
                     exports.retain_mut(|export| {
                         if drop_commands.remove(&export.id)
                             // If there were multiple `RunSinks` in the command
@@ -1286,7 +1286,7 @@ impl StorageState {
                     }
                 }
             }
-            StorageCommand::CreateSinks(exports) => {
+            StorageCommand::RunSinks(exports) => {
                 for export in exports {
                     // Remember the sink description to facilitate possible
                     // reconciliation later.
@@ -1330,7 +1330,7 @@ impl StorageState {
                     // fabric, to ensure consistent ordering of dataflow rendering across all
                     // workers.
                     if worker_index == 0 {
-                        internal_cmd_tx.broadcast(InternalStorageCommand::CreateSinkDataflow(
+                        internal_cmd_tx.broadcast(InternalStorageCommand::RunSinkDataflow(
                             export.id,
                             export.description,
                         ));
