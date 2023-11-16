@@ -1101,7 +1101,15 @@ pub fn plan_create_source(
         mz_sql_parser::ast::Envelope::None => UnplannedSourceEnvelope::None(key_envelope),
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
             //TODO check that key envelope is not set
-            let (_before_idx, after_idx) = typecheck_debezium(&value_desc)?;
+            let after_idx = match typecheck_debezium(&value_desc) {
+                Ok((_before_idx, after_idx)) => Ok(after_idx),
+                Err(type_err) => match encoding.value_ref().inner {
+                    DataEncodingInner::Avro(_) => Err(type_err),
+                    _ => Err(sql_err!(
+                        "ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO"
+                    )),
+                },
+            }?;
 
             match mode {
                 DbzMode::Plain => UnplannedSourceEnvelope::Upsert {
