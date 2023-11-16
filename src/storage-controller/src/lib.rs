@@ -1132,7 +1132,7 @@ where
                 .expect("poisoned")
                 .insert(id, statistics::StatsInitState(BTreeMap::new()));
 
-            client.send(StorageCommand::CreateSinks(vec![cmd]));
+            client.send(StorageCommand::RunSinks(vec![cmd]));
         }
         Ok(())
     }
@@ -1213,7 +1213,33 @@ where
                 .insert(id, statistics::StatsInitState(BTreeMap::new()));
         }
 
-            client.send(StorageCommand::CreateSinks(vec![cmd]));
+        for (instance_id, updates) in updates_by_instance {
+            let mut export_updates = BTreeMap::new();
+            let mut cmds = Vec::with_capacity(updates.len());
+
+            for (cmd, export_state) in updates {
+                export_updates.insert(cmd.id, export_state);
+                cmds.push(cmd);
+            }
+
+            // Fetch the client for this exports's cluster.
+            let client = self.clients.get_mut(&instance_id).ok_or_else(|| {
+                StorageError::ExportInstanceMissing {
+                    storage_instance_id: instance_id,
+                    export_id: *export_updates
+                        .keys()
+                        .next()
+                        .expect("set of exports not empty"),
+                }
+            })?;
+
+            client.send(StorageCommand::RunSinks(cmds));
+
+            // Update state only after all possible errors have occurred.
+            for (id, export_state) in export_updates {
+                let export = self.export_mut(id).expect("export known to exist");
+                *export = export_state;
+            }
         }
 
         Ok(())

@@ -111,7 +111,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Each entry in the vector names a collection and provides a frontier after which
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-    CreateSinks(Vec<RunSinkCommand<T>>),
+    RunSinks(Vec<RunSinkCommand<T>>),
 }
 
 /// A command that starts ingesting the given ingestion description
@@ -238,7 +238,7 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 StorageCommand::RunIngestions(sources) => CreateSources(ProtoCreateSources {
                     sources: sources.into_proto(),
                 }),
-                StorageCommand::CreateSinks(sinks) => CreateSinks(ProtoCreateSinks {
+                StorageCommand::RunSinks(sinks) => RunSinks(ProtoRunSinks {
                     sinks: sinks.into_proto(),
                 }),
             }),
@@ -265,8 +265,8 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
             }
-            Some(CreateSinks(ProtoCreateSinks { sinks })) => {
-                Ok(StorageCommand::CreateSinks(sinks.into_rust()?))
+            Some(RunSinks(ProtoRunSinks { sinks })) => {
+                Ok(StorageCommand::RunSinks(sinks.into_rust()?))
             }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageCommand::kind",
@@ -286,7 +286,7 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
                 .prop_map(StorageCommand::RunIngestions)
                 .boxed(),
             proptest::collection::vec(any::<RunSinkCommand<mz_repr::Timestamp>>(), 1..4)
-                .prop_map(StorageCommand::CreateSinks)
+                .prop_map(StorageCommand::RunSinks)
                 .boxed(),
             proptest::collection::vec(
                 (
@@ -553,7 +553,7 @@ where
             StorageCommand::RunIngestions(ingestions) => ingestions
                 .iter()
                 .try_for_each(|i| self.insert_new_uppers(i.description.subsource_ids(), i.update)),
-            StorageCommand::CreateSinks(exports) => exports
+            StorageCommand::RunSinks(exports) => exports
                 .iter()
                 .try_for_each(|e| self.insert_new_uppers([e.id], e.update)),
             StorageCommand::InitializationComplete
