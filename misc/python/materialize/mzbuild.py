@@ -212,6 +212,65 @@ class Copy(PreImage):
         return set(git.expand_globs(self.rd.root, f"{self.source}/{self.matching}"))
 
 
+class PSUploadSources(PreImage):
+    """A `PreImage` action which uploads a source tarball to S3."""
+
+    def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
+        super().__init__(rd, path)
+
+        bin = config.pop("bin", None)
+        if bin is None:
+            raise ValueError("mzbuild config is missing 'bin' argument")
+        self.bin_path = path / bin
+        self.out_path = path / "sources.tar.zstd"
+
+    def run(self) -> None:
+        super().run()
+        with open(self.bin_path, "rb") as bin:
+            build_id = get_build_id(bin)
+
+        cmd1 = ["/usr/bin/llvm-dwarfdump", "--show-sources", self.bin_path]
+        cmd2 = [
+            "/usr/bin/tar",
+            "-cf",
+            self.out_path,
+            "--zstd",
+            "-T",
+            "-",
+            "--ignore-failed-read",
+        ]
+
+        p1 = subprocess.Popen(cmd1, stdout=subprocess.PIPE)
+        p2 = subprocess.Popen(cmd2, stdin=p1.stdout, stdout=subprocess.PIPE)
+
+        # This causes p1 to receive SIGPIPE if p2 exits early,
+        # like in the shell
+        p1.stdout.close()
+
+        for p in [p1, p2]:
+            if p.returncode:
+                raise subprocess.CalledProcessError(p.returncode, p.args)
+
+        polar_signals_api_token = os.getenv("POLAR_SIGNALS_API_TOKEN")
+        if self.rd.stable and polar_signals_api_token is not None:
+            print("Attempting to upload sources to polar signals")
+            spawn.runv(
+                [
+                    "/usr/local/bin/parca-debuginfo",
+                    "upload",
+                    "--store-address=grpc.polarsignals.com:443",
+                    "--type=sources",
+                    f"--build-id={build_id}",
+                    self.out_path,
+                ],
+                cwd=self.rd.root,
+                env={"PARCA_DEBUGINFO_BEARER_TOKEN": polar_signals_api_token},
+            )
+
+    def inputs(self) -> set[str]:
+        return {self.bin_path}
+
+
 class S3UploadDebuginfo(PreImage):
     """A `PreImage` action which uploads an executable and its debuginfo to S3.
 
@@ -543,6 +602,10 @@ class Image:
                 elif typ == "s3-upload-debuginfo":
                     self.pre_images.append(
                         S3UploadDebuginfo(self.rd, self.path, pre_image)
+                    )
+                elif typ == "ps-upload-sources":
+                    self.pre_images.append(
+                        PSUploadSources(self.rd, self.path, pre_image)
                     )
                 else:
                     raise ValueError(

@@ -44,3 +44,5 @@ EXPLAIN TIMESTAMP FOR SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_
 # The mz_support user can filter SHOW commands on user objects.
 $ postgres-execute connection=mz_support
 SHOW INDEXES ON bids;
+
+> DROP SOURCE auction_house CASCADE;

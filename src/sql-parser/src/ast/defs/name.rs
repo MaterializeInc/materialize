@@ -18,7 +18,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use mz_ore::str::MaxLenString;
+use mz_ore::str::{MaxLenString, StrExt};
 use mz_sql_lexer::keywords::Keyword;
 use std::fmt;
 
@@ -325,7 +325,7 @@ impl_display!(Ident);
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum IdentError {
-    #[error("identifier too long (len {}, max {}, value {})", .0.len(), Ident::MAX_LENGTH, .0)]
+    #[error("identifier too long (len: {}, max: {}, value: {})", .0.len(), Ident::MAX_LENGTH, .0.quoted())]
     TooLong(String),
     #[error("failed to generate identifier with prefix '{prefix}' and suffix '{suffix}' after {attempts} attempts")]
     FailedToGenerate {
