@@ -12,6 +12,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use differential_dataflow::hashable::Hashable;
@@ -69,12 +70,11 @@ use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 /// unchanged and simply manipulating capabilities in response to data and txns
 /// shard progress. See [crate::operator::txns_progress].
 #[derive(Debug)]
-pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
+pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     txns_id: ShardId,
     // Invariant: <= the minimum unapplied batch.
     since_ts: T,
     pub(crate) progress_exclusive: T,
-    txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
 
     next_batch_id: usize,
     /// The batches needing application as of the current progress.
@@ -102,7 +102,28 @@ pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecD
     only_data_id: Option<ShardId>,
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
+/// A self-updating [TxnsCacheState].
+#[derive(Debug)]
+pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
+    txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
+    state: TxnsCacheState<T>,
+}
+
+impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState<T> {
+    pub(crate) fn new(txns_id: ShardId, since_ts: T, only_data_id: Option<ShardId>) -> Self {
+        TxnsCacheState {
+            txns_id,
+            since_ts,
+            progress_exclusive: T::minimum(),
+            next_batch_id: 0,
+            unapplied_batches: BTreeMap::new(),
+            batch_idx: HashMap::new(),
+            datas: BTreeMap::new(),
+            datas_min_write_ts: BinaryHeap::new(),
+            only_data_id,
+        }
+    }
+
     /// Returns the [ShardId] of the txns shard.
     pub fn txns_id(&self) -> ShardId {
         self.txns_id
@@ -546,7 +567,9 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
 
         Ok(())
     }
+}
 
+impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
     pub(crate) async fn init(
         init_ts: T,
         txns_read: ReadHandle<C::Key, C::Val, T, i64>,
@@ -591,21 +614,14 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         let txns_id = txns_read.shard_id();
         let as_of = txns_read.since().clone();
         let since_ts = as_of.as_option().expect("txns shard is not closed").clone();
-        let subscribe = txns_read
+        let txns_subscribe = txns_read
             .subscribe(as_of)
             .await
             .expect("handle holds a capability");
+        let state = TxnsCacheState::new(txns_id, since_ts, only_data_id);
         TxnsCache {
-            txns_id,
-            since_ts,
-            progress_exclusive: T::minimum(),
-            txns_subscribe: subscribe,
-            next_batch_id: 0,
-            unapplied_batches: BTreeMap::new(),
-            batch_idx: HashMap::new(),
-            datas: BTreeMap::new(),
-            datas_min_write_ts: BinaryHeap::new(),
-            only_data_id,
+            txns_subscribe,
+            state,
         }
     }
 
@@ -703,6 +719,19 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             return true;
         };
         C::should_fetch_part(only_data_id, &stats).unwrap_or(true)
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64, C: TxnsCodec> Deref for TxnsCache<T, C> {
+    type Target = TxnsCacheState<T>;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64, C: TxnsCodec> DerefMut for TxnsCache<T, C> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
     }
 }
 
