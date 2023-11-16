@@ -80,6 +80,7 @@
 #![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
+
 //! Internal utility libraries for Materialize.
 //!
 //! **ore** (_n_): the raw material from which more valuable materials are extracted.
