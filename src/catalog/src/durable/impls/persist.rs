@@ -462,7 +462,10 @@ impl PersistCatalogState {
         &mut self,
         upper: Timestamp,
     ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-        snapshot(&mut self.read_handle().await, upper).await
+        let mut read_handle = self.read_handle().await;
+        let snapshot = snapshot(&mut read_handle, upper).await;
+        read_handle.expire().await;
+        snapshot
     }
 
     /// Applies [`StateUpdate`]s to the in memory catalog cache.
