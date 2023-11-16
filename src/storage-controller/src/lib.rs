@@ -817,11 +817,7 @@ where
                                 storage_instance_id: description.instance_id,
                                 ingestion_id: id,
                             })?;
-                    let augmented_ingestion = RunIngestionCommand {
-                        id,
-                        description,
-                        update: false,
-                    };
+                    let augmented_ingestion = RunIngestionCommand { id, description };
 
                     client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
@@ -974,7 +970,6 @@ where
             client.send(StorageCommand::RunIngestions(vec![RunIngestionCommand {
                 id,
                 description,
-                update: true,
             }]));
         }
 
@@ -1115,7 +1110,6 @@ where
                     status_id,
                     from_storage_metadata,
                 },
-                update: false,
             };
 
             // Fetch the client for this exports's cluster.
@@ -1194,7 +1188,6 @@ where
                     status_id,
                     from_storage_metadata,
                 },
-                update: true,
             };
 
             // Fetch the client for this exports's cluster.

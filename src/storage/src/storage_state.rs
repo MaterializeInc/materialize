@@ -75,7 +75,6 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -1086,10 +1085,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             let running_ingestion =
                                 self.storage_state.ingestions.get(&ingestion.id);
 
-                            // Ingestion statements are only considered updates if they are
-                            // currently running.
-                            ingestion.update = running_ingestion.is_some();
-
                             // We keep only:
                             // - The most recent version of the ingestion, which
                             //   is why these commands are run in reverse.
@@ -1114,7 +1109,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             expected_objects.insert(export.id);
 
                             let running_sink = self.storage_state.exports.get(&export.id);
-                            export.update = running_sink.is_some();
 
                             // We keep only:
                             // - The most recent version of the sink, which
@@ -1241,31 +1235,16 @@ impl StorageState {
                 }
             }
             StorageCommand::RunIngestions(ingestions) => {
-                for RunIngestionCommand {
-                    id,
-                    description,
-                    update,
-                } in ingestions
-                {
+                for RunIngestionCommand { id, description } in ingestions {
                     // Remember the ingestion description to facilitate possible
                     // reconciliation later.
-                    let prev = self.ingestions.insert(id, description.clone());
-
-                    assert!(
-                        prev.is_some() == update,
-                        "can only and must update reported frontiers if RunIngestion is update"
-                    );
+                    self.ingestions.insert(id, description.clone());
 
                     // Initialize shared frontier reporting.
                     for id in description.subsource_ids() {
-                        match self.reported_frontiers.entry(id) {
-                            Entry::Occupied(_) => {
-                                assert!(update, "tried to re-insert frontier for {}", id)
-                            }
-                            Entry::Vacant(v) => {
-                                v.insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
-                            }
-                        };
+                        self.reported_frontiers
+                            .entry(id)
+                            .or_insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
                     }
 
                     // This needs to be done by one worker, which will broadcasts a
@@ -1289,23 +1268,8 @@ impl StorageState {
                     // reconciliation later.
                     let prev = self.exports.insert(export.id, export.description.clone());
 
-                    assert!(
-                        prev.is_some() == export.update,
-                        "can only and must update reported frontiers if RunSinkCommand is update"
-                    );
-
-                    if export.update {
-                        assert!(
-                            self.reported_frontiers.contains_key(&export.id),
-                            "if update, must contain frontier for sink {}",
-                            export.id
-                        );
-                        assert!(
-                            self.sink_handles.contains_key(&export.id),
-                            "if update, must contain handle for sink {}",
-                            export.id
-                        );
-                    } else {
+                    // New sink, add state.
+                    if prev.is_none() {
                         self.reported_frontiers.insert(
                             export.id,
                             Antichain::from_elem(mz_repr::Timestamp::minimum()),
