@@ -122,12 +122,6 @@ pub struct RunIngestionCommand {
     /// The description of what source type should be ingested and what post-processing steps must
     /// be applied to the data before writing them down into the storage collection
     pub description: IngestionDescription<CollectionMetadata>,
-    /// Whether or not this ingestion command should be allowed to/required to update an existing
-    /// ingestion.
-    ///
-    /// Essentially, if update, the command came from `ALTER SOURCE`; if not, it came from `CREATE
-    /// SOURCE`.
-    pub update: bool,
 }
 
 impl Arbitrary for RunIngestionCommand {
@@ -138,13 +132,8 @@ impl Arbitrary for RunIngestionCommand {
         (
             any::<GlobalId>(),
             any::<IngestionDescription<CollectionMetadata>>(),
-            any::<bool>(),
         )
-            .prop_map(|(id, description, update)| Self {
-                id,
-                description,
-                update,
-            })
+            .prop_map(|(id, description)| Self { id, description })
             .boxed()
     }
 }
@@ -154,7 +143,6 @@ impl RustType<ProtoRunIngestionCommand> for RunIngestionCommand {
         ProtoRunIngestionCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
-            update: self.update,
         }
     }
 
@@ -164,7 +152,6 @@ impl RustType<ProtoRunIngestionCommand> for RunIngestionCommand {
             description: proto
                 .description
                 .into_rust_if_some("ProtoRunIngestionCommand::description")?,
-            update: proto.update,
         })
     }
 }
@@ -174,7 +161,6 @@ impl RustType<ProtoRunSinkCommand> for RunSinkCommand<mz_repr::Timestamp> {
         ProtoRunSinkCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
-            update: self.update,
         }
     }
 
@@ -184,7 +170,6 @@ impl RustType<ProtoRunSinkCommand> for RunSinkCommand<mz_repr::Timestamp> {
             description: proto
                 .description
                 .into_rust_if_some("ProtoRunSinkCommand::description")?,
-            update: proto.update,
         })
     }
 }
@@ -194,7 +179,6 @@ impl RustType<ProtoRunSinkCommand> for RunSinkCommand<mz_repr::Timestamp> {
 pub struct RunSinkCommand<T> {
     pub id: GlobalId,
     pub description: StorageSinkDesc<MetadataFilled, T>,
-    pub update: bool,
 }
 
 impl Arbitrary for RunSinkCommand<mz_repr::Timestamp> {
@@ -205,13 +189,8 @@ impl Arbitrary for RunSinkCommand<mz_repr::Timestamp> {
         (
             any::<GlobalId>(),
             any::<StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>(),
-            any::<bool>(),
         )
-            .prop_map(|(id, description, update)| Self {
-                id,
-                description,
-                update,
-            })
+            .prop_map(|(id, description)| Self { id, description })
             .boxed()
     }
 }
@@ -548,22 +527,17 @@ where
                 // Similarly, we don't reset state here like compute, because,
                 // until we are required to manage multiple replicas, we can handle
                 // keeping track of state across restarts of storage server(s).
-                Ok(())
             }
             StorageCommand::RunIngestions(ingestions) => ingestions
                 .iter()
-                .try_for_each(|i| self.insert_new_uppers(i.description.subsource_ids(), i.update)),
-            StorageCommand::RunSinks(exports) => exports
-                .iter()
-                .try_for_each(|e| self.insert_new_uppers([e.id], e.update)),
+                .for_each(|i| self.insert_new_uppers(i.description.subsource_ids())),
+            StorageCommand::RunSinks(exports) => {
+                exports.iter().for_each(|e| self.insert_new_uppers([e.id]))
+            }
             StorageCommand::InitializationComplete
             | StorageCommand::UpdateConfiguration(_)
-            | StorageCommand::AllowCompaction(_) => {
-                // Other commands have no known impact on frontier tracking.
-                Ok(())
-            }
-        }
-        .map_err(|id| panic!("Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command));
+            | StorageCommand::AllowCompaction(_) => {}
+        };
     }
 
     /// Shared implementation for commands that install uppers with controllable behavior with
@@ -571,29 +545,19 @@ where
     ///
     /// If any ID was previously tracked in `self` and `skip_existing` is `false`, we return the ID
     /// as an error.
-    fn insert_new_uppers<I: IntoIterator<Item = GlobalId>>(
-        &mut self,
-        ids: I,
-        skip_existing: bool,
-    ) -> Result<(), GlobalId> {
+    fn insert_new_uppers<I: IntoIterator<Item = GlobalId>>(&mut self, ids: I) {
         for id in ids {
-            if self.uppers.contains_key(&id) && skip_existing {
-                continue;
-            }
+            self.uppers.entry(id).or_insert_with(|| {
+                let mut frontier = MutableAntichain::new();
+                // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
+                // merging the types that compute and storage use.
+                #[allow(clippy::as_conversions)]
+                frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
 
-            let mut frontier = MutableAntichain::new();
-            // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
-            // merging the types that compute and storage use.
-            #[allow(clippy::as_conversions)]
-            frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-            let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
-            let previous = self.uppers.insert(id, (frontier, part_frontiers));
-            if previous.is_some() {
-                return Err(id);
-            }
+                (frontier, part_frontiers)
+            });
         }
-
-        Ok(())
     }
 }
 
