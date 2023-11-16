@@ -172,7 +172,7 @@ SCENARIOS = [
             {ITERATIONS * REPEAT}
             """
         ),
-        clusterd_memory="3.6Gb",
+        clusterd_memory="5.1Gb",
     ),
     PgCdcScenario(
         name="pg-cdc-update",
