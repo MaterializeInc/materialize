@@ -30,10 +30,16 @@ def _resolve_ancestor_image_tag() -> tuple[str, str]:
         if buildkite.is_in_pull_request():
             # return the merge base
             common_ancestor_commit = buildkite.get_merge_base()
-            return (
-                _commit_to_image_tag(common_ancestor_commit),
-                "merge base of pull request",
-            )
+            if _image_of_commit_exists(common_ancestor_commit):
+                return (
+                    _commit_to_image_tag(common_ancestor_commit),
+                    "merge base of pull request",
+                )
+            else:
+                return (
+                    _version_to_image_tag(get_latest_published_version()),
+                    "latest release because image of merge base of pull request not available",
+                )
         elif git.is_on_release_version():
             # return the previous release
             tagged_release_version = git.get_tagged_release_version()
@@ -47,9 +53,8 @@ def _resolve_ancestor_image_tag() -> tuple[str, str]:
             )
         else:
             # return the latest release
-            latest_version = get_latest_published_version()
             return (
-                _version_to_image_tag(latest_version),
+                _version_to_image_tag(get_latest_published_version()),
                 "latest release because not in a pull request and not on a release branch",
             )
     else:
@@ -66,18 +71,23 @@ def _resolve_ancestor_image_tag() -> tuple[str, str]:
             )
         elif git.is_on_main_branch():
             # return the latest release
-            latest_version = get_latest_published_version()
             return (
-                _version_to_image_tag(latest_version),
+                _version_to_image_tag(get_latest_published_version()),
                 "latest release because on local main branch",
             )
         else:
             # return the merge base
             common_ancestor_commit = buildkite.get_merge_base()
-            return (
-                _commit_to_image_tag(common_ancestor_commit),
-                "merge base of local non-main branch",
-            )
+            if _image_of_commit_exists(common_ancestor_commit):
+                return (
+                    _commit_to_image_tag(common_ancestor_commit),
+                    "merge base of local non-main branch",
+                )
+            else:
+                return (
+                    _version_to_image_tag(get_latest_published_version()),
+                    "latest release because image of merge base of local non-main branch not available",
+                )
 
 
 def get_latest_published_version() -> Version:
@@ -115,6 +125,10 @@ def get_previous_published_version(release_version: MzVersion) -> Version:
 def _image_of_release_version_exists(version: Version) -> bool:
     assert isinstance(version, Version)
     return _mz_image_tag_exists(_version_to_image_tag(version))
+
+
+def _image_of_commit_exists(commit_hash: str) -> bool:
+    return _mz_image_tag_exists(_commit_to_image_tag(commit_hash))
 
 
 def _mz_image_tag_exists(image_tag: str) -> bool:
