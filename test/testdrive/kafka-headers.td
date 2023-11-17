@@ -256,5 +256,5 @@ message_2    message_2_header_1
 $ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${keyschema} schema=${schema} headers={"header1": [195, 40]}
 {"key": "message_1"} {"f1": "fishval", "f2": 1000}
 
-> SELECT key, header1 from ill_formed_header
-ERROR:  Source error: u3: Text: Found ill-formed byte sequence in header 'header1' that cannot decoded as valid utf-8 (original bytes: [c3, 28])
+! SELECT key, header1 from ill_formed_header
+Source error: u130: Text: Found ill-formed byte sequence in header 'header1' that cannot decoded as valid utf-8 (original bytes: [c3, 28])
