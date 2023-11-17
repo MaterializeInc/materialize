@@ -244,7 +244,7 @@ $ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${
   'testdrive-ill_formed_header-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE HEADERS, HEADER 'header1' AS 'header1'
+  INCLUDE HEADERS, HEADER 'header1' AS header1
   ENVELOPE UPSERT
 
 > SELECT key, header1 from ill_formed_header

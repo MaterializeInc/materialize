@@ -3627,7 +3627,7 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(INCLUDE) {
             self.parse_comma_separated(|parser| {
                 let metadata = match parser
-                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADER, HEADERS])?
+                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS, HEADER])?
                 {
                     KEY => SourceIncludeMetadata::Key {
                         alias: parser.parse_alias()?,

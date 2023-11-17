@@ -1170,7 +1170,7 @@ impl PartitionConsumer {
                     assert_eq!(ts.0, self.pid);
                     Ok(Some((msg, ts)))
                 }
-                Err(e) => Err(e),
+                Err(err) => Err(err),
             },
             Some(Err(err)) => Err(err),
             _ => Ok(None),
