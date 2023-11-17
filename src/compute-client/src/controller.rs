@@ -52,6 +52,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
+use tokio::sync::oneshot;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
 use uuid::Uuid;
@@ -616,6 +617,7 @@ where
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
         peek_target: PeekTarget,
+        result_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {
         self.instance(instance_id)?.peek(
             collection_id,
@@ -626,6 +628,7 @@ where
             map_filter_project,
             target_replica,
             peek_target,
+            result_tx,
         )?;
         Ok(())
     }
@@ -643,8 +646,9 @@ where
         &mut self,
         instance_id: ComputeInstanceId,
         uuid: Uuid,
+        reason: PeekResponse,
     ) -> Result<(), InstanceMissing> {
-        self.instance(instance_id)?.cancel_peek(uuid);
+        self.instance(instance_id)?.cancel_peek(uuid, reason);
         Ok(())
     }
 

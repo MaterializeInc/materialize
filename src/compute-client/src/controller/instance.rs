@@ -37,6 +37,7 @@ use serde::Serialize;
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::{Container, PartialOrder};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
@@ -932,7 +933,9 @@ where
         for response in peek_responses {
             self.compute.deliver_response(response);
         }
-        to_drop.into_iter().for_each(|uuid| self.remove_peek(uuid));
+        to_drop.into_iter().for_each(|uuid| {
+            self.remove_peek(&uuid);
+        });
 
         Ok(())
     }
@@ -1325,6 +1328,7 @@ where
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
         peek_target: PeekTarget,
+        result_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {
         let owned_since;
         let since = match &peek_target {
@@ -1372,6 +1376,7 @@ where
                 // TODO(guswynn): can we just hold the `tracing::Span` here instead?
                 otel_ctx: otel_ctx.clone(),
                 requested_at: Instant::now(),
+                result_tx,
             },
         );
 
@@ -1391,11 +1396,18 @@ where
     }
 
     /// Cancels an existing peek request.
-    pub fn cancel_peek(&mut self, uuid: Uuid) {
-        let Some(peek) = self.compute.peeks.get_mut(&uuid) else {
+    pub fn cancel_peek(&mut self, uuid: Uuid, reason: PeekResponse) {
+        let Some(peek) = self.remove_peek(&uuid) else {
             tracing::warn!("did not find pending peek for {uuid}");
             return;
         };
+
+        // Cancel messages can be sent after the connection has hung
+        // up, but before the connection's state has been cleaned up.
+        // So we ignore errors when sending the response.
+        let otel_ctx = peek.otel_ctx.clone();
+        otel_ctx.attach_as_parent();
+        let _ = peek.result_tx.send(reason);
 
         let response = PeekResponse::Canceled;
         let duration = peek.requested_at.elapsed();
@@ -1403,16 +1415,12 @@ where
             .metrics
             .observe_peek_response(&response, duration);
 
-        // Enqueue the response to the cancellation.
+        // Let the coordinator know. Maybe not needed anymore?
         let otel_ctx = peek.otel_ctx.clone();
         self.compute
             .deliver_response(ComputeControllerResponse::PeekResponse(
                 uuid, response, otel_ctx,
             ));
-
-        // Remove the peek.
-        // This will also propagate the cancellation to the replicas.
-        self.remove_peek(uuid);
     }
 
     /// Assigns a read policy to specific identifiers.
@@ -1709,16 +1717,17 @@ where
     ///    peek, and to allow the `ComputeCommandHistory` to reduce away the corresponding `Peek`
     ///    command.
     ///  * Remove the read hold for this peek, unblocking compaction that might have waited on it.
-    fn remove_peek(&mut self, uuid: Uuid) {
-        let Some(peek) = self.compute.peeks.remove(&uuid) else {
-            return;
+    fn remove_peek(&mut self, uuid: &Uuid) -> Option<PendingPeek<T>> {
+        let Some(peek) = self.compute.peeks.remove(uuid) else {
+            return None;
         };
 
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold,
         // to avoid the edge case that caused #16615.
-        self.compute.send(ComputeCommand::CancelPeek { uuid });
+        self.compute
+            .send(ComputeCommand::CancelPeek { uuid: uuid.clone() });
 
-        let update = (peek.target.id(), ChangeBatch::new_from(peek.time, -1));
+        let update = (peek.target.id(), ChangeBatch::new_from(peek.time.clone(), -1));
         let mut updates = [update].into();
         match &peek.target {
             PeekTarget::Index { .. } => self.update_read_capabilities(updates),
@@ -1726,6 +1735,8 @@ where
                 .storage_controller
                 .update_read_capabilities(&mut updates),
         }
+
+        Some(peek)
     }
 
     pub fn handle_response(
@@ -1814,7 +1825,13 @@ where
     ) -> Option<ComputeControllerResponse<T>> {
         // We might not be tracking this peek anymore, because we have served a response already or
         // because it was canceled. If this is the case, we ignore the response.
-        let peek = self.compute.peeks.get(&uuid)?;
+        let peek = self.remove_peek(&uuid)?;
+
+        otel_ctx.attach_as_parent();
+
+        // Peek cancellations are best effort, so we might still
+        // receive a response, even though the recipient is gone.
+        let _ = peek.result_tx.send(response.clone());
 
         // If the peek is targeting a replica, ignore responses from other replicas.
         let target_replica = peek.target_replica.unwrap_or(replica_id);
@@ -1826,8 +1843,6 @@ where
         self.compute
             .metrics
             .observe_peek_response(&response, duration);
-
-        self.remove_peek(uuid);
 
         // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
         // currently want the parent to be whatever the compute worker did with this peek.
@@ -2074,6 +2089,7 @@ struct PendingPeek<T> {
     ///
     /// Used to track peek durations.
     requested_at: Instant,
+    result_tx: oneshot::Sender<PeekResponse>,
 }
 
 #[derive(Debug, Clone)]

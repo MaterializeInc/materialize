@@ -41,7 +41,6 @@ use mz_repr::explain::{
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
@@ -52,7 +51,6 @@ use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
 
 #[derive(Debug)]
 pub(crate) struct PendingPeek {
-    pub(crate) sender: oneshot::Sender<PeekResponse>,
     pub(crate) conn_id: ConnectionId,
     pub(crate) cluster_id: ClusterId,
     /// All `GlobalId`s that the peek depend on.
@@ -602,7 +600,6 @@ impl crate::coord::Coordinator {
         self.pending_peeks.insert(
             uuid,
             PendingPeek {
-                sender: rows_tx,
                 conn_id: conn_id.clone(),
                 cluster_id: compute_instance,
                 depends_on: source_ids,
@@ -628,6 +625,7 @@ impl crate::coord::Coordinator {
                 map_filter_project,
                 target_replica,
                 peek_target,
+                rows_tx,
             )
             .unwrap_or_terminate("cannot fail to peek");
 
@@ -675,7 +673,7 @@ impl crate::coord::Coordinator {
                 // because the dataflow no longer exists.
                 // TODO(jkosh44) Dropping a cluster should actively cancel all pending queries.
                 for uuid in uuids {
-                    let _ = compute.cancel_peek(compute_instance, uuid);
+                    let _ = compute.cancel_peek(compute_instance, uuid, PeekResponse::Canceled);
                 }
             }
 
@@ -685,21 +683,20 @@ impl crate::coord::Coordinator {
                 .collect::<Vec<_>>();
             for peek in peeks {
                 self.retire_execution(StatementEndedExecutionReason::Canceled, peek.ctx_extra);
-                let _ = peek.sender.send(PeekResponse::Canceled);
             }
         }
     }
 
-    pub(crate) fn send_peek_response(
+    pub(crate) fn handle_peek_response(
         &mut self,
         uuid: Uuid,
         response: PeekResponse,
         otel_ctx: OpenTelemetryContext,
     ) {
-        // We expect exactly one peek response, which we forward. Then we clean up the
-        // peek's state in the coordinator.
+        // We expect exactly one peek response, which has already been returned
+        // to the client through other channels. Then we clean up the peek's
+        // state in the coordinator.
         if let Some(PendingPeek {
-            sender: rows_tx,
             conn_id: _,
             cluster_id: _,
             depends_on: _,
@@ -724,11 +721,8 @@ impl crate::coord::Coordinator {
                 }
                 PeekResponse::Canceled => StatementEndedExecutionReason::Canceled,
             };
-            self.retire_execution(reason, ctx_extra);
             otel_ctx.attach_as_parent();
-            // Peek cancellations are best effort, so we might still
-            // receive a response, even though the recipient is gone.
-            let _ = rows_tx.send(response);
+            self.retire_execution(reason, ctx_extra);
         }
         // Cancellation may cause us to receive responses for peeks no
         // longer in `self.pending_peeks`, so we quietly ignore them.

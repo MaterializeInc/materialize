@@ -370,7 +370,7 @@ impl Coordinator {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
             ControllerResponse::PeekResponse(uuid, response, otel_ctx) => {
-                self.send_peek_response(uuid, response, otel_ctx);
+                self.handle_peek_response(uuid, response, otel_ctx);
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
                 match self.active_compute_sinks.get_mut(&sink_id) {
