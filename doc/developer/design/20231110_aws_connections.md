@@ -80,7 +80,7 @@ Users should then be able to add a trust policy in their AWS account to give acc
 
 ## Implementation
 We already have some [existing code](https://github.com/MaterializeInc/materialize/blob/v0.77.1/src/storage-types/src/connections/aws.rs), which can be re-used to
-handle the AssumeRole scenario as well.
+handle the AssumeRole scenario.
 
 In the parser we already support `ROLE ARN` option which can be renamed to `ASSUME ROLE ARN`
 to better reflect the usage. We will need to add an `ASSUME ROLE SESSION NAME` option as well.
@@ -108,7 +108,7 @@ External ID and then stored in the new `mz_aws_connections` table for that conne
 
 For principal, we'll create one global role which all environmentd/clusterd-s can assume.
 This will add some good restrictions on who could assume the customers role and also
-allows for migration between environment clusters.
+allow for migration between environment clusters.
 
 Note: There's a hard limit of 1 hour on the session duration when [Role chaining in AWS](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html).
 This can be revisited for workarounds if we hit this issue.
@@ -120,10 +120,9 @@ secure enough since any user/role in this account can assume the customer's role
 to [Snowflake](https://docs.snowflake.com/en/user-guide/data-load-s3-config-storage-integration#step-4-retrieve-the-aws-iam-user-for-your-snowflake-account).
 This could work if we keep them in a secret and rotate regularly, this would give
 each customer a unique principal. But we'd have to rotate very frequently and we may also
-need to coordinate that role across all users of the credentials which sounds hard.
+need to coordinate that role across all users of the credentials which seems like a lot of overhead.
 3. An IAM role `arn:aws:iam::<account_id>:role/<id>` we create for each customer environment. This
-will not scale, there's a maximum limit of [5000 roles]
-(https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html#reference_iam-quotas-entities)
+will not scale, there's a maximum limit of [5000 roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html#reference_iam-quotas-entities)
 we can create per account.
 
 #### `VALIDATE CONNECTION`
@@ -155,7 +154,7 @@ a validate connection will not be comprehensive and we'll probably do some addit
 with the intended resources when we actually make use of this connection.
 
 Hence, potentially later we can extend `VALIDATE CONNECTION` sql to optionally specify an S3 or a database url,
-like, `VALIDATE CONNECTION aws_conn WITH (S3 PATH = 's3://prefix')` so the user can correctly
+like, `VALIDATE CONNECTION aws_conn WITH (S3 PATH = 's3://prefix')` so the user can
 validate if the policies are set up correctly on their end in AWS.
 
 Alternatively, we could have a higher level S3 connection using this AWS connection,something
