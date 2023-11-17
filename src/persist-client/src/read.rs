@@ -424,8 +424,8 @@ where
     /// This is broken out into its own function to provide a trivial means for
     /// [`Subscribe`], which contains a [`Listen`], to fetch batches.
     async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
-        let (part, fetched_part) = fetch_leased_part(
-            part,
+        let fetched_part = fetch_leased_part(
+            &part,
             self.handle.blob.as_ref(),
             Arc::clone(&self.handle.metrics),
             &self.handle.metrics.read.listen,
@@ -1027,8 +1027,8 @@ where
         let mut last_consolidate_len = 0;
         let mut is_consolidated = true;
         for part in snap {
-            let (part, fetched_part) = fetch_leased_part(
-                part,
+            let fetched_part = fetch_leased_part(
+                &part,
                 self.blob.as_ref(),
                 Arc::clone(&self.metrics),
                 &self.metrics.read.snapshot,
@@ -1158,8 +1158,8 @@ where
         let mut lease_returner = self.lease_returner.clone();
         let stream = async_stream::stream! {
             for part in snap {
-                let (part, mut fetched_part) = fetch_leased_part(
-                    part,
+                let mut fetched_part = fetch_leased_part(
+                    &part,
                     blob.as_ref(),
                     Arc::clone(&metrics),
                     &snapshot_metrics,
@@ -1497,7 +1497,7 @@ mod tests {
             let last_seqno = this_seqno.replace(part_seqno);
             assert!(last_seqno.is_none() || this_seqno >= last_seqno);
 
-            let (part, _) = fetcher.fetch_leased_part(part).await;
+            let _ = fetcher.fetch_leased_part(&part).await;
 
             // Emulating drop
             subscribe.return_leased_part(part);
