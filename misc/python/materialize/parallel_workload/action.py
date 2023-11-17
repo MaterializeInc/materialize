@@ -68,7 +68,7 @@ class Action:
         self.rng = rng
         self.composition = composition
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         raise NotImplementedError
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
@@ -122,7 +122,7 @@ class FetchAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         # See https://github.com/MaterializeInc/materialize/issues/20474
         exe.rollback() if self.rng.choice([True, False]) else exe.commit()
@@ -137,6 +137,7 @@ class FetchAction(Action):
             if self.rng.choice([True, False]):
                 break
         exe.rollback() if self.rng.choice([True, False]) else exe.commit()
+        return True
 
 
 class SelectAction(Action):
@@ -156,7 +157,7 @@ class SelectAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         obj = self.rng.choice(exe.db.db_objects())
         column = self.rng.choice(obj.columns)
         obj2 = self.rng.choice(exe.db.db_objects_without_views())
@@ -204,6 +205,7 @@ class SelectAction(Action):
 
         exe.execute(query, explainable=True)
         exe.cur.fetchall()
+        return True
 
 
 class SQLsmithAction(Action):
@@ -233,47 +235,47 @@ class SQLsmithAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         if exe.db.fast_startup:
-            return
+            return False
 
         if not self.queries:
-            with exe.db.lock:
-                self.composition.silent = True
+            self.composition.silent = True
+            try:
+                result = self.composition.run(
+                    "sqlsmith",
+                    "--max-joins=0",
+                    "--target=host=materialized port=6875 dbname=materialize user=materialize",
+                    "--read-state",
+                    "--dry-run",
+                    "--max-queries=100",
+                    stdin=exe.db.sqlsmith_state,
+                    capture=True,
+                    capture_stderr=True,
+                    rm=True,
+                )
                 try:
-                    result = self.composition.run(
-                        "sqlsmith",
-                        "--max-joins=0",
-                        "--target=host=materialized port=6875 dbname=materialize user=materialize",
-                        "--read-state",
-                        "--dry-run",
-                        "--max-queries=100",
-                        stdin=exe.db.sqlsmith_state,
-                        capture=True,
-                        capture_stderr=True,
-                        rm=True,
-                    )
-                    try:
-                        data = json.loads(result.stdout)
-                    except:
-                        print(f"Loading json failed: {result.stdout}")
-                        raise
-                    self.queries.extend(data["queries"])
+                    data = json.loads(result.stdout)
                 except:
-                    if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
-                        raise
-                    else:
-                        return
-                finally:
-                    self.composition.silent = False
+                    print(f"Loading json failed: {result.stdout}")
+                    raise
+                self.queries.extend(data["queries"])
+            except:
+                if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
+                    raise
+                else:
+                    return False
+            finally:
+                self.composition.silent = False
 
         query = self.queries.pop()
         exe.execute(query, explainable=True)
         exe.cur.fetchall()
+        return True
 
 
 class InsertAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         table = None
         if exe.insert_table != None:
             for t in exe.db.tables:
@@ -290,7 +292,7 @@ class InsertAction(Action):
         if not table:
             tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
             if not tables:
-                return
+                return False
             table = self.rng.choice(tables)
 
         column_names = ", ".join(column.name(True) for column in table.columns)
@@ -305,10 +307,11 @@ class InsertAction(Action):
         exe.execute(query)
         table.num_rows += len(column_values)
         exe.insert_table = table.table_id
+        return True
 
 
 class SourceInsertAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             sources = [
                 source
@@ -316,9 +319,12 @@ class SourceInsertAction(Action):
                 if source.num_rows < MAX_ROWS
             ]
             if not sources:
-                return
+                return False
             source = self.rng.choice(sources)
         with source.lock:
+            if source not in [*exe.db.kafka_sources, *exe.db.postgres_sources]:
+                return False
+
             transaction = next(source.generator)
             for row_list in transaction.row_lists:
                 for row in row_list.rows:
@@ -327,6 +333,7 @@ class SourceInsertAction(Action):
                     elif row.operation == Operation.DELETE:
                         source.num_rows -= 1
             source.executor.run(transaction)
+        return True
 
 
 class UpdateAction(Action):
@@ -335,7 +342,7 @@ class UpdateAction(Action):
             "canceling statement due to statement timeout",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         table = None
         if exe.insert_table != None:
             for t in exe.db.tables:
@@ -354,6 +361,7 @@ class UpdateAction(Action):
             query += f"{column1.name(True)} = {column1.value(self.rng, True)}"
         exe.execute(query)
         exe.insert_table = table.table_id
+        return True
 
 
 class DeleteAction(Action):
@@ -362,7 +370,7 @@ class DeleteAction(Action):
             "canceling statement due to statement timeout",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         table = self.rng.choice(exe.db.tables)
         query = f"DELETE FROM {table}"
         if self.rng.random() < 0.95:
@@ -379,10 +387,11 @@ class DeleteAction(Action):
         exe.commit()
         result = exe.cur.rowcount
         table.num_rows -= result
+        return True
 
 
 class CommentAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         table = self.rng.choice(exe.db.tables)
 
         if self.rng.choice([True, False]):
@@ -392,6 +401,7 @@ class CommentAction(Action):
             query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng)}'"
 
         exe.execute(query)
+        return True
 
 
 class CreateIndexAction(Action):
@@ -400,9 +410,9 @@ class CreateIndexAction(Action):
             "already exists",  # TODO: Investigate
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         if len(exe.db.indexes) >= MAX_INDEXES:
-            return
+            return False
 
         obj = self.rng.choice(exe.db.db_objects())
         columns = self.rng.sample(obj.columns, len(obj.columns))
@@ -418,36 +428,37 @@ class CreateIndexAction(Action):
         exe.execute(query)
         with exe.db.lock:
             exe.db.indexes.add(index_name)
+        return True
 
 
 class DropIndexAction(Action):
-    def run(self, exe: Executor) -> None:
-        with exe.db.lock:
-            if not exe.db.indexes:
-                return
-            index_name = self.rng.choice(list(exe.db.indexes))
-            query = f"DROP INDEX {identifier(index_name)}"
-            try:
-                exe.execute(query)
-            except QueryError as e:
-                # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or (
-                    "unknown catalog item" not in e.msg
-                    and "unknown schema" not in e.msg
-                ):
-                    raise e
-            exe.db.indexes.remove(index_name)
+    def run(self, exe: Executor) -> bool:
+        if not exe.db.indexes:
+            return False
+        index_name = self.rng.choice(list(exe.db.indexes))
+        query = f"DROP INDEX {identifier(index_name)}"
+        try:
+            exe.execute(query)
+        except QueryError as e:
+            # expected, see #20465
+            if exe.db.scenario != Scenario.Kill or (
+                "unknown catalog item" not in e.msg and "unknown schema" not in e.msg
+            ):
+                raise e
+        exe.db.indexes.remove(index_name)
+        return True
 
 
 class CreateTableAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         if len(exe.db.tables) >= MAX_TABLES:
-            return
+            return False
         table_id = exe.db.table_id
         exe.db.table_id += 1
         table = Table(self.rng, table_id, self.rng.choice(exe.db.schemas))
         table.create(exe)
         exe.db.tables.append(table)
+        return True
 
 
 class DropTableAction(Action):
@@ -456,11 +467,16 @@ class DropTableAction(Action):
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.tables) <= 2:
-                return
+                return False
             table = self.rng.choice(exe.db.tables)
+        with table.lock:
+            # Was dropped while we were acquiring lock
+            if table not in exe.db.tables:
+                return False
+
             query = f"DROP TABLE {table}"
             try:
                 exe.execute(query)
@@ -472,16 +488,18 @@ class DropTableAction(Action):
                 ):
                     raise e
             exe.db.tables.remove(table)
+        return True
 
 
 class RenameTableAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
-            return
+            return False
         with exe.db.lock:
             if not exe.db.tables:
-                return
+                return False
             table = self.rng.choice(exe.db.tables)
+        with table.lock:
             old_name = str(table)
             table.rename += 1
             try:
@@ -491,16 +509,21 @@ class RenameTableAction(Action):
             except:
                 table.rename -= 1
                 raise
+        return True
 
 
 class RenameViewAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
-            return
+            return False
         with exe.db.lock:
             if not exe.db.views:
-                return
+                return False
             view = self.rng.choice(exe.db.views)
+        with view.lock:
+            if view not in exe.db.views:
+                return False
+
             old_name = str(view)
             view.rename += 1
             try:
@@ -510,16 +533,21 @@ class RenameViewAction(Action):
             except:
                 view.rename -= 1
                 raise
+        return True
 
 
 class RenameSinkAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
-            return
+            return False
         with exe.db.lock:
             if not exe.db.kafka_sinks:
-                return
+                return False
             sink = self.rng.choice(exe.db.kafka_sinks)
+        with sink.lock:
+            if sink not in exe.db.kafka_sinks:
+                return False
+
             old_name = str(sink)
             sink.rename += 1
             try:
@@ -529,18 +557,20 @@ class RenameSinkAction(Action):
             except:
                 sink.rename -= 1
                 raise
+        return True
 
 
 class CreateDatabaseAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.dbs) >= MAX_DBS:
-                return
+                return False
             db_id = exe.db.db_id
             exe.db.db_id += 1
         db = DB(exe.db.seed, db_id)
         db.create(exe)
         exe.db.dbs.append(db)
+        return True
 
 
 class DropDatabaseAction(Action):
@@ -549,27 +579,33 @@ class DropDatabaseAction(Action):
             "cannot be dropped with RESTRICT while it contains schemas",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.dbs) <= 1:
-                return
-            db_id = self.rng.randrange(len(exe.db.dbs))
-            db = exe.db.dbs[db_id]
+                return False
+            db = self.rng.choice(exe.db.dbs)
+        with db.lock:
+            # Was dropped while we were acquiring lock
+            if db not in exe.db.dbs:
+                return False
+
             query = f"DROP DATABASE {db} RESTRICT"
             exe.execute(query)
-            del exe.db.dbs[db_id]
+            exe.db.dbs.remove(db)
+        return True
 
 
 class CreateSchemaAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.schemas) >= MAX_SCHEMAS:
-                return
+                return False
             schema_id = exe.db.schema_id
             exe.db.schema_id += 1
-            schema = Schema(self.rng.choice(exe.db.dbs), schema_id)
-            schema.create(exe)
-            exe.db.schemas.append(schema)
+        schema = Schema(self.rng.choice(exe.db.dbs), schema_id)
+        schema.create(exe)
+        exe.db.schemas.append(schema)
+        return True
 
 
 class DropSchemaAction(Action):
@@ -578,12 +614,16 @@ class DropSchemaAction(Action):
             "cannot be dropped without CASCADE while it contains objects",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.schemas) <= 1:
-                return
-            schema_id = self.rng.randrange(len(exe.db.schemas))
-            schema = exe.db.schemas[schema_id]
+                return False
+            schema = self.rng.choice(exe.db.schemas)
+        with schema.lock:
+            # Was dropped while we were acquiring lock
+            if schema not in exe.db.schemas:
+                return False
+
             query = f"DROP SCHEMA {schema}"
             try:
                 exe.execute(query)
@@ -591,7 +631,8 @@ class DropSchemaAction(Action):
                 # expected, see #20465
                 if exe.db.scenario != Scenario.Kill or "unknown schema" not in e.msg:
                     raise e
-            del exe.db.schemas[schema_id]
+            exe.db.schemas.remove(schema)
+        return True
 
 
 class RenameSchemaAction(Action):
@@ -600,11 +641,14 @@ class RenameSchemaAction(Action):
             "ambiguous reference to schema named"  # see https://github.com/MaterializeInc/materialize/pull/22551#pullrequestreview-1691876923
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
-            return
+            return False
         with exe.db.lock:
             schema = self.rng.choice(exe.db.schemas)
+        with schema.lock:
+            if schema not in exe.db.schemas:
+                return False
             old_name = str(schema)
             schema.rename += 1
             try:
@@ -614,6 +658,7 @@ class RenameSchemaAction(Action):
             except:
                 schema.rename -= 1
                 raise
+        return True
 
 
 class SwapSchemaAction(Action):
@@ -622,17 +667,22 @@ class SwapSchemaAction(Action):
             "object state changed while transaction was in progress",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
-            return
+            return False
         with exe.db.lock:
             db = self.rng.choice(exe.db.dbs)
             schemas = [
                 schema for schema in exe.db.schemas if schema.db.db_id == db.db_id
             ]
             if len(schemas) < 2:
-                return
+                return False
             schema1, schema2 = self.rng.sample(schemas, 2)
+        with schema1.lock, schema2.lock:
+            if schema1 not in exe.db.schemas:
+                return False
+            if schema2 not in exe.db.schemas:
+                return False
             if self.rng.choice([True, False]):
                 exe.execute(
                     f"ALTER SCHEMA {schema1} SWAP WITH {identifier(schema2.name())}"
@@ -652,27 +702,30 @@ class SwapSchemaAction(Action):
                     exe.cur._c.autocommit = True
             schema1.schema_id, schema2.schema_id = schema2.schema_id, schema1.schema_id
             schema1.rename, schema2.rename = schema2.rename, schema1.rename
+        return True
 
 
 class TransactionIsolationAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         level = self.rng.choice(["SERIALIZABLE", "STRICT SERIALIZABLE"])
         exe.set_isolation(level)
+        return True
 
 
 class CommitRollbackAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         if self.rng.random() < 0.7:
             exe.commit()
         else:
             exe.rollback()
+        return True
 
 
 class CreateViewAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
-                return
+                return False
             view_id = exe.db.view_id
             exe.db.view_id += 1
         # Don't use views for now since LIMIT 1 and statement_timeout are
@@ -692,6 +745,7 @@ class CreateViewAction(Action):
         )
         view.create(exe)
         exe.db.views.append(view)
+        return True
 
 
 class DropViewAction(Action):
@@ -700,12 +754,16 @@ class DropViewAction(Action):
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.views:
-                return
-            view_id = self.rng.randrange(len(exe.db.views))
-            view = exe.db.views[view_id]
+                return False
+            view = self.rng.choice(exe.db.views)
+        with view.lock:
+            # Was dropped while we were acquiring lock
+            if view not in exe.db.views:
+                return False
+
             if view.materialized:
                 query = f"DROP MATERIALIZED VIEW {view}"
             else:
@@ -719,19 +777,21 @@ class DropViewAction(Action):
                     and "unknown schema" not in e.msg
                 ):
                     raise e
-            del exe.db.views[view_id]
+            exe.db.views.remove(view)
+        return True
 
 
 class CreateRoleAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.roles) >= MAX_ROLES:
-                return
+                return False
             role_id = exe.db.role_id
             exe.db.role_id += 1
         role = Role(role_id)
         role.create(exe)
         exe.db.roles.append(role)
+        return True
 
 
 class DropRoleAction(Action):
@@ -741,11 +801,16 @@ class DropRoleAction(Action):
             "current role cannot be dropped",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.roles:
-                return
+                return False
             role = self.rng.choice(exe.db.roles)
+        with role.lock:
+            # Was dropped while we were acquiring lock
+            if role not in exe.db.roles:
+                return False
+
             query = f"DROP ROLE {role}"
             try:
                 exe.execute(query)
@@ -754,13 +819,14 @@ class DropRoleAction(Action):
                 if exe.db.scenario != Scenario.Kill or "unknown role" not in e.msg:
                     raise e
             exe.db.roles.remove(role)
+        return True
 
 
 class CreateClusterAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.clusters) >= MAX_CLUSTERS:
-                return
+                return False
             cluster_id = exe.db.cluster_id
             exe.db.cluster_id += 1
         cluster = Cluster(
@@ -772,6 +838,7 @@ class CreateClusterAction(Action):
         )
         cluster.create(exe)
         exe.db.clusters.append(cluster)
+        return True
 
 
 class DropClusterAction(Action):
@@ -781,13 +848,18 @@ class DropClusterAction(Action):
             "because other objects depend on it",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.clusters) <= 1:
-                return
+                return False
             # Keep cluster 0 with 1 replica for sources/sinks
-            cluster_id = self.rng.randrange(1, len(exe.db.clusters))
-            cluster = exe.db.clusters[cluster_id]
+            self.rng.randrange(1, len(exe.db.clusters))
+            cluster = self.rng.choice(exe.db.clusters)
+        with cluster.lock:
+            # Was dropped while we were acquiring lock
+            if cluster not in exe.db.clusters:
+                return False
+
             query = f"DROP CLUSTER {cluster}"
             try:
                 exe.execute(query)
@@ -795,7 +867,8 @@ class DropClusterAction(Action):
                 # expected, see #20465
                 if exe.db.scenario != Scenario.Kill or "unknown cluster" not in e.msg:
                     raise e
-            del exe.db.clusters[cluster_id]
+            exe.db.clusters.remove(cluster)
+        return True
 
 
 class SwapClusterAction(Action):
@@ -804,13 +877,19 @@ class SwapClusterAction(Action):
             "object state changed while transaction was in progress",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
-            return
+            return False
         with exe.db.lock:
             if len(exe.db.clusters) < 2:
-                return
+                return False
             cluster1, cluster2 = self.rng.sample(exe.db.clusters, 2)
+        with cluster1.lock, cluster2.lock:
+            if cluster1 not in exe.db.clusters:
+                return False
+            if cluster2 not in exe.db.clusters:
+                return False
+
             if self.rng.choice([True, False]):
                 exe.execute(
                     f"ALTER CLUSTER {cluster1} SWAP WITH {identifier(cluster2.name())}"
@@ -833,6 +912,7 @@ class SwapClusterAction(Action):
                 cluster1.cluster_id,
             )
             cluster1.rename, cluster2.rename = cluster2.rename, cluster1.rename
+        return True
 
 
 class SetClusterAction(Action):
@@ -841,60 +921,68 @@ class SetClusterAction(Action):
             "SET cluster cannot be called in an active transaction",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.clusters:
-                return
+                return False
             cluster = self.rng.choice(exe.db.clusters)
         query = f"SET CLUSTER = {cluster}"
         exe.execute(query)
+        return True
 
 
 class CreateClusterReplicaAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = [
             "cannot create more than one replica of a cluster containing sources or sinks",
-            # Can happen with reduced locking
-            "cannot create multiple replicas named",
         ] + super().errors_to_ignore(exe)
 
         return result
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
             unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
             if not unmanaged_clusters:
-                return
+                return False
             cluster = self.rng.choice(unmanaged_clusters)
             if len(cluster.replicas) >= MAX_CLUSTER_REPLICAS:
-                return
+                return False
+            cluster.replica_id += 1
+        with cluster.lock:
+            if cluster not in exe.db.clusters or not cluster.managed:
+                return False
+
             replica = ClusterReplica(
                 cluster.replica_id,
-                size=self.rng.choice(["1", "2", "4"]),
+                size=self.rng.choice(["1", "2"]),
                 cluster=cluster,
             )
-            cluster.replica_id += 1
-            try:
-                replica.create(exe)
-                cluster.replicas.append(replica)
-            except:
-                cluster.replica_id -= 1
-                raise
+            replica.create(exe)
+            cluster.replicas.append(replica)
+            return True
 
 
 class DropClusterReplicaAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
             unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
             if not unmanaged_clusters:
-                return
+                return False
             cluster = self.rng.choice(unmanaged_clusters)
             # Avoid "has no replicas available to service request" error
             if len(cluster.replicas) <= 1:
-                return
+                return False
             replica = self.rng.choice(cluster.replicas)
+        with replica.lock:
+            # Was dropped while we were acquiring lock
+            if replica not in cluster.replicas:
+                return False
+            # Avoid "has no replicas available to service request" error
+            if len(cluster.replicas) <= 1:
+                return False
+
             query = f"DROP CLUSTER REPLICA {cluster}.{replica}"
             try:
                 exe.execute(query)
@@ -906,32 +994,47 @@ class DropClusterReplicaAction(Action):
                 ):
                     raise e
             cluster.replicas.remove(replica)
+        return True
 
 
 class GrantPrivilegesAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.roles:
-                return
+                return False
             role = self.rng.choice(exe.db.roles)
             privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
             tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
             table = self.rng.choice(tables_views)
+        with table.lock, role.lock:
+            if table not in [*exe.db.tables, *exe.db.views]:
+                return False
+            if role not in exe.db.roles:
+                return False
+
             query = f"GRANT {privilege} ON {table} TO {role}"
             exe.execute(query)
+        return True
 
 
 class RevokePrivilegesAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.roles:
-                return
+                return False
             role = self.rng.choice(exe.db.roles)
             privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
             tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
             table = self.rng.choice(tables_views)
+        with table.lock, role.lock:
+            if table not in [*exe.db.tables, *exe.db.views]:
+                return False
+            if role not in exe.db.roles:
+                return False
+
             query = f"REVOKE {privilege} ON {table} FROM {role}"
             exe.execute(query)
+        return True
 
 
 # TODO: Should factor this out so can easily use it without action
@@ -945,7 +1048,7 @@ class ReconnectAction(Action):
         super().__init__(rng, composition)
         self.random_role = random_role
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         autocommit = exe.cur._c.autocommit
         host = exe.db.host
         port = exe.db.ports["materialized"]
@@ -956,8 +1059,8 @@ class ReconnectAction(Action):
                 )
             else:
                 user = "materialize"
+            conn = exe.cur._c
 
-        conn = exe.cur._c
         try:
             exe.cur.close()
         except:
@@ -990,6 +1093,7 @@ class ReconnectAction(Action):
                 raise QueryError(str(e), "connect")
             else:
                 break
+        return True
 
 
 class CancelAction(Action):
@@ -1009,7 +1113,7 @@ class CancelAction(Action):
         super().__init__(rng, composition)
         self.workers = workers
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         pid = self.rng.choice(
             [worker.exe.pg_pid for worker in self.workers if worker.exe and worker.exe.pg_pid != -1]  # type: ignore
         )
@@ -1025,6 +1129,7 @@ class CancelAction(Action):
         )
         # Sleep less often to work around #22228 / #2392
         time.sleep(self.rng.uniform(1, 10))
+        return True
 
 
 class KillAction(Action):
@@ -1035,13 +1140,14 @@ class KillAction(Action):
     ):
         super().__init__(rng, composition)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         assert self.composition
         self.composition.kill("materialized")
         # Otherwise getting failure on "up" locally
         time.sleep(1)
         self.composition.up("materialized", detach=True)
         time.sleep(self.rng.uniform(120, 240))
+        return True
 
 
 # TODO: Don't restore immediately, keep copy Database objects
@@ -1058,12 +1164,11 @@ class BackupRestoreAction(Action):
         self.num = 0
         assert self.composition
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         self.num += 1
         time.sleep(self.rng.uniform(10, 240))
-        self.db.lock.acquire()
 
-        try:
+        with self.db.lock:
             # Backup
             self.composition.exec("mc", "mc", "mb", f"persist/crdb-backup{self.num}")
             self.composition.exec(
@@ -1102,9 +1207,7 @@ class BackupRestoreAction(Action):
                 "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
             )
             self.composition.up("materialized")
-
-        finally:
-            self.db.lock.release()
+        return True
 
 
 class CreateWebhookSourceAction(Action):
@@ -1116,18 +1219,25 @@ class CreateWebhookSourceAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.webhook_sources) >= MAX_WEBHOOK_SOURCES:
-                return
+                return False
             webhook_source_id = exe.db.webhook_source_id
             exe.db.webhook_source_id += 1
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
             cluster = self.rng.choice(potential_clusters)
             schema = self.rng.choice(exe.db.schemas)
+        with schema.lock, cluster.lock:
+            if schema not in exe.db.schemas:
+                return False
+            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+                return False
+
             source = WebhookSource(webhook_source_id, cluster, schema, self.rng)
             source.create(exe)
             exe.db.webhook_sources.append(source)
+        return True
 
 
 class DropWebhookSourceAction(Action):
@@ -1136,12 +1246,16 @@ class DropWebhookSourceAction(Action):
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.webhook_sources:
-                return
-            source_id = self.rng.randrange(len(exe.db.webhook_sources))
-            source = exe.db.webhook_sources[source_id]
+                return False
+            source = self.rng.choice(exe.db.webhook_sources)
+        with source.lock:
+            # Was dropped while we were acquiring lock
+            if source not in exe.db.webhook_sources:
+                return False
+
             query = f"DROP SOURCE {source}"
             try:
                 exe.execute(query)
@@ -1152,7 +1266,8 @@ class DropWebhookSourceAction(Action):
                     and "unknown schema" not in e.msg
                 ):
                     raise e
-            del exe.db.webhook_sources[source_id]
+            exe.db.webhook_sources.remove(source)
+        return True
 
 
 class CreateKafkaSourceAction(Action):
@@ -1164,15 +1279,21 @@ class CreateKafkaSourceAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.kafka_sources) >= MAX_KAFKA_SOURCES:
-                return
+                return False
             source_id = exe.db.kafka_source_id
             exe.db.kafka_source_id += 1
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
             cluster = self.rng.choice(potential_clusters)
             schema = self.rng.choice(exe.db.schemas)
+        with schema.lock, cluster.lock:
+            if schema not in exe.db.schemas:
+                return False
+            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+                return False
+
             try:
                 source = KafkaSource(
                     source_id,
@@ -1186,6 +1307,7 @@ class CreateKafkaSourceAction(Action):
             except:
                 if exe.db.scenario != Scenario.Kill:
                     raise
+        return True
 
 
 class DropKafkaSourceAction(Action):
@@ -1194,12 +1316,16 @@ class DropKafkaSourceAction(Action):
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.kafka_sources:
-                return
-            source_id = self.rng.randrange(len(exe.db.kafka_sources))
-            source = exe.db.kafka_sources[source_id]
+                return False
+            source = self.rng.choice(exe.db.kafka_sources)
+        with source.lock:
+            # Was dropped while we were acquiring lock
+            if source not in exe.db.kafka_sources:
+                return False
+
             query = f"DROP SOURCE {source}"
             try:
                 exe.execute(query)
@@ -1210,7 +1336,8 @@ class DropKafkaSourceAction(Action):
                     and "unknown schema" not in e.msg
                 ):
                     raise e
-            del exe.db.kafka_sources[source_id]
+            exe.db.kafka_sources.remove(source)
+        return True
 
 
 class CreatePostgresSourceAction(Action):
@@ -1222,19 +1349,25 @@ class CreatePostgresSourceAction(Action):
             )
         return result
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         # TODO: Reenable when #22770 is fixed
         if exe.db.scenario == Scenario.BackupRestore:
-            return
+            return False
 
         with exe.db.lock:
             if len(exe.db.postgres_sources) >= MAX_POSTGRES_SOURCES:
-                return
+                return False
             source_id = exe.db.postgres_source_id
             exe.db.postgres_source_id += 1
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
             schema = self.rng.choice(exe.db.schemas)
             cluster = self.rng.choice(potential_clusters)
+        with schema.lock, cluster.lock:
+            if schema not in exe.db.schemas:
+                return False
+            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+                return False
+
             try:
                 source = PostgresSource(
                     source_id,
@@ -1248,6 +1381,7 @@ class CreatePostgresSourceAction(Action):
             except:
                 if exe.db.scenario != Scenario.Kill:
                     raise
+        return True
 
 
 class DropPostgresSourceAction(Action):
@@ -1256,12 +1390,16 @@ class DropPostgresSourceAction(Action):
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.postgres_sources:
-                return
-            source_id = self.rng.randrange(len(exe.db.postgres_sources))
-            source = exe.db.postgres_sources[source_id]
+                return False
+            source = self.rng.choice(exe.db.postgres_sources)
+        with source.lock:
+            # Was dropped while we were acquiring lock
+            if source not in exe.db.postgres_sources:
+                return False
+
             query = f"DROP SOURCE {source.executor.source}"
             try:
                 exe.execute(query)
@@ -1272,7 +1410,8 @@ class DropPostgresSourceAction(Action):
                     and "unknown schema" not in e.msg
                 ):
                     raise e
-            del exe.db.postgres_sources[source_id]
+            exe.db.postgres_sources.remove(source)
+        return True
 
 
 class CreateKafkaSinkAction(Action):
@@ -1282,15 +1421,21 @@ class CreateKafkaSinkAction(Action):
             "cannot create sink in cluster with more than one replica",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.kafka_sinks) >= MAX_KAFKA_SINKS:
-                return
+                return False
             sink_id = exe.db.kafka_sink_id
             exe.db.kafka_sink_id += 1
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
             cluster = self.rng.choice(potential_clusters)
             schema = self.rng.choice(exe.db.schemas)
+        with schema.lock, cluster.lock:
+            if schema not in exe.db.schemas:
+                return False
+            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
+                return False
+
             sink = KafkaSink(
                 sink_id,
                 cluster,
@@ -1300,6 +1445,7 @@ class CreateKafkaSinkAction(Action):
             )
             sink.create(exe)
             exe.db.kafka_sinks.append(sink)
+        return True
 
 
 class DropKafkaSinkAction(Action):
@@ -1308,12 +1454,16 @@ class DropKafkaSinkAction(Action):
             "still depended upon by",
         ] + super().errors_to_ignore(exe)
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.kafka_sinks:
-                return
-            sink_id = self.rng.randrange(len(exe.db.kafka_sinks))
-            sink = exe.db.kafka_sinks[sink_id]
+                return False
+            sink = self.rng.choice(exe.db.kafka_sinks)
+        with sink.lock:
+            # Was dropped while we were acquiring lock
+            if sink not in exe.db.kafka_sinks:
+                return False
+
             query = f"DROP SINK {sink}"
             try:
                 exe.execute(query)
@@ -1324,7 +1474,8 @@ class DropKafkaSinkAction(Action):
                     and "unknown schema" not in e.msg
                 ):
                     raise e
-            del exe.db.kafka_sinks[sink_id]
+            exe.db.kafka_sinks.remove(sink)
+        return True
 
 
 class HttpPostAction(Action):
@@ -1334,10 +1485,10 @@ class HttpPostAction(Action):
             result.extend(["404: no object was found at the path"])
         return result
 
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if not exe.db.webhook_sources:
-                return
+                return False
 
             sources = [
                 source
@@ -1345,8 +1496,13 @@ class HttpPostAction(Action):
                 if source.num_rows < MAX_ROWS
             ]
             if not sources:
-                return
+                return False
             source = self.rng.choice(sources)
+        with source.lock:
+            # Was dropped while we were acquiring lock
+            if source not in exe.db.webhook_sources:
+                return False
+
             url = f"http://{exe.db.host}:{exe.db.ports['http']}/api/webhook/{urllib.parse.quote(source.schema.db.name(), safe='')}/{urllib.parse.quote(source.schema.name(), safe='')}/{urllib.parse.quote(source.name(), safe='')}"
 
             payload = source.body_format.to_data_type().random_value(self.rng)
@@ -1376,10 +1532,11 @@ class HttpPostAction(Action):
                 # Expected when Mz is killed
                 if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
                     raise
+        return True
 
 
 class StatisticsAction(Action):
-    def run(self, exe: Executor) -> None:
+    def run(self, exe: Executor) -> bool:
         for typ, objs in [
             ("tables", exe.db.tables),
             ("views", exe.db.views),
@@ -1393,6 +1550,7 @@ class StatisticsAction(Action):
                 counts.append(str(exe.cur.fetchall()[0][0]))
             print(f"{typ}: {' '.join(counts)}")
             time.sleep(10)
+        return True
 
 
 class ActionList:
