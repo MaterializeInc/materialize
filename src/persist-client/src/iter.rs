@@ -9,7 +9,7 @@
 
 //! Code for iterating through one or more parts, including streaming consolidation.
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -78,7 +78,6 @@ pub(crate) enum FetchData<T> {
     },
     AlreadyFetched,
 }
-
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     fn maybe_unconsolidated(&self) -> bool {
         let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
@@ -112,18 +111,17 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                 part_key,
                 part_desc,
                 ..
-            } => {
-                fetch_batch_part(
-                    &shard_id,
-                    &*blob,
-                    &metrics,
-                    &shard_metrics,
-                    read_metrics(&metrics.read),
-                    &part_key,
-                    &part_desc,
-                )
-                .await
-            }
+            } => fetch_batch_part(
+                &shard_id,
+                &*blob,
+                &metrics,
+                &shard_metrics,
+                read_metrics(&metrics.read),
+                &part_key,
+                &part_desc,
+            )
+            .await
+            .map_err(|blob_key| anyhow!("missing unleased key {blob_key}")),
             FetchData::Leased {
                 blob,
                 read_metrics,
@@ -142,13 +140,12 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                     &part.key,
                     &part.desc,
                 )
-                .await;
+                .await
+                .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"));
                 lease_returner.return_leased_part(part);
                 fetched
             }
-            FetchData::AlreadyFetched => {
-                bail!("Fetched already-fetched part!")
-            }
+            FetchData::AlreadyFetched => Err(anyhow!("attempt to fetch an already-fetched part")),
         }
     }
 }
@@ -432,7 +429,10 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         self.metrics.consolidation.parts_fetched.inc();
                         let maybe_unconsolidated = data.maybe_unconsolidated();
                         *part = ConsolidationPart::from_encoded(
-                            data.take().fetch().await?,
+                            data.take()
+                                .fetch()
+                                .await
+                                .ok_or_else(anyhow!("unexpectedly missing part"))?,
                             &self.filter,
                             maybe_unconsolidated,
                         );
@@ -449,7 +449,9 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         }
                         self.metrics.consolidation.parts_fetched.inc();
                         *part = ConsolidationPart::from_encoded(
-                            handle.await??,
+                            handle
+                                .await?
+                                .ok_or_else(anyhow!("unexpectedly missing part"))?,
                             &self.filter,
                             *maybe_unconsolidated,
                         );

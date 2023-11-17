@@ -220,7 +220,7 @@ where
         &part.desc,
     )
     .await
-    .unwrap_or_else(|err| {
+    .unwrap_or_else(|blob_key| {
         // Ideally, readers should never encounter a missing blob. They place a seqno
         // hold as they consume their snapshot/listen, preventing any blobs they need
         // from being deleted by garbage collection, and all blob implementations are
@@ -234,7 +234,7 @@ where
             reader_id
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "batch fetcher".to_string()),
-            err
+            blob_key
         )
     });
     let fetched_part = FetchedPart {
@@ -262,29 +262,21 @@ pub(crate) async fn fetch_batch_part<T>(
     read_metrics: &ReadMetrics,
     key: &PartialBatchKey,
     registered_desc: &Description<T>,
-) -> Result<EncodedPart<T>, anyhow::Error>
+) -> Result<EncodedPart<T>, BlobKey>
 where
     T: Timestamp + Lattice + Codec64,
 {
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
+    let blob_key = key.complete(shard_id);
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
         shard_metrics.blob_gets.inc();
-        blob.get(&key.complete(shard_id)).await
+        blob.get(&blob_key).await
     })
     .instrument(get_span.clone())
-    .await;
+    .await
+    .ok_or(blob_key)?;
 
-    let value = match value {
-        Some(v) => v,
-        None => {
-            return Err(anyhow!(
-                "unexpected missing blob: {} for shard: {}",
-                key,
-                shard_id
-            ))
-        }
-    };
     drop(get_span);
 
     read_metrics.part_count.inc();

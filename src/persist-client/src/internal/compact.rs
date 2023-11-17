@@ -40,6 +40,7 @@ use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::metrics::ShardMetrics;
+use crate::internal::paths::BlobKey;
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::Consolidator;
