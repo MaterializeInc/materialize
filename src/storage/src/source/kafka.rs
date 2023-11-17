@@ -492,7 +492,7 @@ impl SourceRender for KafkaSourceConnection {
                     if !PartialOrder::less_equal(data_cap.time(), &future_ts) {
                         let prev_pid_count = prev_pid_info.map(|info| info.len()).unwrap_or(0);
                         let pid_count = partitions.len();
-                        let err: SourceReaderError = SourceReaderError::other_definite(anyhow!(
+                        let err = SourceReaderError::other_definite(anyhow!(
                             "topic was recreated: partition \
                                      count regressed from {prev_pid_count} to {pid_count}"
                         ));
@@ -1075,7 +1075,7 @@ fn construct_source_message(
                                             Ok(str) => Ok(Datum::String(str)),
                                             Err(_) => Err(DecodeError {
                                                 kind: DecodeErrorKind::Text(format!(
-                                                    "Found ill-formed byte sequence in header '{}' that cannot decoded as valid utf-8",
+                                                    "Found ill-formed byte sequence in header '{}' that cannot be decoded as valid utf-8",
                                                     key
                                                 )),
                                                 raw: v.to_vec(),
