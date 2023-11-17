@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use mz_sql::session::user::SYSTEM_USER;
-use tracing::{debug, error};
+use tracing::{error, info};
 
 use crate::config::SynchronizedParameters;
 use crate::{AdapterError, Client, SessionClient};
@@ -40,7 +40,7 @@ impl SystemParameterBackend {
             vars.insert(param.name.clone(), param.value.clone());
             match self.session_client.set_system_vars(vars).await {
                 Ok(()) => {
-                    debug!(name = param.name, value = param.value, "sync parameter");
+                    info!(name = param.name, value = param.value, "sync parameter");
                 }
                 Err(error) => {
                     error!(
