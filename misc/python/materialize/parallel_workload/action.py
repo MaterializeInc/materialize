@@ -143,12 +143,11 @@ class FetchAction(Action):
 class SelectAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.complexity in (Complexity.DML, Complexity.DDL):
-            result.extend(
-                [
-                    "in the same timedomain",
-                ]
-            )
+        result.extend(
+            [
+                "in the same timedomain",
+            ]
+        )
         if exe.db.complexity == Complexity.DDL:
             result.extend(
                 [
@@ -220,13 +219,11 @@ class SQLsmithAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
         result.extend(known_errors)
-
-        if exe.db.complexity in (Complexity.DML, Complexity.DDL):
-            result.extend(
-                [
-                    "in the same timedomain",
-                ]
-            )
+        result.extend(
+            [
+                "in the same timedomain",
+            ]
+        )
         if exe.db.complexity == Complexity.DDL:
             result.extend(
                 [

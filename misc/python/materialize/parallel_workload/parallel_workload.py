@@ -59,8 +59,8 @@ def run(
     ports: dict[str, int],
     seed: str,
     runtime: int,
-    complexity: Complexity,
-    scenario: Scenario,
+    complexity_str: str,
+    scenario_str: str,
     num_threads: int | None,
     naughty_identifiers: bool,
     fast_startup: bool,
@@ -68,6 +68,19 @@ def run(
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
     random.seed(seed)
+
+    rng = random.Random(random.randrange(SEED_RANGE))
+
+    complexity = (
+        Complexity(rng.choice([elem.value for elem in Complexity]))
+        if complexity_str == "random"
+        else Complexity(complexity_str)
+    )
+    scenario = (
+        Scenario(rng.choice([elem.value for elem in Scenario]))
+        if scenario_str == "random"
+        else Scenario(scenario_str)
+    )
 
     print(
         f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} {'--fast-startup' if fast_startup else ''}(--host={host})"
@@ -78,7 +91,6 @@ def run(
         datetime.datetime.now() + datetime.timedelta(seconds=runtime)
     ).timestamp()
 
-    rng = random.Random(random.randrange(SEED_RANGE))
     database = Database(
         rng, seed, host, ports, complexity, scenario, naughty_identifiers, fast_startup
     )
@@ -361,13 +373,13 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         "--complexity",
         default="ddl",
         type=str,
-        choices=[elem.value for elem in Complexity],
+        choices=[elem.value for elem in Complexity] + ["random"],
     )
     parser.add_argument(
         "--scenario",
         default="regression",
         type=str,
-        choices=[elem.value for elem in Scenario],
+        choices=[elem.value for elem in Scenario] + ["random"],
     )
     parser.add_argument(
         "--threads",
@@ -428,8 +440,8 @@ def main() -> int:
         ports,
         args.seed,
         args.runtime,
-        Complexity(args.complexity),
-        Scenario(args.scenario),
+        args.complexity,
+        args.scenario,
         args.threads,
         args.naughty_identifiers,
         args.fast_startup,

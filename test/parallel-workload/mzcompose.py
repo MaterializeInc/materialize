@@ -18,7 +18,7 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
-from materialize.parallel_workload.settings import Complexity, Scenario
+from materialize.parallel_workload.settings import Scenario
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -101,8 +101,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ports,
             args.seed,
             args.runtime,
-            Complexity(args.complexity),
-            Scenario(args.scenario),
+            args.complexity,
+            args.scenario,
             args.threads,
             args.naughty_identifiers,
             args.fast_startup,
