@@ -1179,7 +1179,7 @@ mod tests {
                 )
                 .await;
             for batch in snap {
-                let (batch, res) = fetcher1.fetch_leased_part(batch).await;
+                let res = fetcher1.fetch_leased_part(&batch).await;
                 read0.process_returned_leased_part(batch);
                 assert_eq!(
                     res.unwrap_err(),

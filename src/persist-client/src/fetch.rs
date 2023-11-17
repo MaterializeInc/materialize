@@ -76,24 +76,18 @@ where
     /// returned value.
     pub async fn fetch_leased_part(
         &self,
-        part: LeasedBatchPart<T>,
-    ) -> (
-        LeasedBatchPart<T>,
-        Result<FetchedPart<K, V, T, D>, InvalidUsage<T>>,
-    ) {
+        part: &LeasedBatchPart<T>,
+    ) -> Result<FetchedPart<K, V, T, D>, InvalidUsage<T>> {
         if &part.shard_id != &self.shard_id {
             let batch_shard = part.shard_id.clone();
-            return (
-                part,
-                Err(InvalidUsage::BatchNotFromThisShard {
-                    batch_shard,
-                    handle_shard: self.shard_id.clone(),
-                }),
-            );
+            return Err(InvalidUsage::BatchNotFromThisShard {
+                batch_shard,
+                handle_shard: self.shard_id.clone(),
+            });
         }
 
-        let (part, fetched_part) = fetch_leased_part(
-            part,
+        let fetched_part = fetch_leased_part(
+            &part,
             self.blob.as_ref(),
             Arc::clone(&self.metrics),
             &self.metrics.read.batch_fetcher,
@@ -102,7 +96,7 @@ where
             self.schemas.clone(),
         )
         .await;
-        (part, Ok(fetched_part))
+        Ok(fetched_part)
     }
 }
 
@@ -181,14 +175,14 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
 /// Note to check the `LeasedBatchPart` documentation for how to handle the
 /// returned value.
 pub(crate) async fn fetch_leased_part<K, V, T, D>(
-    part: LeasedBatchPart<T>,
+    part: &LeasedBatchPart<T>,
     blob: &(dyn Blob + Send + Sync),
     metrics: Arc<Metrics>,
     read_metrics: &ReadMetrics,
     shard_metrics: &ShardMetrics,
     reader_id: Option<&LeasedReaderId>,
     schemas: Schemas<K, V>,
-) -> (LeasedBatchPart<T>, FetchedPart<K, V, T, D>)
+) -> FetchedPart<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -238,7 +232,7 @@ where
         _phantom: PhantomData,
     };
 
-    (part, fetched_part)
+    fetched_part
 }
 
 pub(crate) async fn fetch_batch_part<T>(
