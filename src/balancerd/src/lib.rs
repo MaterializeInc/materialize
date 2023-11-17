@@ -661,7 +661,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 
 #[derive(Debug)]
 pub enum Resolver {
-    Static(SocketAddr),
+    Static(String),
     Frontegg(FronteggResolver),
 }
 
@@ -710,10 +710,18 @@ impl Resolver {
                     password: Some(password),
                 })
             }
-            Resolver::Static(addr) => Ok(ResolvedAddr {
-                addr: addr.clone(),
-                password: None,
-            }),
+            Resolver::Static(addr) => {
+                let mut addrs = tokio::net::lookup_host(&addr)
+                    .await
+                    .unwrap_or_else(|_| panic!("could not resolve {addr}"));
+                let Some(addr) = addrs.next() else {
+                    panic!("{addr} did not resolve to any addresses");
+                };
+                Ok(ResolvedAddr {
+                    addr,
+                    password: None,
+                })
+            }
         }
     }
 }

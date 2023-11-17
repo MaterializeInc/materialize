@@ -88,12 +88,17 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
             })
         }
         (Some(addr), None) => {
+            // As a typo-check, verify that the passed address resolves to at least one IP. This
+            // result isn't recorded anywhere: we re-resolve on each request in case DNS changes.
+            // Here only to cause startup to crash if mis-typed.
             let mut addrs = tokio::net::lookup_host(&addr)
                 .await
                 .unwrap_or_else(|_| panic!("could not resolve {addr}"));
-            let Some(addr) = addrs.next() else {
+            let Some(_resolved) = addrs.next() else {
                 panic!("{addr} did not resolve to any addresses");
             };
+            drop(addrs);
+
             Resolver::Static(addr)
         }
         _ => anyhow::bail!(
