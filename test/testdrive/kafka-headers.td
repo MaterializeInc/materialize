@@ -257,4 +257,4 @@ $ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${
 {"key": "message_1"} {"f1": "fishval", "f2": 1000}
 
 ! SELECT key, header1 from ill_formed_header
-Source error: u130: Text: Found ill-formed byte sequence in header 'header1' that cannot decoded as valid utf-8 (original bytes: [c3, 28])
+contains:Found ill-formed byte sequence in header 'header1' that cannot be decoded as valid utf-8 (original bytes: [c3, 28])
