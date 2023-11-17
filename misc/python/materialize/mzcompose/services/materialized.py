@@ -181,7 +181,8 @@ class Materialized(Service):
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
 
         if sanity_restart:
-            config.setdefault("labels", []).append("sanity_restart")
+            # Workaround for https://bytemeta.vip/repo/docker/compose/issues/11133
+            config["labels"] = {"sanity_restart": True}
 
         volumes = []
         if use_default_volumes:
