@@ -218,7 +218,7 @@ impl Default for ClusterReplicaSizeMap {
 ///
 /// In the case of AWS PrivateLink connections, Materialize will connect to the
 /// VPC endpoint as the AWS Principal generated via this context.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AwsPrincipalContext {
     pub aws_account_id: String,
     pub aws_external_id_prefix: AwsExternalIdPrefix,

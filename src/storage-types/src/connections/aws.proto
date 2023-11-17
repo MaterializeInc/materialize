@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (currently does not require backward-compatibility)
+
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
@@ -17,9 +19,11 @@ import "storage-types/src/connections.proto";
 package mz_storage_types.connections.aws;
 
 message ProtoAwsConfig {
-    ProtoAwsCredentials credentials = 1;
+    oneof auth {
+        ProtoAwsCredentials credentials = 1;
+        ProtoAwsAssumeRole assume_role = 3;
+    }
     optional string region = 2;
-    ProtoAwsAssumeRole role = 3;
     optional string endpoint = 4;
 }
 
@@ -29,6 +33,13 @@ message ProtoAwsCredentials {
     optional mz_storage_types.connections.ProtoStringOrSecret session_token = 3;
 }
 
+message ProtoMaterializePrincipal {
+    string arn = 1;
+    string external_id_prefix = 2;
+}
+
 message ProtoAwsAssumeRole {
     string arn = 1;
+    optional string session_name = 2;
+    ProtoMaterializePrincipal mz_principal = 3;
 }

@@ -296,6 +296,14 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Returns the set of supported AWS PrivateLink availability zone ids.
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
 
+    /// Returns the Materialize role for assuming customer's role
+    /// for AWS Connection.
+    fn aws_external_connection_role(&self) -> Option<String>;
+
+    /// Returns the External ID prefix to be used when using AWS connection
+    /// to connect to customer's AWS account.
+    fn aws_external_id_prefix(&self) -> Option<String>;
+
     /// Returns system vars
     fn system_vars(&self) -> &SystemVars;
 
@@ -1186,6 +1194,8 @@ pub enum CatalogError {
     ConfigAlreadyExists(String),
     /// Builtin migrations failed.
     FailedBuiltinSchemaMigration(String),
+    /// Catalog state missing information
+    MissingState(String),
 }
 
 impl fmt::Display for CatalogError {
@@ -1231,6 +1241,7 @@ impl fmt::Display for CatalogError {
             Self::IdAllocatorAlreadyExists(name) => write!(f, "ID allocator '{name}' already exists"),
             Self::ConfigAlreadyExists(key) => write!(f, "config '{key}' already exists"),
             Self::FailedBuiltinSchemaMigration(objects) => write!(f, "failed to migrate schema of builtin objects: {objects}"),
+            Self::MissingState(name) => write!(f, "{name}' not found in catalog")
         }
     }
 }

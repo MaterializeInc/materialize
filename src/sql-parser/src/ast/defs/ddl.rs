@@ -669,6 +669,8 @@ impl_display_t!(DbzTxMetadataOption);
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ConnectionOptionName {
     AccessKeyId,
+    AssumeRoleArn,
+    AssumeRoleSessionName,
     AvailabilityZones,
     AwsPrivatelink,
     Broker,
@@ -680,7 +682,6 @@ pub enum ConnectionOptionName {
     Port,
     ProgressTopic,
     Region,
-    RoleArn,
     SaslMechanisms,
     SaslPassword,
     SaslUsername,
@@ -712,7 +713,8 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::Port => "PORT",
             ConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",
             ConnectionOptionName::Region => "REGION",
-            ConnectionOptionName::RoleArn => "ROLE ARN",
+            ConnectionOptionName::AssumeRoleArn => "ASSUME ROLE ARN",
+            ConnectionOptionName::AssumeRoleSessionName => "ASSUME ROLE SESSION NAME",
             ConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
             ConnectionOptionName::SaslPassword => "SASL PASSWORD",
             ConnectionOptionName::SaslUsername => "SASL USERNAME",

@@ -164,6 +164,24 @@ pub enum PlanError {
         option_name: String,
         err: Box<PlanError>,
     },
+    MissingRequiredOptions {
+        // Expected to be generated from the `to_string` value on the option
+        // name.
+        option_names: Vec<String>,
+        // Type of the item getting created, for eg: Connection type
+        item_type: CatalogItemType,
+        // Optional sub type of the item getting created, for eg. AWS Connection type
+        item_sub_type: Option<String>,
+    },
+    ConflictingOptions {
+        // Expected to be generated from the `to_string` value on the option
+        // name.
+        option_names: Vec<String>,
+        // Type of the item getting created, for eg: Connection type
+        item_type: CatalogItemType,
+        // Optional sub type of the item getting created, for eg. AWS Connection type
+        item_sub_type: Option<String>,
+    },
     UnexpectedDuplicateReference {
         name: UnresolvedItemName,
     },
@@ -598,6 +616,22 @@ impl fmt::Display for PlanError {
             }
             Self::MissingName(item_type) => {
                 write!(f, "unspecified name for {item_type}")
+            }
+            Self::MissingRequiredOptions { option_names, item_type, item_sub_type } => {
+                if let Some(sub_type) = item_sub_type {
+                    write!(f, "Options [{}] are required for {} {}", option_names.join(", "), sub_type, item_type)
+
+                } else {
+                    write!(f, "Options [{}] are required for {}", option_names.join(" ,"), item_type)
+                }
+            }
+            Self::ConflictingOptions { option_names, item_type, item_sub_type } => {
+                if let Some(sub_type) = item_sub_type {
+                    write!(f, "Only one of [{}] can be provided for {} {}", option_names.join(", or "), sub_type, item_type )
+
+                } else {
+                    write!(f, "Only one of [{}] can be provided for {}", option_names.join(" , or "), item_type)
+                }
             }
         }
     }

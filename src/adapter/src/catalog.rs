@@ -4299,6 +4299,20 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.aws_privatelink_availability_zones.clone()
     }
 
+    fn aws_external_connection_role(&self) -> Option<String> {
+        self.state
+            .aws_principal_context
+            .as_ref()
+            .and_then(|aws| aws.aws_external_connection_role.clone())
+    }
+
+    fn aws_external_id_prefix(&self) -> Option<String> {
+        self.state
+            .aws_principal_context
+            .as_ref()
+            .map(|aws| aws.aws_external_id_prefix.to_string())
+    }
+
     fn system_vars(&self) -> &SystemVars {
         &self.state.system_configuration
     }

@@ -13,10 +13,11 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::builtin::{
-    MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
-    MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_METRICS,
-    MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS,
-    MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS,
+    MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
+    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_LINKS,
+    MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES,
+    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS, MZ_DATABASES,
+    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS,
     MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES,
     MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
     MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS,
@@ -46,8 +47,9 @@ use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogTyp
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_storage_types::connections::aws::{AwsAuth, AwsConfig};
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::connections::KafkaConnection;
+use mz_storage_types::connections::{KafkaConnection, StringOrSecret};
 use mz_storage_types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection,
@@ -642,6 +644,9 @@ impl CatalogState {
             mz_storage_types::connections::Connection::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
             }
+            mz_storage_types::connections::Connection::Aws(ref aws_config) => {
+                updates.extend(self.pack_aws_connection_update(id, aws_config, diff));
+            }
             mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
                 if let Some(aws_principal_context) = self.aws_principal_context.as_ref() {
                     updates.extend(self.pack_aws_privatelink_connection_update(
@@ -654,8 +659,7 @@ impl CatalogState {
                 }
             }
             mz_storage_types::connections::Connection::Csr(_)
-            | mz_storage_types::connections::Connection::Postgres(_)
-            | mz_storage_types::connections::Connection::Aws(_) => (),
+            | mz_storage_types::connections::Connection::Postgres(_) => (),
         };
         updates
     }
@@ -720,6 +724,73 @@ impl CatalogState {
             Datum::String(&connection_id.to_string()),
             Datum::String(&aws_principal_context.to_principal_string(connection_id)),
         ]);
+        Ok(BuiltinTableUpdate { id, row, diff })
+    }
+
+    pub fn pack_aws_connection_update(
+        &self,
+        connection_id: GlobalId,
+        aws_config: &AwsConfig,
+        diff: Diff,
+    ) -> Result<BuiltinTableUpdate, Error> {
+        let id = self.resolve_builtin_table(&MZ_AWS_CONNECTIONS);
+
+        let mut access_key_id: Option<&str> = None;
+        let mut access_key_id_secret_id = None;
+        let mut assume_role_arn: Option<&str> = None;
+        let mut assume_role_session_name: Option<&str> = None;
+        let mut principal: Option<&str> = None;
+        let mut external_id = None;
+        let mut example_trust_policy = None;
+
+        match &aws_config.auth {
+            AwsAuth::Credentials(credentials) => match &credentials.access_key_id {
+                StringOrSecret::String(access_key) => access_key_id = Some(access_key),
+                StringOrSecret::Secret(secret_id) => {
+                    access_key_id_secret_id = Some(secret_id.to_string())
+                }
+            },
+            AwsAuth::AssumeRole(assume_role) => {
+                assume_role_arn = Some(&assume_role.arn);
+                assume_role_session_name = assume_role.session_name.as_deref();
+                principal = Some(&assume_role.mz_principal.arn);
+                external_id = Some(
+                    assume_role
+                        .mz_principal
+                        .get_external_id(connection_id.to_string()),
+                );
+                example_trust_policy = Some(
+                    Jsonb::from_serde_json(
+                        assume_role
+                            .mz_principal
+                            .get_aws_example_trust_policy(connection_id.to_string()),
+                    )
+                    .expect("valid json expected"),
+                );
+            }
+        }
+        let mut row = Row::default();
+        let mut row_packer = row.packer();
+        row_packer.push(Datum::String(&connection_id.to_string()));
+        row_packer.push(Datum::from(
+            aws_config.endpoint.as_ref().map(String::as_str),
+        ));
+        row_packer.push(Datum::from(aws_config.region.as_ref().map(String::as_str)));
+        row_packer.push(Datum::from(access_key_id));
+        row_packer.push(Datum::from(
+            access_key_id_secret_id.as_ref().map(String::as_str),
+        ));
+        row_packer.push(Datum::from(assume_role_arn));
+        row_packer.push(Datum::from(assume_role_session_name));
+        row_packer.push(Datum::from(principal));
+        row_packer.push(Datum::from(external_id.as_ref().map(String::as_str)));
+
+        if let Some(policy) = example_trust_policy {
+            row_packer.push(policy.into_row().into_element())
+        } else {
+            row_packer.push(Datum::Null)
+        }
+
         Ok(BuiltinTableUpdate { id, row, diff })
     }
 
