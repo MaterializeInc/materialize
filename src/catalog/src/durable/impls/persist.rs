@@ -664,7 +664,9 @@ impl DurableCatalogState for PersistCatalogState {
         &mut self,
         txn_batch: TransactionBatch,
     ) -> Result<(), CatalogError> {
-        if self.is_read_only() {
+        // If the transaction is empty then we don't error, even in read-only mode. This matches the
+        // semantics that the stash uses.
+        if !txn_batch.is_empty() && self.is_read_only() {
             return Err(DurableCatalogError::NotWritable(
                 "cannot commit a transaction in a read-only catalog".to_string(),
             )
@@ -709,6 +711,11 @@ impl DurableCatalogState for PersistCatalogState {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError> {
+        // Read only catalog does not care about leadership.
+        if self.is_read_only() {
+            return Ok(());
+        }
+
         let upper = self.current_upper().await;
         if upper == self.upper {
             Ok(())

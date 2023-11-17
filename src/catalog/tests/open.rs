@@ -83,6 +83,7 @@ use mz_catalog::durable::{
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
 use mz_repr::role_id::RoleId;
+use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_stash::DebugStashFactory;
 use uuid::Uuid;
 
@@ -427,22 +428,22 @@ async fn test_open_read_only(
     }
 
     // Initialize the stash.
-    {
-        let mut state = Box::new(openable_state2)
-            .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
-            .await
-            .unwrap();
-        assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
-        Box::new(state).expire().await;
-    }
+    let mut state = Box::new(openable_state2)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+    assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
 
-    let mut state = Box::new(openable_state3)
+    let mut read_only_state = Box::new(openable_state3)
         .open_read_only(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     // Read-only catalogs do not increment the epoch.
-    assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
-    let err = state.allocate_user_id().await.unwrap_err();
+    assert_eq!(
+        read_only_state.epoch(),
+        Epoch::new(2).expect("known to be non-zero")
+    );
+    let err = read_only_state.allocate_user_id().await.unwrap_err();
     match err {
         CatalogError::Catalog(_) => panic!("unexpected catalog error"),
         CatalogError::Durable(e) => assert!(
@@ -453,6 +454,28 @@ async fn test_open_read_only(
                     .contains("cannot execute UPDATE in a read-only transaction")
         ),
     }
+
+    // Read-only catalog should survive writes from a write-able catalog.
+    let mut txn = state.transaction().await.unwrap();
+    let _role_id = txn
+        .insert_user_role(
+            "joe".to_string(),
+            RoleAttributes::new(),
+            RoleMembership::new(),
+            RoleVars::default(),
+        )
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    // TODO(jkosh44) We should assert that the read only catalog can see the new role
+    // However, read-only persist catalogs do not update themselves with new values.
+    // let snapshot = read_only_state.snapshot().await.unwrap();
+    // let role = snapshot.roles.get(&RoleKey {
+    //     id: Some(role_id.into_proto()),
+    // });
+    // assert_eq!(&role.unwrap().name, "joe");
+
+    Box::new(read_only_state).expire().await;
     Box::new(state).expire().await;
 }
 
