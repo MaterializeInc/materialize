@@ -26,7 +26,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(
         auto_create_topics=False,
-        port="30123:30123",
+        ports=["30123:30123"],
         allow_host_ports=True,
         environment_extra=[
             "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
@@ -77,7 +77,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """CREATE CONNECTION IF NOT EXISTS kafka_conn
-               FOR KAFKA BROKER 'kafka:9092'"""
+               FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"""
         )
         cur.execute(
             """CREATE CONNECTION IF NOT EXISTS csr_conn

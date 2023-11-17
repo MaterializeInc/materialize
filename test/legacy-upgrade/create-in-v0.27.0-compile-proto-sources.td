@@ -32,8 +32,14 @@ $ kafka-ingest topic=upgrade-proto-source-${arg.upgrade-from-version} format=pro
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}';
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
+    BROKER '${testdrive.kafka-addr}',
+    SECURITY PROTOCOL PLAINTEXT
+  )
+
+>[version<7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
+    BROKER '${testdrive.kafka-addr}'
+  )
 
 > CREATE SOURCE kafka_proto_source
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upgrade-proto-source-${arg.upgrade-from-version}-${testdrive.seed}')

@@ -11,6 +11,7 @@ import random
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.table_capabilities import TableExists
@@ -27,7 +28,7 @@ class CreateTableParameterized(ActionFactory):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning}
+        return {BalancerdIsRunning, MzIsRunning}
 
     def new(self, capabilities: Capabilities) -> list[Action]:
         new_table_name = capabilities.get_free_capability_name(
@@ -51,6 +52,10 @@ class CreateTableParameterized(ActionFactory):
 
 class CreateTable(Action):
     """Creates a table on the Mz instance. 50% of the tables have a default index."""
+
+    @classmethod
+    def requires(cls) -> set[type[Capability]]:
+        return {BalancerdIsRunning, MzIsRunning}
 
     def __init__(self, table: TableExists, capabilities: Capabilities) -> None:
         assert (
@@ -84,7 +89,7 @@ class ValidateTable(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, TableExists}
+        return {BalancerdIsRunning, MzIsRunning, TableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.table = random.choice(capabilities.get(TableExists))
@@ -122,7 +127,7 @@ class DML(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, TableExists}
+        return {BalancerdIsRunning, MzIsRunning, TableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.table = random.choice(capabilities.get(TableExists))

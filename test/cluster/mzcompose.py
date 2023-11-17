@@ -46,8 +46,13 @@ SERVICES = [
     Clusterd(name="clusterd2"),
     Clusterd(name="clusterd3"),
     Clusterd(name="clusterd4"),
-    # We use mz_panic() in some test scenarios, so environmentd must stay up.
-    Materialized(propagate_crashes=False, external_cockroach=True),
+    Materialized(
+        # We use mz_panic() in some test scenarios, so environmentd must stay up.
+        propagate_crashes=False,
+        external_cockroach=True,
+        # Kills make the shadow catalog not work properly
+        catalog_store="stash",
+    ),
     Redpanda(),
     Toxiproxy(),
     Testdrive(
@@ -2806,3 +2811,35 @@ def workflow_test_index_source_stuck(
         c.up("clusterd1")
         c.up("clusterd2")
         c.run("testdrive", "index-source-stuck/run.td")
+
+
+def workflow_test_github_cloud_7998(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Regression test for MaterializeInc/cloud#7998."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(name="clusterd1"),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+
+        c.run("testdrive", "github-cloud-7998/setup.td")
+
+        # Make the compute cluster unavailable.
+        c.kill("clusterd1")
+        c.run("testdrive", "github-cloud-7998/check.td")
+
+        # Trigger an environment bootstrap.
+        c.kill("materialized")
+        c.up("materialized")
+        c.run("testdrive", "github-cloud-7998/check.td")
+
+        # Run a second bootstrap check, just to be sure.
+        c.kill("materialized")
+        c.up("materialized")
+        c.run("testdrive", "github-cloud-7998/check.td")

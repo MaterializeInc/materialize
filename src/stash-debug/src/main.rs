@@ -81,16 +81,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::pin;
 use std::process;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
+use futures::StreamExt;
 use once_cell::sync::Lazy;
 use tracing_subscriber::filter::EnvFilter;
 
-use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
+use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, StateConfig};
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::durable::{
     self as catalog, BootstrapArgs, OpenableDurableCatalogState, StashConfig,
@@ -99,7 +102,7 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_secrets::InMemorySecretsController;
+use mz_ore::retry::Retry;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
@@ -492,55 +495,70 @@ impl Usage {
             anyhow::bail!("upgrade_check expected Catalog stash, found {:?}", self);
         }
 
-        let metrics_registry = &MetricsRegistry::new();
-        let now = SYSTEM_TIME.clone();
-        let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
-            stash_config,
-        ));
-        let storage = openable_storage
-            .open_savepoint(
-                now(),
-                &BootstrapArgs {
-                    default_cluster_replica_size: "1".into(),
-                    bootstrap_role: None,
+        let retry = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .into_retry_stream();
+        let mut retry = pin::pin!(retry);
+
+        loop {
+            let now = SYSTEM_TIME.clone();
+            let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
+                stash_config.clone(),
+            ));
+            let mut storage = openable_storage
+                .open_savepoint(
+                    now(),
+                    &BootstrapArgs {
+                        default_cluster_replica_size: "1".into(),
+                        bootstrap_role: None,
+                    },
+                    None,
+                )
+                .await?;
+
+            match Catalog::initialize_state(
+                StateConfig {
+                    unsafe_mode: true,
+                    all_features: false,
+                    build_info: &BUILD_INFO,
+                    environment_id: EnvironmentId::for_tests(),
+                    now,
+                    skip_migrations: false,
+                    cluster_replica_sizes: cluster_replica_sizes.clone(),
+                    default_storage_cluster_size: None,
+                    builtin_cluster_replica_size: "1".into(),
+                    system_parameter_defaults: Default::default(),
+                    availability_zones: vec![],
+                    egress_ips: vec![],
+                    aws_principal_context: None,
+                    aws_privatelink_availability_zones: None,
+                    system_parameter_sync_config: None,
+                    http_host_name: None,
+                    connection_context: None,
+                    active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
                 },
-                None,
+                &mut storage,
             )
-            .await?;
-        let secrets_reader = Arc::new(InMemorySecretsController::new());
-
-        let (catalog, _, _, last_catalog_version) = Catalog::open(Config {
-            storage,
-            unsafe_mode: true,
-            all_features: false,
-            build_info: &BUILD_INFO,
-            environment_id: EnvironmentId::for_tests(),
-            now,
-            skip_migrations: false,
-            metrics_registry,
-            cluster_replica_sizes,
-            default_storage_cluster_size: None,
-            builtin_cluster_replica_size: "1".into(),
-            system_parameter_defaults: Default::default(),
-            availability_zones: vec![],
-            secrets_reader,
-            egress_ips: vec![],
-            aws_principal_context: None,
-            aws_privatelink_availability_zones: None,
-            system_parameter_sync_config: None,
-            storage_usage_retention_period: None,
-            http_host_name: None,
-            connection_context: None,
-            active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
-        })
-        .await?;
-        catalog.expire().await;
-
-        Ok(format!(
-            "catalog upgrade from {} to {} would succeed",
-            last_catalog_version,
-            BUILD_INFO.human_version(),
-        ))
+            .await
+            {
+                Ok((_, _, _, last_catalog_version)) => {
+                    storage.expire().await;
+                    return Ok(format!(
+                        "catalog upgrade from {} to {} would succeed",
+                        last_catalog_version,
+                        BUILD_INFO.human_version(),
+                    ));
+                }
+                Err(e) => {
+                    if retry.next().await.is_none() {
+                        tracing::error!(?e, "Could not open catalog, and out of retries.");
+                        return Err(e.into());
+                    }
+                    tracing::warn!(?e, "Could not open catalog. Retrying...");
+                }
+            }
+        }
     }
 }
 

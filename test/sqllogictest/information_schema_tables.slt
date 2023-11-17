@@ -225,6 +225,14 @@ mz_tables
 BASE TABLE
 materialize
 mz_catalog
+mz_timezone_abbreviations
+VIEW
+materialize
+mz_catalog
+mz_timezone_names
+VIEW
+materialize
+mz_catalog
 mz_types
 BASE TABLE
 materialize
@@ -495,6 +503,10 @@ materialize
 mz_internal
 mz_kafka_sources
 BASE TABLE
+materialize
+mz_internal
+mz_materialization_lag
+VIEW
 materialize
 mz_internal
 mz_message_batch_counts_received_raw
@@ -870,6 +882,14 @@ VIEW
 materialize
 pg_catalog
 pg_tablespace
+VIEW
+materialize
+pg_catalog
+pg_timezone_abbrevs
+VIEW
+materialize
+pg_catalog
+pg_timezone_names
 VIEW
 materialize
 pg_catalog

@@ -191,7 +191,7 @@ fn test_no_block() {
 
                 let result = client
                     .batch_execute(&format!(
-                        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}') WITH (VALIDATE = false)",
+                        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
                         &*KAFKA_ADDRS,
                     ))
                     .await;
@@ -262,7 +262,7 @@ fn test_drop_connection_race() {
             .unwrap();
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}') WITH (VALIDATE = false)",
+                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
                 &*KAFKA_ADDRS,
             ))
             .await
@@ -2905,11 +2905,15 @@ fn test_auto_run_on_introspection_feature_enabled() {
         .unwrap();
     assert_introspection_notice(true);
 
-    let _row = client
-        .query_one(
-            "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
-            &[],
-        )
+    // We add a retry here since it might take a moment to get a replica heartbeat.
+    let _row = Retry::default()
+        .max_tries(5)
+        .retry(|_state| {
+            client.query_one(
+                "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
+                &[],
+            )
+        })
         .unwrap();
     assert_introspection_notice(true);
 
@@ -3000,11 +3004,15 @@ fn test_auto_run_on_introspection_feature_disabled() {
         .unwrap();
     assert_introspection_notice(None);
 
-    let _row = client
-        .query_one(
-            "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
-            &[],
-        )
+    // We add a retry here since it might take a moment to get a replica heartbeat.
+    let _row = Retry::default()
+        .max_tries(5)
+        .retry(|_state| {
+            client.query_one(
+                "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
+                &[],
+            )
+        })
         .unwrap();
     assert_introspection_notice(None);
 

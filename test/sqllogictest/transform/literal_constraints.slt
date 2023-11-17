@@ -48,8 +48,8 @@ Used Indexes:
   - materialize.public.idx_t1_a_b (*** full scan ***)
 
 Notices:
-  - Notice: Index materialize.public.idx_t1_a_b on t1(a, b) is too wide to use for literal equalities `a IN (1, 2)`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (a).
+  - Notice: Index materialize.public.idx_t1_a_b on t1(#0{a}, #1{b}) is too wide to use for literal equalities `#0{a} IN (1, 2)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#0{a}).
 
 EOF
 
@@ -1359,8 +1359,8 @@ Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `x = 5`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (x).
+  - Notice: Index materialize.public.t6_idx_x_y on t6(#0{x}, #1{y}) is too wide to use for literal equalities `#0{x} = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#0{x}).
 
 EOF
 
@@ -1382,10 +1382,10 @@ Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `x = 5`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (x).
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `x = 5`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (x).
+  - Notice: Index materialize.public.t6_idx_x_y on t6(#0{x}, #1{y}) is too wide to use for literal equalities `#0{x} = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#0{x}).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(#0{x}, #1{y}, #2{z}) is too wide to use for literal equalities `#0{x} = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#0{x}).
 
 EOF
 
@@ -1455,10 +1455,10 @@ Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 6`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y = 6`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+  - Notice: Index materialize.public.t6_idx_x_y on t6(#0{x}, #1{y}) is too wide to use for literal equalities `#1{y} = 6`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#1{y}).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(#0{x}, #1{y}, #2{z}) is too wide to use for literal equalities `#1{y} = 6`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#1{y}).
 
 EOF
 
@@ -1494,8 +1494,8 @@ Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `z = 7`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (z).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(#0{x}, #1{y}, #2{z}) is too wide to use for literal equalities `#2{z} = 7`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#2{z}).
 
 EOF
 
@@ -1517,10 +1517,10 @@ Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 5`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y = 5`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+  - Notice: Index materialize.public.t6_idx_x_y on t6(#0{x}, #1{y}) is too wide to use for literal equalities `#1{y} = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#1{y}).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(#0{x}, #1{y}, #2{z}) is too wide to use for literal equalities `#1{y} = 5`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#1{y}).
 
 EOF
 
@@ -1539,10 +1539,10 @@ Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y IN (4, 8)`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y IN (4, 8)`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+  - Notice: Index materialize.public.t6_idx_x_y on t6(#0{x}, #1{y}) is too wide to use for literal equalities `#1{y} IN (4, 8)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#1{y}).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(#0{x}, #1{y}, #2{z}) is too wide to use for literal equalities `#1{y} IN (4, 8)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#1{y}).
 
 EOF
 
@@ -1561,10 +1561,10 @@ Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y IN (2, 5)`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y, z).
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `(y, z) IN ((2, 3), (5, 7))`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y, z).
+  - Notice: Index materialize.public.t6_idx_x_y on t6(#0{x}, #1{y}) is too wide to use for literal equalities `#1{y} IN (2, 5)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#1{y}, #2{z}).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(#0{x}, #1{y}, #2{z}) is too wide to use for literal equalities `(#1{y}, #2{z}) IN ((2, 3), (5, 7))`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#1{y}, #2{z}).
 
 EOF
 
@@ -1583,7 +1583,7 @@ Used Indexes:
   - materialize.public.t6_idx_x_y (*** full scan ***)
 
 Notices:
-  - Notice: Index materialize.public.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `z = 9`.
-    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (z, w).
+  - Notice: Index materialize.public.t6_idx_x_y_z on t6(#0{x}, #1{y}, #2{z}) is too wide to use for literal equalities `#2{z} = 9`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (#2{z}, #3{w}).
 
 EOF

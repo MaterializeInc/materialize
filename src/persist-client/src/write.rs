@@ -33,12 +33,14 @@ use crate::batch::{
     validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     ProtoBatch,
 };
+use crate::cfg::PersistFeatureFlag;
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HandleDebugState, HollowBatch, Upper};
+use crate::read::ReadHandle;
 use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
@@ -132,26 +134,32 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    // We don't actually do an async call in here at the moment, but we used to and may
-    // again later, so let's reserve the right for now.
-    #[allow(clippy::unused_async)]
-    pub(crate) async fn new(
+    pub(crate) fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
         machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
-        compact: Option<Compactor<K, V, T, D>>,
         blob: Arc<dyn Blob + Send + Sync>,
-        isolated_runtime: Arc<IsolatedRuntime>,
         writer_id: WriterId,
         purpose: &str,
         schemas: Schemas<K, V>,
-        upper: Antichain<T>,
     ) -> Self {
+        let isolated_runtime = Arc::clone(&machine.isolated_runtime);
+        let compact = cfg.compaction_enabled.then(|| {
+            Compactor::new(
+                cfg.clone(),
+                Arc::clone(&metrics),
+                Arc::clone(&isolated_runtime),
+                writer_id.clone(),
+                schemas.clone(),
+                gc.clone(),
+            )
+        });
         let debug_state = HandleDebugState {
             hostname: cfg.hostname.to_owned(),
             purpose: purpose.to_owned(),
         };
+        let upper = machine.applier.clone_upper();
         WriteHandle {
             cfg,
             metrics,
@@ -166,6 +174,21 @@ where
             upper,
             explicitly_expired: false,
         }
+    }
+
+    /// Creates a [WriteHandle] for the same shard from an existing
+    /// [ReadHandle].
+    pub fn from_read(read: &ReadHandle<K, V, T, D>, purpose: &str) -> Self {
+        Self::new(
+            read.cfg.clone(),
+            Arc::clone(&read.metrics),
+            read.machine.clone(),
+            read.gc.clone(),
+            Arc::clone(&read.blob),
+            WriterId::new(),
+            purpose,
+            read.schemas.clone(),
+        )
     }
 
     /// This handle's shard id.
@@ -513,6 +536,11 @@ where
     /// to append it to this shard.
     pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
         let ret = Batch {
+            batch_delete_enabled: self
+                .cfg
+                .dynamic
+                .enabled(PersistFeatureFlag::BATCH_DELETE_ENABLED),
+            metrics: Arc::clone(&self.metrics),
             shard_id: batch
                 .shard_id
                 .into_rust()
@@ -522,7 +550,7 @@ where
                 .batch
                 .into_rust_if_some("ProtoBatch::batch")
                 .expect("valid transmittable batch"),
-            _blob: Arc::clone(&self.blob),
+            blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
         };
         assert_eq!(ret.shard_id, self.machine.shard_id());
@@ -601,7 +629,7 @@ where
         let mut watch = self.machine.applier.watch();
         let batch = self
             .machine
-            .next_listen_batch(frontier, &mut watch, None)
+            .next_listen_batch(frontier, &mut watch, None, None)
             .await;
         if PartialOrder::less_than(&self.upper, batch.desc.upper()) {
             self.upper.clone_from(batch.desc.upper());

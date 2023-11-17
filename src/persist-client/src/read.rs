@@ -33,7 +33,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
-use crate::cfg::PersistFeatureFlag;
+use crate::cfg::{PersistFeatureFlag, RetryParameters};
 use crate::fetch::{
     fetch_leased_part, BatchFetcher, FetchBatchFilter, FetchedPart, LeasedBatchPart,
     SerdeLeasedBatchPart, SerdeLeasedBatchPartMetadata,
@@ -132,14 +132,18 @@ where
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn next(&mut self) -> Vec<ListenEvent<T, LeasedBatchPart<T>>> {
+    pub async fn next(
+        &mut self,
+        // If Some, an override for the default listen sleep retry parameters.
+        listen_retry: Option<RetryParameters>,
+    ) -> Vec<ListenEvent<T, LeasedBatchPart<T>>> {
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
         match self.snapshot.take() {
             Some(parts) => vec![ListenEvent::Updates(parts)],
             None => {
-                let (parts, upper) = self.listen.next().await;
+                let (parts, upper) = self.listen.next(listen_retry).await;
                 vec![ListenEvent::Updates(parts), ListenEvent::Progress(upper)]
             }
         }
@@ -151,7 +155,7 @@ where
     pub async fn fetch_next(
         &mut self,
     ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
-        let events = self.next().await;
+        let events = self.next(None).await;
         let new_len = events
             .iter()
             .map(|event| match event {
@@ -175,6 +179,11 @@ where
             }
         }
         ret
+    }
+
+    /// Fetches the contents of `part` and returns its lease.
+    pub async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
+        self.listen.fetch_batch_part(part).await
     }
 
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
@@ -293,7 +302,11 @@ where
     ///
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
-    pub async fn next(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
+    pub async fn next(
+        &mut self,
+        // If Some, an override for the default listen sleep retry parameters.
+        retry: Option<RetryParameters>,
+    ) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
         let batch = self
             .handle
             .machine
@@ -301,6 +314,7 @@ where
                 &self.frontier,
                 &mut self.watch,
                 Some(&self.handle.reader_id),
+                retry,
             )
             .await;
 
@@ -392,7 +406,7 @@ where
     pub async fn fetch_next(
         &mut self,
     ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
-        let (parts, progress) = self.next().await;
+        let (parts, progress) = self.next(None).await;
         let mut ret = Vec::with_capacity(parts.len() + 1);
         for part in parts {
             let fetched_part = self.fetch_batch_part(part).await;
@@ -754,6 +768,7 @@ where
             encoded_size_bytes: part.encoded_size_bytes,
             leased_seqno: Some(self.lease_seqno()),
             filter_pushdown_audit: false,
+            key_lower: part.key_lower,
         }
     }
 
@@ -1431,7 +1446,7 @@ mod tests {
         width = 4;
         // Collect parts while continuing to write values
         for i in offset..offset + width {
-            for event in subscribe.next().await {
+            for event in subscribe.next(None).await {
                 if let ListenEvent::Updates(mut new_parts) = event {
                     parts.append(&mut new_parts);
                     // Here and elsewhere we "cheat" and immediately downgrade the since
@@ -1487,7 +1502,7 @@ mod tests {
             subscribe.return_leased_part(part);
 
             // Simulates an exchange
-            for event in subscribe.next().await {
+            for event in subscribe.next(None).await {
                 if let ListenEvent::Updates(parts) = event {
                     for part in parts {
                         subsequent_parts.push(part.into_exchangeable_part());

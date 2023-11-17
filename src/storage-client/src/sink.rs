@@ -21,6 +21,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt};
 use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
     KafkaSinkConnectionRetention, KafkaSinkFormat,
@@ -243,12 +244,12 @@ pub async fn build_kafka(
     sink_id: mz_repr::GlobalId,
     connection: &mut KafkaSinkConnection,
     connection_cx: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), ContextCreationError> {
     let client: AdminClient<_> = connection
         .connection
         .create_with_context(connection_cx, MzClientContext::default(), &BTreeMap::new())
         .await
-        .context("creating admin client failed")?;
+        .add_context("creating admin client failed")?;
 
     // Check for existence of progress topic; if it exists and contains data for
     // this sink, we expect the data topic to exist, as well. Note that we don't
@@ -256,7 +257,9 @@ pub async fn build_kafka(
     // from creating topics before setting up their sinks.
     let meta = client
         .inner()
-        .fetch_metadata(None, Duration::from_secs(10))?;
+        .fetch_metadata(None, Duration::from_secs(10))
+        .check_ssh_status(client.inner().context())
+        .add_context("fetching metadata")?;
 
     // Check if the broker's metadata already contains the progress topic.
     let progress_topic = match &connection.consistency_config {
@@ -283,18 +286,22 @@ pub async fn build_kafka(
             )
             .await?;
 
+        let progress_client = Arc::new(progress_client);
         let latest_ts = determine_latest_progress_record(
             format!("build_kafka_{}", sink_id),
             progress_topic.name().to_string(),
             ProgressKey::new(sink_id),
-            Arc::new(progress_client),
+            Arc::clone(&progress_client),
         )
-        .await?;
+        .await
+        .check_ssh_status(progress_client.client().context())?;
 
         // If we have progress data, we should have the topic listed in the
         // broker's metadata. If we don't, error.
         if latest_ts.is_some() && !meta.topics().iter().any(|t| t.name() == connection.topic) {
-            bail!("sink progress data exists, but sink data topic is missing");
+            Err(anyhow::anyhow!(
+                "sink progress data exists, but sink data topic is missing"
+            ))?
         }
     }
 
@@ -307,7 +314,8 @@ pub async fn build_kafka(
         connection.retention,
     )
     .await
-    .context("error registering kafka topic for sink")?;
+    .check_ssh_status(client.inner().context())
+    .add_context("error registering kafka topic for sink")?;
 
     match &connection.format {
         KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
@@ -336,17 +344,16 @@ pub async fn build_kafka(
     }
 
     match &connection.consistency_config {
-        KafkaConsistencyConfig::Progress { topic } => {
-            ensure_kafka_topic(
-                &client,
-                topic,
-                1,
-                connection.replication_factor,
-                KafkaSinkConnectionRetention::default(),
-            )
-            .await
-            .context("error registering kafka consistency topic for sink")?;
-        }
+        KafkaConsistencyConfig::Progress { topic } => ensure_kafka_topic(
+            &client,
+            topic,
+            1,
+            connection.replication_factor,
+            KafkaSinkConnectionRetention::default(),
+        )
+        .await
+        .check_ssh_status(client.inner().context())
+        .add_context("error registering kafka consistency topic for sink")?,
     };
 
     Ok(())

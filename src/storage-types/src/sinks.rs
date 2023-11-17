@@ -9,20 +9,20 @@
 
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use mz_ore::cast::CastFrom;
 use mz_persist_client::ShardId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
-use mz_stash_types::objects::proto;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
-use crate::connections::{CsrConnection, KafkaConnection};
+use crate::connections::StringOrSecret;
 use crate::controller::{CollectionMetadata, StorageError};
 
 use crate::connections::inline::{
@@ -45,7 +45,7 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
 }
 
 impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + PartialOrder>
-    StorageSinkDesc<S, T>
+    crate::AlterCompatible for StorageSinkDesc<S, T>
 {
     /// Determines if `self` is compatible with another `StorageSinkDesc`, in
     /// such a way that it is possible to turn `self` into `other` through a
@@ -54,7 +54,7 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
     /// Currently, the only "valid transformation" is the passage of time such
     /// that the sink's as ofs may differ. However, this will change once we
     /// support `ALTER CONNECTION` or `ALTER SINK`.
-    pub fn alter_compatible(
+    fn alter_compatible(
         &self,
         id: GlobalId,
         other: &StorageSinkDesc<S, T>,
@@ -85,15 +85,15 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             ),
         ];
 
-        for (compatible, desc) in compatibility_checks {
+        for (compatible, field) in compatibility_checks {
             if !compatible {
                 tracing::warn!(
-                    "StorageSinkDesc incompatible at {desc}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    "StorageSinkDesc incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );
 
-                return Err(StorageError::IncompatibleSinkDescriptions { id });
+                return Err(StorageError::InvalidAlter { id });
             }
         }
 
@@ -234,7 +234,7 @@ impl<T: PartialOrder + Clone> SinkAsOf<T> {
     /// Forwards the since frontier of this `SinkAsOf`. If it is already
     /// sufficiently far advanced the downgrade is a no-op.
     pub fn downgrade(&mut self, other_since: &Antichain<T>) {
-        if PartialOrder::less_equal(&self.frontier, other_since) {
+        if PartialOrder::less_than(&self.frontier, other_since) {
             // TODO(aljoscha): Should this be meet_assign?
             self.frontier.clone_from(other_since);
             // If we're using the since, never read the snapshot
@@ -273,23 +273,6 @@ impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
             frontier: proto
                 .frontier
                 .into_rust_if_some("ProtoSinkAsOf::frontier")?,
-            strict: proto.strict,
-        })
-    }
-}
-
-impl RustType<proto::SinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
-    fn into_proto(&self) -> proto::SinkAsOf {
-        proto::SinkAsOf {
-            frontier: Some(self.frontier.into_proto()),
-            strict: self.strict,
-        }
-    }
-
-    fn from_proto(proto: proto::SinkAsOf) -> Result<Self, TryFromProtoError> {
-        let frontier = proto.frontier.into_rust_if_some("SinkAsOf::frontier")?;
-        Ok(SinkAsOf {
-            frontier,
             strict: proto.strict,
         })
     }
@@ -421,7 +404,7 @@ impl RustType<ProtoKafkaConsistencyConfig> for KafkaConsistencyConfig {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: GlobalId,
-    pub connection: KafkaConnection<C>,
+    pub connection: C::Kafka,
     pub format: KafkaSinkFormat<C>,
     /// A natural key of the sinked relation (view or source).
     pub relation_key_indices: Option<Vec<usize>>,
@@ -434,6 +417,9 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub replication_factor: i32,
     pub fuel: usize,
     pub retention: KafkaSinkConnectionRetention,
+    /// Additional options that need to be set on the connection whenever it's
+    /// inlined.
+    pub connection_options: BTreeMap<String, StringOrSecret>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
@@ -453,10 +439,15 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             replication_factor,
             fuel,
             retention,
+            connection_options,
         } = self;
+
+        let mut connection = r.resolve_connection(connection).unwrap_kafka();
+        connection.options.extend(connection_options);
+
         KafkaSinkConnection {
             connection_id,
-            connection: connection.into_inline_connection(&r),
+            connection,
             format: format.into_inline_connection(r),
             relation_key_indices,
             key_desc_and_indices,
@@ -467,6 +458,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             replication_factor,
             fuel,
             retention,
+            connection_options: BTreeMap::default(),
         }
     }
 }
@@ -486,6 +478,11 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             replication_factor: self.replication_factor,
             fuel: u64::cast_from(self.fuel),
             retention: Some(self.retention.into_proto()),
+            connection_options: self
+                .connection_options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.into_proto()))
+                .collect(),
         }
     }
 
@@ -515,6 +512,11 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             retention: proto
                 .retention
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::retention")?,
+            connection_options: proto
+                .connection_options
+                .into_iter()
+                .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
+                .collect::<Result<_, _>>()?,
         })
     }
 }
@@ -549,7 +551,7 @@ pub enum KafkaSinkAvroFormatState<C: ConnectionAccess = InlinedConnection> {
     UnpublishedMaybe {
         key_schema: Option<String>,
         value_schema: String,
-        csr_connection: CsrConnection<C>,
+        csr_connection: C::Csr,
     },
     /// After communicating with the CSR, the IDs we've been given for the
     /// schemas.
@@ -571,7 +573,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkAvroFormatState, R>
             } => KafkaSinkAvroFormatState::UnpublishedMaybe {
                 key_schema,
                 value_schema,
-                csr_connection: csr_connection.into_inline_connection(r),
+                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
             },
             Self::Published {
                 key_schema_id,

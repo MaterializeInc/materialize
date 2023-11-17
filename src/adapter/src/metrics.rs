@@ -35,6 +35,7 @@ pub struct Metrics {
     pub slow_message_handling: HistogramVec,
     pub optimization_notices: IntCounterVec,
     pub append_table_duration_seconds: HistogramVec,
+    pub webhook_validation_reduce_failures: IntCounterVec,
 }
 
 impl Metrics {
@@ -133,6 +134,11 @@ impl Metrics {
                 var_labels: ["is_blocking"],
                 buckets: histogram_seconds_buckets(0.128, 32.0),
             )),
+            webhook_validation_reduce_failures: registry.register(metric!(
+                name: "mz_webhook_validation_reduce_failures",
+                help: "Count of how many times we've failed to reduce a webhook source's CHECK statement.",
+                var_labels: ["reason"],
+            ))
         }
     }
 }

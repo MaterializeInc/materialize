@@ -125,11 +125,14 @@ pub mod metrics;
 #[cfg(feature = "network")]
 pub mod netio;
 pub mod now;
+pub mod num;
 pub mod option;
 pub mod panic;
 pub mod path;
 pub mod permutations;
 pub mod process;
+#[cfg(feature = "region")]
+pub mod region;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "process")))]
 pub mod result;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]

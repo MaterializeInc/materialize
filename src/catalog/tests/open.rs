@@ -76,12 +76,14 @@
 // END LINT CONFIG
 
 use mz_catalog::durable::{
-    persist_backed_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
-    test_stash_backed_catalog_state, CatalogError, Epoch, OpenableDurableCatalogState, StashConfig,
+    persist_backed_catalog_state, shadow_catalog_state, stash_backed_catalog_state,
+    test_bootstrap_args, test_stash_backed_catalog_state, CatalogError, Epoch,
+    OpenableDurableCatalogState, StashConfig,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
 use mz_repr::role_id::RoleId;
+use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_stash::DebugStashFactory;
 use uuid::Uuid;
 
@@ -380,6 +382,36 @@ async fn test_persist_open_read_only() {
     .await;
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_shadow_read_only_open() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let (debug_factory, stash_config) = stash_config().await;
+
+    let shadow_openable_state1 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state2 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state3 =
+        shadow_catalog_state(stash_config.clone(), persist_client, organization_id).await;
+    test_open_read_only(
+        shadow_openable_state1,
+        shadow_openable_state2,
+        shadow_openable_state3,
+    )
+    .await;
+    debug_factory.drop().await;
+}
+
 async fn test_open_read_only(
     openable_state1: impl OpenableDurableCatalogState,
     openable_state2: impl OpenableDurableCatalogState,
@@ -396,22 +428,22 @@ async fn test_open_read_only(
     }
 
     // Initialize the stash.
-    {
-        let mut state = Box::new(openable_state2)
-            .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
-            .await
-            .unwrap();
-        assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
-        Box::new(state).expire().await;
-    }
+    let mut state = Box::new(openable_state2)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+    assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
 
-    let mut state = Box::new(openable_state3)
+    let mut read_only_state = Box::new(openable_state3)
         .open_read_only(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     // Read-only catalogs do not increment the epoch.
-    assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
-    let err = state.allocate_user_id().await.unwrap_err();
+    assert_eq!(
+        read_only_state.epoch(),
+        Epoch::new(2).expect("known to be non-zero")
+    );
+    let err = read_only_state.allocate_user_id().await.unwrap_err();
     match err {
         CatalogError::Catalog(_) => panic!("unexpected catalog error"),
         CatalogError::Durable(e) => assert!(
@@ -422,6 +454,28 @@ async fn test_open_read_only(
                     .contains("cannot execute UPDATE in a read-only transaction")
         ),
     }
+
+    // Read-only catalog should survive writes from a write-able catalog.
+    let mut txn = state.transaction().await.unwrap();
+    let _role_id = txn
+        .insert_user_role(
+            "joe".to_string(),
+            RoleAttributes::new(),
+            RoleMembership::new(),
+            RoleVars::default(),
+        )
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    // TODO(jkosh44) We should assert that the read only catalog can see the new role
+    // However, read-only persist catalogs do not update themselves with new values.
+    // let snapshot = read_only_state.snapshot().await.unwrap();
+    // let role = snapshot.roles.get(&RoleKey {
+    //     id: Some(role_id.into_proto()),
+    // });
+    // assert_eq!(&role.unwrap().name, "joe");
+
+    Box::new(read_only_state).expire().await;
     Box::new(state).expire().await;
 }
 
@@ -469,6 +523,36 @@ async fn test_persist_open() {
         persist_openable_state3,
     )
     .await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_shadow_open() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let (debug_factory, stash_config) = stash_config().await;
+
+    let shadow_openable_state1 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state2 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state3 =
+        shadow_catalog_state(stash_config.clone(), persist_client, organization_id).await;
+    test_open(
+        shadow_openable_state1,
+        shadow_openable_state2,
+        shadow_openable_state3,
+    )
+    .await;
+    debug_factory.drop().await;
 }
 
 async fn test_open(

@@ -19,7 +19,7 @@ $ kafka-ingest topic=input format=bytes
 Rochester,NY,14618
 New York,NY,10004
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 # The source intentionally does not go through toxiproxy.
 > CREATE SOURCE input (city, state, zip)

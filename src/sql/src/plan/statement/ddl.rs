@@ -18,7 +18,7 @@ use std::iter;
 
 use itertools::Itertools;
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
-use mz_expr::CollectionPlan;
+use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::collections::HashSet;
@@ -37,10 +37,12 @@ use mz_sql_parser::ast::{
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, SetRoleVar,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
+    MaterializedViewOptionName, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
-use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_sql_parser::ident;
+use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
@@ -415,8 +417,10 @@ pub fn plan_create_webhook_source(
         if !expression.contains_column() {
             return Err(PlanError::WebhookValidationDoesNotUseColumns);
         }
-        // Validation expressions cannot contain unmaterializable functions, e.g. now().
-        if expression.contains_unmaterializable() {
+        // Validation expressions cannot contain unmaterializable functions, except `now()`. We
+        // allow calls to `now()` because some webhook providers recommend rejecting requests that
+        // are older than a certain threshold.
+        if expression.contains_unmaterializable_except(&[UnmaterializableFunc::CurrentTimestamp]) {
             return Err(PlanError::WebhookValidationNonDeterministic);
         }
     }
@@ -602,13 +606,12 @@ pub fn plan_create_source(
             key: _,
         }) => {
             let connection_item = scx.get_item_by_resolved_name(connection_name)?;
-            let mut kafka_connection = match connection_item.connection()? {
-                Connection::Kafka(connection) => connection.clone(),
-                _ => sql_bail!(
+            if !matches!(connection_item.connection()?, Connection::Kafka(_)) {
+                sql_bail!(
                     "{} is not a kafka connection",
                     scx.catalog.resolve_full_name(connection_item.name())
-                ),
-            };
+                )
+            }
 
             // Starting offsets are allowed out with feature flags mode, as they are a simple,
             // useful way to specify where to start reading a topic.
@@ -639,9 +642,7 @@ pub fn plan_create_source(
             let optional_start_offset =
                 Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
 
-            for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
-                kafka_connection.options.insert(k, v);
-            }
+            let connection_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
 
             let topic = extracted_options
                 .topic
@@ -726,6 +727,7 @@ pub fn plan_create_source(
                 group_id_prefix,
                 environment_id: scx.catalog.config().environment_id.to_string(),
                 metadata_columns,
+                connection_options,
             };
 
             let connection = GenericSourceConnection::Kafka(connection);
@@ -1099,7 +1101,15 @@ pub fn plan_create_source(
         mz_sql_parser::ast::Envelope::None => UnplannedSourceEnvelope::None(key_envelope),
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
             //TODO check that key envelope is not set
-            let (_before_idx, after_idx) = typecheck_debezium(&value_desc)?;
+            let after_idx = match typecheck_debezium(&value_desc) {
+                Ok((_before_idx, after_idx)) => Ok(after_idx),
+                Err(type_err) => match encoding.value_ref().inner {
+                    DataEncodingInner::Avro(_) => Err(type_err),
+                    _ => Err(sql_err!(
+                        "ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO"
+                    )),
+                },
+            }?;
 
             match mode {
                 DbzMode::Plain => UnplannedSourceEnvelope::Upsert {
@@ -1620,7 +1630,7 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection: Option<mz_storage_types::connections::CsrConnection<ReferencedConnection>>,
+    pub csr_connection: Option<<ReferencedConnection as ConnectionAccess>::Csr>,
     pub confluent_wire_format: bool,
 }
 
@@ -1667,7 +1677,7 @@ fn get_encoding_inner(
                 } => {
                     let item = scx.get_item_by_resolved_name(&connection.connection)?;
                     let csr_connection = match item.connection()? {
-                        Connection::Csr(connection) => connection.clone(),
+                        Connection::Csr(_) => item.id(),
                         _ => {
                             sql_bail!(
                                 "{} is not a schema registry connection",
@@ -2054,11 +2064,16 @@ pub fn plan_create_materialized_view(
         &stmt.columns,
     )?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
-    if !stmt.non_null_assertions.is_empty() {
+
+    let MaterializedViewOptionExtracted {
+        assert_not_null,
+        seen: _,
+    }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
+
+    if !assert_not_null.is_empty() {
         scx.require_feature_flag(&crate::session::vars::ENABLE_ASSERT_NOT_NULL)?;
     }
-    let mut non_null_assertions = stmt
-        .non_null_assertions
+    let mut non_null_assertions = assert_not_null
         .into_iter()
         .map(normalize::column_name)
         .map(|assertion_name| {
@@ -2151,6 +2166,11 @@ pub fn plan_create_materialized_view(
     }))
 }
 
+generate_extracted_config!(
+    MaterializedViewOption,
+    (AssertNotNull, Ident, AllowMultiple)
+);
+
 pub fn describe_create_sink(
     _: &StatementContext,
     _: CreateSinkStatement<Aug>,
@@ -2201,9 +2221,12 @@ pub fn plan_create_sink(
         Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
-    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     // Check for an object in the catalog with this same name
+    let Some(name) = name else {
+        return Err(PlanError::MissingName(CatalogItemType::Sink));
+    };
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
     let full_name = scx.catalog.resolve_full_name(&name);
     let partial_name = PartialItemName::from(full_name.clone());
     if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
@@ -2212,6 +2235,7 @@ pub fn plan_create_sink(
             item_type: item.item_type(),
         });
     }
+
     let from_name = &from;
     let from = scx.get_item_by_resolved_name(&from)?;
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
@@ -2461,9 +2485,19 @@ fn kafka_sink_builder(
     sink_from: GlobalId,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
-    // Get Kafka connection
-    let mut connection = match item.connection()? {
-        Connection::Kafka(connection) => connection.clone(),
+    // Get Kafka connection + progress topic
+    //
+    // TODO: In ALTER CONNECTION, the progress topic must be immutable
+    let (connection, progress_topic) = match item.connection()? {
+        Connection::Kafka(connection) => {
+            let id = item.id();
+            let progress_topic = connection
+                .progress_topic
+                .clone()
+                .unwrap_or_else(|| scx.catalog.config().default_kafka_sink_progress_topic(id));
+
+            (id, progress_topic)
+        }
         _ => sql_bail!(
             "{} is not a kafka connection",
             scx.catalog.resolve_full_name(item.name())
@@ -2489,9 +2523,7 @@ fn kafka_sink_builder(
 
     let extracted_options: KafkaConfigOptionExtracted = options.try_into()?;
 
-    for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
-        connection.options.insert(k, v);
-    }
+    let connection_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
 
     let connection_id = item.id();
     let KafkaConfigOptionExtracted {
@@ -2531,7 +2563,7 @@ fn kafka_sink_builder(
 
             let item = scx.get_item_by_resolved_name(&connection)?;
             let csr_connection = match item.connection()? {
-                Connection::Csr(connection) => connection.clone(),
+                Connection::Csr(_) => item.id(),
                 _ => {
                     sql_bail!(
                         "{} is not a schema registry connection",
@@ -2599,11 +2631,7 @@ fn kafka_sink_builder(
     };
 
     let consistency_config = KafkaConsistencyConfig::Progress {
-        topic: connection.progress_topic.clone().unwrap_or_else(|| {
-            scx.catalog
-                .config()
-                .default_kafka_sink_progress_topic(connection_id)
-        }),
+        topic: progress_topic,
     };
 
     if partition_count == 0 || partition_count < -1 {
@@ -2644,6 +2672,7 @@ fn kafka_sink_builder(
         key_desc_and_indices,
         value_desc,
         retention,
+        connection_options,
     }))
 }
 
@@ -2691,7 +2720,7 @@ pub fn plan_create_index(
                 .default_key()
                 .iter()
                 .map(|i| match on_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
+                    Some(n) => Expr::Identifier(vec![n.clone().into()]),
                     _ => Expr::Value(Value::Number((i + 1).to_string())),
                 })
                 .collect()
@@ -2727,7 +2756,7 @@ pub fn plan_create_index(
                 .join("_");
             write!(idx_name.item, "_{index_name_col_suffix}_idx")
                 .expect("write on strings cannot fail");
-            idx_name.item = normalize::ident(Ident::new(&idx_name.item))
+            idx_name.item = normalize::ident(Ident::new(&idx_name.item)?)
         }
 
         if !*if_not_exists {
@@ -2764,7 +2793,7 @@ pub fn plan_create_index(
     });
 
     // Normalize `stmt`.
-    *name = Some(Ident::new(index_name.item.clone()));
+    *name = Some(Ident::new(index_name.item.clone())?);
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
     if let ResolvedItemName::Item { print_id, .. } = &mut stmt.on_name {
@@ -3406,6 +3435,9 @@ pub fn plan_create_connection(
 
     let connection_options_extracted = connection::ConnectionOptionExtracted::try_from(values)?;
     let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
+    if let Connection::Aws(_) = &connection {
+        scx.require_feature_flag(&vars::ENABLE_AWS_CONNECTION)?;
+    }
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     let options = CreateConnectionOptionExtracted::try_from(with_options)?;
@@ -4471,7 +4503,8 @@ where
     //
     // 'check' returns if the temp schema name would be valid.
     let check = |temp_suffix: &str| {
-        let temp_name = Ident::new(format!("mz_schema_swap_{temp_suffix}"));
+        let mut temp_name = ident!("mz_schema_swap_");
+        temp_name.append_lossy(temp_suffix);
         scx.resolve_schema_in_database(&db_spec, &temp_name)
             .is_err()
     };
@@ -4574,8 +4607,9 @@ where
     let cluster_b = scx.resolve_cluster(Some(&name_b))?;
 
     let check = |temp_suffix: &str| {
-        let name_temp = Ident::new(format!("mz_cluster_swap_{temp_suffix}"));
-        match scx.catalog.resolve_cluster(Some(name_temp.as_str())) {
+        let mut temp_name = ident!("mz_schema_swap_");
+        temp_name.append_lossy(temp_suffix);
+        match scx.catalog.resolve_cluster(Some(temp_name.as_str())) {
             // Temp name does not exist, so we can use it.
             Err(CatalogError::UnknownCluster(_)) => true,
             // Temp name already exists!
@@ -4609,7 +4643,7 @@ pub fn plan_alter_cluster_replica_rename(
                     cluster_id: cluster.id(),
                     replica_id: replica,
                     name: QualifiedReplica {
-                        cluster: cluster.name().into(),
+                        cluster: Ident::new(cluster.name())?,
                         replica: name.replica,
                     },
                     to_name: normalize::ident(to_item_name),

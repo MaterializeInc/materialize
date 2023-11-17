@@ -55,6 +55,7 @@ class Executor:
     def commit(self) -> None:
         self.insert_table = None
         try:
+            self.log("commit")
             self.cur._c.commit()
         except Exception as e:
             raise QueryError(str(e), "commit")
@@ -62,6 +63,7 @@ class Executor:
     def rollback(self) -> None:
         self.insert_table = None
         try:
+            self.log("rollback")
             self.cur._c.rollback()
         except Exception as e:
             raise QueryError(str(e), "rollback")

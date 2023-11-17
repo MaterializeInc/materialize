@@ -7,9 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+
+use mz_ccsr::ListError;
 use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{ReferencedSubsources, UnresolvedItemName};
+use mz_storage_types::errors::{ContextCreationError, CsrConnectError};
 
 use crate::names::{FullItemName, PartialItemName};
 use crate::pure::Aug;
@@ -210,7 +214,7 @@ pub enum KafkaSinkPurificationError {
     #[error("{0} is not a KAFKA CONNECTION")]
     NotKafkaConnection(FullItemName),
     #[error("admin client errored")]
-    AdminClientError(String),
+    AdminClientError(Arc<ContextCreationError>),
     #[error("zero brokers discovered in metadata request")]
     ZeroBrokers,
 }
@@ -218,7 +222,7 @@ pub enum KafkaSinkPurificationError {
 impl KafkaSinkPurificationError {
     pub fn detail(&self) -> Option<String> {
         match self {
-            Self::AdminClientError(e) => Some(e.clone()),
+            Self::AdminClientError(e) => Some(e.to_string_with_causes()),
             _ => None,
         }
     }
@@ -228,19 +232,24 @@ impl KafkaSinkPurificationError {
     }
 }
 
+use mz_ore::error::ErrorExt;
+
 /// Logical errors detectable during purification for a KAFKA SOURCE.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CsrPurificationError {
     #[error("{0} is not a CONFLUENT SCHEMA REGISTRY CONNECTION")]
     NotCsrConnection(FullItemName),
     #[error("client errored")]
-    ClientError(String),
+    ClientError(Arc<CsrConnectError>),
+    #[error("list subjects failed")]
+    ListSubjectsError(Arc<ListError>),
 }
 
 impl CsrPurificationError {
     pub fn detail(&self) -> Option<String> {
         match self {
-            Self::ClientError(e) => Some(e.clone()),
+            Self::ClientError(e) => Some(e.to_string_with_causes()),
+            Self::ListSubjectsError(e) => Some(e.to_string_with_causes()),
             _ => None,
         }
     }

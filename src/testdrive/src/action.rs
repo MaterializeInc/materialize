@@ -30,6 +30,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_tls_util::make_tls;
 use once_cell::sync::Lazy;
@@ -120,6 +121,8 @@ pub struct Config {
     pub materialize_catalog_postgres_stash: Option<String>,
     /// Build information
     pub build_info: &'static BuildInfo,
+    /// The environment ID to use for this run
+    pub environment_id: EnvironmentId,
 
     // === Persist options. ===
     /// Handle to the persist consensus system.
@@ -183,6 +186,7 @@ pub struct State {
     materialize_internal_http_addr: String,
     materialize_user: String,
     pgclient: tokio_postgres::Client,
+    environment_id: EnvironmentId,
 
     // === Persist state. ===
     persist_consensus_url: Option<String>,
@@ -305,6 +309,7 @@ impl State {
                     tls,
                 },
                 SYSTEM_TIME.clone(),
+                Some(self.environment_id.clone()),
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));
@@ -349,6 +354,9 @@ impl State {
             .context("resetting materialize state: SHOW DATABASES")?
         {
             let db_name: String = row.get(0);
+            if db_name.starts_with("testdrive_no_reset_") {
+                continue;
+            }
             let query = format!("DROP DATABASE {}", db_name);
             sql::print_query(&query, None);
             inner_client.batch_execute(&query).await.context(format!(
@@ -599,6 +607,7 @@ impl Run for PosCommand {
                     }
                     "set" => set::set_vars(builtin, state),
                     "set-from-sql" => set::run_set_from_sql(builtin, state).await,
+                    "set-from-file" => set::run_set_from_file(builtin, state).await,
                     "webhook-append" => webhook::run_append(builtin, state).await,
                     // "verify-timestamp-compaction" => Box::new(
                     //     verify_timestamp_compaction::run_verify_timestamp_compaction_action(
@@ -872,6 +881,7 @@ pub async fn create_state(
         materialize_internal_http_addr,
         materialize_user,
         pgclient,
+        environment_id: config.environment_id.clone(),
 
         // === Persist state. ===
         persist_consensus_url: config.persist_consensus_url.clone(),

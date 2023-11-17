@@ -51,8 +51,8 @@ where
     ///
     /// The timestamp will be assigned at commit time.
     ///
-    /// TODO(txn): Allow this to spill to s3 (for bounded memory) once persist
-    /// can make the ts rewrite op efficient.
+    /// TODO: Allow this to spill to s3 (for bounded memory) once persist can
+    /// make the ts rewrite op efficient.
     #[allow(clippy::unused_async)]
     pub async fn write(&mut self, data_id: &ShardId, key: K, val: V, diff: D) {
         self.writes

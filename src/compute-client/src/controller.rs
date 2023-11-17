@@ -43,9 +43,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
-use mz_stash_types::objects::proto;
 use mz_storage_client::controller::{IntrospectionType, ReadPolicy, StorageController};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -76,9 +74,9 @@ type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
 /// Responses from the compute controller.
 #[derive(Debug)]
 pub enum ComputeControllerResponse<T> {
-    /// See [`ComputeResponse::PeekResponse`](crate::protocol::response::ComputeResponse::PeekResponse).
+    /// See [`ComputeResponse::PeekResponse`].
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// See [`ComputeResponse::SubscribeResponse`](crate::protocol::response::ComputeResponse::SubscribeResponse).
+    /// See [`ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
 }
 
@@ -110,22 +108,6 @@ impl ComputeReplicaLogging {
     }
 }
 
-impl RustType<proto::ReplicaLogging> for ComputeReplicaLogging {
-    fn into_proto(&self) -> proto::ReplicaLogging {
-        proto::ReplicaLogging {
-            log_logging: self.log_logging,
-            interval: self.interval.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: proto::ReplicaLogging) -> Result<Self, TryFromProtoError> {
-        Ok(ComputeReplicaLogging {
-            log_logging: proto.log_logging,
-            interval: proto.interval.into_rust()?,
-        })
-    }
-}
-
 /// A controller for the compute layer.
 pub struct ComputeController<T> {
     instances: BTreeMap<ComputeInstanceId, Instance<T>>,
@@ -136,6 +118,8 @@ pub struct ComputeController<T> {
     config: ComputeParameters,
     /// Default value for `idle_arrangement_merge_effort`.
     default_idle_arrangement_merge_effort: u32,
+    /// Default value for `arrangement_exert_proportionality`.
+    default_arrangement_exert_proportionality: u32,
     /// A replica response to be handled by the corresponding `Instance` on a subsequent call to
     /// `ActiveComputeController::process`.
     stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
@@ -172,6 +156,7 @@ impl<T> ComputeController<T> {
             initialized: false,
             config: Default::default(),
             default_idle_arrangement_merge_effort: 1000,
+            default_arrangement_exert_proportionality: 16,
             stashed_replica_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
@@ -242,6 +227,10 @@ impl<T> ComputeController<T> {
     pub fn set_default_idle_arrangement_merge_effort(&mut self, value: u32) {
         self.default_idle_arrangement_merge_effort = value;
     }
+
+    pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
+        self.default_arrangement_exert_proportionality = value;
+    }
 }
 
 impl<T> ComputeController<T>
@@ -283,7 +272,6 @@ where
         &mut self,
         id: ComputeInstanceId,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
-        variable_length_row_encoding: bool,
     ) -> Result<(), InstanceExists> {
         if self.instances.contains_key(&id) {
             return Err(InstanceExists(id));
@@ -298,7 +286,6 @@ where
                 self.metrics.for_instance(id),
                 self.response_tx.clone(),
                 self.introspection_tx.clone(),
-                variable_length_row_encoding,
             ),
         );
 
@@ -462,6 +449,10 @@ where
             .idle_arrangement_merge_effort
             .unwrap_or(self.compute.default_idle_arrangement_merge_effort);
 
+        // TODO(teskje): make configurable via replica option
+        let arrangement_exert_proportionality =
+            self.compute.default_arrangement_exert_proportionality;
+
         let replica_config = ReplicaConfig {
             location,
             logging: LoggingConfig {
@@ -471,6 +462,7 @@ where
                 index_logs: Default::default(),
             },
             idle_arrangement_merge_effort,
+            arrangement_exert_proportionality,
             grpc_client: self.compute.config.grpc_client.clone(),
         };
 

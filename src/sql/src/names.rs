@@ -18,12 +18,11 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
-use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_repr::role_id::RoleId;
 use mz_repr::ColumnName;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
-use mz_stash_types::objects::{proto, RustType, TryFromProtoError};
+use mz_sql_parser::ident;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -70,12 +69,13 @@ impl fmt::Display for FullItemName {
 
 impl From<FullItemName> for UnresolvedItemName {
     fn from(full_name: FullItemName) -> UnresolvedItemName {
+        // TODO(parkmycar): Change UnresolvedItemName to use `Ident` internally.
         let mut name_parts = Vec::new();
         if let RawDatabaseSpecifier::Name(database) = full_name.database {
-            name_parts.push(Ident::new(database));
+            name_parts.push(Ident::new_unchecked(database));
         }
-        name_parts.push(Ident::new(full_name.schema));
-        name_parts.push(Ident::new(full_name.item));
+        name_parts.push(Ident::new_unchecked(full_name.schema));
+        name_parts.push(Ident::new_unchecked(full_name.item));
         UnresolvedItemName(name_parts)
     }
 }
@@ -157,14 +157,15 @@ impl From<String> for PartialItemName {
 
 impl From<PartialItemName> for UnresolvedItemName {
     fn from(partial_name: PartialItemName) -> UnresolvedItemName {
+        // TODO(parkmycar): Change UnresolvedItemName to use `Ident` internally.
         let mut name_parts = Vec::new();
         if let Some(database) = partial_name.database {
-            name_parts.push(Ident::new(database));
+            name_parts.push(Ident::new_unchecked(database));
         }
         if let Some(schema) = partial_name.schema {
-            name_parts.push(Ident::new(schema));
+            name_parts.push(Ident::new_unchecked(schema));
         }
-        name_parts.push(Ident::new(partial_name.item));
+        name_parts.push(Ident::new_unchecked(partial_name.item));
         UnresolvedItemName(name_parts)
     }
 }
@@ -301,35 +302,6 @@ impl From<Option<DatabaseId>> for ResolvedDatabaseSpecifier {
     }
 }
 
-impl RustType<proto::ResolvedDatabaseSpecifier> for ResolvedDatabaseSpecifier {
-    fn into_proto(&self) -> proto::ResolvedDatabaseSpecifier {
-        let spec = match self {
-            ResolvedDatabaseSpecifier::Ambient => {
-                proto::resolved_database_specifier::Spec::Ambient(Default::default())
-            }
-            ResolvedDatabaseSpecifier::Id(database_id) => {
-                proto::resolved_database_specifier::Spec::Id(database_id.into_proto())
-            }
-        };
-        proto::ResolvedDatabaseSpecifier { spec: Some(spec) }
-    }
-
-    fn from_proto(proto: proto::ResolvedDatabaseSpecifier) -> Result<Self, TryFromProtoError> {
-        let spec = proto
-            .spec
-            .ok_or_else(|| TryFromProtoError::missing_field("ResolvedDatabaseSpecifier::spec"))?;
-        let spec = match spec {
-            proto::resolved_database_specifier::Spec::Ambient(_) => {
-                ResolvedDatabaseSpecifier::Ambient
-            }
-            proto::resolved_database_specifier::Spec::Id(database_id) => {
-                ResolvedDatabaseSpecifier::Id(database_id.into_rust()?)
-            }
-        };
-        Ok(spec)
-    }
-}
-
 /*
  * TODO(jkosh44) It's possible that in order to fix
  * https://github.com/MaterializeInc/materialize/issues/8805 we will need to assign temporary
@@ -411,33 +383,6 @@ impl From<SchemaSpecifier> for SchemaId {
     }
 }
 
-impl RustType<proto::SchemaSpecifier> for SchemaSpecifier {
-    fn into_proto(&self) -> proto::SchemaSpecifier {
-        let spec = match self {
-            SchemaSpecifier::Temporary => {
-                proto::schema_specifier::Spec::Temporary(Default::default())
-            }
-            SchemaSpecifier::Id(schema_id) => {
-                proto::schema_specifier::Spec::Id(schema_id.into_proto())
-            }
-        };
-        proto::SchemaSpecifier { spec: Some(spec) }
-    }
-
-    fn from_proto(proto: proto::SchemaSpecifier) -> Result<Self, TryFromProtoError> {
-        let spec = proto
-            .spec
-            .ok_or_else(|| TryFromProtoError::missing_field("SchemaSpecifier::spec"))?;
-        let spec = match spec {
-            proto::schema_specifier::Spec::Temporary(_) => SchemaSpecifier::Temporary,
-            proto::schema_specifier::Spec::Id(schema_id) => {
-                SchemaSpecifier::Id(schema_id.into_rust()?)
-            }
-        };
-        Ok(spec)
-    }
-}
-
 // Aug is the type variable assigned to an AST that has already been
 // name-resolved. An AST in this state has global IDs populated next to table
 // names, and local IDs assigned to CTE definitions and references.
@@ -505,17 +450,17 @@ impl AstDisplay for ResolvedItemName {
                     f.write_str(format!("[{} AS ", id));
                 }
                 if let RawDatabaseSpecifier::Name(database) = &full_name.database {
-                    f.write_node(&Ident::new(database));
+                    f.write_node(&Ident::new_unchecked(database));
                     f.write_str(".");
                 }
-                f.write_node(&Ident::new(&full_name.schema));
+                f.write_node(&Ident::new_unchecked(&full_name.schema));
                 f.write_str(".");
-                f.write_node(&Ident::new(&full_name.item));
+                f.write_node(&Ident::new_unchecked(&full_name.item));
                 if *print_id {
                     f.write_str("]");
                 }
             }
-            ResolvedItemName::Cte { name, .. } => f.write_node(&Ident::new(name)),
+            ResolvedItemName::Cte { name, .. } => f.write_node(&Ident::new_unchecked(name)),
             ResolvedItemName::Error => {}
         }
     }
@@ -543,7 +488,7 @@ impl AstDisplay for ResolvedColumnName {
             ResolvedColumnName::Column { relation, name, .. } => {
                 f.write_node(relation);
                 f.write_str(".");
-                f.write_node(&Ident::new(name.as_str()));
+                f.write_node(&Ident::new_unchecked(name.as_str()));
             }
             ResolvedColumnName::Error => {}
         }
@@ -593,10 +538,10 @@ impl AstDisplay for ResolvedSchemaName {
         match self {
             ResolvedSchemaName::Schema { full_name, .. } => {
                 if let RawDatabaseSpecifier::Name(database) = &full_name.database {
-                    f.write_node(&Ident::new(database));
+                    f.write_node(&Ident::new_unchecked(database));
                     f.write_str(".");
                 }
-                f.write_node(&Ident::new(&full_name.schema));
+                f.write_node(&Ident::new_unchecked(&full_name.schema));
             }
             ResolvedSchemaName::Error => {}
         }
@@ -624,7 +569,9 @@ impl ResolvedDatabaseName {
 impl AstDisplay for ResolvedDatabaseName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ResolvedDatabaseName::Database { name, .. } => f.write_node(&Ident::new(name)),
+            ResolvedDatabaseName::Database { name, .. } => {
+                f.write_node(&Ident::new_unchecked(name))
+            }
             ResolvedDatabaseName::Error => {}
         }
     }
@@ -645,7 +592,7 @@ pub struct ResolvedClusterName {
 impl AstDisplay for ResolvedClusterName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         if let Some(print_name) = &self.print_name {
-            f.write_node(&Ident::new(print_name))
+            f.write_node(&Ident::new_unchecked(print_name))
         } else {
             f.write_str(format!("[{}]", self.id))
         }
@@ -709,14 +656,14 @@ impl AstDisplay for ResolvedDataType {
                     f.write_str(format!("[{} AS ", id));
                 }
                 if let RawDatabaseSpecifier::Name(database) = &full_name.database {
-                    f.write_node(&Ident::new(database));
+                    f.write_node(&Ident::new_unchecked(database));
                     f.write_str(".");
                 }
 
-                f.write_node(&Ident::new(&full_name.schema));
+                f.write_node(&Ident::new_unchecked(&full_name.schema));
                 f.write_str(".");
 
-                f.write_node(&Ident::new(&full_name.item));
+                f.write_node(&Ident::new_unchecked(&full_name.item));
                 if *print_id {
                     f.write_str("]");
                 }
@@ -899,28 +846,6 @@ impl FromStr for SchemaId {
     }
 }
 
-impl RustType<proto::SchemaId> for SchemaId {
-    fn into_proto(&self) -> proto::SchemaId {
-        let value = match self {
-            SchemaId::User(id) => proto::schema_id::Value::User(*id),
-            SchemaId::System(id) => proto::schema_id::Value::System(*id),
-        };
-
-        proto::SchemaId { value: Some(value) }
-    }
-
-    fn from_proto(proto: proto::SchemaId) -> Result<Self, TryFromProtoError> {
-        let value = proto
-            .value
-            .ok_or_else(|| TryFromProtoError::missing_field("SchemaId::value"))?;
-        let id = match value {
-            proto::schema_id::Value::User(id) => SchemaId::User(id),
-            proto::schema_id::Value::System(id) => SchemaId::System(id),
-        };
-        Ok(id)
-    }
-}
-
 /// The identifier for a database.
 #[derive(
     Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
@@ -967,25 +892,6 @@ impl FromStr for DatabaseId {
                 "couldn't parse DatabaseId {}",
                 s
             ))),
-        }
-    }
-}
-
-impl RustType<proto::DatabaseId> for DatabaseId {
-    fn into_proto(&self) -> proto::DatabaseId {
-        let value = match self {
-            DatabaseId::User(id) => proto::database_id::Value::User(*id),
-            DatabaseId::System(id) => proto::database_id::Value::System(*id),
-        };
-
-        proto::DatabaseId { value: Some(value) }
-    }
-
-    fn from_proto(proto: proto::DatabaseId) -> Result<Self, TryFromProtoError> {
-        match proto.value {
-            Some(proto::database_id::Value::User(id)) => Ok(DatabaseId::User(id)),
-            Some(proto::database_id::Value::System(id)) => Ok(DatabaseId::System(id)),
-            None => Err(TryFromProtoError::missing_field("DatabaseId::value")),
         }
     }
 }
@@ -1270,128 +1176,6 @@ pub enum CommentObjectId {
     ClusterReplica((ClusterId, ReplicaId)),
 }
 
-impl RustType<proto::comment_key::Object> for CommentObjectId {
-    fn into_proto(&self) -> proto::comment_key::Object {
-        match self {
-            CommentObjectId::Table(global_id) => {
-                proto::comment_key::Object::Table(global_id.into_proto())
-            }
-            CommentObjectId::View(global_id) => {
-                proto::comment_key::Object::View(global_id.into_proto())
-            }
-            CommentObjectId::MaterializedView(global_id) => {
-                proto::comment_key::Object::MaterializedView(global_id.into_proto())
-            }
-            CommentObjectId::Source(global_id) => {
-                proto::comment_key::Object::Source(global_id.into_proto())
-            }
-            CommentObjectId::Sink(global_id) => {
-                proto::comment_key::Object::Sink(global_id.into_proto())
-            }
-            CommentObjectId::Index(global_id) => {
-                proto::comment_key::Object::Index(global_id.into_proto())
-            }
-            CommentObjectId::Func(global_id) => {
-                proto::comment_key::Object::Func(global_id.into_proto())
-            }
-            CommentObjectId::Connection(global_id) => {
-                proto::comment_key::Object::Connection(global_id.into_proto())
-            }
-            CommentObjectId::Type(global_id) => {
-                proto::comment_key::Object::Type(global_id.into_proto())
-            }
-            CommentObjectId::Secret(global_id) => {
-                proto::comment_key::Object::Secret(global_id.into_proto())
-            }
-            CommentObjectId::Role(role_id) => {
-                proto::comment_key::Object::Role(role_id.into_proto())
-            }
-            CommentObjectId::Database(database_id) => {
-                proto::comment_key::Object::Database(database_id.into_proto())
-            }
-            CommentObjectId::Schema((database, schema)) => {
-                proto::comment_key::Object::Schema(proto::ResolvedSchema {
-                    database: Some(database.into_proto()),
-                    schema: Some(schema.into_proto()),
-                })
-            }
-            CommentObjectId::Cluster(cluster_id) => {
-                proto::comment_key::Object::Cluster(cluster_id.into_proto())
-            }
-            CommentObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                let cluster_replica_id = proto::ClusterReplicaId {
-                    cluster_id: Some(cluster_id.into_proto()),
-                    replica_id: Some(replica_id.into_proto()),
-                };
-                proto::comment_key::Object::ClusterReplica(cluster_replica_id)
-            }
-        }
-    }
-
-    fn from_proto(proto: proto::comment_key::Object) -> Result<Self, TryFromProtoError> {
-        let id = match proto {
-            proto::comment_key::Object::Table(global_id) => {
-                CommentObjectId::Table(global_id.into_rust()?)
-            }
-            proto::comment_key::Object::View(global_id) => {
-                CommentObjectId::View(global_id.into_rust()?)
-            }
-            proto::comment_key::Object::MaterializedView(global_id) => {
-                CommentObjectId::MaterializedView(global_id.into_rust()?)
-            }
-            proto::comment_key::Object::Source(global_id) => {
-                CommentObjectId::Source(global_id.into_rust()?)
-            }
-            proto::comment_key::Object::Sink(global_id) => {
-                CommentObjectId::Sink(global_id.into_rust()?)
-            }
-            proto::comment_key::Object::Index(global_id) => {
-                CommentObjectId::Index(global_id.into_rust()?)
-            }
-            proto::comment_key::Object::Func(global_id) => {
-                CommentObjectId::Func(global_id.into_rust()?)
-            }
-            proto::comment_key::Object::Connection(global_id) => {
-                CommentObjectId::Connection(global_id.into_rust()?)
-            }
-            proto::comment_key::Object::Type(global_id) => {
-                CommentObjectId::Type(global_id.into_rust()?)
-            }
-            proto::comment_key::Object::Secret(global_id) => {
-                CommentObjectId::Secret(global_id.into_rust()?)
-            }
-            proto::comment_key::Object::Role(role_id) => {
-                CommentObjectId::Role(role_id.into_rust()?)
-            }
-            proto::comment_key::Object::Database(database_id) => {
-                CommentObjectId::Database(database_id.into_rust()?)
-            }
-            proto::comment_key::Object::Schema(resolved_schema) => {
-                let database = resolved_schema
-                    .database
-                    .into_rust_if_some("ResolvedSchema::database")?;
-                let schema = resolved_schema
-                    .schema
-                    .into_rust_if_some("ResolvedSchema::schema")?;
-                CommentObjectId::Schema((database, schema))
-            }
-            proto::comment_key::Object::Cluster(cluster_id) => {
-                CommentObjectId::Cluster(cluster_id.into_rust()?)
-            }
-            proto::comment_key::Object::ClusterReplica(cluster_replica_id) => {
-                let cluster_id = cluster_replica_id
-                    .cluster_id
-                    .into_rust_if_some("ClusterReplicaId::cluster_id")?;
-                let replica_id = cluster_replica_id
-                    .replica_id
-                    .into_rust_if_some("ClusterReplicaId::replica_id")?;
-                CommentObjectId::ClusterReplica((cluster_id, replica_id))
-            }
-        };
-        Ok(id)
-    }
-}
-
 #[derive(Debug)]
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
@@ -1509,7 +1293,7 @@ impl<'a> NameResolver<'a> {
 
                 // Check if unqualified name refers to a CTE.
                 if raw_name.database.is_none() && raw_name.schema.is_none() {
-                    let norm_name = normalize::ident(Ident::new(&raw_name.item));
+                    let norm_name = normalize::ident(Ident::new_unchecked(&raw_name.item));
                     if let Some(id) = self.ctes.get(&norm_name) {
                         return ResolvedItemName::Cte {
                             id: *id,
@@ -1549,10 +1333,11 @@ impl<'a> NameResolver<'a> {
                                         Some((i, q)) if i.starts_with("json_") && q.len() < 2 => {
                                             let mut jsonb_version = q
                                                 .iter()
-                                                .map(|q| Ident::new(*q))
+                                                .map(|q| Ident::new_unchecked(*q))
                                                 .collect::<Vec<_>>();
-                                            jsonb_version
-                                                .push(Ident::new(i.replace("json_", "jsonb_")));
+                                            jsonb_version.push(Ident::new_unchecked(
+                                                i.replace("json_", "jsonb_"),
+                                            ));
                                             let jsonb_version = RawItemName::Name(
                                                 UnresolvedItemName(jsonb_version),
                                             );
@@ -2043,7 +1828,8 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             } => {
                 match &function.name {
                     RawItemName::Name(name) => {
-                        if *name == UnresolvedItemName::unqualified("values") && self.status.is_ok()
+                        if *name == UnresolvedItemName::unqualified(ident!("values"))
+                            && self.status.is_ok()
                         {
                             self.status = Err(PlanError::FromValueRequiresParen);
                         }

@@ -8,11 +8,10 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
-from typing import Any
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 TESTDRIVE_NOP = "$ nop"
 
@@ -28,6 +27,12 @@ class Check:
 
     def _can_run(self, e: Executor) -> bool:
         return True
+
+    def _kafka_broker(self) -> str:
+        result = "BROKER '${testdrive.kafka-addr}'"
+        if self.current_version >= MzVersion.parse("0.78.0-dev"):
+            result += ", SECURITY PROTOCOL PLAINTEXT"
+        return result
 
     def initialize(self) -> Testdrive:
         return Testdrive(TESTDRIVE_NOP)
@@ -73,14 +78,8 @@ class Check:
 
 
 def disabled(ignore_reason: str):
-    class ClassWrapper:
-        def __init__(self, cls: type[Check]):
-            assert issubclass(cls, Check)
-            self.check_class = cls
-            self.check_class.enabled = False
+    def decorator(cls):
+        cls.enabled = False
+        return cls
 
-        def __call__(self, *cls_ars: Any):
-            check = self.check_class(*cls_ars)
-            return check
-
-    return ClassWrapper
+    return decorator

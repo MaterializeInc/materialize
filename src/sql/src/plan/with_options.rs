@@ -11,7 +11,7 @@
 
 use mz_repr::adt::interval::Interval;
 use mz_repr::{strconv, GlobalId};
-use mz_sql_parser::ast::{KafkaBroker, ReplicaDefinition};
+use mz_sql_parser::ast::{Ident, KafkaBroker, ReplicaDefinition};
 use mz_storage_types::connections::StringOrSecret;
 use serde::{Deserialize, Serialize};
 
@@ -85,6 +85,24 @@ impl TryFromValue<WithOptionValue<Aug>> for Object {
 impl ImpliedValue for Object {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an object")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for Ident {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        Ok(match v {
+            WithOptionValue::Ident(name) => name,
+            _ => sql_bail!("must provide an identifier"),
+        })
+    }
+    fn name() -> String {
+        "identifier".to_string()
+    }
+}
+
+impl ImpliedValue for Ident {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an identifier")
     }
 }
 

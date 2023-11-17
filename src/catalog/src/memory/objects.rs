@@ -631,9 +631,6 @@ pub struct Log {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    // TODO(benesch): this field duplicates information that could be derived
-    // from the connection ID. Too hard to fix at the moment.
-    #[serde(skip)]
     pub connection: StorageSinkConnection<ReferencedConnection>,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
@@ -657,12 +654,6 @@ impl Sink {
     pub fn connection_id(&self) -> Option<GlobalId> {
         self.connection.connection_id()
     }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub enum StorageSinkConnectionState {
-    Pending(StorageSinkConnection<ReferencedConnection>),
-    Ready(StorageSinkConnection<ReferencedConnection>),
 }
 
 #[derive(Debug, Clone, Serialize)]

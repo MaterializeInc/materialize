@@ -101,17 +101,6 @@ mod tests;
 pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
 pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 
-// TODO(jkosh44) There's some circular logic going on with this key across crates.
-// mz_catalog::stash initializes uses this value to initialize
-// `CONFIG_COLLECTION: mz_stash::TypedCollection`. Then `mz_stash::postgres::Stash` uses this value
-// to check if the stash has been initialized.
-/// The key within the Config Collection that stores the version of the Stash.
-pub const USER_VERSION_KEY: &str = "user_version";
-pub const COLLECTION_CONFIG: TypedCollection<
-    mz_stash_types::objects::proto::ConfigKey,
-    mz_stash_types::objects::proto::ConfigValue,
-> = TypedCollection::new("config");
-
 pub type Diff = i64;
 pub type Timestamp = i64;
 

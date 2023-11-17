@@ -17,6 +17,8 @@ import requests
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from materialize.cloudtest.util.common import retry
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -66,14 +68,19 @@ def make_jwt(tenant_id: str) -> str:
 
 
 def fetch_jwt(email: str, password: str, host: str) -> str:
-    res = requests.post(
-        f"https://{host}/frontegg/identity/resources/auth/v1/user",
-        json={"email": email, "password": password},
-        timeout=10,
-    )
-    try:
+    def fetch():
+        res = requests.post(
+            f"https://{host}/frontegg/identity/resources/auth/v1/user",
+            json={"email": email, "password": password},
+            timeout=10,
+        )
         res.raise_for_status()
-    except Exception as e:
+        return res
+
+    try:
+        res = retry(fetch, 10, [requests.exceptions.HTTPError])
+    except requests.exceptions.HTTPError as e:
+        res = e.response
         LOGGER.error(
             dedent(
                 f"""

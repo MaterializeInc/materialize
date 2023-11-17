@@ -23,7 +23,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::AvailableCollections;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
-use mz_repr::{ColumnType, DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena};
+use mz_repr::{ColumnType, DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -41,6 +41,7 @@ use crate::arrangement::manager::SpecializedTraceHandle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinSpec;
+use crate::render::RenderTimestamp;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 
 // Local type definition to avoid the horror in signatures.
@@ -513,10 +514,11 @@ where
     /// If you have logic that could be applied to each record, consider using the
     /// `flat_map` methods which allows this and can reduce the work done.
     pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
-        let mut row_buf = Row::default();
         match &self {
             ArrangementFlavor::Local(oks, errs) => (
                 oks.as_collection(move |borrow| {
+                    let binding = SharedRow::get();
+                    let mut row_buf = binding.borrow_mut();
                     row_buf.packer().extend(&**borrow);
                     row_buf.clone()
                 }),
@@ -524,6 +526,8 @@ where
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
                 oks.as_collection(move |borrow| {
+                    let binding = SharedRow::get();
+                    let mut row_buf = binding.borrow_mut();
                     row_buf.packer().extend(&**borrow);
                     row_buf.clone()
                 }),
@@ -936,13 +940,12 @@ where
             return self.as_specific_collection(key.as_deref());
         }
         let (stream, errors) = self.flat_map(key_val, || {
-            let mut row_builder = Row::default();
             let mut datum_vec = DatumVec::new();
             // Wrap in an `Rc` so that lifetimes work out.
             let until = std::rc::Rc::new(until);
             move |row_datums, time, diff| {
-                use crate::render::RenderTimestamp;
-
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let until = std::rc::Rc::clone(&until);
                 let temp_storage = RowArena::new();
                 let row_iter = row_datums.iter();

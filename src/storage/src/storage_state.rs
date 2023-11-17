@@ -15,9 +15,9 @@
 //!
 //! A worker receives _external_ [`StorageCommands`](StorageCommand) from the
 //! storage controller, via a channel. Storage workers also share an _internal_
-//! control/command fabric ([`internal_control`](crate::internal_control)).
-//! Internal commands go through a `Sequencer` dataflow that ensures that all
-//! workers receive all commands in the same consistent order.
+//! control/command fabric ([`internal_control`]). Internal commands go through
+//! a `Sequencer` dataflow that ensures that all workers receive all commands in
+//! the same consistent order.
 //!
 //! We need to make sure that commands that cause dataflows to be rendered are
 //! processed in the same consistent order across all workers because timely
@@ -102,6 +102,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData};
+use mz_storage_types::AlterCompatible;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -782,6 +783,25 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
 
+                // If all subsources of the source are finished, we can skip rendering entirely.
+                // Also, if `as_of` is empty, the dataflow has been finalized, so we can skip it as
+                // well.
+                //
+                // TODO(guswynn|petrosagg): this is a bit hacky, and is a consequence of storage state
+                // management being a bit of a mess. we should clean this up and remove weird if
+                // statements like this.
+                if resume_uppers.values().all(|frontier| frontier.is_empty()) || as_of.is_empty() {
+                    tracing::info!(
+                        ?resume_uppers,
+                        ?as_of,
+                        "worker {}/{} skipping building ingestion dataflow \
+                        for {ingestion_id} because the ingestion is finished",
+                        self.timely_worker.index(),
+                        self.timely_worker.peers(),
+                    );
+                    return;
+                }
+
                 crate::render::build_ingestion_dataflow(
                     self.timely_worker,
                     &mut self.storage_state,
@@ -1283,6 +1303,7 @@ impl StorageState {
                 }
             }
             StorageCommand::AllowCompaction(list) => {
+                let mut drop_ids = vec![];
                 for (id, frontier) in list {
                     match self.exports.get_mut(&id) {
                         Some(export_description) => {
@@ -1311,56 +1332,45 @@ impl StorageState {
 
                     if frontier.is_empty() {
                         fail_point!("crash_on_drop");
+
                         // Indicates that we may drop `id`, as there are no more valid times to read.
+                        self.ingestions.remove(&id);
+                        self.exports.remove(&id);
+                        self.sink_handles.remove(&id);
+                        drop_ids.push(id);
 
-                        let ids = match self.ingestions.remove(&id) {
-                            Some(description) => {
-                                // Without the source dataflow running, all source exports
-                                // should also be considered dropped. n.b. `source_exports`
-                                // includes `id`
-                                description.subsource_ids().collect::<Vec<_>>()
-                            }
-                            None => {
-                                self.exports.remove(&id);
-                                self.sink_handles.remove(&id);
-                                vec![id]
-                            }
-                        };
-
-                        for id in &ids {
-                            // This will stop reporting of frontiers.
+                        // This will stop reporting of frontiers.
+                        //
+                        // If this object still has its frontiers reported,
+                        // we will notify the client envd of the drop.
+                        if self.reported_frontiers.remove(&id).is_some() {
+                            // The only actions left are internal cleanup, so we can
+                            // commit to the client that these objects have been
+                            // dropped.
                             //
-                            // If this object still has its frontiers reported,
-                            // we will notify the client envd of the drop.
-                            if self.reported_frontiers.remove(id).is_some() {
-                                // The only actions left are internal cleanup, so we can
-                                // commit to the client that these objects have been
-                                // dropped.
-                                //
-                                // This must be done now rather than in response to
-                                // DropDataflow, otherwise we introduce the possibility
-                                // of a timing issue where:
-                                // - We remove all tracking state from the storage state
-                                //   and send `DropDataflow` (i.e. this block)
-                                // - While waiting to process that command, we reconcile
-                                //   with a new envd. That envd has already committed to
-                                //   its catalog that this object no longer exists.
-                                // - We process the DropDataflow command, and identify
-                                //   that this object has been dropped.
-                                // - The next time `dropped_ids` is processed, we send a
-                                //   response that this ID has been dropped, but the
-                                //   upstream state has no record of that object having
-                                //   ever existed.
-                                self.dropped_ids.insert(*id);
-                            }
-                        }
-
-                        // Broadcast from one worker to make sure its sequences
-                        // with the other internal commands.
-                        if worker_index == 0 {
-                            internal_cmd_tx.broadcast(InternalStorageCommand::DropDataflow(ids));
+                            // This must be done now rather than in response to
+                            // DropDataflow, otherwise we introduce the possibility
+                            // of a timing issue where:
+                            // - We remove all tracking state from the storage state
+                            //   and send `DropDataflow` (i.e. this block)
+                            // - While waiting to process that command, we reconcile
+                            //   with a new envd. That envd has already committed to
+                            //   its catalog that this object no longer exists.
+                            // - We process the DropDataflow command, and identify
+                            //   that this object has been dropped.
+                            // - The next time `dropped_ids` is processed, we send a
+                            //   response that this ID has been dropped, but the
+                            //   upstream state has no record of that object having
+                            //   ever existed.
+                            self.dropped_ids.insert(id);
                         }
                     }
+                }
+
+                // Broadcast from one worker to make sure its sequences
+                // with the other internal commands.
+                if worker_index == 0 && !drop_ids.is_empty() {
+                    internal_cmd_tx.broadcast(InternalStorageCommand::DropDataflow(drop_ids));
                 }
             }
         }

@@ -35,6 +35,8 @@ class EvaluationStrategyKey(Enum):
     MZ_DATAFLOW_RENDERING = 2
     MZ_CONSTANT_FOLDING = 3
     POSTGRES = 4
+    MZ_DATAFLOW_RENDERING_OTHER_DB = 5
+    MZ_CONSTANT_FOLDING_OTHER_DB = 6
 
 
 class EvaluationStrategy:

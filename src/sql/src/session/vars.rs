@@ -74,6 +74,7 @@ use std::string::ToString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
@@ -83,8 +84,11 @@ use mz_persist_client::batch::UntrimmableColumns;
 use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::strconv;
 use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_sql_parser::ident;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -325,7 +329,7 @@ const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
 
 // Schema can be used an alias for a search path with a single element.
 pub const SCHEMA_ALIAS: &UncasedStr = UncasedStr::new("schema");
-static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![Ident::new(DEFAULT_SCHEMA)]);
+static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![ident!(DEFAULT_SCHEMA)]);
 static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),
     value: &*DEFAULT_SEARCH_PATH,
@@ -646,6 +650,33 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
+const PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_txns_data_shard_retryer_initial_backoff"),
+    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.initial_backoff,
+    description:
+        "The initial backoff when polling for new batches from a txns data shard persist_source.",
+    internal: true,
+};
+
+/// Controls backoff multiplier of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
+const PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("persist_txns_data_shard_retryer_multiplier"),
+    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.multiplier,
+    description:
+        "The backoff multiplier when polling for new batches from a txns data shard persist_source.",
+    internal: true,
+};
+
+/// Controls backoff clamp of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
+const PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_txns_data_shard_retryer_clamp"),
+    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.clamp,
+    description:
+        "The backoff clamp duration when polling for new batches from a txns data shard persist_source.",
+    internal: true,
+};
+
 const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_fast_path_limit"),
     value: &0,
@@ -662,6 +693,19 @@ const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
     value: &false,
     description: "Whether the disk option for managed clusters and cluster replicas should be enabled by default.",
     internal: true,
+};
+
+const UNSAFE_NEW_TRANSACTION_WALL_TIME: ServerVar<Option<CheckedTimestamp<DateTime<Utc>>>> = ServerVar {
+    name: UncasedStr::new("unsafe_new_transaction_wall_time"),
+    value: &None,
+    description:
+        "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. \
+        If not set, uses the system's clock.",
+    // This needs to be false because `internal: true` things are only modifiable by the mz_system
+    // and mz_support users, and we want sqllogictest to have access with its user. Because the name
+    // starts with "unsafe" it still won't be visible or changeable by users unless unsafe mode is
+    // enabled.
+    internal: false,
 };
 
 /// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
@@ -881,13 +925,6 @@ static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| Server
 static DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<usize> = Lazy::new(|| {
     usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed))
 });
-
-const VARIABLE_LENGTH_ROW_ENCODING: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("variable_length_row_encoding"),
-    value: &false,
-    description: "Determines whether `repr::row::VARIABLE_LENGTH_ENCODING` is set. See that module for details.",
-    internal: true,
-};
 
 static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("webhooks_secrets_caching_ttl_secs"),
@@ -1316,6 +1353,14 @@ pub const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: ServerVar<u32> = ServerVar {
     internal: true,
 };
 
+pub const DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("default_arrangement_exert_proportionality"),
+    value: &16,
+    description:
+        "The default value to use for the `ARRANGEMENT EXERT PROPORTIONALITY` cluster/replica option.",
+    internal: true,
+};
+
 pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_default_connection_validation"),
     value: &true,
@@ -1428,6 +1473,13 @@ pub const WEBHOOK_CONCURRENT_REQUEST_LIMIT: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("webhook_concurrent_request_limit"),
     value: &WEBHOOK_CONCURRENCY_LIMIT,
     description: "Maximum number of concurrent requests for appending to a webhook source.",
+    internal: true,
+};
+
+pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_columnation_lgalloc"),
+    value: &false,
+    description: "Enable allocating regions from lgalloc",
     internal: true,
 };
 
@@ -1937,7 +1989,7 @@ feature_flags!(
     {
         name: enable_jemalloc_profiling,
         desc: "jemalloc heap memory profiling",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -1979,7 +2031,7 @@ feature_flags!(
     {
         name: enable_new_outer_join_lowering,
         desc: "new outer join lowering",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: false,
     },
@@ -1989,6 +2041,36 @@ feature_flags!(
         default: false,
         internal: true,
         enable_for_item_parsing: true,
+    },
+    {
+        name: enable_time_at_time_zone,
+        desc: "use of AT TIME ZONE or timezone() with time type",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_persist_txn_tables,
+        desc: "\
+            Whether to use the new persist-txn tables implementation or the legacy \
+            one.
+
+            Only takes effect on restart. Any changes will also cause clusterd \
+            processes to restart.
+
+            This value is also configurable via a Launch Darkly parameter of the \
+            same name, but we keep the flag to make testing easier. If specified, \
+            the flag takes precedence over the Launch Darkly param.",
+        default: &false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_aws_connection,
+        desc: "CREATE CONNECTION ... TO AWS",
+        default: &true, // will set to false once we verify that nobody's using this
+        internal: true,
+        enable_for_item_parsing: false,
     },
 );
 
@@ -2092,6 +2174,7 @@ impl SessionVars {
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
             .with_var(&EMIT_INTROSPECTION_QUERY_NOTICE)
+            .with_var(&UNSAFE_NEW_TRANSACTION_WALL_TIME)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -2514,6 +2597,10 @@ impl SessionVars {
     pub fn emit_introspection_query_notice(&self) -> bool {
         *self.expect_value(&EMIT_INTROSPECTION_QUERY_NOTICE)
     }
+
+    pub fn unsafe_new_transaction_wall_time(&self) -> Option<CheckedTimestamp<DateTime<Utc>>> {
+        *self.expect_value(&UNSAFE_NEW_TRANSACTION_WALL_TIME)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -2672,6 +2759,9 @@ impl SystemVars {
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF)
+            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER)
+            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
             .with_var(&PERSIST_FAST_PATH_LIMIT)
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
@@ -2697,6 +2787,7 @@ impl SystemVars {
             .with_var(&ENABLE_MZ_JOIN_CORE)
             .with_var(&LINEAR_JOIN_YIELDING)
             .with_var(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
+            .with_var(&DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY)
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
             .with_var(&ENABLE_SPECIALIZED_ARRANGEMENTS)
@@ -2707,7 +2798,6 @@ impl SystemVars {
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
-            .with_var(&VARIABLE_LENGTH_ROW_ENCODING)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -2733,7 +2823,8 @@ impl SystemVars {
             .with_var(&STATEMENT_LOGGING_RETENTION)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
-            .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT);
+            .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
+            .with_var(&ENABLE_COLUMNATION_LGALLOC);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -2954,7 +3045,6 @@ impl SystemVars {
     /// the affected SystemVars.
     fn refresh_internal_state(&mut self) {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
-        self.propagate_var_change(VARIABLE_LENGTH_ROW_ENCODING.name.as_str());
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
@@ -3161,6 +3251,21 @@ impl SystemVars {
         *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
     }
 
+    /// Returns the `persist_txns_data_shard_retryer_initial_backoff` configuration parameter.
+    pub fn persist_txns_data_shard_retryer_initial_backoff(&self) -> Duration {
+        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF)
+    }
+
+    /// Returns the `persist_txns_data_shard_retryer_multiplier` configuration parameter.
+    pub fn persist_txns_data_shard_retryer_multiplier(&self) -> u32 {
+        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER)
+    }
+
+    /// Returns the `persist_txns_data_shard_retryer_clamp` configuration parameter.
+    pub fn persist_txns_data_shard_retryer_clamp(&self) -> Duration {
+        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
+    }
+
     pub fn persist_fast_path_limit(&self) -> usize {
         *self.expect_value(&PERSIST_FAST_PATH_LIMIT)
     }
@@ -3364,6 +3469,11 @@ impl SystemVars {
         *self.expect_value(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
     }
 
+    /// Returns the `default_arrangement_exert_proportionality` configuration parameter.
+    pub fn default_arrangement_exert_proportionality(&self) -> u32 {
+        *self.expect_value(&DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY)
+    }
+
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
     pub fn enable_storage_shard_finalization(&self) -> bool {
         *self.expect_value(&ENABLE_STORAGE_SHARD_FINALIZATION)
@@ -3405,17 +3515,6 @@ impl SystemVars {
 
     pub fn coord_slow_message_reporting_threshold(&self) -> Duration {
         *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
-    }
-
-    /// The dramatic name is to warn you not to call this unless you know what you're doing!
-    /// It should only be read during environmentd startup, to ensure that all replicas get the
-    /// same value.
-    ///
-    /// After startup, row decoding is controlled by the
-    /// `mz_repr::VARIABLE_LENGTH_ROW_ENCODING` global atomic variable.
-    #[allow(non_snake_case)]
-    pub fn variable_length_row_encoding_DANGEROUS(&self) -> bool {
-        *self.expect_value(&VARIABLE_LENGTH_ROW_ENCODING)
     }
 
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
@@ -3499,6 +3598,11 @@ impl SystemVars {
     /// Returns the `webhook_concurrent_request_limit` configuration parameter.
     pub fn webhook_concurrent_request_limit(&self) -> usize {
         *self.expect_value(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
+    }
+
+    /// Returns the `enable_columnation_lgalloc` configuration parameter.
+    pub fn enable_columnation_lgalloc(&self) -> bool {
+        *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
     }
 }
 
@@ -4275,6 +4379,23 @@ impl Value for f64 {
     }
 }
 
+impl Value for Option<CheckedTimestamp<DateTime<Utc>>> {
+    fn type_name() -> String {
+        "timestamptz".to_string()
+    }
+
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<Self, VarError> {
+        let s = extract_single_value(param, input)?;
+        strconv::parse_timestamptz(s)
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
+            .map(Some)
+    }
+
+    fn format(&self) -> String {
+        self.map(|t| t.to_string()).unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct NumericNonNegNonNan;
 
@@ -4583,7 +4704,16 @@ impl Value for Vec<Ident> {
             // element. This matches PostgreSQL.
             VarInput::SqlSet(values) => values,
         };
-        Ok(values.iter().map(Ident::new).collect())
+        let values = values
+            .iter()
+            .map(Ident::new)
+            .collect::<Result<_, _>>()
+            .map_err(|e| VarError::InvalidParameterValue {
+                parameter: param.into(),
+                values: values.to_vec(),
+                reason: e.to_string(),
+            })?;
+        Ok(values)
     }
 
     fn format(&self) -> String {
@@ -5048,6 +5178,7 @@ pub fn is_compute_config_var(name: &str) -> bool {
         || name == ENABLE_MZ_JOIN_CORE.name()
         || name == ENABLE_JEMALLOC_PROFILING.name()
         || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
+        || name == ENABLE_COLUMNATION_LGALLOC.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
 }
@@ -5108,6 +5239,9 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
+        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF.name()
+        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER.name()
+        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP.name()
         || name == PERSIST_FAST_PATH_LIMIT.name()
         || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()

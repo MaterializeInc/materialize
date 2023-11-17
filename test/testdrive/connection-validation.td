@@ -10,7 +10,7 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_connection_validation_syntax = true
 
-> CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}')
+> CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > VALIDATE CONNECTION kafka_conn
 
@@ -18,7 +18,7 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 
 # Explicitly enable validation
 
-> CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}') WITH (VALIDATE = true)
+> CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = true)
 
 > VALIDATE CONNECTION kafka_conn
 
@@ -26,7 +26,7 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 
 # WITH (VALIDATE) variant
 
-> CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}') WITH (VALIDATE)
+> CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE)
 
 > VALIDATE CONNECTION kafka_conn
 
@@ -34,11 +34,11 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 
 > CREATE CONNECTION invalid_tunnel TO SSH TUNNEL (HOST 'invalid', USER 'invalid', PORT 22)
 
-! CREATE CONNECTION invalid_kafka_conn TO KAFKA (BROKERS ('${testdrive.kafka-addr}' USING SSH TUNNEL invalid_tunnel))
+! CREATE CONNECTION invalid_kafka_conn TO KAFKA (BROKERS ('${testdrive.kafka-addr}' USING SSH TUNNEL invalid_tunnel), SECURITY PROTOCOL PLAINTEXT)
 contains:failed to connect to the remote host
 
 # Create the connection without validation and validate later
-> CREATE CONNECTION invalid_kafka_conn TO KAFKA (BROKERS ('${testdrive.kafka-addr}' USING SSH TUNNEL invalid_tunnel)) WITH (VALIDATE = false)
+> CREATE CONNECTION invalid_kafka_conn TO KAFKA (BROKERS ('${testdrive.kafka-addr}' USING SSH TUNNEL invalid_tunnel), SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)
 
 ! VALIDATE CONNECTION invalid_kafka_conn
 contains:failed to connect to the remote host

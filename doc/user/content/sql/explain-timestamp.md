@@ -6,7 +6,7 @@ menu:
     parent: commands
 ---
 
-`EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement -- valuable information to acknowledge query delays.
+`EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement -- valuable information to investigate query delays.
 
 {{< warning >}}
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
@@ -63,8 +63,8 @@ A timeline value of `None` means the query is known to be constant across all ti
 Every source has a beginning _read frontier_ and an ending _write frontier_.
 They stand for a source’s limits to return a correct result immediately:
 
-* Read frontier: Indicates the minimum logical timestamp to return a correct result (known as _compaction_)
-* Write frontier: Indicates the maximum timestamp to build a correct result without waiting unprocessed data.
+* Read frontier: Indicates the minimum logical timestamp to return a correct result (advanced by _compaction_)
+* Write frontier: Indicates the maximum timestamp to build a correct result without waiting for unprocessed data.
 
 Each source has its own output section consisting of the following fields:
 
@@ -178,5 +178,4 @@ Each source contains two frontiers:
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
-- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the schemas that all relations in the query are contained in.

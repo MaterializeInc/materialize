@@ -12,25 +12,29 @@ import os
 import pandas as pd
 from matplotlib import pyplot as plt
 
+from materialize.scalability.df.df_details import DfDetails
+from materialize.scalability.df.df_totals import DfTotals
 from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
-    boxplot_latency_per_connections,
-    scatterplot_latency_per_connections,
-    scatterplot_tps_per_connections,
+    plot_duration_by_connections_for_workload,
+    plot_duration_by_endpoints_for_workload,
+    plot_tps_per_connections,
 )
-
-USE_BOXPLOT = True
 
 
 def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
-    fig = plt.figure(layout="constrained", figsize=(16, 14))
-    (tps_figure, latency_figure) = fig.subfigures(2, 1)
+    fig = plt.figure(layout="constrained", figsize=(16, 22))
+    (
+        tps_figure,
+        duration_per_connections_figure,
+        duration_per_endpoints_figure,
+    ) = fig.subfigures(3, 1)
 
     df_totals_by_endpoint_name, df_details_by_endpoint_name = load_data_from_filesystem(
         workload_name
     )
 
-    scatterplot_tps_per_connections(
+    plot_tps_per_connections(
         workload_name,
         tps_figure,
         df_totals_by_endpoint_name,
@@ -38,26 +42,23 @@ def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
         include_zero_in_y_axis=include_zero_in_y_axis,
     )
 
-    if USE_BOXPLOT:
-        boxplot_latency_per_connections(
-            workload_name,
-            latency_figure,
-            df_details_by_endpoint_name,
-            include_zero_in_y_axis=include_zero_in_y_axis,
-        )
-    else:
-        scatterplot_latency_per_connections(
-            workload_name,
-            latency_figure,
-            df_details_by_endpoint_name,
-            baseline_version_name=None,
-            include_zero_in_y_axis=include_zero_in_y_axis,
-        )
+    plot_duration_by_connections_for_workload(
+        workload_name,
+        duration_per_connections_figure,
+        df_details_by_endpoint_name,
+        include_zero_in_y_axis=include_zero_in_y_axis,
+    )
+    plot_duration_by_endpoints_for_workload(
+        workload_name,
+        duration_per_endpoints_figure,
+        df_details_by_endpoint_name,
+        include_zero_in_y_axis=include_zero_in_y_axis,
+    )
 
 
 def load_data_from_filesystem(
     workload_name: str,
-) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+) -> tuple[dict[str, DfTotals], dict[str, DfDetails]]:
     endpoint_names = paths.get_endpoint_names_from_results_dir()
     endpoint_names.sort()
 
@@ -76,7 +77,11 @@ def load_data_from_filesystem(
 
         assert os.path.exists(details_data_path)
 
-        df_totals_by_endpoint_name[endpoint_name] = pd.read_csv(totals_data_path)
-        df_details_by_endpoint_name[endpoint_name] = pd.read_csv(details_data_path)
+        df_totals_by_endpoint_name[endpoint_name] = DfTotals(
+            pd.read_csv(totals_data_path)
+        )
+        df_details_by_endpoint_name[endpoint_name] = DfDetails(
+            pd.read_csv(details_data_path)
+        )
 
     return df_totals_by_endpoint_name, df_details_by_endpoint_name

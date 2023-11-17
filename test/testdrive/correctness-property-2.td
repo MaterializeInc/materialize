@@ -40,7 +40,7 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
 # Create a cluster with no replicas so that we have time to submit queries at the minimum frontier.
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

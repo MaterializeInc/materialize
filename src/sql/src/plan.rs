@@ -847,7 +847,8 @@ pub enum ExplaineeStatement {
     /// The object to be explained is a SELECT statement.
     Query {
         raw_plan: HirRelationExpr,
-        row_set_finishing: Option<RowSetFinishing>,
+        row_set_finishing: RowSetFinishing,
+        desc: RelationDesc,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
     },
@@ -900,10 +901,16 @@ impl ExplaineeStatement {
     pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
         match self {
             Self::Query {
-                row_set_finishing, ..
+                row_set_finishing,
+                desc,
+                ..
             } => {
-                // Use the optional finishing extracted in the plan_query call.
-                row_set_finishing.clone()
+                if !row_set_finishing.is_trivial(desc.arity()) {
+                    // Use the optional finishing extracted in the plan_query call.
+                    Some(row_set_finishing.clone())
+                } else {
+                    None
+                }
             }
             Self::CreateMaterializedView { .. } => {
                 // Trivial finishing asserted in plan_create_materialized_view.
@@ -1298,14 +1305,50 @@ pub struct Ingestion {
 pub struct WebhookValidation {
     /// The expression used to validate a request.
     pub expression: MirScalarExpr,
+    /// Description of the source that will be created.
+    pub relation_desc: RelationDesc,
     /// The column index to provide the request body and whether to provide it as bytes.
     pub bodies: Vec<(usize, bool)>,
     /// The column index to provide the request headers and whether to provide the values as bytes.
-    ///
-    /// TODO(parkmycar): Support filtering down to specific headers.
     pub headers: Vec<(usize, bool)>,
     /// Any secrets that are used in that validation.
     pub secrets: Vec<WebhookValidationSecret>,
+}
+
+impl WebhookValidation {
+    const MAX_REDUCE_TIME: Duration = Duration::from_secs(60);
+
+    /// Attempt to reduce the internal [`MirScalarExpr`] into a simpler expression.
+    ///
+    /// The reduction happens on a separate thread, we also only wait for
+    /// `WebhookValidation::MAX_REDUCE_TIME` before timing out and returning an error.
+    pub async fn reduce_expression(&mut self) -> Result<(), &'static str> {
+        let WebhookValidation {
+            expression,
+            relation_desc,
+            ..
+        } = self;
+
+        // On a different thread, attempt to reduce the expression.
+        let mut expression_ = expression.clone();
+        let desc_ = relation_desc.clone();
+        let reduce_task = mz_ore::task::spawn_blocking(
+            || "webhook-validation-reduce",
+            move || {
+                expression_.reduce(&desc_.typ().column_types);
+                expression_
+            },
+        );
+
+        match tokio::time::timeout(Self::MAX_REDUCE_TIME, reduce_task).await {
+            Ok(Ok(reduced_expr)) => {
+                *expression = reduced_expr;
+                Ok(())
+            }
+            Ok(Err(_)) => Err("joining task"),
+            Err(_) => Err("timeout"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize)]

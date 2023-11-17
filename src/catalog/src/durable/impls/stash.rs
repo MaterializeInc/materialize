@@ -27,17 +27,18 @@ use mz_proto::{ProtoType, RustType};
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash::{AppendBatch, DebugStashFactory, Diff, Stash, StashFactory, TypedCollection};
-use mz_stash_types::objects::proto;
 use mz_stash_types::StashError;
 use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{Collection, CollectionTrace, Trace};
-use crate::durable::initialize::DEPLOY_GENERATION;
+use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, USER_VERSION_KEY};
+use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, DurableType, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey,
     TimelineTimestamp, TimestampValue,
 };
 use crate::durable::transaction::{Transaction, TransactionBatch};
+use crate::durable::upgrade::upgrade;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DebugCatalogState, DurableCatalogError,
     DurableCatalogState, Epoch, OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
@@ -226,7 +227,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
             },
             Some(stash) => stash,
         };
-        stash.is_initialized().await.err_into()
+        is_stash_initialized(stash).await.err_into()
     }
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
@@ -250,6 +251,29 @@ impl OpenableDurableCatalogState for OpenableConnection {
             .map(|v| v.value);
 
         Ok(deployment_generation)
+    }
+
+    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+        let stash = match &mut self.stash {
+            None => match self.open_stash_read_only().await {
+                Ok(stash) => stash,
+                Err(e) if e.can_recover_with_write_mode() => return Ok(None),
+                Err(e) => return Err(e.into()),
+            },
+            Some(stash) => stash,
+        };
+
+        let value = CONFIG_COLLECTION
+            .peek_key_one(
+                stash,
+                proto::ConfigKey {
+                    key: ENABLE_PERSIST_TXN_TABLES.into(),
+                },
+            )
+            .await?
+            .map(|v| v.value);
+
+        Ok(value.map(|value| value > 0))
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -433,7 +457,7 @@ async fn open_inner(
     deploy_generation: Option<u64>,
 ) -> Result<Box<Connection>, (Stash, CatalogError)> {
     // Initialize the Stash if it hasn't been already
-    let is_init = match stash.is_initialized().await {
+    let is_init = match is_stash_initialized(&mut stash).await {
         Ok(is_init) => is_init,
         Err(e) => {
             return Err((stash, e.into()));
@@ -460,7 +484,7 @@ async fn open_inner(
         if !stash.is_readonly() {
             // Before we do anything with the Stash, we need to run any pending upgrades and
             // initialize new collections.
-            match stash.upgrade().await {
+            match upgrade(&mut stash).await {
                 Ok(()) => {}
                 Err(e) => {
                     return Err((stash, e.into()));
@@ -483,6 +507,29 @@ async fn open_inner(
     };
 
     Ok(Box::new(conn))
+}
+
+/// Returns whether this Stash is initialized. We consider a Stash to be initialized if
+/// it contains an entry in the [`CONFIG_COLLECTION`] with the key of [`USER_VERSION_KEY`].
+#[tracing::instrument(name = "stash::is_initialized", level = "debug", skip_all)]
+pub async fn is_stash_initialized(stash: &mut Stash) -> Result<bool, StashError> {
+    // Check to see what collections exist, this prevents us from unnecessarily creating a
+    // config collection, if one doesn't yet exist.
+    let collections = stash.collections().await?;
+    let exists = collections
+        .iter()
+        .any(|(_id, name)| name == CONFIG_COLLECTION.name());
+
+    // If our config collection exists, then we'll try to read a version number.
+    if exists {
+        let items = CONFIG_COLLECTION.iter(stash).await?;
+        let contains_version = items
+            .into_iter()
+            .any(|((key, _value), _ts, _diff)| key.key == USER_VERSION_KEY);
+        Ok(contains_version)
+    } else {
+        Ok(false)
+    }
 }
 
 /// A [`Connection`] represent an open connection to the stash. It exposes optimized methods for
@@ -711,7 +758,7 @@ impl DurableCatalogState for Connection {
         // (which would happen at least one time when the txn starts), and
         // instead only clone the Arc.
         let txn_batch = Arc::new(txn_batch);
-        let is_initialized = self.stash.is_initialized().await?;
+        let is_initialized = is_stash_initialized(&mut self.stash).await?;
 
         // Before doing anything else, set the connection timeout if it changed.
         if let Some(connection_timeout) = txn_batch.connection_timeout {
@@ -1093,6 +1140,12 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.openable_connection.get_deployment_generation().await
+    }
+
+    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+        self.openable_connection
+            .get_enable_persist_txn_tables()
+            .await
     }
 
     async fn trace(&mut self) -> Result<Trace, CatalogError> {

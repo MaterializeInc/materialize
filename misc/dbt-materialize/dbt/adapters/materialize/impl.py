@@ -20,6 +20,12 @@ from typing import Any, Dict, List, Optional
 import dbt.exceptions
 from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport
 from dbt.adapters.base.meta import available
+from dbt.adapters.capability import (
+    Capability,
+    CapabilityDict,
+    CapabilitySupport,
+    Support,
+)
 from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
@@ -78,6 +84,17 @@ class MaterializeAdapter(PostgresAdapter):
         ConstraintType.primary_key: ConstraintSupport.NOT_SUPPORTED,
         ConstraintType.foreign_key: ConstraintSupport.NOT_SUPPORTED,
     }
+
+    # NOTE(morsapaes): Materialize supports the functionality required to enable
+    # metadata source freshness checks, but the value of this feature in a data
+    # warehouse built for real-time is limited, so we do not implement it.
+    _capabilities = CapabilityDict(
+        {
+            Capability.TableLastModifiedMetadata: CapabilitySupport(
+                support=Support.NotImplemented
+            ),
+        }
+    )
 
     @classmethod
     def is_cancelable(cls) -> bool:

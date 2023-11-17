@@ -93,26 +93,27 @@ FROM WEBHOOK
     CHECK (
         WITH (BODY, HEADERS, SECRET stripe_webhook_secret)
         (
-            -- Sign the timestamp and body.
-            encode(hmac(
-                (
-                    -- Extract the `t` component from the `Stripe-Signature` header.
-                    regexp_split_to_array(headers->'stripe-signature', ',|=')[
-                        array_position(regexp_split_to_array(headers->'stripe-signature', ',|='), 't')
-                        + 1
-                    ]
-                    || '.' ||
-                    body
-                ),
-                stripe_webhook_secret,
-                'sha256'
-            ), 'hex')
-            =
-            -- Extract the `v1` component from the `Stripe-Signature` header.
-            regexp_split_to_array(headers->'stripe-signature', ',|=')[
-                array_position(regexp_split_to_array(headers->'stripe-signature', ',|='), 'v1')
-                + 1
-            ]
+            constant_time_eq(
+                -- Sign the timestamp and body.
+                encode(hmac(
+                    (
+                        -- Extract the `t` component from the `Stripe-Signature` header.
+                        regexp_split_to_array(headers->'stripe-signature', ',|=')[
+                            array_position(regexp_split_to_array(headers->'stripe-signature', ',|='), 't')
+                            + 1
+                        ]
+                        || '.' ||
+                        body
+                    ),
+                    stripe_webhook_secret,
+                    'sha256'
+                ), 'hex'),
+                -- Extract the `v1` component from the `Stripe-Signature` header.
+                regexp_split_to_array(headers->'stripe-signature', ',|=')[
+                    array_position(regexp_split_to_array(headers->'stripe-signature', ',|='), 'v1')
+                    + 1
+                ],
+            )
         )
     );
 ```

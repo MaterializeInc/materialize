@@ -43,6 +43,10 @@ REFERENCE_RE = re.compile(
     | @disabled
     # Used in pytest
     | @pytest.mark.skip
+    # Used in output-consistency framework
+    | YesIgnore
+    # Used in proto files
+    //\ buf\ breaking:\ ignore
     )
     """,
     re.VERBOSE | re.IGNORECASE,
@@ -94,11 +98,6 @@ def detect_closed_issues(filename: str) -> list[IssueRef]:
                     ]
                     assert len(groups) == 1, f"Expected only 1 element in {groups}"
                     group, issue_id = groups[0]
-                    (
-                        "TimelyDataflow/timely-dataflow"
-                        if issue_match.group("timelydataflow")
-                        else "MaterializeInc/materialize"
-                    )
                     issue_refs.append(
                         IssueRef(
                             GROUP_REPO[group],

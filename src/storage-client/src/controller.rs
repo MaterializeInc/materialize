@@ -216,7 +216,7 @@ pub trait StorageController: Debug + Send {
     /// created with zero replicas.
     ///
     /// Panics if a storage instance with the given ID already exists.
-    fn create_instance(&mut self, id: StorageInstanceId, variable_length_row_encoding: bool);
+    fn create_instance(&mut self, id: StorageInstanceId);
 
     /// Drops the storage instance with the given ID.
     ///
@@ -376,7 +376,7 @@ pub trait StorageController: Debug + Send {
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot_cursor(
-        &self,
+        &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>

@@ -7,8 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod state_update;
+
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,31 +22,28 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::now::EpochMillis;
+use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{soft_assert, soft_assert_eq};
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::codec_impls::{
-    SimpleDecoder, SimpleEncoder, SimpleSchema, UnitSchema, VecU8Schema,
-};
-use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
-use mz_persist_types::Codec;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::RustType;
 use mz_repr::Diff;
-use mz_stash::USER_VERSION_KEY;
-use mz_stash_types::objects::proto;
-use mz_stash_types::STASH_VERSION;
 use mz_storage_types::sources::Timeline;
-use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::debug;
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
-use crate::durable::initialize::DEPLOY_GENERATION;
+use crate::durable::impls::persist::state_update::StateUpdateKindSchema;
+pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
+use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, USER_VERSION_KEY};
+use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
+use crate::durable::upgrade::STASH_VERSION;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
     OpenableDurableCatalogState, ReadOnlyDurableCatalogState, TimelineTimestamp, Transaction,
@@ -63,183 +63,6 @@ enum Mode {
     Writable,
 }
 
-/// A single update to the catalog state.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdate {
-    /// They kind and contents of the state update.
-    kind: StateUpdateKind,
-    /// The timestamp at which the update occurred.
-    ts: Timestamp,
-    /// Record count difference for the update.
-    diff: Diff,
-}
-
-impl StateUpdate {
-    /// Convert a [`TransactionBatch`] to a list of [`StateUpdate`]s at timestamp `ts`.
-    fn from_txn_batch(txn_batch: TransactionBatch, ts: Timestamp) -> Vec<StateUpdate> {
-        fn from_batch<K, V>(
-            batch: Vec<(K, V, Diff)>,
-            ts: Timestamp,
-            kind: fn(K, V) -> StateUpdateKind,
-        ) -> impl Iterator<Item = StateUpdate> {
-            batch.into_iter().map(move |(k, v, diff)| StateUpdate {
-                kind: kind(k, v),
-                ts,
-                diff,
-            })
-        }
-        let TransactionBatch {
-            databases,
-            schemas,
-            items,
-            comments,
-            roles,
-            clusters,
-            cluster_replicas,
-            introspection_sources,
-            id_allocator,
-            configs,
-            settings,
-            timestamps,
-            system_gid_mapping,
-            system_configurations,
-            default_privileges,
-            system_privileges,
-            audit_log_updates,
-            storage_usage_updates,
-            // Persist implementation does not use the connection timeout.
-            connection_timeout: _,
-        } = txn_batch;
-        let databases = from_batch(databases, ts, StateUpdateKind::Database);
-        let schemas = from_batch(schemas, ts, StateUpdateKind::Schema);
-        let items = from_batch(items, ts, StateUpdateKind::Item);
-        let comments = from_batch(comments, ts, StateUpdateKind::Comment);
-        let roles = from_batch(roles, ts, StateUpdateKind::Role);
-        let clusters = from_batch(clusters, ts, StateUpdateKind::Cluster);
-        let cluster_replicas = from_batch(cluster_replicas, ts, StateUpdateKind::ClusterReplica);
-        let introspection_sources = from_batch(
-            introspection_sources,
-            ts,
-            StateUpdateKind::IntrospectionSourceIndex,
-        );
-        let id_allocators = from_batch(id_allocator, ts, StateUpdateKind::IdAllocator);
-        let configs = from_batch(configs, ts, StateUpdateKind::Config);
-        let settings = from_batch(settings, ts, StateUpdateKind::Setting);
-        let timestamps = from_batch(timestamps, ts, StateUpdateKind::Timestamp);
-        let system_object_mappings =
-            from_batch(system_gid_mapping, ts, StateUpdateKind::SystemObjectMapping);
-        let system_configurations = from_batch(
-            system_configurations,
-            ts,
-            StateUpdateKind::SystemConfiguration,
-        );
-        let default_privileges =
-            from_batch(default_privileges, ts, StateUpdateKind::DefaultPrivilege);
-        let system_privileges = from_batch(system_privileges, ts, StateUpdateKind::SystemPrivilege);
-        let audit_logs = from_batch(audit_log_updates, ts, StateUpdateKind::AuditLog);
-        let storage_usage_updates =
-            from_batch(storage_usage_updates, ts, StateUpdateKind::StorageUsage);
-
-        databases
-            .chain(schemas)
-            .chain(items)
-            .chain(comments)
-            .chain(roles)
-            .chain(clusters)
-            .chain(cluster_replicas)
-            .chain(introspection_sources)
-            .chain(id_allocators)
-            .chain(configs)
-            .chain(settings)
-            .chain(timestamps)
-            .chain(system_object_mappings)
-            .chain(system_configurations)
-            .chain(default_privileges)
-            .chain(system_privileges)
-            .chain(audit_logs)
-            .chain(storage_usage_updates)
-            .collect()
-    }
-}
-
-/// The contents of a single state update.
-// TODO(jkosh44) Remove Serde when we switch to proto fully.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum StateUpdateKind {
-    AuditLog(proto::AuditLogKey, ()),
-    Cluster(proto::ClusterKey, proto::ClusterValue),
-    ClusterReplica(proto::ClusterReplicaKey, proto::ClusterReplicaValue),
-    Comment(proto::CommentKey, proto::CommentValue),
-    Config(proto::ConfigKey, proto::ConfigValue),
-    Database(proto::DatabaseKey, proto::DatabaseValue),
-    DefaultPrivilege(proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue),
-    Epoch(Epoch),
-    IdAllocator(proto::IdAllocKey, proto::IdAllocValue),
-    IntrospectionSourceIndex(
-        proto::ClusterIntrospectionSourceIndexKey,
-        proto::ClusterIntrospectionSourceIndexValue,
-    ),
-    Item(proto::ItemKey, proto::ItemValue),
-    Role(proto::RoleKey, proto::RoleValue),
-    Schema(proto::SchemaKey, proto::SchemaValue),
-    Setting(proto::SettingKey, proto::SettingValue),
-    StorageUsage(proto::StorageUsageKey, ()),
-    SystemConfiguration(
-        proto::ServerConfigurationKey,
-        proto::ServerConfigurationValue,
-    ),
-    SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
-    SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
-    Timestamp(proto::TimestampKey, proto::TimestampValue),
-}
-
-// TODO(jkosh44) As an initial implementation we simply serialize and deserialize everything as a
-// JSON. Before enabling in production, we'd like to utilize Protobuf to serialize and deserialize
-// everything.
-impl Codec for StateUpdateKind {
-    type Schema = VecU8Schema;
-
-    fn codec_name() -> String {
-        "StateUpdateJson".to_string()
-    }
-
-    fn encode<B>(&self, buf: &mut B)
-    where
-        B: bytes::BufMut,
-    {
-        let bytes = serde_json::to_vec(&self).expect("failed to encode StateUpdate");
-        buf.put(bytes.as_slice());
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        serde_json::from_slice(buf).map_err(|err| err.to_string())
-    }
-}
-
-impl mz_persist_types::columnar::Schema<StateUpdateKind> for VecU8Schema {
-    type Encoder<'a> = SimpleEncoder<'a, StateUpdateKind, Vec<u8>>;
-
-    type Decoder<'a> = SimpleDecoder<'a, StateUpdateKind, Vec<u8>>;
-
-    fn columns(&self) -> DynStructCfg {
-        SimpleSchema::<StateUpdateKind, Vec<u8>>::columns(&())
-    }
-
-    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
-        SimpleSchema::<StateUpdateKind, Vec<u8>>::decoder(cols, |val, ret| {
-            *ret = StateUpdateKind::decode(val).expect("should be valid StateUpdateKind")
-        })
-    }
-
-    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        SimpleSchema::<StateUpdateKind, Vec<u8>>::push_encoder(cols, |col, val| {
-            let mut buf = Vec::new();
-            StateUpdateKind::encode(val, &mut buf);
-            mz_persist_types::columnar::ColumnPush::<Vec<u8>>::push(col, &buf)
-        })
-    }
-}
-
 /// Handles and metadata needed to interact with persist.
 ///
 /// Production users should call [`Self::expire`] before dropping a [`PersistHandle`] so that it
@@ -250,6 +73,10 @@ pub struct PersistHandle {
     write_handle: WriteHandle<StateUpdateKind, (), Timestamp, Diff>,
     /// Read handle to persist.
     read_handle: ReadHandle<StateUpdateKind, (), Timestamp, Diff>,
+    /// Handle for connecting to persist.
+    persist_client: PersistClient,
+    /// Catalog shard ID.
+    shard_id: ShardId,
 }
 
 impl PersistHandle {
@@ -270,18 +97,17 @@ impl PersistHandle {
         let (write_handle, read_handle) = persist_client
             .open(
                 shard_id,
-                Arc::new(VecU8Schema::default()),
-                Arc::new(UnitSchema),
-                Diagnostics {
-                    shard_name: "catalog".to_string(),
-                    handle_purpose: "durable catalog state".to_string(),
-                },
+                Arc::new(StateUpdateKindSchema::default()),
+                Arc::new(UnitSchema::default()),
+                diagnostics(),
             )
             .await
             .expect("invalid usage");
         PersistHandle {
             write_handle,
             read_handle,
+            persist_client,
+            shard_id,
         }
     }
 
@@ -351,9 +177,12 @@ impl PersistHandle {
             "open inner"
         );
 
+        self.read_handle.expire().await;
         let mut catalog = PersistCatalogState {
             mode,
-            persist_handle: self,
+            write_handle: self.write_handle,
+            persist_client: self.persist_client,
+            shard_id: self.shard_id,
             upper,
             epoch: current_epoch,
             // Initialize empty in-memory state.
@@ -405,15 +234,8 @@ impl PersistHandle {
     }
 
     /// Fetch the current upper of the catalog state.
-    // TODO(jkosh44) This isn't actually guaranteed to be linearizable. Before enabling this in
-    //  production we need a new linearizable solution.
     async fn current_upper(&mut self) -> Timestamp {
-        self.write_handle
-            .fetch_recent_upper()
-            .await
-            .as_option()
-            .cloned()
-            .expect("we use a totally ordered time and never finalize the shard")
+        current_upper(&mut self.write_handle).await
     }
 
     /// Reports if the catalog state has been initialized, and the current upper.
@@ -431,29 +253,7 @@ impl PersistHandle {
         &mut self,
         upper: Timestamp,
     ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-        let snapshot = if upper > Timestamp::minimum() {
-            let since = self.read_handle.since().clone();
-            let mut as_of = upper.saturating_sub(1);
-            as_of.advance_by(since.borrow());
-            self.read_handle
-                .snapshot_and_fetch(Antichain::from_elem(as_of))
-                .await
-                .expect("we have advanced the restart_as_of by the since")
-        } else {
-            Vec::new()
-        };
-        soft_assert!(
-            snapshot.iter().all(|(_, _, diff)| *diff == 1),
-            "snapshot_and_fetch guarantees a consolidated result"
-        );
-        snapshot
-            .into_iter()
-            .map(|((key, _unit), ts, diff)| StateUpdate {
-                kind: key.expect("key decoding error"),
-                ts,
-                diff,
-            })
-            .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
+        snapshot(&mut self.read_handle, upper).await
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
@@ -482,8 +282,8 @@ impl PersistHandle {
         };
         snapshot
             .into_iter()
-            .map(|((key, _unit), ts, diff)| StateUpdate {
-                kind: key.expect("key decoding error"),
+            .map(|((kind, _unit), ts, diff)| StateUpdate {
+                kind: kind.expect("kind decoding error"),
                 ts,
                 diff,
             })
@@ -531,31 +331,11 @@ impl PersistHandle {
         current_upper: Timestamp,
         next_upper: Timestamp,
     ) -> Result<(), CatalogError> {
-        let updates = updates
-            .into_iter()
-            .map(|update| ((update.kind, ()), update.ts, update.diff));
-        match self
-            .write_handle
-            .compare_and_append(
-                updates,
-                Antichain::from_elem(current_upper),
-                Antichain::from_elem(next_upper),
-            )
-            .await
-            .expect("invalid usage")
-        {
-            Ok(()) => {
-                self.read_handle
-                    .downgrade_since(&Antichain::from_elem(current_upper))
-                    .await;
-                Ok(())
-            }
-            Err(upper_mismatch) => Err(DurableCatalogError::Fence(format!(
-                "current catalog upper {:?} fenced by new catalog upper {:?}",
-                upper_mismatch.expected, upper_mismatch.current
-            ))
-            .into()),
-        }
+        compare_and_append(&mut self.write_handle, updates, current_upper, next_upper).await?;
+        self.read_handle
+            .downgrade_since(&Antichain::from_elem(current_upper))
+            .await;
+        Ok(())
     }
 }
 
@@ -609,6 +389,13 @@ impl OpenableDurableCatalogState for PersistHandle {
         Ok(self.get_config(DEPLOY_GENERATION, upper).await)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+        let upper = self.current_upper().await;
+        let value = self.get_config(ENABLE_PERSIST_TXN_TABLES, upper).await;
+        Ok(value.map(|value| value > 0))
+    }
+
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         let (is_initialized, upper) = self.is_initialized_inner().await;
@@ -632,8 +419,12 @@ impl OpenableDurableCatalogState for PersistHandle {
 pub struct PersistCatalogState {
     /// The [`Mode`] that this catalog was opened in.
     mode: Mode,
-    /// Handles to the persist shard containing the catalog.
-    persist_handle: PersistHandle,
+    /// Write handle to persist.
+    write_handle: WriteHandle<StateUpdateKind, (), Timestamp, Diff>,
+    /// Handle for connecting to persist.
+    persist_client: PersistClient,
+    /// Catalog shard ID.
+    shard_id: ShardId,
     /// The current upper of the persist shard.
     upper: Timestamp,
     /// The epoch of this catalog.
@@ -646,6 +437,37 @@ pub struct PersistCatalogState {
 }
 
 impl PersistCatalogState {
+    /// Fetch the current upper of the catalog state.
+    async fn current_upper(&mut self) -> Timestamp {
+        current_upper(&mut self.write_handle).await
+    }
+
+    /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
+    /// iff the current global upper of the catalog is `current_upper`.
+    async fn compare_and_append(
+        &mut self,
+        updates: Vec<StateUpdate>,
+        current_upper: Timestamp,
+        next_upper: Timestamp,
+    ) -> Result<(), CatalogError> {
+        compare_and_append(&mut self.write_handle, updates, current_upper, next_upper).await
+    }
+
+    /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
+    /// state up to, but not including, `upper`.
+    ///
+    /// The output is consolidated and sorted by timestamp in ascending order.
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn persist_snapshot(
+        &mut self,
+        upper: Timestamp,
+    ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
+        let mut read_handle = self.read_handle().await;
+        let snapshot = snapshot(&mut read_handle, upper).await;
+        read_handle.expire().await;
+        snapshot
+    }
+
     /// Applies [`StateUpdate`]s to the in memory catalog cache.
     #[tracing::instrument(level = "debug", skip_all)]
     fn apply_updates(
@@ -744,6 +566,19 @@ impl PersistCatalogState {
         self.confirm_leadership().await?;
         f(&self.snapshot)
     }
+
+    /// Open a read handle to the catalog.
+    async fn read_handle(&mut self) -> ReadHandle<StateUpdateKind, (), Timestamp, Diff> {
+        self.persist_client
+            .open_leased_reader(
+                self.shard_id,
+                Arc::new(StateUpdateKindSchema::default()),
+                Arc::new(UnitSchema::default()),
+                diagnostics(),
+            )
+            .await
+            .expect("invalid usage")
+    }
 }
 
 #[async_trait]
@@ -754,7 +589,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn expire(self: Box<Self>) {
-        self.persist_handle.expire().await
+        self.write_handle.expire().await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -778,8 +613,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         // audit logs in memory because they can grow quite large. Therefore, we
         // go back to persist and grab everything again.
         Ok(self
-            .persist_handle
-            .snapshot(self.upper)
+            .persist_snapshot(self.upper)
             .await
             .filter_map(
                 |StateUpdate {
@@ -830,7 +664,9 @@ impl DurableCatalogState for PersistCatalogState {
         &mut self,
         txn_batch: TransactionBatch,
     ) -> Result<(), CatalogError> {
-        if self.is_read_only() {
+        // If the transaction is empty then we don't error, even in read-only mode. This matches the
+        // semantics that the stash uses.
+        if !txn_batch.is_empty() && self.is_read_only() {
             return Err(DurableCatalogError::NotWritable(
                 "cannot commit a transaction in a read-only catalog".to_string(),
             )
@@ -864,17 +700,10 @@ impl DurableCatalogState for PersistCatalogState {
                     diff: 1,
                 });
             }
-            self.persist_handle
-                .compare_and_append(updates, current_upper, next_upper)
+            self.compare_and_append(updates, current_upper, next_upper)
                 .await?;
             self.upper = next_upper;
-            debug!(
-                "commit successful, upper advance from {:?} to {:?}, since advanced from {:?} to {:?}",
-                current_upper,
-                next_upper,
-                self.persist_handle.read_handle.since(),
-                current_upper
-            );
+            debug!("commit successful, upper advanced from {current_upper:?} to {next_upper:?}",);
         }
 
         Ok(())
@@ -882,7 +711,12 @@ impl DurableCatalogState for PersistCatalogState {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError> {
-        let upper = self.persist_handle.current_upper().await;
+        // Read only catalog does not care about leadership.
+        if self.is_read_only() {
+            return Ok(());
+        }
+
+        let upper = self.current_upper().await;
         if upper == self.upper {
             Ok(())
         } else {
@@ -912,8 +746,7 @@ impl DurableCatalogState for PersistCatalogState {
             Some(period) => u128::from(boot_ts).saturating_sub(period.as_millis()),
         };
         let storage_usage = self
-            .persist_handle
-            .snapshot(self.upper)
+            .persist_snapshot(self.upper)
             .await
             .filter_map(
                 |StateUpdate {
@@ -979,6 +812,90 @@ impl DurableCatalogState for PersistCatalogState {
 pub struct Fence {
     /// Previous epoch, if one existed.
     prev_epoch: Option<Epoch>,
+}
+
+/// Generate a diagnostic to use when connecting to persist.
+fn diagnostics() -> Diagnostics {
+    Diagnostics {
+        shard_name: "catalog".to_string(),
+        handle_purpose: "durable catalog state".to_string(),
+    }
+}
+
+/// Fetch the current upper of the catalog state.
+// TODO(jkosh44) This isn't actually guaranteed to be linearizable. Before enabling this in
+//  production we need a new linearizable solution.
+async fn current_upper(
+    write_handle: &mut WriteHandle<StateUpdateKind, (), Timestamp, Diff>,
+) -> Timestamp {
+    write_handle
+        .fetch_recent_upper()
+        .await
+        .as_option()
+        .cloned()
+        .expect("we use a totally ordered time and never finalize the shard")
+}
+
+/// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
+/// iff the current global upper of the catalog is `current_upper`.
+async fn compare_and_append(
+    write_handle: &mut WriteHandle<StateUpdateKind, (), Timestamp, Diff>,
+    updates: Vec<StateUpdate>,
+    current_upper: Timestamp,
+    next_upper: Timestamp,
+) -> Result<(), CatalogError> {
+    let updates = updates
+        .into_iter()
+        .map(|update| ((update.kind, ()), update.ts, update.diff));
+    write_handle
+        .compare_and_append(
+            updates,
+            Antichain::from_elem(current_upper),
+            Antichain::from_elem(next_upper),
+        )
+        .await
+        .expect("invalid usage")
+        .map_err(|upper_mismatch| {
+            DurableCatalogError::Fence(format!(
+                "current catalog upper {:?} fenced by new catalog upper {:?}",
+                upper_mismatch.expected, upper_mismatch.current
+            ))
+            .into()
+        })
+}
+
+/// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
+/// state up to, but not including, `upper`.
+///
+/// The output is consolidated and sorted by timestamp in ascending order.
+#[tracing::instrument(level = "debug", skip(read_handle))]
+async fn snapshot(
+    read_handle: &mut ReadHandle<StateUpdateKind, (), Timestamp, Diff>,
+    upper: Timestamp,
+) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
+    let snapshot = if upper > Timestamp::minimum() {
+        let since = read_handle.since().clone();
+        let mut as_of = upper.saturating_sub(1);
+        as_of.advance_by(since.borrow());
+        read_handle
+            .snapshot_and_fetch(Antichain::from_elem(as_of))
+            .await
+            .expect("we have advanced the restart_as_of by the since")
+    } else {
+        Vec::new()
+    };
+    soft_assert!(
+        snapshot.iter().all(|(_, _, diff)| *diff == 1),
+        "snapshot_and_fetch guarantees a consolidated result"
+    );
+    snapshot
+        .into_iter()
+        .map(|((kind, _unit), ts, diff)| StateUpdate {
+            kind: kind.expect("kind decoding error"),
+            ts,
+            diff,
+        })
+        .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
 }
 
 // Debug methods.
@@ -1081,6 +998,28 @@ impl PersistHandle {
         T::Key: PartialEq + Eq + Debug + Clone,
         T::Value: Debug + Clone,
     {
+        let (_, prev) = retry(self, move |s| {
+            let key = key.clone();
+            let value = value.clone();
+            async {
+                let prev = s.debug_edit_inner::<T>(key, value).await;
+                (s, prev)
+            }
+        })
+        .await;
+        prev
+    }
+
+    #[tracing::instrument(level = "info", skip(self))]
+    pub(crate) async fn debug_edit_inner<T: Collection>(
+        &mut self,
+        key: T::Key,
+        value: T::Value,
+    ) -> Result<Option<T::Value>, CatalogError>
+    where
+        T::Key: PartialEq + Eq + Debug + Clone,
+        T::Value: Debug + Clone,
+    {
         let current_upper = self.current_upper().await;
         let next_upper = current_upper.step_forward();
         let snapshot = self.snapshot(current_upper).await;
@@ -1126,6 +1065,23 @@ impl PersistHandle {
         key: T::Key,
     ) -> Result<(), CatalogError>
     where
+        T::Key: PartialEq + Eq + Debug + Clone,
+    {
+        let (_, res) = retry(self, move |s| {
+            let key = key.clone();
+            async {
+                let res = s.debug_delete_inner::<T>(key).await;
+                (s, res)
+            }
+        })
+        .await;
+        res
+    }
+
+    /// Manually delete `key` from collection `T`.
+    #[tracing::instrument(level = "info", skip(self))]
+    async fn debug_delete_inner<T: Collection>(&mut self, key: T::Key) -> Result<(), CatalogError>
+    where
         T::Key: PartialEq + Eq + Debug,
     {
         let current_upper = self.current_upper().await;
@@ -1150,4 +1106,18 @@ impl PersistHandle {
             .await?;
         Ok(())
     }
+}
+
+/// Wrapper for [`Retry::retry_async_with_state`] so that all commands share the same retry behavior.
+async fn retry<F, S, U, R, T, E>(state: S, mut f: F) -> (S, Result<T, E>)
+where
+    F: FnMut(S) -> U,
+    U: Future<Output = (S, R)>,
+    R: Into<RetryResult<T, E>>,
+{
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .clamp_backoff(Duration::from_secs(1))
+        .retry_async_with_state(state, |_, s| f(s))
+        .await
 }

@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{atomic, Arc};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::Future;
@@ -31,6 +31,14 @@ use mz_catalog::builtin::{
 use mz_catalog::durable::{
     test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig, Transaction,
 };
+pub use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
+pub use mz_catalog::memory::objects::{
+    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
+    ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
+    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
+    Table, Type, View,
+};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
     ClusterEvent, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
@@ -68,7 +76,9 @@ use mz_sql::plan::{
     PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
-use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput, SystemVars, VarInput};
+use mz_sql::session::vars::{
+    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, ENABLE_PERSIST_TXN_TABLES,
+};
 use mz_sql::{plan, rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{
     CreateSinkOption, CreateSourceOption, QualifiedReplica, Statement, WithOptionValue,
@@ -79,8 +89,7 @@ use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
-pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
+pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config, StateConfig};
 pub use crate::catalog::open::BuiltinMigrationMetadata;
 pub use crate::catalog::state::CatalogState;
 use crate::command::CatalogDump;
@@ -88,28 +97,15 @@ use crate::coord::{ConnMeta, TargetCluster};
 use crate::session::{PreparedStatement, Session};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
-pub use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
-    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
-    StorageSinkConnectionState, Table, Type, View,
-};
 
 mod builtin_table_updates;
 mod config;
 pub(crate) mod consistency;
-mod error;
 mod migrate;
 
 mod inner;
 mod open;
 mod state;
-
-pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);
-
-const CREATE_SQL_TODO: &str = "TODO";
-
-pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -406,7 +402,7 @@ impl Catalog {
             details: CatalogTypeDetails {
                 array_id: builtin.details.array_id,
                 typ,
-                typreceive_oid: builtin.details.typreceive_oid,
+                pg_metadata: builtin.details.pg_metadata.clone(),
             },
         }
     }
@@ -437,10 +433,15 @@ impl Catalog {
         let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let environmentd_id = Uuid::new_v4();
-        let catalog =
-            Self::open_debug_catalog(&debug_stash_factory, persist_client, environmentd_id, now)
-                .await
-                .expect("unable to open debug stash");
+        let catalog = Self::open_debug_catalog(
+            &debug_stash_factory,
+            persist_client,
+            environmentd_id,
+            now,
+            None,
+        )
+        .await
+        .expect("unable to open debug stash");
         let res = f(catalog).await;
         debug_stash_factory.drop().await;
         res
@@ -454,6 +455,7 @@ impl Catalog {
         persist_client: PersistClient,
         organization_id: Uuid,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(
             mz_catalog::durable::shadow_catalog_state(
@@ -471,7 +473,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_stash_catalog(storage, now, environment_id).await
     }
 
     /// Opens a debug stash backed catalog at `url`, using `schema` as the connection's search_path.
@@ -481,6 +483,7 @@ impl Catalog {
         url: String,
         schema: String,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new())
             .expect("unable to create TLS connector");
@@ -497,7 +500,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_stash_catalog(storage, now, environment_id).await
     }
 
     /// Opens a read only debug stash backed catalog defined by `stash_config`.
@@ -506,6 +509,7 @@ impl Catalog {
     pub async fn open_debug_read_only_stash_catalog_config(
         stash_config: StashConfig,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
             stash_config,
@@ -513,51 +517,43 @@ impl Catalog {
         let storage = openable_storage
             .open_read_only(now(), &test_bootstrap_args())
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_stash_catalog(storage, now, environment_id).await
     }
 
     async fn open_debug_stash_catalog(
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
-        let variable_length_row_encoding =
-            if mz_repr::VARIABLE_LENGTH_ROW_ENCODING.load(atomic::Ordering::SeqCst) {
-                "true"
-            } else {
-                "false"
-            };
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
-            unsafe_mode: true,
-            all_features: false,
-            build_info: &DUMMY_BUILD_INFO,
-            environment_id: EnvironmentId::for_tests(),
-            now,
-            skip_migrations: true,
             metrics_registry,
-            cluster_replica_sizes: Default::default(),
-            default_storage_cluster_size: None,
-            builtin_cluster_replica_size: "1".into(),
-            system_parameter_defaults: [(
-                "variable_length_row_encoding".to_string(),
-                variable_length_row_encoding.to_string(),
-            )]
-            .into_iter()
-            .collect(),
-            availability_zones: vec![],
             secrets_reader,
-            egress_ips: vec![],
-            aws_principal_context: None,
-            aws_privatelink_availability_zones: None,
-            system_parameter_sync_config: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
-            http_host_name: None,
-            connection_context: None,
-            active_connection_count,
+            state: StateConfig {
+                unsafe_mode: true,
+                all_features: false,
+                build_info: &DUMMY_BUILD_INFO,
+                environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
+                now,
+                skip_migrations: true,
+                cluster_replica_sizes: Default::default(),
+                default_storage_cluster_size: None,
+                builtin_cluster_replica_size: "1".into(),
+                system_parameter_defaults: Default::default(),
+                availability_zones: vec![],
+                egress_ips: vec![],
+                aws_principal_context: None,
+                aws_privatelink_availability_zones: None,
+                system_parameter_sync_config: None,
+                http_host_name: None,
+                connection_context: None,
+                active_connection_count,
+            },
         })
         .await?;
         Ok(catalog)
@@ -1115,7 +1111,6 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             &mut state,
-            &drop_ids,
         )?;
 
         let result = f(&state)?;
@@ -1155,9 +1150,6 @@ impl Catalog {
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &mut CatalogState,
-        // Provide all of the IDs that are being dropped in this transaction so we can provide
-        // stronger invariants about when we change items' dependencies.
-        drop_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         // NOTE(benesch): to support altering legacy sized sources and sinks
         // (those with linked clusters), we need to generate retractions for
@@ -1227,7 +1219,6 @@ impl Catalog {
                     tx,
                     builtin_table_updates,
                     oracle_write_ts,
-                    drop_ids,
                     audit_events,
                     session,
                     id,
@@ -1322,14 +1313,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    Self::update_item(
-                        state,
-                        builtin_table_updates,
-                        id,
-                        to_name,
-                        sink.item,
-                        drop_ids,
-                    )?;
+                    Self::update_item(state, builtin_table_updates, id, to_name, sink.item)?;
                 }
                 Op::AlterSource { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -1422,14 +1406,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    Self::update_item(
-                        state,
-                        builtin_table_updates,
-                        id,
-                        to_name,
-                        source.item,
-                        drop_ids,
-                    )?;
+                    Self::update_item(state, builtin_table_updates, id, to_name, source.item)?;
                 }
                 Op::CreateDatabase {
                     name,
@@ -2698,14 +2675,7 @@ impl Catalog {
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     updates.push((id, to_qualified_name, new_entry.item));
                     for (id, to_name, to_item) in updates {
-                        Self::update_item(
-                            state,
-                            builtin_table_updates,
-                            id,
-                            to_name,
-                            to_item,
-                            drop_ids,
-                        )?;
+                        Self::update_item(state, builtin_table_updates, id, to_name, to_item)?;
                     }
                 }
                 Op::RenameSchema {
@@ -2860,14 +2830,7 @@ impl Catalog {
                     ));
 
                     for (id, new_name, new_item) in updates {
-                        Self::update_item(
-                            state,
-                            builtin_table_updates,
-                            id,
-                            new_name,
-                            new_item,
-                            drop_ids,
-                        )?;
+                        Self::update_item(state, builtin_table_updates, id, new_name, new_item)?;
                     }
                 }
                 Op::UpdateOwner { id, new_owner } => {
@@ -3054,7 +3017,6 @@ impl Catalog {
                         id,
                         name.clone(),
                         to_item.clone(),
-                        drop_ids,
                     )?;
                     let entry = state.get_entry(&id);
                     tx.update_item(id, entry.clone().into())?;
@@ -3153,9 +3115,6 @@ impl Catalog {
         id: GlobalId,
         to_name: QualifiedItemName,
         to_item: CatalogItem,
-        // This lets us understand which items are dropped in this transaction so we can account
-        // for changes in dependencies.
-        drop_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
         info!(
@@ -3165,25 +3124,6 @@ impl Catalog {
             id
         );
 
-        // Ensure any removal from the uses is accompanied by a drop.
-        let to_item_uses_and_dropped_ids: BTreeSet<&GlobalId> =
-            drop_ids.iter().chain(&to_item.uses().0).collect();
-
-        assert!(
-            old_entry
-                .uses()
-                .0
-                .iter()
-                .all(|id| to_item_uses_and_dropped_ids.contains(id)),
-            "all of the old entries used items must be accompanied by a drop \
-                old_entry.uses: {:?}\
-                to_item.uses: {:?}\
-                drop_ids {:?}",
-            old_entry.uses(),
-            to_item.uses(),
-            drop_ids,
-        );
-
         let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema = state.get_schema_mut(
             &old_entry.name().qualifiers.database_spec,
@@ -3191,6 +3131,14 @@ impl Catalog {
             conn_id,
         );
         schema.items.remove(&old_entry.name().item);
+
+        // Dropped deps
+        let dropped_deps: Vec<_> = old_entry
+            .uses()
+            .0
+            .difference(&to_item.uses().0)
+            .cloned()
+            .collect();
 
         // We only need to install this item on items in the `used_by` of new
         // dependencies.
@@ -3206,6 +3154,14 @@ impl Catalog {
         new_entry.item = to_item;
 
         schema.items.insert(new_entry.name().item.clone(), id);
+
+        for u in dropped_deps {
+            // OK if we no longer have this entry because we are dropping our
+            // dependency on it.
+            if let Some(metadata) = state.entry_by_id.get_mut(&u) {
+                metadata.used_by.retain(|dep_id| *dep_id != id)
+            }
+        }
 
         for u in new_deps {
             match state.entry_by_id.get_mut(&u) {
@@ -3232,6 +3188,14 @@ impl Catalog {
         state.insert_system_configuration(name, value)?;
         let var = state.get_system_configuration(name)?;
         tx.upsert_system_config(name, var.value())?;
+        // This mirrors the `enabled_persist_txn_tables` "system var" into the
+        // catalog stash "config" collection so that we can toggle the flag with
+        // Launch Darkly, but use it in boot before Launch Darkly is available.
+        if name == ENABLE_PERSIST_TXN_TABLES.name() {
+            tx.set_enable_persist_txn_tables(
+                state.system_configuration.enable_persist_txn_tables(),
+            )?;
+        }
         Ok(())
     }
 
@@ -3361,10 +3325,6 @@ impl Catalog {
             is_retained_metrics_object,
             custom_logical_compaction_window,
         )
-    }
-
-    pub fn uses_tables(&self, id: GlobalId) -> bool {
-        self.state.uses_tables(id)
     }
 
     /// Return the ids of all log sources the given object depends on.
@@ -4443,6 +4403,7 @@ mod tests {
                 persist_client.clone(),
                 organization_id.clone(),
                 NOW_ZERO.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4470,6 +4431,7 @@ mod tests {
                 persist_client,
                 organization_id,
                 NOW_ZERO.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4679,6 +4641,7 @@ mod tests {
                 persist_client.clone(),
                 organization_id.clone(),
                 SYSTEM_TIME.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4715,6 +4678,7 @@ mod tests {
                 persist_client,
                 organization_id,
                 SYSTEM_TIME.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4887,7 +4851,8 @@ mod tests {
                 ty: String,
                 elem: u32,
                 array: u32,
-                receive: Option<u32>,
+                input: u32,
+                receive: u32,
             }
 
             struct PgOper {
@@ -4924,7 +4889,7 @@ mod tests {
 
             let pg_type: BTreeMap<_, _> = client
                 .query(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, nullif(typreceive::oid, 0) as typreceive FROM pg_type",
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type",
                     &[],
                 )
                 .await
@@ -4937,6 +4902,7 @@ mod tests {
                         ty: row.get("typtype"),
                         elem: row.get("typelem"),
                         array: row.get("typarray"),
+                        input: row.get("typinput"),
                         receive: row.get("typreceive"),
                     };
                     (oid, pg_type)
@@ -5026,13 +4992,29 @@ mod tests {
                             ty.oid, pg_ty.name, ty.name,
                         );
 
+                        let (typinput_oid, typreceive_oid) = match &ty.details.pg_metadata {
+                            None => (0, 0),
+                            Some(pgmeta) => (pgmeta.typinput_oid, pgmeta.typreceive_oid),
+                        };
                         assert_eq!(
-                            ty.details.typreceive_oid, pg_ty.receive,
-                            "type {} has typreceive OID {:?} in mz but {:?} in pg",
-                            ty.name, ty.details.typreceive_oid, pg_ty.receive,
+                            typinput_oid, pg_ty.input,
+                            "type {} has typinput OID {:?} in mz but {:?} in pg",
+                            ty.name, typinput_oid, pg_ty.input,
                         );
-
-                        if let Some(typreceive_oid) = ty.details.typreceive_oid {
+                        assert_eq!(
+                            typreceive_oid, pg_ty.receive,
+                            "type {} has typreceive OID {:?} in mz but {:?} in pg",
+                            ty.name, typreceive_oid, pg_ty.receive,
+                        );
+                        if typinput_oid != 0 {
+                            assert!(
+                                func_oids.contains(&typinput_oid),
+                                "type {} has typinput OID {} that does not exist in pg_proc",
+                                ty.name,
+                                typinput_oid,
+                            );
+                        }
+                        if typreceive_oid != 0 {
                             assert!(
                                 func_oids.contains(&typreceive_oid),
                                 "type {} has typreceive OID {} that does not exist in pg_proc",
@@ -5419,6 +5401,7 @@ mod tests {
         let prep_style = ExprPrepStyle::OneShot {
             logical_time: EvalTime::Time(Timestamp::MIN),
             session: &session,
+            catalog_state: &catalog.state,
         };
 
         // Execute the function as much as possible, ensuring no panics occur, but
@@ -5428,8 +5411,7 @@ mod tests {
         if let Ok(hir) = res {
             if let Ok(mut mir) = hir.lower_uncorrelated() {
                 // Populate unmaterialized functions.
-                prep_scalar_expr(&catalog.state, &mut mir, prep_style.clone())
-                    .expect("must succeed");
+                prep_scalar_expr(&mut mir, prep_style.clone()).expect("must succeed");
 
                 if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
                     if let Some(return_styp) = return_styp {

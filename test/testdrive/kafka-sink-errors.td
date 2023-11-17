@@ -17,7 +17,7 @@ ALTER SYSTEM SET enable_kafka_config_denylist_options = true
 > CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (1);
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

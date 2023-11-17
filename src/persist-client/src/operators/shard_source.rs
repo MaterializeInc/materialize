@@ -40,6 +40,7 @@ use timely::PartialOrder;
 use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
+use crate::cfg::RetryParameters;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
 use crate::stats::PartStats;
@@ -78,6 +79,8 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     should_fetch_part: F,
+    // If Some, an override for the default listen sleep retry parameters.
+    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
 ) -> (
     Stream<Child<'g, G, T>, FetchedPart<K, V, G::Timestamp, D>>,
     Rc<dyn Any>,
@@ -135,6 +138,7 @@ where
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
         should_fetch_part,
+        listen_sleep,
     );
     let descs = descs.enter(scope);
     let (descs, backpressure_token) = match desc_transformer {
@@ -180,6 +184,8 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     mut should_fetch_part: F,
+    // If Some, an override for the default listen sleep retry parameters.
+    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, Rc<dyn Any>)
 where
     K: Debug + Codec,
@@ -360,7 +366,8 @@ where
 
             let mut done = false;
             while !done {
-                for event in subscription.next().await {
+                let listen_retry = listen_sleep.as_ref().map(|retry| retry());
+                for event in subscription.next(listen_retry).await {
                     if let ListenEvent::Progress(ref progress) = event {
                         // If `until.less_equal(progress)`, it means that all subsequent batches will
                         // contain only times greater or equal to `until`, which means they can be
@@ -661,6 +668,7 @@ mod tests {
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),
                         ),
                         |_fetch, _frontier| true,
+                        false.then_some(|| unreachable!()),
                     );
                     (stream.leave(), token)
                 });
@@ -729,6 +737,7 @@ mod tests {
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),
                         ),
                         |_fetch, _frontier| true,
+                        false.then_some(|| unreachable!()),
                     );
                     (stream.leave(), token)
                 });

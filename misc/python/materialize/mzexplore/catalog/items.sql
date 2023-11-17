@@ -21,9 +21,9 @@ FROM
   mz_databases AS d ON (s.database_id = d.id)
 WHERE
   o.id like 'u%' AND
-  o.name like {name} AND
-  s.name like {schema} AND
-  d.name like {database}
+  o.name ilike {name} AND
+  s.name ilike {schema} AND
+  d.name ilike {database}
 ORDER BY
   o.type,
   d.name,

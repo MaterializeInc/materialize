@@ -273,6 +273,7 @@ use differential_dataflow::Hashable;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
+use mz_persist_client::stats::PartStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{ShardId, ShardIdSchema};
 use mz_persist_types::codec_impls::VecU8Schema;
@@ -280,7 +281,7 @@ use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, instrument};
+use tracing::{debug, error, instrument};
 
 pub mod operator;
 pub mod txn_read;
@@ -294,6 +295,15 @@ pub enum TxnsEntry {
     Register(ShardId),
     /// A batch written to a data shard in a txn.
     Append(ShardId, Vec<u8>),
+}
+
+impl TxnsEntry {
+    fn data_id(&self) -> &ShardId {
+        match self {
+            TxnsEntry::Register(data_id) => data_id,
+            TxnsEntry::Append(data_id, _) => data_id,
+        }
+    }
 }
 
 /// An abstraction over the encoding format of [TxnsEntry].
@@ -314,6 +324,14 @@ pub trait TxnsCodec: Debug {
     ///
     /// Implementations should panic if the values are invalid.
     fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry;
+
+    /// Returns if a part might include the given data shard based on pushdown
+    /// stats.
+    ///
+    /// False positives are okay (needless fetches) but false negatives are not
+    /// (incorrectness). Returns an Option to make `?` convenient, `None` is
+    /// treated the same as `Some(true)`.
+    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool>;
 }
 
 /// A reasonable default implementation of [TxnsCodec].
@@ -341,6 +359,15 @@ impl TxnsCodec for TxnsCodecDefault {
         } else {
             TxnsEntry::Append(key, val)
         }
+    }
+    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
+        let stats = stats
+            .key
+            .col::<String>("")
+            .map_err(|err| error!("unexpected stats type: {}", err))
+            .ok()??;
+        let data_id_str = data_id.to_string();
+        Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
     }
 }
 
@@ -535,7 +562,7 @@ async fn apply_caa<K, V, T, D>(
 }
 
 #[instrument(level = "debug", skip_all, fields(shard=%txns_since.shard_id(), ts=?new_since_ts))]
-pub(crate) async fn maybe_cads<T, O, C>(
+pub(crate) async fn cads<T, O, C>(
     txns_since: &mut SinceHandle<C::Key, C::Val, T, i64, O>,
     new_since_ts: T,
 ) where
@@ -550,15 +577,13 @@ pub(crate) async fn maybe_cads<T, O, C>(
     }
     let token = txns_since.opaque().clone();
     let res = txns_since
-        .maybe_compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(new_since_ts)))
+        .compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(new_since_ts)))
         .await;
     match res {
-        Some(Ok(_)) => {}
-        Some(Err(actual)) => {
+        Ok(_) => {}
+        Err(actual) => {
             mz_ore::halt!("fenced by another process @ {actual:?}. ours = {token:?}")
         }
-        // We got rate-limited. No-op.
-        None => {}
     }
 }
 

@@ -26,13 +26,11 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::str::StrExt;
-use mz_proto::IntoRustIfSome;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
-use mz_stash_types::objects::{proto, RustType, TryFromProtoError};
+use mz_sql_parser::ast::{Expr, Ident, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sources::SourceDesc;
@@ -455,77 +453,11 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
     }
 }
 
-impl RustType<proto::RoleAttributes> for RoleAttributes {
-    fn into_proto(&self) -> proto::RoleAttributes {
-        proto::RoleAttributes {
-            inherit: self.inherit,
-        }
-    }
-
-    fn from_proto(proto: proto::RoleAttributes) -> Result<Self, TryFromProtoError> {
-        let mut attributes = RoleAttributes::new();
-
-        attributes.inherit = proto.inherit;
-
-        Ok(attributes)
-    }
-}
-
 /// Default variable values for a [`CatalogRole`].
 #[derive(Default, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct RoleVars {
     /// Map of variable names to their value.
     pub map: BTreeMap<String, OwnedVarInput>,
-}
-
-impl RustType<proto::role_vars::entry::Val> for OwnedVarInput {
-    fn into_proto(&self) -> proto::role_vars::entry::Val {
-        match self.clone() {
-            OwnedVarInput::Flat(v) => proto::role_vars::entry::Val::Flat(v),
-            OwnedVarInput::SqlSet(entries) => {
-                proto::role_vars::entry::Val::SqlSet(proto::role_vars::SqlSet { entries })
-            }
-        }
-    }
-
-    fn from_proto(proto: proto::role_vars::entry::Val) -> Result<Self, TryFromProtoError> {
-        let result = match proto {
-            proto::role_vars::entry::Val::Flat(v) => OwnedVarInput::Flat(v),
-            proto::role_vars::entry::Val::SqlSet(proto::role_vars::SqlSet { entries }) => {
-                OwnedVarInput::SqlSet(entries)
-            }
-        };
-        Ok(result)
-    }
-}
-
-impl RustType<proto::RoleVars> for RoleVars {
-    fn into_proto(&self) -> proto::RoleVars {
-        let entries = self
-            .map
-            .clone()
-            .into_iter()
-            .map(|(key, val)| proto::role_vars::Entry {
-                key,
-                val: Some(val.into_proto()),
-            })
-            .collect();
-
-        proto::RoleVars { entries }
-    }
-
-    fn from_proto(proto: proto::RoleVars) -> Result<Self, TryFromProtoError> {
-        let map = proto
-            .entries
-            .into_iter()
-            .map(|entry| {
-                let val = entry.val.into_rust_if_some("role_vars::Entry::Val")?;
-                Ok::<_, TryFromProtoError>((entry.key, val))
-            })
-            .collect::<Result<_, _>>()?;
-
-        Ok(RoleVars { map })
-    }
 }
 
 /// A role in a [`SessionCatalog`].
@@ -740,42 +672,6 @@ impl From<CatalogItemType> for ObjectType {
     }
 }
 
-impl RustType<proto::CatalogItemType> for CatalogItemType {
-    fn into_proto(&self) -> proto::CatalogItemType {
-        match self {
-            CatalogItemType::Table => proto::CatalogItemType::Table,
-            CatalogItemType::Source => proto::CatalogItemType::Source,
-            CatalogItemType::Sink => proto::CatalogItemType::Sink,
-            CatalogItemType::View => proto::CatalogItemType::View,
-            CatalogItemType::MaterializedView => proto::CatalogItemType::MaterializedView,
-            CatalogItemType::Index => proto::CatalogItemType::Index,
-            CatalogItemType::Type => proto::CatalogItemType::Type,
-            CatalogItemType::Func => proto::CatalogItemType::Func,
-            CatalogItemType::Secret => proto::CatalogItemType::Secret,
-            CatalogItemType::Connection => proto::CatalogItemType::Connection,
-        }
-    }
-
-    fn from_proto(proto: proto::CatalogItemType) -> Result<Self, TryFromProtoError> {
-        let item_type = match proto {
-            proto::CatalogItemType::Table => CatalogItemType::Table,
-            proto::CatalogItemType::Source => CatalogItemType::Source,
-            proto::CatalogItemType::Sink => CatalogItemType::Sink,
-            proto::CatalogItemType::View => CatalogItemType::View,
-            proto::CatalogItemType::MaterializedView => CatalogItemType::MaterializedView,
-            proto::CatalogItemType::Index => CatalogItemType::Index,
-            proto::CatalogItemType::Type => CatalogItemType::Type,
-            proto::CatalogItemType::Func => CatalogItemType::Func,
-            proto::CatalogItemType::Secret => CatalogItemType::Secret,
-            proto::CatalogItemType::Connection => CatalogItemType::Connection,
-            proto::CatalogItemType::Unknown => {
-                return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"))
-            }
-        };
-        Ok(item_type)
-    }
-}
-
 /// Details about a type in the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogTypeDetails<T: TypeReference> {
@@ -783,8 +679,17 @@ pub struct CatalogTypeDetails<T: TypeReference> {
     pub array_id: Option<GlobalId>,
     /// The description of this type.
     pub typ: CatalogType<T>,
-    /// The OID of the `typreceive` function in PostgreSQL, if available.
-    pub typreceive_oid: Option<u32>,
+    /// Additional metadata about the type in PostgreSQL, if relevant.
+    pub pg_metadata: Option<CatalogTypePgMetadata>,
+}
+
+/// Additional PostgreSQL metadata about a type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogTypePgMetadata {
+    /// The OID of the `typinput` function in PostgreSQL.
+    pub typinput_oid: u32,
+    /// The OID of the `typreceive` function in PostgreSQL.
+    pub typreceive_oid: u32,
 }
 
 /// Represents a reference to type in the catalog
@@ -1332,8 +1237,13 @@ impl<'a, T> ErsatzCatalog<'a, T> {
             None => sql_bail!("database {database} not found source"),
         };
 
+        // Note: Using unchecked here is okay because all of these values were originally Idents.
         Ok((
-            UnresolvedItemName::qualified(&[database, schema, &name.item]),
+            UnresolvedItemName::qualified(&[
+                Ident::new_unchecked(database),
+                Ident::new_unchecked(schema),
+                Ident::new_unchecked(&name.item),
+            ]),
             desc,
         ))
     }
@@ -1448,51 +1358,6 @@ impl Display for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
         })
-    }
-}
-
-impl RustType<proto::ObjectType> for ObjectType {
-    fn into_proto(&self) -> proto::ObjectType {
-        match self {
-            ObjectType::Table => proto::ObjectType::Table,
-            ObjectType::View => proto::ObjectType::View,
-            ObjectType::MaterializedView => proto::ObjectType::MaterializedView,
-            ObjectType::Source => proto::ObjectType::Source,
-            ObjectType::Sink => proto::ObjectType::Sink,
-            ObjectType::Index => proto::ObjectType::Index,
-            ObjectType::Type => proto::ObjectType::Type,
-            ObjectType::Role => proto::ObjectType::Role,
-            ObjectType::Cluster => proto::ObjectType::Cluster,
-            ObjectType::ClusterReplica => proto::ObjectType::ClusterReplica,
-            ObjectType::Secret => proto::ObjectType::Secret,
-            ObjectType::Connection => proto::ObjectType::Connection,
-            ObjectType::Database => proto::ObjectType::Database,
-            ObjectType::Schema => proto::ObjectType::Schema,
-            ObjectType::Func => proto::ObjectType::Func,
-        }
-    }
-
-    fn from_proto(proto: proto::ObjectType) -> Result<Self, TryFromProtoError> {
-        match proto {
-            proto::ObjectType::Table => Ok(ObjectType::Table),
-            proto::ObjectType::View => Ok(ObjectType::View),
-            proto::ObjectType::MaterializedView => Ok(ObjectType::MaterializedView),
-            proto::ObjectType::Source => Ok(ObjectType::Source),
-            proto::ObjectType::Sink => Ok(ObjectType::Sink),
-            proto::ObjectType::Index => Ok(ObjectType::Index),
-            proto::ObjectType::Type => Ok(ObjectType::Type),
-            proto::ObjectType::Role => Ok(ObjectType::Role),
-            proto::ObjectType::Cluster => Ok(ObjectType::Cluster),
-            proto::ObjectType::ClusterReplica => Ok(ObjectType::ClusterReplica),
-            proto::ObjectType::Secret => Ok(ObjectType::Secret),
-            proto::ObjectType::Connection => Ok(ObjectType::Connection),
-            proto::ObjectType::Database => Ok(ObjectType::Database),
-            proto::ObjectType::Schema => Ok(ObjectType::Schema),
-            proto::ObjectType::Func => Ok(ObjectType::Func),
-            proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
-                "ObjectType::Unknown",
-            )),
-        }
     }
 }
 
@@ -1649,36 +1514,6 @@ impl TryFrom<BTreeMap<String, RoleId>> for RoleMembership {
                 .into_iter()
                 .map(|(k, v)| Ok((RoleId::from_str(&k)?, v)))
                 .collect::<Result<_, anyhow::Error>>()?,
-        })
-    }
-}
-
-impl RustType<proto::RoleMembership> for RoleMembership {
-    fn into_proto(&self) -> proto::RoleMembership {
-        proto::RoleMembership {
-            map: self
-                .map
-                .iter()
-                .map(|(key, val)| proto::role_membership::Entry {
-                    key: Some(key.into_proto()),
-                    value: Some(val.into_proto()),
-                })
-                .collect(),
-        }
-    }
-
-    fn from_proto(proto: proto::RoleMembership) -> Result<Self, TryFromProtoError> {
-        Ok(RoleMembership {
-            map: proto
-                .map
-                .into_iter()
-                .map(|e| {
-                    let key = e.key.into_rust_if_some("RoleMembership::Entry::key")?;
-                    let val = e.value.into_rust_if_some("RoleMembership::Entry::value")?;
-
-                    Ok((key, val))
-                })
-                .collect::<Result<_, TryFromProtoError>>()?,
         })
     }
 }

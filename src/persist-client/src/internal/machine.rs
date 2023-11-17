@@ -32,6 +32,7 @@ use tracing::{debug, info, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
+use crate::cfg::RetryParameters;
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::apply::Applier;
@@ -834,6 +835,8 @@ where
         frontier: &Antichain<T>,
         watch: &mut StateWatch<K, V, T, D>,
         reader_id: Option<&LeasedReaderId>,
+        // If Some, an override for the default listen sleep retry parameters.
+        retry: Option<RetryParameters>,
     ) -> HollowBatch<T> {
         let mut seqno = match self.applier.next_listen_batch(frontier) {
             Ok(b) => return b,
@@ -842,14 +845,14 @@ where
 
         // The latest state still doesn't have a new frontier for us:
         // watch+sleep in a loop until it does.
-        let sleeps = self.applier.metrics.retries.next_listen_batch.stream(
-            self.applier
-                .cfg
-                .dynamic
-                .next_listen_batch_retry_params()
-                .into_retry(SystemTime::now())
-                .into_retry_stream(),
-        );
+        let retry =
+            retry.unwrap_or_else(|| self.applier.cfg.dynamic.next_listen_batch_retry_params());
+        let sleeps = self
+            .applier
+            .metrics
+            .retries
+            .next_listen_batch
+            .stream(retry.into_retry(SystemTime::now()).into_retry_stream());
 
         enum Wake<'a, K, V, T, D> {
             Watch(&'a mut StateWatch<K, V, T, D>),
@@ -1946,6 +1949,8 @@ pub mod datadriven {
                     .expect("unknown batch")
                     .clone();
                 Batch::new(
+                    true,
+                    Arc::clone(&datadriven.client.metrics),
                     Arc::clone(&datadriven.client.blob),
                     datadriven.shard_id,
                     datadriven.client.cfg.build_version.clone(),

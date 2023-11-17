@@ -23,22 +23,23 @@ use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::TableTransaction;
-use mz_stash_types::objects::proto;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::builtin::BuiltinLog;
-use crate::durable::objects::ClusterConfig;
+use crate::durable::initialize::ENABLE_PERSIST_TXN_TABLES;
+use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
-    AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
-    CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
-    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
-    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig,
-    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
+    AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
+    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
+    ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
+    Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
+    DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    TimestampKey, TimestampValue,
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogState, Snapshot, SystemConfiguration,
@@ -1031,6 +1032,17 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    /// Updates the catalog stash `enable_persist_txn_tables` "config" value to
+    /// match the `enable_persist_txn_tables` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub fn set_enable_persist_txn_tables(&mut self, value: bool) -> Result<(), CatalogError> {
+        let value = if value { 1 } else { 0 };
+        self.set_config(ENABLE_PERSIST_TXN_TABLES.into(), value)?;
+        Ok(())
+    }
+
     pub fn update_comment(
         &mut self,
         object_id: CommentObjectId,
@@ -1289,4 +1301,50 @@ pub struct TransactionBatch {
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
     pub(crate) connection_timeout: Option<Duration>,
+}
+
+impl TransactionBatch {
+    pub fn is_empty(&self) -> bool {
+        let TransactionBatch {
+            databases,
+            schemas,
+            items,
+            comments,
+            roles,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+            audit_log_updates,
+            storage_usage_updates,
+            // This doesn't get written down anywhere.
+            connection_timeout: _,
+        } = self;
+
+        databases.is_empty()
+            && schemas.is_empty()
+            && items.is_empty()
+            && comments.is_empty()
+            && roles.is_empty()
+            && clusters.is_empty()
+            && cluster_replicas.is_empty()
+            && introspection_sources.is_empty()
+            && id_allocator.is_empty()
+            && configs.is_empty()
+            && settings.is_empty()
+            && timestamps.is_empty()
+            && system_gid_mapping.is_empty()
+            && system_configurations.is_empty()
+            && default_privileges.is_empty()
+            && system_privileges.is_empty()
+            && audit_log_updates.is_empty()
+            && storage_usage_updates.is_empty()
+    }
 }

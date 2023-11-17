@@ -26,7 +26,7 @@ use std::ops::Deref;
 
 use itertools::{izip, Itertools};
 use mz_expr::{Id, MirScalarExpr};
-use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
+use mz_ore::str::{separated, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, Indices, PlanRenderingContext};
 
@@ -575,13 +575,9 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for JoinClosure {
         if !self.ready_equivalences.is_empty() {
             let equivalences = separated(
                 " AND ",
-                self.ready_equivalences.iter().map(|equivalence| {
-                    if equivalence.len() == 2 {
-                        bracketed("", "", separated(" = ", equivalence))
-                    } else {
-                        bracketed("eq(", ")", separated(", ", equivalence))
-                    }
-                }),
+                self.ready_equivalences
+                    .iter()
+                    .map(|equivalence| separated(" = ", equivalence)),
             );
             writeln!(f, "{}ready_equivalences={}", ctx.indent, equivalences)?;
         }

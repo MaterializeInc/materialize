@@ -15,13 +15,14 @@ use std::time::Duration;
 use std::{cmp, thread};
 
 use async_trait::async_trait;
+use mz_catalog::memory::error::Error;
 use mz_ore::now::NowFn;
 use mz_repr::{Timestamp, TimestampManipulation};
 use mz_storage_types::sources::Timeline;
 use once_cell::sync::Lazy;
 use tracing::error;
 
-use crate::catalog::{Catalog, Error};
+use crate::catalog::Catalog;
 use crate::coord::timeline::WriteTimestamp;
 use crate::coord::timestamp_oracle::{catalog_oracle, TimestampOracle};
 use crate::util::ResultExt;

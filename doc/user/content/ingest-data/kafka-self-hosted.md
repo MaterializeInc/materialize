@@ -55,11 +55,8 @@ In Materialize, create a source connection that uses the SSH tunnel connection y
 
 ```sql
 CREATE CONNECTION kafka_connection TO KAFKA (
-BROKERS (
-    'broker1:9092' USING SSH TUNNEL ssh_connection,
-    'broker2:9092' USING SSH TUNNEL ssh_connection
-    -- Add all Kafka brokers
-    )
+  BROKER 'broker1:9092',
+  SSH TUNNEL ssh_connection
 );
 ```
 

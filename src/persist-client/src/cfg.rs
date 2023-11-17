@@ -49,10 +49,17 @@ impl PersistFeatureFlag {
         default: false,
         description: "use the new streaming consolidate during snapshot_and_fetch",
     };
+    // TODO: Remove this once we're comfortable that there aren't any bugs.
+    pub(crate) const BATCH_DELETE_ENABLED: PersistFeatureFlag = PersistFeatureFlag {
+        name: "persist_batch_delete_enabled",
+        default: false,
+        description: "Whether to actually delete blobs when batch delete is called (Materialize).",
+    };
 
     pub const ALL: &'static [PersistFeatureFlag] = &[
         Self::STREAMING_COMPACTION,
         Self::STREAMING_SNAPSHOT_AND_FETCH,
+        Self::BATCH_DELETE_ENABLED,
     ];
 }
 
@@ -205,6 +212,7 @@ impl PersistConfig {
                 pubsub_client_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_CLIENT_ENABLED),
                 pubsub_push_diff_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED),
                 rollup_threshold: AtomicUsize::new(Self::DEFAULT_ROLLUP_THRESHOLD),
+                txns_data_shard_retryer: RwLock::new(Self::DEFAULT_TXNS_DATA_SHARD_RETRYER),
                 feature_flags: {
                     // NB: initialized with the full set of feature flags, so the map never needs updating.
                     PersistFeatureFlag::ALL
@@ -340,6 +348,13 @@ impl PersistConfig {
         clamp: Duration::from_secs(16),
     };
 
+    /// Default value for [`DynamicConfig::txns_data_shard_retry_params`].
+    pub const DEFAULT_TXNS_DATA_SHARD_RETRYER: RetryParameters = RetryParameters {
+        initial_backoff: Duration::from_millis(1024),
+        multiplier: 2,
+        clamp: Duration::from_secs(16),
+    };
+
     pub(crate) const DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER: usize = 3;
 
     /// Default value for [`DynamicConfig::blob_cache_mem_limit_bytes`].
@@ -455,6 +470,7 @@ pub struct DynamicConfig {
     // We put them under a single RwLock to reduce the cost of reads
     // and to logically group them together.
     next_listen_batch_retryer: RwLock<RetryParameters>,
+    txns_data_shard_retryer: RwLock<RetryParameters>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Arbitrary, Serialize, Deserialize)]
@@ -723,6 +739,12 @@ impl DynamicConfig {
             .expect("lock poisoned")
     }
 
+    /// Retry configuration for persist-txns data shard override of
+    /// `next_listen_batch`.
+    pub fn txns_data_shard_retry_params(&self) -> RetryParameters {
+        *self.txns_data_shard_retryer.read().expect("lock poisoned")
+    }
+
     // TODO: Get rid of these in favor of using PersistParameters at the
     // relevant callsites.
     #[cfg(test)]
@@ -789,6 +811,8 @@ pub struct PersistParameters {
     pub consensus_connection_pool_ttl_stagger: Option<Duration>,
     /// Configures [`DynamicConfig::next_listen_batch_retry_params`].
     pub next_listen_batch_retryer: Option<RetryParameters>,
+    /// Configures [`DynamicConfig::txns_data_shard_retry_params`].
+    pub txns_data_shard_retryer: Option<RetryParameters>,
     /// Configures [`DynamicConfig::reader_lease_duration`].
     pub reader_lease_duration: Option<Duration>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
@@ -835,6 +859,7 @@ impl PersistParameters {
             storage_sink_minimum_batch_updates: self_storage_sink_minimum_batch_updates,
             storage_source_decode_fuel: self_storage_source_decode_fuel,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
+            txns_data_shard_retryer: self_txns_data_shard_retryer,
             stats_audit_percent: self_stats_audit_percent,
             stats_collection_enabled: self_stats_collection_enabled,
             stats_filter_enabled: self_stats_filter_enabled,
@@ -858,6 +883,7 @@ impl PersistParameters {
             storage_sink_minimum_batch_updates: other_storage_sink_minimum_batch_updates,
             storage_source_decode_fuel: other_storage_source_decode_fuel,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
+            txns_data_shard_retryer: other_txns_data_shard_retryer,
             stats_audit_percent: other_stats_audit_percent,
             stats_collection_enabled: other_stats_collection_enabled,
             stats_filter_enabled: other_stats_filter_enabled,
@@ -903,6 +929,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_next_listen_batch_retryer {
             *self_next_listen_batch_retryer = Some(v);
+        }
+        if let Some(v) = other_txns_data_shard_retryer {
+            *self_txns_data_shard_retryer = Some(v);
         }
         if let Some(v) = other_stats_audit_percent {
             *self_stats_audit_percent = Some(v)
@@ -950,6 +979,7 @@ impl PersistParameters {
             storage_sink_minimum_batch_updates,
             storage_source_decode_fuel,
             next_listen_batch_retryer,
+            txns_data_shard_retryer,
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
@@ -972,6 +1002,7 @@ impl PersistParameters {
             && storage_sink_minimum_batch_updates.is_none()
             && storage_source_decode_fuel.is_none()
             && next_listen_batch_retryer.is_none()
+            && txns_data_shard_retryer.is_none()
             && stats_audit_percent.is_none()
             && stats_collection_enabled.is_none()
             && stats_filter_enabled.is_none()
@@ -1003,6 +1034,7 @@ impl PersistParameters {
             storage_sink_minimum_batch_updates,
             storage_source_decode_fuel,
             next_listen_batch_retryer,
+            txns_data_shard_retryer,
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
@@ -1091,6 +1123,14 @@ impl PersistParameters {
                 .expect("lock poisoned");
             *retry = *retry_params;
         }
+        if let Some(retry_params) = txns_data_shard_retryer {
+            let mut retry = cfg
+                .dynamic
+                .txns_data_shard_retryer
+                .write()
+                .expect("lock poisoned");
+            *retry = *retry_params;
+        }
         if let Some(stats_audit_percent) = stats_audit_percent {
             cfg.dynamic
                 .stats_audit_percent
@@ -1161,6 +1201,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
                 .into_proto(),
             storage_source_decode_fuel: self.storage_source_decode_fuel.into_proto(),
             next_listen_batch_retryer: self.next_listen_batch_retryer.into_proto(),
+            txns_data_shard_retryer: self.txns_data_shard_retryer.into_proto(),
             stats_audit_percent: self.stats_audit_percent.into_proto(),
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
@@ -1192,6 +1233,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
                 .into_rust()?,
             storage_source_decode_fuel: proto.storage_source_decode_fuel.into_rust()?,
             next_listen_batch_retryer: proto.next_listen_batch_retryer.into_rust()?,
+            txns_data_shard_retryer: proto.txns_data_shard_retryer.into_rust()?,
             stats_audit_percent: proto.stats_audit_percent.into_rust()?,
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,

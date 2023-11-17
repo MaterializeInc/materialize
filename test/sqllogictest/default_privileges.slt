@@ -3355,7 +3355,7 @@ materialize  d1    s1    connection  r5      U
 materialize  d2    s2    connection  r5      U
 
 statement ok
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3370,7 +3370,37 @@ statement ok
 DROP CONNECTION c
 
 statement ok
-CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE SECRET s3_api_secret_key as 'secret_key';
+
+statement ok
+CREATE CONNECTION materialize.public.a TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET s3_api_secret_key) WITH (VALIDATE = false);
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'a'
+----
+a  =U/materialize
+a  r1=U/materialize
+a  r2=U/materialize
+a  r3=U/materialize
+a  materialize=U/materialize
+
+statement ok
+DROP CONNECTION a
+
+# Disable aws connections, it should be on by default
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_aws_connection TO false;
+----
+COMPLETE 0
+
+statement error db error: ERROR: CREATE CONNECTION ... TO AWS is not supported
+CREATE CONNECTION materialize.public.a TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET s3_api_secret_key) WITH (VALIDATE = false);
+
+statement ok
+DROP SECRET s3_api_secret_key;
+
+statement ok
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3386,7 +3416,7 @@ statement ok
 DROP CONNECTION d1.s11.c
 
 statement ok
-CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3402,7 +3432,7 @@ statement ok
 DROP CONNECTION d2.s22.c
 
 statement ok
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3419,7 +3449,7 @@ statement ok
 DROP CONNECTION d1.s1.c
 
 statement ok
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3436,7 +3466,7 @@ statement ok
 DROP CONNECTION d2.s2.c
 
 simple conn=r6,user=r6
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3452,7 +3482,7 @@ DROP CONNECTION materialize.public.c;
 COMPLETE 0
 
 simple conn=r7,user=r7
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3468,7 +3498,7 @@ DROP CONNECTION materialize.public.c;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3484,7 +3514,7 @@ DROP CONNECTION d1.s1.c;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3500,7 +3530,7 @@ DROP CONNECTION d2.s2.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3516,7 +3546,7 @@ DROP CONNECTION d1.s1.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3531,7 +3561,7 @@ DROP CONNECTION d1.s11.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3547,7 +3577,7 @@ DROP CONNECTION d2.s2.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3676,7 +3706,7 @@ SELECT * FROM default_privileges
 PUBLIC       NULL  NULL  type        PUBLIC  U
 
 statement ok
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3687,7 +3717,7 @@ statement ok
 DROP CONNECTION c
 
 statement ok
-CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3698,7 +3728,7 @@ statement ok
 DROP CONNECTION d1.s11.c
 
 statement ok
-CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3709,7 +3739,7 @@ statement ok
 DROP CONNECTION d2.s22.c
 
 statement ok
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3720,7 +3750,7 @@ statement ok
 DROP CONNECTION d1.s1.c
 
 statement ok
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SELECT name, unnest(privileges)::text FROM mz_connections WHERE name = 'c'
@@ -3731,7 +3761,7 @@ statement ok
 DROP CONNECTION d2.s2.c
 
 simple conn=r6,user=r6
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3746,7 +3776,7 @@ DROP CONNECTION materialize.public.c;
 COMPLETE 0
 
 simple conn=r7,user=r7
-CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION materialize.public.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3761,7 +3791,7 @@ DROP CONNECTION materialize.public.c;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3776,7 +3806,7 @@ DROP CONNECTION d1.s1.c;
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3791,7 +3821,7 @@ DROP CONNECTION d2.s2.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d1.s1.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3806,7 +3836,7 @@ DROP CONNECTION d1.s1.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d1.s11.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3821,7 +3851,7 @@ DROP CONNECTION d1.s11.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s2.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -3836,7 +3866,7 @@ DROP CONNECTION d2.s2.c;
 COMPLETE 0
 
 simple conn=r11,user=r11
-CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s22.c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 

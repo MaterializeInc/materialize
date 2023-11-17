@@ -28,8 +28,8 @@ pub struct Fusion;
 
 impl crate::Transform for Fusion {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "fusion")
     )]

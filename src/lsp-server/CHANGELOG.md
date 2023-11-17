@@ -2,6 +2,11 @@
 
 All notable changes to the Materialize Language Server Protocol (LSP) Server will be documented in this file.
 
+## [0.2.1] - 2023-11-10
+
+### Added
+ - Parsing capability by executing commands.
+
 ## [0.2.0] - 2023-10-30
 
 ### Added

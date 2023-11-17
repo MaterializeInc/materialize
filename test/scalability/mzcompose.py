@@ -15,7 +15,7 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from matplotlib import pyplot as plt
 
-from materialize import benchmark_utils, buildkite, git
+from materialize import buildkite, docker, git
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
@@ -32,20 +32,25 @@ from materialize.scalability.endpoints import (
 )
 from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
-    boxplot_latency_per_connections,
-    scatterplot_tps_per_connections,
+    plot_duration_by_connections_for_workload,
+    plot_duration_by_endpoints_for_workload,
+    plot_tps_per_connections,
 )
-from materialize.scalability.regression import RegressionOutcome
+from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
 from materialize.scalability.workload import Workload, WorkloadSelfTest
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
-from materialize.util import all_subclasses
+from materialize.util import YesNoOnce, all_subclasses
 
 SERVICES = [
-    Materialized(image="materialize/materialized:latest", sanity_restart=False),
+    Materialized(
+        image="materialize/materialized:latest",
+        sanity_restart=False,
+        catalog_store="stash",
+    ),
     Postgres(),
 ]
 
@@ -162,7 +167,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print(f"* {other_endpoint}")
 
     # fetch main branch and git tags so that their commit messages can be resolved
-    git.fetch(remote=git.get_remote(), branch="main", include_tags=True)
+    git.fetch(remote=git.get_remote(), branch="main", include_tags=YesNoOnce.ONCE)
 
     schema = Schema(
         create_index=args.create_index,
@@ -239,7 +244,7 @@ def get_baseline_and_other_endpoints(
             )
         else:
             if target == "common-ancestor":
-                target = benchmark_utils.resolve_tag_of_common_ancestor()
+                target = docker.resolve_ancestor_image_tag()
             endpoint = MaterializeContainer(
                 composition=c,
                 specified_target=original_target,
@@ -306,7 +311,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
     ) in result.get_df_total_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 6))
         (subfigure) = fig.subfigures(1, 1)
-        scatterplot_tps_per_connections(
+        plot_tps_per_connections(
             workload_name,
             subfigure,
             results_by_endpoint,
@@ -324,7 +329,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
     ) in result.get_df_details_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 10))
         (subfigure) = fig.subfigures(1, 1)
-        boxplot_latency_per_connections(
+        plot_duration_by_connections_for_workload(
             workload_name,
             subfigure,
             results_by_endpoint,
@@ -332,7 +337,24 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
             include_workload_in_title=True,
         )
         plt.savefig(
-            paths.plot_png("latency", workload_name), bbox_inches="tight", dpi=300
+            paths.plot_png("duration_by_connections", workload_name),
+            bbox_inches="tight",
+            dpi=300,
+        )
+
+        fig = plt.figure(layout="constrained", figsize=(16, 10))
+        (subfigure) = fig.subfigures(1, 1)
+        plot_duration_by_endpoints_for_workload(
+            workload_name,
+            subfigure,
+            results_by_endpoint,
+            include_zero_in_y_axis=INCLUDE_ZERO_IN_Y_AXIS,
+            include_workload_in_title=True,
+        )
+        plt.savefig(
+            paths.plot_png("duration_by_endpoints", workload_name),
+            bbox_inches="tight",
+            dpi=300,
         )
 
 
@@ -340,7 +362,7 @@ def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
     if not outcome.has_regressions():
         return
 
-    outcome.raw_regression_data.to_csv(paths.regressions_csv())
+    outcome.regression_data.to_csv(paths.regressions_csv())
     buildkite.upload_artifact(
         paths.regressions_csv().relative_to(paths.RESULTS_DIR),
         cwd=paths.RESULTS_DIR,

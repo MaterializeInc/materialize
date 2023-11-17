@@ -12,8 +12,8 @@ syntax = "proto3";
 import "google/protobuf/empty.proto";
 
 import "postgres-util/src/desc.proto";
+import "proto/src/chrono.proto";
 import "proto/src/proto.proto";
-import "repr/src/chrono.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
@@ -153,6 +153,7 @@ message ProtoKafkaSourceConnection {
     optional mz_proto.ProtoU128 environment_id = 5;
     optional string environment_name = 12;
     repeated ProtoKafkaMetadataColumn metadata_columns = 11;
+    map<string, mz_storage_types.connections.ProtoStringOrSecret> connection_options = 14;
 }
 
 message ProtoSourceDesc {

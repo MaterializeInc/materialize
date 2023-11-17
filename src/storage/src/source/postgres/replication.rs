@@ -165,8 +165,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         let table_info = reader_table_info;
         Box::pin(async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap, upper_cap]: &mut [_; 2] = caps.try_into().unwrap();
-            let (data_cap, upper_cap) = (data_cap.as_mut().unwrap(), upper_cap.as_mut().unwrap());
+            let [data_cap_set, upper_cap_set]: &mut [_; 2] = caps.try_into().unwrap();
 
             if !config.responsible_for("slot") {
                 return Ok(());
@@ -197,8 +196,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let Some(resume_lsn) = resume_upper.into_option() else {
                 return Ok(());
             };
-            data_cap.downgrade(&resume_lsn);
-            upper_cap.downgrade(&resume_lsn);
+            data_cap_set.downgrade([&resume_lsn]);
+            upper_cap_set.downgrade([&resume_lsn]);
             trace!(%id, "timely-{worker_id} replication reader started lsn={}", resume_lsn);
 
 
@@ -237,7 +236,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     // (in practice) never conflict any previously revealed
                     // portions of the TVC.
                     let update = ((oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
-                    data_output.give(data_cap, update).await;
+                    data_output.give(&data_cap_set[0], update).await;
                 }
                 return Ok(());
             }
@@ -250,7 +249,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 client,
                 slot,
                 &connection.publication,
-                *data_cap.time(),
+                *data_cap_set[0].time(),
                 committed_uppers.as_mut()
             )
             .peekable());
@@ -262,7 +261,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
-                let mut new_upper = *data_cap.time();
+                let mut new_upper = *data_cap_set[0].time();
                 match event {
                     Ok(XLogData(data)) => match data.data() {
                         Begin(begin) => {
@@ -296,9 +295,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             }
                             new_upper = commit_lsn + 1;
                             if container.len() > max_capacity {
-                                data_output.give_container(data_cap, &mut container).await;
-                                upper_cap.downgrade(&new_upper);
-                                data_cap.downgrade(&new_upper);
+                                data_output.give_container(&data_cap_set[0], &mut container).await;
+                                upper_cap_set.downgrade([&new_upper]);
+                                data_cap_set.downgrade([&new_upper]);
                             }
                         },
                         _ => return Err(TransientError::BareTransactionEvent),
@@ -313,10 +312,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                 let will_yield = stream.as_mut().peek().now_or_never().is_none();
                 if will_yield {
-                    data_output.give_container(data_cap, &mut container).await;
-                    upper_cap.downgrade(&new_upper);
-                    data_cap.downgrade(&new_upper);
-                    rewinds.retain(|_, (_, req)| data_cap.time() <= &req.snapshot_lsn);
+                    data_output.give_container(&data_cap_set[0], &mut container).await;
+                    upper_cap_set.downgrade([&new_upper]);
+                    data_cap_set.downgrade([&new_upper]);
+                    rewinds.retain(|_, (_, req)| data_cap_set[0].time() <= &req.snapshot_lsn);
                 }
             }
             // We never expect the replication stream to gracefully end
@@ -382,7 +381,7 @@ fn raw_stream<'a>(
         let lsn = PgLsn::from(resume_lsn.offset);
         let query = format!(
             r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" '{}')"#,
-            Ident::from(slot.clone()).to_ast_string(),
+            Ident::new_unchecked(slot.clone()).to_ast_string(),
             lsn,
             publication,
         );

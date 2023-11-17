@@ -17,7 +17,7 @@ import textwrap
 from contextlib import closing
 from pathlib import Path
 
-from pg8000.native import identifier
+from pg8000.dbapi import DatabaseError
 
 from materialize.mzexplore import sql
 from materialize.mzexplore.common import (
@@ -76,9 +76,9 @@ def defs(
         # -------------------------------------
 
         for item in db.catalog_items(database, schema, name):
-            item_database = identifier(item["database"])
-            item_schema = identifier(item["schema"])
-            item_name = identifier(item["name"])
+            item_database = sql.identifier(item["database"])
+            item_schema = sql.identifier(item["schema"])
+            item_name = sql.identifier(item["name"])
             fqname = f"{item_database}.{item_schema}.{item_name}"
 
             if item["type"] == "index":
@@ -94,18 +94,21 @@ def defs(
             else:  # "connection", "secret"
                 continue
 
-            create_sql = db.query_one(show_create_query)["create_sql"]
-            item["create_sql"] = sql.try_mzfmt(create_sql) if mzfmt else create_sql
+            try:
+                create_sql = db.query_one(show_create_query)["create_sql"]
+                item["create_sql"] = sql.try_mzfmt(create_sql) if mzfmt else create_sql
 
-            base = Path(item["type"], item["database"], item["schema"])
-            path = base.joinpath(f"{item['name']}.sql")
+                base = Path(item["type"], item["database"], item["schema"])
+                path = base.joinpath(f"{item['name']}.sql")
 
-            (target / base).mkdir(parents=True, exist_ok=True)
+                (target / base).mkdir(parents=True, exist_ok=True)
 
-            # Save definitions in files.
-            info(f"Extracting {item['type']} def in `{path}`")
-            with (target / path).open("w") as file:
-                file.write(output_template.substitute(item))
+                # Save definitions in files.
+                info(f"Extracting {item['type']} def in `{path}`")
+                with (target / path).open("w") as file:
+                    file.write(output_template.substitute(item))
+            except DatabaseError as e:
+                warn(f"Cannot export def {fqname}: {e}")
 
 
 def plans(
@@ -149,9 +152,9 @@ def plans(
         )
     ) as db:
         for item in db.catalog_items(database, schema, name):
-            item_database = identifier(item["database"])
-            item_schema = identifier(item["schema"])
-            item_name = identifier(item["name"])
+            item_database = sql.identifier(item["database"])
+            item_schema = sql.identifier(item["schema"])
+            item_name = sql.identifier(item["name"])
             fqname = f"{item_database}.{item_schema}.{item_name}"
 
             try:
@@ -185,12 +188,16 @@ def plans(
                             if part != None
                         )
                         info(f"Explaining {stage} for {explainee} in `{file_name}`")
-                        plans[file_name] = explain(
-                            db,
-                            stage,
-                            explainee,
-                            explain_flags,
-                        )
+                        try:
+                            plans[file_name] = explain(
+                                db,
+                                stage,
+                                explainee,
+                                explain_flags,
+                            )
+                        except DatabaseError as e:
+                            warn(f"Cannot explain {stage} for {explainee}: {e}")
+                            continue
 
             if ExplaineeType.CREATE_STATEMENT.contains(explainee_type):
                 # If the DDL for the plan exists, explain it as well
@@ -224,12 +231,16 @@ def plans(
                         if part != None
                     )
                     info(f"Explaining {stage} for CREATE {fqname} in `{file_name}`")
-                    plans[file_name] = explain(
-                        db,
-                        stage,
-                        explainee,
-                        explain_flags,
-                    )
+                    try:
+                        plans[file_name] = explain(
+                            db,
+                            stage,
+                            explainee,
+                            explain_flags,
+                        )
+                    except DatabaseError as e:
+                        warn(f"Cannot explain {stage} for CREATE {fqname}: {e}")
+                        continue
 
             for file_name, plan in plans.items():
                 explain_path = base.joinpath(file_name)

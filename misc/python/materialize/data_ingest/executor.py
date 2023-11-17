@@ -85,7 +85,7 @@ class Executor:
         self,
         cur: pg8000.Cursor,
         query: str,
-        required_error_message_substr: str | None,
+        required_error_message_substrs: list[str],
         max_tries: int = 5,
         wait_time_in_sec: int = 1,
     ) -> None:
@@ -94,10 +94,7 @@ class Executor:
                 self.execute(cur, query)
                 return
             except Exception as e:
-                if (
-                    required_error_message_substr is not None
-                    and required_error_message_substr not in e.__str__()
-                ):
+                if not any([s in e.__str__() for s in required_error_message_substrs]):
                     raise
                 elif try_count == max_tries:
                     raise
@@ -179,7 +176,6 @@ class KafkaExecutor(Executor):
         )
         for topic, f in fs.items():
             f.result()
-            print(f"Topic {topic} created")
 
         # NOTE: this _could_ be refactored, but since we are fairly certain at
         # this point there will be exactly one topic it should be fine.
@@ -448,7 +444,10 @@ class KafkaRoundtripExecutor(Executor):
                     ENVELOPE DEBEZIUM""",
                 wait_time_in_sec=1,
                 max_tries=15,
-                required_error_message_substr="No value schema found",
+                required_error_message_substrs=[
+                    "No value schema found",
+                    "Key schema is required for ENVELOPE DEBEZIUM",
+                ],
             )
         self.mz_conn.autocommit = False
 

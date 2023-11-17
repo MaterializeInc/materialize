@@ -13,6 +13,7 @@ from datetime import timedelta
 from enum import Enum
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
@@ -36,6 +37,7 @@ SERVICES = [
     Postgres(),
     Cockroach(),
     Minio(setup_materialize=True),
+    Balancerd(),
     # Those two are overriden below
     Materialized(),
     Clusterd(name="storaged"),
@@ -141,6 +143,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             setup_materialize=True,
         ),
         Testdrive(
+            materialize_url="postgres://materialize@balancerd:6875",
             no_reset=True,
             seed=1,
             default_timeout="600s",

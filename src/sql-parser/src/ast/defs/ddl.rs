@@ -26,6 +26,36 @@ use std::fmt;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, Expr, Ident, OrderByExpr, UnresolvedItemName, WithOptionValue};
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MaterializedViewOptionName {
+    /// The `ASSERT NOT NULL [=] <ident>` option.
+    AssertNotNull,
+}
+
+impl AstDisplay for MaterializedViewOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            MaterializedViewOptionName::AssertNotNull => f.write_str("ASSERT NOT NULL"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MaterializedViewOption<T: AstInfo> {
+    pub name: MaterializedViewOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for MaterializedViewOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Schema {
     pub schema: String,
@@ -622,6 +652,7 @@ pub enum ConnectionOptionName {
     SaslPassword,
     SaslUsername,
     SecretAccessKey,
+    SecurityProtocol,
     ServiceName,
     SshTunnel,
     SslCertificate,
@@ -652,6 +683,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
             ConnectionOptionName::SaslPassword => "SASL PASSWORD",
             ConnectionOptionName::SaslUsername => "SASL USERNAME",
+            ConnectionOptionName::SecurityProtocol => "SECURITY PROTOCOL",
             ConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
             ConnectionOptionName::ServiceName => "SERVICE NAME",
             ConnectionOptionName::SshTunnel => "SSH TUNNEL",

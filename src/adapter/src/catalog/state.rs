@@ -24,11 +24,13 @@ use tracing::info;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable};
+use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
     CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
     Role, Schema, Secret, Sink, Source, Table, Type, View,
 };
+use mz_catalog::{LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID};
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
     ReplicaAllocation, ReplicaConfig, ReplicaLocation, UnmanagedReplicaLocation,
@@ -70,10 +72,7 @@ use mz_storage_types::connections::inline::{
 };
 use mz_transform::Optimizer;
 
-use crate::catalog::{
-    AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog, Error, ErrorKind,
-    LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID,
-};
+use crate::catalog::{AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog};
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
@@ -184,8 +183,12 @@ impl CatalogState {
             .database_by_name
             .get(session.vars().database())
             .map(|id| id.clone());
+        let state = match session.transaction().catalog_state() {
+            Some(txn_catalog_state) => Cow::Borrowed(txn_catalog_state),
+            None => Cow::Borrowed(self),
+        };
         ConnCatalog {
-            state: Cow::Borrowed(self),
+            state,
             unresolvable_ids: BTreeSet::new(),
             conn_id: session.conn_id().clone(),
             cluster: session.vars().cluster().into(),
@@ -458,23 +461,6 @@ impl CatalogState {
             }
         }
         dependents
-    }
-
-    pub fn uses_tables(&self, id: GlobalId) -> bool {
-        match self.get_entry(&id).item() {
-            CatalogItem::Table(_) => true,
-            item @ (CatalogItem::View(_) | CatalogItem::MaterializedView(_)) => {
-                item.uses().0.iter().any(|id| self.uses_tables(*id))
-            }
-            CatalogItem::Index(idx) => self.uses_tables(idx.on),
-            CatalogItem::Source(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
-        }
     }
 
     /// Indicates whether the indicated item is considered stable or not.
@@ -773,7 +759,7 @@ impl CatalogState {
                         optimize::OptimizerConfig::from(session_catalog.system_vars());
 
                     // Build an optimizer for this VIEW.
-                    let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+                    let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
                     // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                     let raw_expr = view.expr;
@@ -909,7 +895,7 @@ impl CatalogState {
                         optimize::OptimizerConfig::from(session_catalog.system_vars());
 
                     // Build an optimizer for this VIEW.
-                    let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+                    let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
                     // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                     let raw_expr = view.expr;
@@ -1000,7 +986,7 @@ impl CatalogState {
                 details: CatalogTypeDetails {
                     array_id: None,
                     typ: typ.inner,
-                    typreceive_oid: None,
+                    pg_metadata: None,
                 },
                 resolved_ids,
             }),

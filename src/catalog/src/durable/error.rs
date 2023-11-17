@@ -11,7 +11,7 @@ use std::fmt::Debug;
 
 use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
-use mz_stash_types::{InternalStashError, StashError, MIN_STASH_VERSION, STASH_VERSION};
+use mz_stash_types::{InternalStashError, StashError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -41,9 +41,13 @@ pub enum DurableCatalogError {
     Fence(String),
     /// The persisted catalog's version is too old for the current catalog to migrate.
     #[error(
-        "incompatible Catalog version {0}, minimum: {MIN_STASH_VERSION}, current: {STASH_VERSION}"
+        "incompatible Catalog version {found_version}, minimum: {min_stash_version}, current: {stash_version}"
     )]
-    IncompatibleVersion(u64),
+    IncompatibleVersion {
+        found_version: u64,
+        min_stash_version: u64,
+        stash_version: u64,
+    },
     /// Catalog is uninitialized.
     #[error("uninitialized")]
     Uninitialized,
@@ -94,9 +98,15 @@ impl From<StashError> for DurableCatalogError {
         // We're not really supposed to look at the inner error, but we'll make an exception here.
         match e.inner {
             InternalStashError::Fence(msg) => DurableCatalogError::Fence(msg),
-            InternalStashError::IncompatibleVersion(version) => {
-                DurableCatalogError::IncompatibleVersion(version)
-            }
+            InternalStashError::IncompatibleVersion {
+                found_version,
+                min_stash_version,
+                stash_version,
+            } => DurableCatalogError::IncompatibleVersion {
+                found_version,
+                min_stash_version,
+                stash_version,
+            },
             InternalStashError::Uninitialized => DurableCatalogError::Uninitialized,
             InternalStashError::StashNotWritable(msg) => DurableCatalogError::NotWritable(msg),
             InternalStashError::Proto(e) => DurableCatalogError::Proto(e),

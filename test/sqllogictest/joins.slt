@@ -169,7 +169,7 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Distinct project=[#0] // { arity: 1 }
             Project (#0) // { arity: 1 }
-              Join on=(eq(#1, #2, #3)) type=delta // { arity: 4 }
+              Join on=(#1 = #2 = #3) type=delta // { arity: 4 }
                 implementation
                   %0:l1 » %1[#0]UKA » %2[#0]UKA
                   %1 » %2[#0]UKA » %0:l1[#1]KAf

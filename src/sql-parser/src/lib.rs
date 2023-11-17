@@ -106,6 +106,8 @@
 pub mod ast;
 pub mod parser;
 
+mod ident;
+
 #[cfg(feature = "test")]
 pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
     use crate::ast::display::AstDisplay;

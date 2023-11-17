@@ -34,6 +34,7 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::PartialBatchKey;
 use crate::read::{LeasedReaderId, ReadHandle};
+use crate::stats::PartStats;
 use crate::ShardId;
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
@@ -374,6 +375,9 @@ pub struct LeasedBatchPart<T> {
     pub(crate) leased_seqno: Option<SeqNo>,
     pub(crate) stats: Option<LazyPartStats>,
     pub(crate) filter_pushdown_audit: bool,
+    /// A lower bound on the key. If a tight lower bound is not available, the
+    /// empty vec (as the minimum vec) is a conservative choice.
+    pub(crate) key_lower: Vec<u8>,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -402,6 +406,7 @@ where
             reader_id: self.reader_id.clone(),
             stats: self.stats.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit,
+            key_lower: std::mem::take(&mut self.key_lower),
         };
         // If `x` has a lease, we've effectively transferred it to `r`.
         let _ = self.leased_seqno.take();
@@ -437,6 +442,11 @@ where
     /// then something has gone horribly wrong.
     pub fn request_filter_pushdown_audit(&mut self) {
         self.filter_pushdown_audit = true;
+    }
+
+    /// Returns the pushdown stats for this part.
+    pub fn stats(&self) -> Option<PartStats> {
+        self.stats.as_ref().map(|x| x.decode())
     }
 }
 
@@ -710,6 +720,7 @@ pub struct SerdeLeasedBatchPart {
     reader_id: LeasedReaderId,
     stats: Option<LazyPartStats>,
     filter_pushdown_audit: bool,
+    key_lower: Vec<u8>,
 }
 
 impl SerdeLeasedBatchPart {
@@ -745,6 +756,7 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
             reader_id: x.reader_id,
             stats: x.stats,
             filter_pushdown_audit: x.filter_pushdown_audit,
+            key_lower: x.key_lower,
         }
     }
 }

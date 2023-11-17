@@ -8,20 +8,33 @@
 // by the Apache License, Version 2.0.
 
 //! Optimizer implementation for `CREATE INDEX` statements.
+//!
+//! Note that, in contrast to other optimization pipelines, timestamp selection is not part of
+//! index optimization. Instead users are expected to separately set the as-of on the optimized
+//! `DataflowDescription` received from `GlobalLirPlan::unapply`. Reasons for choosing to exclude
+//! timestamp selection from the index optimization pipeline are:
+//!
+//!  (a) Indexes don't support non-empty `until` frontiers, so they don't provide opportunity for
+//!      optimizations based on the selected timestamp.
+//!  (b) We want to generate dataflow plans early during environment bootstrapping, before we have
+//!      access to all information required for timestamp selection.
+//!
+//! None of this is set in stone though. If we find an opportunity for optimizing indexes based on
+//! their timestamps, we'll want to make timestamp selection part of the index optimization again
+//! and find a different approach to bootstrapping.
+//!
+//! See also MaterializeInc/materialize#22940.
 
 use std::sync::Arc;
 
-use maplit::btreemap;
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
-use mz_compute_types::ComputeInstanceId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use timely::progress::Antichain;
 
 use crate::catalog::Catalog;
 use crate::coord::dataflows::{
@@ -30,19 +43,35 @@ use crate::coord::dataflows::{
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
 };
-use crate::CollectionIdBundle;
 
-pub struct OptimizeIndex {
+pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     _typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
     catalog: Arc<Catalog>,
-    /// A snapshot of the compute instance that will run the dataflows.
+    /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A durable GlobalId to be used with the exported index arrangement.
     exported_index_id: GlobalId,
     // Optimizer config.
     config: OptimizerConfig,
+}
+
+impl Optimizer {
+    pub fn new(
+        catalog: Arc<Catalog>,
+        compute_instance: ComputeInstanceSnapshot,
+        exported_index_id: GlobalId,
+        config: OptimizerConfig,
+    ) -> Self {
+        Self {
+            _typecheck_ctx: empty_context(),
+            catalog,
+            compute_instance,
+            exported_index_id,
+            config,
+        }
+    }
 }
 
 /// A wrapper of index parts needed to start the optimization process.
@@ -72,26 +101,20 @@ impl Index {
 /// 2. transitively inlining referenced views, and
 /// 3. jointly optimizing the `MIR` plans in the [`MirDataflowDescription`].
 #[derive(Clone)]
-pub struct GlobalMirPlan<T: Clone> {
+pub struct GlobalMirPlan {
     df_desc: MirDataflowDescription,
     df_meta: DataflowMetainfo,
-    ts_info: T,
 }
 
-/// Timestamp information type for [`GlobalMirPlan`] structs representing an
-/// optimization result without a resolved timestamp.
-#[derive(Clone)]
-pub struct Unresolved {
-    compute_instance_id: ComputeInstanceId,
-}
+impl GlobalMirPlan {
+    pub fn df_desc(&self) -> &MirDataflowDescription {
+        &self.df_desc
+    }
 
-/// Timestamp information type for [`GlobalMirPlan`] structs representing an
-/// optimization result with a resolved timestamp.
-///
-/// The actual timestamp value is set in the [`MirDataflowDescription`] of the
-/// surrounding [`GlobalMirPlan`] when we call `resolve()`.
-#[derive(Clone)]
-pub struct Resolved;
+    pub fn df_meta(&self) -> &DataflowMetainfo {
+        &self.df_meta
+    }
+}
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
@@ -101,25 +124,18 @@ pub struct GlobalLirPlan {
     df_meta: DataflowMetainfo,
 }
 
-impl OptimizeIndex {
-    pub fn new(
-        catalog: Arc<Catalog>,
-        compute_instance: ComputeInstanceSnapshot,
-        exported_index_id: GlobalId,
-        config: OptimizerConfig,
-    ) -> Self {
-        Self {
-            _typecheck_ctx: empty_context(),
-            catalog,
-            compute_instance,
-            exported_index_id,
-            config,
-        }
+impl GlobalLirPlan {
+    pub fn df_desc(&self) -> &LirDataflowDescription {
+        &self.df_desc
+    }
+
+    pub fn df_meta(&self) -> &DataflowMetainfo {
+        &self.df_meta
     }
 }
 
-impl Optimize<Index> for OptimizeIndex {
-    type To = GlobalMirPlan<Unresolved>;
+impl Optimize<Index> for Optimizer {
+    type To = GlobalMirPlan;
 
     fn optimize(&mut self, index: Index) -> Result<Self::To, OptimizerError> {
         let state = self.catalog.state();
@@ -136,7 +152,7 @@ impl Optimize<Index> for OptimizeIndex {
         df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         for desc in df_desc.objects_to_build.iter_mut() {
-            prep_relation_expr(state, &mut desc.plan, ExprPrepStyle::Index)?;
+            prep_relation_expr(&mut desc.plan, ExprPrepStyle::Index)?;
         }
 
         let mut index_desc = IndexDesc {
@@ -145,7 +161,7 @@ impl Optimize<Index> for OptimizeIndex {
         };
 
         for key in index_desc.key.iter_mut() {
-            prep_scalar_expr(state, key, ExprPrepStyle::Index)?;
+            prep_scalar_expr(key, ExprPrepStyle::Index)?;
         }
 
         df_desc.export_index(self.exported_index_id, index_desc, on_desc.typ().clone());
@@ -161,66 +177,18 @@ impl Optimize<Index> for OptimizeIndex {
             df_meta.push_optimizer_notice_dedup(OptimizerNotice::IndexKeyEmpty);
         }
 
-        // Return.
-        Ok(GlobalMirPlan {
-            df_desc,
-            df_meta,
-            ts_info: Unresolved {
-                compute_instance_id: self.compute_instance.instance_id(),
-            },
-        })
+        // Return the (sealed) plan at the end of this optimization step.
+        Ok(GlobalMirPlan { df_desc, df_meta })
     }
 }
 
-impl<T: Clone> GlobalMirPlan<T> {
-    pub fn df_desc(&self) -> &MirDataflowDescription {
-        &self.df_desc
-    }
-
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
-}
-
-impl GlobalMirPlan<Unresolved> {
-    /// Produces the [`GlobalMirPlan`] with [`Resolved`] timestamp required for
-    /// the next stage.
-    pub fn resolve(mut self, as_of: Antichain<Timestamp>) -> GlobalMirPlan<Resolved> {
-        // Set the `as_of` timestamp for the dataflow.
-        self.df_desc.set_as_of(as_of);
-
-        GlobalMirPlan {
-            df_desc: self.df_desc,
-            df_meta: self.df_meta,
-            ts_info: Resolved,
-        }
-    }
-
-    /// Computes the [`CollectionIdBundle`] of the wrapped dataflow.
-    pub fn id_bundle(&self) -> CollectionIdBundle {
-        let storage_ids = self.df_desc.source_imports.keys().copied().collect();
-        let compute_ids = self.df_desc.index_imports.keys().copied().collect();
-        CollectionIdBundle {
-            storage_ids,
-            compute_ids: btreemap! {self.compute_instance_id() => compute_ids},
-        }
-    }
-
-    /// Returns the [`ComputeInstanceId`] against which we should resolve the
-    /// timestamp for the next stage.
-    pub fn compute_instance_id(&self) -> ComputeInstanceId {
-        self.ts_info.compute_instance_id
-    }
-}
-
-impl Optimize<GlobalMirPlan<Resolved>> for OptimizeIndex {
+impl Optimize<GlobalMirPlan> for Optimizer {
     type To = GlobalLirPlan;
 
-    fn optimize(&mut self, plan: GlobalMirPlan<Resolved>) -> Result<Self::To, OptimizerError> {
+    fn optimize(&mut self, plan: GlobalMirPlan) -> Result<Self::To, OptimizerError> {
         let GlobalMirPlan {
             mut df_desc,
             df_meta,
-            ts_info: _,
         } = plan;
 
         // Ensure all expressions are normalized before finalizing.
@@ -244,15 +212,8 @@ impl Optimize<GlobalMirPlan<Resolved>> for OptimizeIndex {
 }
 
 impl GlobalLirPlan {
+    /// Unwraps the parts of the final result of the optimization pipeline.
     pub fn unapply(self) -> (LirDataflowDescription, DataflowMetainfo) {
         (self.df_desc, self.df_meta)
-    }
-
-    pub fn df_desc(&self) -> &LirDataflowDescription {
-        &self.df_desc
-    }
-
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
     }
 }

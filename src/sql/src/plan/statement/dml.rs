@@ -23,8 +23,9 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
-    IfExistsBehavior, OrderByExpr, SubscribeOutput,
+    IfExistsBehavior, OrderByExpr, SubscribeOutput, UnresolvedItemName,
 };
+use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
     KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection,
 };
@@ -334,16 +335,10 @@ pub fn plan_explain_plan(
             let query::PlannedQuery {
                 expr: mut raw_plan,
                 desc,
-                finishing,
+                finishing: row_set_finishing,
                 scope: _,
             } = query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
             raw_plan.bind_parameters(params)?;
-
-            let row_set_finishing = if finishing.is_trivial(desc.arity()) {
-                None
-            } else {
-                Some(finishing)
-            };
 
             if broken {
                 scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
@@ -352,6 +347,7 @@ pub fn plan_explain_plan(
             crate::plan::Explainee::Statement(ExplaineeStatement::Query {
                 raw_plan,
                 row_set_finishing,
+                desc,
                 broken,
             })
         }
@@ -436,6 +432,14 @@ pub fn plan_explain_schema(
         schema_for,
         mut statement,
     } = explain_schema;
+
+    // Force the sink's name to one that's guaranteed not to exist, by virtue of
+    // being a non-existent item in a schema under the system's control, so that
+    // `plan_create_sink` doesn't complain about the name already existing.
+    statement.name = Some(UnresolvedItemName::qualified(&[
+        ident!("mz_catalog"),
+        ident!("mz_explain_schema"),
+    ]));
 
     crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
 

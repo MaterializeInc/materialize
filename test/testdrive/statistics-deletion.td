@@ -17,7 +17,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
 > CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE '2'))
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE TABLE t (a text, b text)
 > CREATE MATERIALIZED VIEW simple_view AS SELECT * from t;

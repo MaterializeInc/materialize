@@ -11,6 +11,7 @@ import random
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.postgres_capabilities import PostgresRunning, PostgresTableExists
@@ -53,7 +54,7 @@ class CreatePostgresTable(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, PostgresRunning}
+        return {BalancerdIsRunning, MzIsRunning, PostgresRunning}
 
     def __init__(self, capabilities: Capabilities) -> None:
         this_postgres_table = PostgresTableExists(
@@ -106,7 +107,7 @@ class PostgresDML(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, PostgresRunning, PostgresTableExists}
+        return {BalancerdIsRunning, MzIsRunning, PostgresRunning, PostgresTableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.postgres_table = random.choice(capabilities.get(PostgresTableExists))

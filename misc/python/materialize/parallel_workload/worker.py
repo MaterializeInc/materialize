@@ -15,6 +15,7 @@ from collections import Counter, defaultdict
 import pg8000
 
 from materialize.data_ingest.query_error import QueryError
+from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.action import Action, ReconnectAction
 from materialize.parallel_workload.database import Database
 from materialize.parallel_workload.executor import Executor
@@ -25,11 +26,12 @@ class Worker:
     actions: list[Action]
     weights: list[float]
     end_time: float
-    num_queries: int
+    num_queries: Counter[type[Action]]
     autocommit: bool
     system: bool
     exe: Executor | None
     ignored_errors: defaultdict[str, Counter[type[Action]]]
+    composition: Composition | None
 
     def __init__(
         self,
@@ -39,15 +41,17 @@ class Worker:
         end_time: float,
         autocommit: bool,
         system: bool,
+        composition: Composition | None,
     ):
         self.rng = rng
         self.actions = actions
         self.weights = weights
         self.end_time = end_time
-        self.num_queries = 0
+        self.num_queries = Counter()
         self.autocommit = autocommit
         self.system = system
         self.ignored_errors = defaultdict(Counter)
+        self.composition = composition
         self.exe = None
 
     def run(self, host: str, port: int, user: str, database: Database) -> None:
@@ -63,7 +67,7 @@ class Worker:
 
         while time.time() < self.end_time:
             action = self.rng.choices(self.actions, self.weights)[0]
-            self.num_queries += 1
+            self.num_queries[type(action)] += 1
             try:
                 if self.exe.rollback_next:
                     try:
@@ -80,7 +84,9 @@ class Worker:
                             continue
                     self.exe.rollback_next = False
                 if self.exe.reconnect_next:
-                    ReconnectAction(self.rng, random_role=False).run(self.exe)
+                    ReconnectAction(self.rng, self.composition, random_role=False).run(
+                        self.exe
+                    )
                     self.exe.reconnect_next = False
                 action.run(self.exe)
             except QueryError as e:
@@ -99,5 +105,5 @@ class Worker:
                         break
                 else:
                     thread_name = threading.current_thread().getName()
-                    print(f"[{thread_name}] Query failed: {e.query} {e.msg}")
+                    print(f"+++ [{thread_name}] Query failed: {e.query} {e.msg}")
                     raise

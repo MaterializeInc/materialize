@@ -22,6 +22,7 @@ use mz_ore::metrics::{CounterVecExt, GaugeVecExt};
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_operators::persist_source;
+use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
@@ -461,7 +462,7 @@ where
                                                         progress_stream: feedback_data,
                                                         max_inflight_bytes:
                                                             storage_dataflow_max_inflight_bytes,
-                                                        summary: (Default::default(), 1),
+                                                        summary: (Default::default(), Subtime::least_summary()),
                                                         metrics: backpressure_metrics.clone(),
                                                     }),
                                                     backpressure_metrics,
@@ -481,6 +482,7 @@ where
                                         Antichain::new(),
                                         None,
                                         flow_control,
+                                        false.then_some(|| unreachable!()),
                                     );
                                     (
                                         stream.as_collection(),
@@ -578,13 +580,7 @@ where
             (
                 envelope_ok,
                 envelope_err,
-                decode_health
-                    .map(|(index, update)| HealthStatusMessage {
-                        index,
-                        namespace: StatusNamespace::Decode,
-                        update,
-                    })
-                    .concat(&envelope_health),
+                decode_health.concat(&envelope_health),
             )
         }
     };

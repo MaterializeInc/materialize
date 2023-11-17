@@ -11,7 +11,7 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 
 class Privileges(Check):
@@ -21,7 +21,7 @@ class Privileges(Check):
             $ postgres-execute connection=postgres://materialize@materialized:6875/materialize
             CREATE DATABASE privilege_db{i}
             CREATE SCHEMA privilege_schema{i}
-            CREATE CONNECTION privilege_kafka_conn{i} FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
+            CREATE CONNECTION privilege_kafka_conn{i} FOR KAFKA {self._kafka_broker()}
             CREATE CONNECTION privilege_csr_conn{i} FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}'
             CREATE TYPE privilege_type{i} AS LIST (ELEMENT TYPE = text)
             CREATE TABLE privilege_t{i} (c1 int, c2 privilege_type{i})

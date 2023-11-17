@@ -51,12 +51,14 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
+use crate::connections::StringOrSecret;
 use crate::controller::{CollectionMetadata, StorageError};
 use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
 use crate::sources::proto_load_generator_source_connection::Generator as ProtoGenerator;
+use crate::AlterCompatible;
 
 pub mod encoding;
 
@@ -106,12 +108,10 @@ impl<S> IngestionDescription<S> {
     }
 }
 
-impl<S: Debug + Eq + PartialEq> IngestionDescription<S> {
-    /// Determines if `self` is compatible with another `IngestionDescription`,
-    /// in such a way that it is possible to turn `self` into `other` through a
-    /// valid series of transformations (e.g. no transformation or `ALTER
-    /// SOURCE`).
-    pub fn alter_compatible(
+impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
+    for IngestionDescription<S>
+{
+    fn alter_compatible(
         &self,
         id: GlobalId,
         other: &IngestionDescription<S>,
@@ -131,48 +131,59 @@ impl<S: Debug + Eq + PartialEq> IngestionDescription<S> {
         self.desc.alter_compatible(id, desc)?;
 
         let compatibility_checks = [
-            source_imports == &other.source_imports,
-            ingestion_metadata == &other.ingestion_metadata,
-            source_exports
-                .iter()
-                .merge_join_by(&other.source_exports, |(l_key, _), (r_key, _)| {
-                    l_key.cmp(r_key)
-                })
-                .all(|r| match r {
-                    Both(
-                        (
-                            _,
-                            SourceExport {
-                                output_index: _,
-                                storage_metadata: l_metadata,
-                            },
-                        ),
-                        (
-                            _,
-                            SourceExport {
-                                output_index: _,
-                                storage_metadata: r_metadata,
-                            },
-                        ),
-                    ) => {
-                        // the output index may change, but the table's metadata
-                        // may not
-                        l_metadata == r_metadata
-                    }
-                    _ => true,
-                }),
-            instance_id == &other.instance_id,
-            remap_collection_id == &other.remap_collection_id,
+            (source_imports == &other.source_imports, "source_imports"),
+            (
+                ingestion_metadata
+                    .alter_compatible(id, &other.ingestion_metadata)
+                    .is_ok(),
+                "ingestion_metadata",
+            ),
+            (
+                source_exports
+                    .iter()
+                    .merge_join_by(&other.source_exports, |(l_key, _), (r_key, _)| {
+                        l_key.cmp(r_key)
+                    })
+                    .all(|r| match r {
+                        Both(
+                            (
+                                _,
+                                SourceExport {
+                                    output_index: _,
+                                    storage_metadata: l_metadata,
+                                },
+                            ),
+                            (
+                                _,
+                                SourceExport {
+                                    output_index: _,
+                                    storage_metadata: r_metadata,
+                                },
+                            ),
+                        ) => {
+                            // the output index may change, but the table's metadata
+                            // may not
+                            l_metadata.alter_compatible(id, r_metadata).is_ok()
+                        }
+                        _ => true,
+                    }),
+                "source_exports",
+            ),
+            (instance_id == &other.instance_id, "instance_id"),
+            (
+                remap_collection_id == &other.remap_collection_id,
+                "remap_collection_id",
+            ),
         ];
-        for compatible in compatibility_checks {
+        for (compatible, field) in compatibility_checks {
             if !compatible {
                 tracing::warn!(
-                    "IngestionDescription incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    "IngestionDescription incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );
 
-                return Err(StorageError::InvalidAlterSource { id });
+                return Err(StorageError::InvalidAlter { id });
             }
         }
 
@@ -1353,7 +1364,7 @@ impl UnplannedSourceEnvelope {
 }
 
 /// A connection to an external system
-pub trait SourceConnection: Debug + Clone + PartialEq {
+pub trait SourceConnection: Debug + Clone + PartialEq + crate::AlterCompatible {
     /// The name of the external system (e.g kafka, postgres, etc).
     fn name(&self) -> &'static str;
 
@@ -1371,27 +1382,6 @@ pub trait SourceConnection: Debug + Clone + PartialEq {
     /// Returns metadata columns that this connection *instance* will produce once rendered. The
     /// columns are returned in the order specified by the user.
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
-
-    /// Determines if `self` is compatible with another `SourceConnection`, in
-    /// such a way that it is possible to turn `self` into `other` through a
-    /// valid series of transformations (e.g. no transformation or `ALTER
-    /// SOURCE`).
-    ///
-    /// Note that the default implementation errors unless the two are equal. To
-    /// support any modifying transformations, you must specify the
-    /// implementation.
-    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
-        if self == other {
-            Ok(())
-        } else {
-            tracing::warn!(
-                "SourceConnection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
-                self,
-                other
-            );
-            Err(StorageError::InvalidAlterSource { id })
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1404,6 +1394,9 @@ pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub group_id_prefix: Option<String>,
     pub environment_id: String,
     pub metadata_columns: Vec<(String, KafkaMetadataKind)>,
+    /// Additional options that need to be set on the connection whenever it's
+    /// inlined.
+    pub connection_options: BTreeMap<String, StringOrSecret>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
@@ -1418,16 +1411,21 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
             group_id_prefix,
             environment_id,
             metadata_columns,
+            connection_options,
         } = self;
 
+        let mut connection = r.resolve_connection(connection).unwrap_kafka();
+        connection.options.extend(connection_options);
+
         KafkaSourceConnection {
-            connection: r.resolve_connection(connection).unwrap_kafka(),
+            connection,
             connection_id,
             topic,
             start_offsets,
             group_id_prefix,
             environment_id,
             metadata_columns,
+            connection_options: BTreeMap::default(),
         }
     }
 }
@@ -1514,6 +1512,8 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
     }
 }
 
+impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {}
+
 impl<C: ConnectionAccess> Arbitrary for KafkaSourceConnection<C>
 where
     <<C as ConnectionAccess>::Kafka as Arbitrary>::Strategy: 'static,
@@ -1530,6 +1530,7 @@ where
             any::<Option<String>>(),
             any::<String>(),
             proptest::collection::vec(any::<(String, KafkaMetadataKind)>(), 0..4),
+            proptest::collection::btree_map(any::<String>(), any::<StringOrSecret>(), 0..4),
         )
             .prop_map(
                 |(
@@ -1540,6 +1541,7 @@ where
                     group_id_prefix,
                     environment_id,
                     metadata_columns,
+                    connection_options,
                 )| KafkaSourceConnection {
                     connection,
                     connection_id,
@@ -1548,6 +1550,7 @@ where
                     group_id_prefix,
                     environment_id,
                     metadata_columns,
+                    connection_options,
                 },
             )
             .boxed()
@@ -1571,6 +1574,11 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
                     name: name.into_proto(),
                     kind: Some(kind.into_proto()),
                 })
+                .collect(),
+            connection_options: self
+                .connection_options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.into_proto()))
                 .collect(),
         }
     }
@@ -1601,6 +1609,11 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
                 }
             },
             metadata_columns,
+            connection_options: proto
+                .connection_options
+                .into_iter()
+                .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
+                .collect::<Result<_, _>>()?,
         })
     }
 }
@@ -1754,11 +1767,13 @@ impl<C: ConnectionAccess> SourceDesc<C> {
     pub fn envelope(&self) -> &SourceEnvelope {
         &self.envelope
     }
+}
 
+impl<C: ConnectionAccess> crate::AlterCompatible for SourceDesc<C> {
     /// Determines if `self` is compatible with another `SourceDesc`, in such a
     /// way that it is possible to turn `self` into `other` through a valid
     /// series of transformations (e.g. no transformation or `ALTER SOURCE`).
-    pub fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
         if self == other {
             return Ok(());
         }
@@ -1771,21 +1786,24 @@ impl<C: ConnectionAccess> SourceDesc<C> {
         connection.alter_compatible(id, &other.connection)?;
 
         let compatibility_checks = [
-            connection == &other.connection,
-            encoding == &other.encoding,
-            envelope == &other.envelope,
-            timestamp_interval == &other.timestamp_interval,
+            (connection == &other.connection, "connection"),
+            (encoding == &other.encoding, "encoding"),
+            (envelope == &other.envelope, "envelope"),
+            (
+                timestamp_interval == &other.timestamp_interval,
+                "timestamp_interval",
+            ),
         ];
 
-        for compatible in compatibility_checks {
+        for (compatible, field) in compatibility_checks {
             if !compatible {
                 tracing::warn!(
-                    "SourceDesc incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    "SourceDesc incompatible {field}:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );
 
-                return Err(StorageError::InvalidAlterSource { id });
+                return Err(StorageError::InvalidAlter { id });
             }
         }
 
@@ -1889,20 +1907,32 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::TestScript(conn) => conn.metadata_columns(),
         }
     }
+}
 
+impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
         if self == other {
             return Ok(());
         }
-        match (self, other) {
+        let r = match (self, other) {
             (Self::Kafka(conn), Self::Kafka(other)) => conn.alter_compatible(id, other),
             (Self::Postgres(conn), Self::Postgres(other)) => conn.alter_compatible(id, other),
             (Self::LoadGenerator(conn), Self::LoadGenerator(other)) => {
                 conn.alter_compatible(id, other)
             }
             (Self::TestScript(conn), Self::TestScript(other)) => conn.alter_compatible(id, other),
-            _ => Err(StorageError::InvalidAlterSource { id }),
+            _ => Err(StorageError::InvalidAlter { id }),
+        };
+
+        if r.is_err() {
+            tracing::warn!(
+                "GenericSourceConnection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
         }
+
+        r
     }
 }
 
@@ -2026,7 +2056,9 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         vec![]
     }
+}
 
+impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C> {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
         if self == other {
             return Ok(());
@@ -2041,30 +2073,36 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
         } = self;
 
         let compatibility_checks = [
-            connection_id == &other.connection_id,
-            connection == &other.connection,
-            table_casts
-                .iter()
-                .merge_join_by(&other.table_casts, |(l_key, _), (r_key, _)| {
-                    l_key.cmp(r_key)
-                })
-                .all(|r| match r {
-                    Both((_, l_val), (_, r_val)) => l_val == r_val,
-                    _ => true,
-                }),
-            publication == &other.publication,
-            publication_details == &other.publication_details,
+            (connection_id == &other.connection_id, "connection_id"),
+            (connection == &other.connection, "connection"),
+            (
+                table_casts
+                    .iter()
+                    .merge_join_by(&other.table_casts, |(l_key, _), (r_key, _)| {
+                        l_key.cmp(r_key)
+                    })
+                    .all(|r| match r {
+                        Both((_, l_val), (_, r_val)) => l_val == r_val,
+                        _ => true,
+                    }),
+                "table_casts",
+            ),
+            (publication == &other.publication, "publication"),
+            (
+                publication_details == &other.publication_details,
+                "publication_details",
+            ),
         ];
 
-        for compatible in compatibility_checks {
+        for (compatible, field) in compatibility_checks {
             if !compatible {
                 tracing::warn!(
-                    "PostgresSourceConnection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    "PostgresSourceConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );
 
-                return Err(StorageError::InvalidAlterSource { id });
+                return Err(StorageError::InvalidAlter { id });
             }
         }
 
@@ -2196,6 +2234,8 @@ impl SourceConnection for LoadGeneratorSourceConnection {
         vec![]
     }
 }
+
+impl crate::AlterCompatible for LoadGeneratorSourceConnection {}
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
@@ -2611,6 +2651,8 @@ impl SourceConnection for TestScriptSourceConnection {
         vec![]
     }
 }
+
+impl crate::AlterCompatible for TestScriptSourceConnection {}
 
 impl RustType<ProtoTestScriptSourceConnection> for TestScriptSourceConnection {
     fn into_proto(&self) -> ProtoTestScriptSourceConnection {

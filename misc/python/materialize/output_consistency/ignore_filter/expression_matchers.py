@@ -45,11 +45,29 @@ def matches_fun_by_name(
     return False
 
 
+def matches_fun_by_any_name(
+    expression: Expression, function_names_in_lower_case: set[str]
+) -> bool:
+    for function_name in function_names_in_lower_case:
+        if matches_fun_by_name(expression, function_name):
+            return True
+
+    return False
+
+
 def matches_op_by_pattern(expression: Expression, pattern: str) -> bool:
     if isinstance(expression, ExpressionWithArgs) and isinstance(
         expression.operation, DbOperation
     ):
         return expression.operation.pattern == pattern
+    return False
+
+
+def matches_op_by_any_pattern(expression: Expression, patterns: set[str]) -> bool:
+    for pattern in patterns:
+        if matches_op_by_pattern(expression, pattern):
+            return True
+
     return False
 
 

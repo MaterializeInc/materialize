@@ -26,7 +26,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(
         auto_create_topics=False,
-        port="30123:30123",
+        ports=["30123:30123"],
         allow_host_ports=True,
         environment_extra=[
             "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
@@ -42,6 +42,7 @@ SERVICES = [
         external_minio=True,
         ports=["6975:6875", "6976:6876", "6977:6877"],
     ),
+    Service("sqlsmith", {"mzbuild": "sqlsmith"}),
     Service(
         name="persistcli",
         config={"mzbuild": "jobs"},
@@ -63,39 +64,54 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "minio",
         "materialized",
     ]
-    c.up(*service_names)
-    c.up("mc", persistent=True)
-    c.exec(
-        "mc",
-        "mc",
-        "alias",
-        "set",
-        "persist",
-        "http://minio:9000/",
-        "minioadmin",
-        "minioadmin",
+    catalog_store = (
+        "stash"
+        if args.scenario in (Scenario.Kill, Scenario.BackupRestore)
+        else "shadow"
     )
-    c.exec("mc", "mc", "version", "enable", "persist/persist")
+    with c.override(
+        Materialized(
+            external_cockroach=True,
+            restart="on-failure",
+            external_minio=True,
+            ports=["6975:6875", "6976:6876", "6977:6877"],
+            catalog_store=catalog_store,
+        )
+    ):
+        c.up(*service_names)
+        c.up("mc", persistent=True)
+        c.exec(
+            "mc",
+            "mc",
+            "alias",
+            "set",
+            "persist",
+            "http://minio:9000/",
+            "minioadmin",
+            "minioadmin",
+        )
+        c.exec("mc", "mc", "version", "enable", "persist/persist")
 
-    ports = {s: c.default_port(s) for s in service_names}
-    ports["http"] = c.port("materialized", 6876)
-    ports["mz_system"] = c.port("materialized", 6877)
-    # try:
-    run(
-        "localhost",
-        ports,
-        args.seed,
-        args.runtime,
-        Complexity(args.complexity),
-        Scenario(args.scenario),
-        args.threads,
-        args.naughty_identifiers,
-        c,
-    )
-    # TODO: Only ignore errors that will be handled by parallel-workload, not others
-    # except Exception:
-    #     print("--- Execution of parallel-workload failed")
-    #     print_exc()
-    #     # Don't fail the entire run. We ran into a crash,
-    #     # ci-logged-errors-detect will handle this if it's an unknown failure.
-    #     return
+        ports = {s: c.default_port(s) for s in service_names}
+        ports["http"] = c.port("materialized", 6876)
+        ports["mz_system"] = c.port("materialized", 6877)
+        # try:
+        run(
+            "localhost",
+            ports,
+            args.seed,
+            args.runtime,
+            Complexity(args.complexity),
+            Scenario(args.scenario),
+            args.threads,
+            args.naughty_identifiers,
+            args.fast_startup,
+            c,
+        )
+        # TODO: Only ignore errors that will be handled by parallel-workload, not others
+        # except Exception:
+        #     print("--- Execution of parallel-workload failed")
+        #     print_exc()
+        #     # Don't fail the entire run. We ran into a crash,
+        #     # ci-logged-errors-detect will handle this if it's an unknown failure.
+        #     return

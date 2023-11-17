@@ -17,8 +17,10 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use futures::Stream;
 use mz_ore::collections::HashMap;
-use mz_persist_client::read::{ListenEvent, ReadHandle, Since, Subscribe};
+use mz_persist_client::fetch::LeasedBatchPart;
+use mz_persist_client::read::{Cursor, ListenEvent, ReadHandle, Since, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec, Codec64, StepForward};
@@ -91,6 +93,14 @@ pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecD
     /// Invariant: Contains the minimum write time (if any) for each value in
     /// `self.datas`.
     datas_min_write_ts: BinaryHeap<Reverse<(T, ShardId)>>,
+
+    /// If Some, this cache only tracks the indicated data shard as a
+    /// performance optimization. When used, only some methods (in particular,
+    /// the ones necessary for the txns_progress operator) are supported.
+    ///
+    /// TODO: It'd be nice to make this a compile time thing. I have some ideas,
+    /// but they're decently invasive, so leave it for a followup.
+    only_data_id: Option<ShardId>,
 }
 
 impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
@@ -100,7 +110,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         txns_write: &mut WriteHandle<C::Key, C::Val, T, i64>,
     ) -> Self {
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
-        let mut ret = Self::from_read(txns_read).await;
+        let mut ret = Self::from_read(txns_read, None).await;
         ret.update_gt(&init_ts).await;
         ret
     }
@@ -110,7 +120,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     /// `txns_id` identifies which shard will be used as the txns WAL. MZ will
     /// likely have one of these per env, used by all processes and the same
     /// across restarts.
-    pub async fn open(client: &PersistClient, txns_id: ShardId) -> Self {
+    pub async fn open(
+        client: &PersistClient,
+        txns_id: ShardId,
+        only_data_id: Option<ShardId>,
+    ) -> Self {
         let (txns_key_schema, txns_val_schema) = C::schemas();
         let txns_read = client
             .open_leased_reader(
@@ -124,10 +138,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             )
             .await
             .expect("txns schema shouldn't change");
-        Self::from_read(txns_read).await
+        Self::from_read(txns_read, only_data_id).await
     }
 
-    pub(crate) async fn from_read(txns_read: ReadHandle<C::Key, C::Val, T, i64>) -> Self {
+    pub(crate) async fn from_read(
+        txns_read: ReadHandle<C::Key, C::Val, T, i64>,
+        only_data_id: Option<ShardId>,
+    ) -> Self {
         let txns_id = txns_read.shard_id();
         let as_of = txns_read.since().clone();
         let since_ts = as_of.as_option().expect("txns shard is not closed").clone();
@@ -145,6 +162,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             batch_idx: HashMap::new(),
             datas: BTreeMap::new(),
             datas_min_write_ts: BinaryHeap::new(),
+            only_data_id,
         }
     }
 
@@ -159,6 +177,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     /// Specifically, a data shard is registered at a timestamp `ts` if it has a
     /// `register_ts <= ts` but no `forget_ts >= ts`.
     pub fn registered_at(&self, data_id: &ShardId, ts: &T) -> bool {
+        self.assert_only_data_id(data_id);
         let Some(data_times) = self.datas.get(data_id) else {
             return false;
         };
@@ -176,6 +195,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     ///
     /// Returns Err if that data shard has not been registered at the given ts.
     pub fn data_snapshot(&self, data_id: ShardId, as_of: T) -> DataSnapshot<T> {
+        self.assert_only_data_id(&data_id);
         assert!(self.progress_exclusive > as_of);
         let Some(all) = self.datas.get(&data_id) else {
             // Not registered at this time, so we know there are no unapplied
@@ -226,6 +246,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     ///
     /// Returns Err if that data shard has not been registered at the given ts.
     pub fn data_listen_next(&self, data_id: &ShardId, ts: T) -> DataListenNext<T> {
+        self.assert_only_data_id(data_id);
         assert!(self.progress_exclusive >= ts);
         use DataListenNext::*;
         let data_times = self.datas.get(data_id);
@@ -283,6 +304,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
 
     /// Returns the minimum timestamp not known to be applied by this cache.
     pub fn min_unapplied_ts(&self) -> &T {
+        assert_eq!(self.only_data_id, None);
         // We maintain an invariant that the values in the unapplied_batches map
         // are sorted by timestamp, thus the first one must be the minimum.
         self.unapplied_batches
@@ -296,6 +318,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
 
     /// Returns the batches needing application as of the current progress.
     pub(crate) fn unapplied_batches(&self) -> impl Iterator<Item = &(ShardId, Vec<u8>, T)> {
+        assert_eq!(self.only_data_id, None);
         self.unapplied_batches.values()
     }
 
@@ -317,6 +340,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         expected_txns_upper: &T,
         retractions: impl Iterator<Item = (&'a Vec<u8>, &'a ShardId)>,
     ) -> impl Iterator<Item = (&'a Vec<u8>, &'a ShardId)> {
+        assert_eq!(self.only_data_id, None);
         assert!(&self.progress_exclusive >= expected_txns_upper);
         retractions.filter(|(batch_raw, _)| self.batch_idx.contains_key(*batch_raw))
     }
@@ -365,26 +389,54 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
 
     async fn update<F: Fn(&T) -> bool>(&mut self, done: F) {
         while !done(&self.progress_exclusive) {
-            let events = self.txns_subscribe.fetch_next().await;
+            let events = self.txns_subscribe.next(None).await;
             for event in events {
-                let mut updates = match event {
+                let parts = match event {
                     ListenEvent::Progress(frontier) => {
                         self.progress_exclusive = frontier
                             .into_option()
                             .expect("nothing should close the txns shard");
                         continue;
                     }
-                    ListenEvent::Updates(updates) => updates,
+                    ListenEvent::Updates(parts) => parts,
                 };
+                let mut updates = Vec::new();
+                // We filter out unrelated data in two passes. The first is
+                // `should_fetch_part`, which allows us to skip entire fetches
+                // from s3/Blob. Then, if a part does need to be fetched, it
+                // still might contain info about unrelated data shards, and we
+                // filter those out before buffering in `updates`.
+                for part in parts {
+                    let should_fetch_part = self.should_fetch_part(&part);
+                    debug!(
+                        "should_fetch_part={} for {:?} {:?}",
+                        should_fetch_part,
+                        self.only_data_id,
+                        part.stats()
+                    );
+                    if !should_fetch_part {
+                        self.txns_subscribe.return_leased_part(part);
+                        continue;
+                    }
+                    let part_updates = self.txns_subscribe.fetch_batch_part(part).await;
+                    let part_updates = part_updates.map(|((k, v), t, d)| {
+                        let (k, v) = (k.expect("valid key"), v.expect("valid val"));
+                        (C::decode(k, v), t, d)
+                    });
+                    if let Some(only_data_id) = self.only_data_id.as_ref() {
+                        updates
+                            .extend(part_updates.filter(|(x, _, _)| x.data_id() == only_data_id));
+                    } else {
+                        updates.extend(part_updates);
+                    }
+                }
                 // Persist emits the times sorted by little endian encoding,
                 // which is not what we want. If we ever expose an interface for
                 // registering and committing to a data shard at the same
                 // timestamp, this will also have to sort registrations first.
                 updates.sort_by(|(_, at, _), (_, bt, _)| at.cmp(bt));
-                for ((k, v), t, d) in updates {
-                    let k = k.expect("valid key");
-                    let v = v.expect("valid val");
-                    match C::decode(k, v) {
+                for (e, t, d) in updates {
+                    match e {
                         TxnsEntry::Register(data_id) => self.push_register(data_id, t, d),
                         TxnsEntry::Append(data_id, batch) => self.push_append(data_id, batch, t, d),
                     }
@@ -402,7 +454,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 
     fn push_register(&mut self, data_id: ShardId, ts: T, diff: i64) {
+        self.assert_only_data_id(&data_id);
         debug_assert!(ts >= self.progress_exclusive);
+        if let Some(only_data_id) = self.only_data_id.as_ref() {
+            if only_data_id != &data_id {
+                return;
+            }
+        }
 
         if diff == 1 {
             debug!(
@@ -438,7 +496,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 
     fn push_append(&mut self, data_id: ShardId, batch: Vec<u8>, ts: T, diff: i64) {
+        self.assert_only_data_id(&data_id);
         debug_assert!(ts >= self.progress_exclusive);
+        if let Some(only_data_id) = self.only_data_id.as_ref() {
+            if only_data_id != &data_id {
+                return;
+            }
+        }
 
         if diff == 1 {
             debug!(
@@ -567,6 +631,24 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             self.since_ts, self.datas_min_write_ts
         );
         debug_assert_eq!(self.validate(), Ok(()));
+    }
+
+    fn should_fetch_part(&self, part: &LeasedBatchPart<T>) -> bool {
+        let Some(only_data_id) = self.only_data_id.as_ref() else {
+            return true;
+        };
+        // This `part.stats()` call involves decoding and the only_data_id=None
+        // case is common-ish, so make sure to keep it after that early return.
+        let Some(stats) = part.stats() else {
+            return true;
+        };
+        C::should_fetch_part(only_data_id, &stats).unwrap_or(true)
+    }
+
+    fn assert_only_data_id(&self, data_id: &ShardId) {
+        if let Some(only_data_id) = self.only_data_id.as_ref() {
+            assert_eq!(data_id, only_data_id);
+        }
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
@@ -852,18 +934,50 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     pub async fn snapshot_and_fetch<K, V, D>(
         &self,
         data_read: &mut ReadHandle<K, V, T, D>,
-        // TODO(txn): It's quite surprising to require a WriteHandle for reads,
-        // see what we can do about making this nicer.
-        data_write: WriteHandle<K, V, T, D>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>>
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
         D: Semigroup + Codec64 + Send + Sync,
     {
+        let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
         data_read
             .snapshot_and_fetch(Antichain::from_elem(self.as_of.clone()))
+            .await
+    }
+
+    /// See [ReadHandle::snapshot_cursor].
+    pub async fn snapshot_cursor<K, V, D>(
+        &self,
+        data_read: &mut ReadHandle<K, V, T, D>,
+    ) -> Result<Cursor<K, V, T, D>, Since<T>>
+    where
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let data_write = WriteHandle::from_read(data_read, "unblock_read");
+        self.unblock_read(data_write).await;
+        data_read
+            .snapshot_cursor(Antichain::from_elem(self.as_of.clone()))
+            .await
+    }
+
+    /// See [ReadHandle::snapshot_and_stream].
+    pub async fn snapshot_and_stream<K, V, D>(
+        &self,
+        data_read: &mut ReadHandle<K, V, T, D>,
+    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>>
+    where
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let data_write = WriteHandle::from_read(data_read, "unblock_read");
+        self.unblock_read(data_write).await;
+        data_read
+            .snapshot_and_stream(Antichain::from_elem(self.as_of.clone()))
             .await
     }
 
@@ -914,7 +1028,7 @@ mod tests {
     use DataListenNext::*;
 
     use crate::operator::DataSubscribe;
-    use crate::tests::{reader, writer};
+    use crate::tests::reader;
     use crate::txns::TxnsHandle;
 
     use super::*;
@@ -924,7 +1038,7 @@ mod tests {
             init_ts: u64,
             txns: &TxnsHandle<String, (), u64, i64>,
         ) -> Self {
-            let mut ret = TxnsCache::open(&txns.datas.client, txns.txns_id()).await;
+            let mut ret = TxnsCache::open(&txns.datas.client, txns.txns_id(), None).await;
             ret.update_gt(&init_ts).await;
             ret.compact_to(&init_ts);
             ret
@@ -937,11 +1051,10 @@ mod tests {
             as_of: u64,
         ) -> Vec<String> {
             let mut data_read = reader(client, data_id).await;
-            let data_write = writer(client, data_id).await;
             self.update_gt(&as_of).await;
             let mut snapshot = self
                 .data_snapshot(data_read.shard_id(), as_of)
-                .snapshot_and_fetch(&mut data_read, data_write)
+                .snapshot_and_fetch(&mut data_read)
                 .await
                 .unwrap();
             snapshot.sort();
@@ -1118,10 +1231,7 @@ mod tests {
         let snap = txns.txns_cache.data_snapshot(d0, 4);
         let mut data_read = reader(&client, d0).await;
         // This shouldn't deadlock.
-        let contents = snap
-            .snapshot_and_fetch(&mut data_read, writer(&client, d0).await)
-            .await
-            .unwrap();
+        let contents = snap.snapshot_and_fetch(&mut data_read).await.unwrap();
         assert_eq!(contents.len(), 1);
 
         // Sanity check that the scenario played out like we said above.

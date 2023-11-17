@@ -11,7 +11,7 @@
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.mzcompose_actions import ConfigureMz, KillMz, StartMz
 from materialize.checks.scenarios import Scenario
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 
 class Node:
@@ -40,7 +40,7 @@ class BeginVersion(Node):
         # As this action may need start very old Mz versions,
         # we do not use any bootstrap_systme_parameters
         return [
-            StartMz(tag=self.version, system_parameter_defaults={}),
+            StartMz(scenario, tag=self.version, system_parameter_defaults={}),
             ConfigureMz(scenario),
         ]
 

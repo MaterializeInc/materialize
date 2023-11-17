@@ -27,14 +27,14 @@ class BackupAndRestoreAfterManipulate(Scenario):
 
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             Initialize(self),
             Manipulate(self, phase=1),
             Manipulate(self, phase=2),
             Backup(),
             KillMz(),
             Restore(),
-            StartMz(),
+            StartMz(self),
             Validate(self),
         ]
 
@@ -44,13 +44,13 @@ class BackupAndRestoreBeforeManipulate(Scenario):
 
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             Initialize(self),
             Manipulate(self, phase=1),
             Backup(),
             KillMz(),
             Restore(),
-            StartMz(),
+            StartMz(self),
             Manipulate(self, phase=2),
             Validate(self),
         ]

@@ -21,7 +21,58 @@ reference these objects is not allowed.
 {{< /warning >}}
 
 
-## System Relations
+## System relations
+
+### `mz_activity_log`
+
+{{< public-preview />}}
+
+{{< warning >}}
+Do not rely on all statements being logged in this view. Materialize
+controls the maximum rate at which statements are sampled, and may change
+this rate at any time.
+{{< /warning >}}
+
+{{< warning >}}
+Entries in this view may be cleared on restart (e.g., during Materialize maintenance windows).
+{{< /warning >}}
+
+The `mz_activity_log` view contains a log of the SQL statements that
+have been issued to Materialize, along with various metadata about
+them.
+
+Entries in this log may be sampled. The sampling rate is controlled by
+the session variable `statement_logging_sample_rate`, which may be set
+to any value between 0 and 1. For example, to disable statement
+logging entirely for a session, execute `SET
+statement_logging_sample_rate TO 0`. Materialize may apply a lower
+sampling rate than the one set in this variable.
+
+<!-- RELATION_SPEC mz_internal.mz_activity_log -->
+| Field                     | Type                         | Meaning                                                                                                                                                                                                                                                                       |
+|---------------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `execution_id`            | [`uuid`]                     | An ID that is unique for each executed statement.                                                                                                                                                                                                                              |
+| `sample_rate`             | [`double precision`]         | The actual rate at which the statement was sampled.                                                                                                                                                                                                                           |
+| `cluster_id`              | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_clusters).                                                                                                                                                                                                               |
+| `application_name`        | [`text`]                     | The value of the `application_name` session variable at execution time.                                                                                                                                                                                                       |
+| `cluster_name`            | [`text`]                     | The name of the cluster with ID `cluster_id` at execution time.                                                                                                                                                                                                               |
+| `transaction_isolation`   | [`text`]                     | The value of the `transaction_isolation` session variable at execution time.                                                                                                                                                                                                  |
+| `execution_timestamp`     | [`uint8`]                    | The logical timestamp at which execution was scheduled.                                                                                                                                                                                                                       |
+| `transient_index_id`      | [`text`]                     | The internal index of the compute dataflow created for the query, if any.                                                                                                                                                                                                     |
+| `params`                  | [`text array`]                   | The parameters with which the statement was executed.                                                                                                                                                                                                                         |
+| `began_at`                | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
+| `finished_at`             | [`timestamp with time zone`] | The wall-clock time at which the statement finished executing.                                                                                                                                                                                                                   |
+| `finished_status`         | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `errored`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                    |
+| `error_message`           | [`text`]                     | The error message, if the statement failed.                                                                                                                                                                                                                                   |
+| `rows_returned`           | [`bigint`]                   | The number of rows returned, for statements that return rows.                                                                                                                                                                                                                 |
+| `execution_strategy`      | [`text`]                     | For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow. |
+| `transaction_id`          | [`uint8`]                    | The ID of the transaction that the statement was part of. Note that transaction IDs are only unique per session.                                                                                                                                                              |
+| `prepared_statement_id`   | [`uuid`]                     | An ID that is unique for each prepared statement. For example, if a statement is prepared once and then executed multiple times, all executions will have the same value for this column (but different values for `execution_id`).                                           |
+| `sql`                     | [`text`]                     | The SQL text of the statement.                                                                                                                                                                                                                                                |
+| `prepared_statement_name` | [`text`]                     | The name given by the client library to the prepared statement.                                                                                                                                                                                                               |
+| `session_id`              | [`uuid`]                     | An ID that is unique for each session.                                                                                                                                                                                                                                        |
+| `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
+| `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
 
 ### `mz_cluster_replica_frontiers`
 
@@ -223,6 +274,22 @@ The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 | `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
 | `group_id_base`        | [`text`]       | The prefix of the group ID that Materialize will use when consuming data for the Kafka source.            |
 
+### `mz_materialization_lag`
+
+The `mz_materialization_lag` view describes for each materialized view, index, and sink in the system the difference between the input frontiers and the output frontier.
+For hydrated dataflows, this lag roughly corresponds to the time it takes for updates at the inputs to become reflected in the outputs.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_materialization_lag -->
+| Field                     | Type             | Meaning                                                                                  |
+| ------------------------- | ---------------- | --------                                                                                 |
+| `object_id`               | [`text`]         | The ID of the materialized view, index, or sink.                                         |
+| `local_lag`               | [`interval`]     | The amount of time the materialization lags behind its direct inputs.                    |
+| `global_lag`              | [`interval`]     | The amount of time the materialization lags behind its root inputs (sources and tables). |
+| `slowest_local_input_id`  | [`text`]         | The ID of the slowest direct input.                                                      |
+| `slowest_global_input_id` | [`text`]         | The ID of the slowest root input.                                                        |
+
 ### `mz_object_dependencies`
 
 The `mz_object_dependencies` table describes the dependency structure between
@@ -312,7 +379,7 @@ referenced from
 | `id`                 | [`uuid`]                     | The globally unique ID of this history entry. Does **not** correspond to [`mz_sessions.id`](#mz_sessions), which can be recycled. |
 | `connected_at`       | [`timestamp with time zone`] | The time at which the session was established.                                                                                    |
 | `application_name`   | [`text`]                     | The `application_name` session metadata field.                                                                                    |
-| `authenticated_user` | [`text`]                     | The name of the user for wish the session was established.                                                                        |
+| `authenticated_user` | [`text`]                     | The name of the user for which the session was established.                                                                       |
 -->
 
 ### `mz_sessions`
@@ -717,7 +784,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 | `name`         | [`text`]    | The name of the webhook source.                                                              |
 | `url`          | [`text`]    | The URL which can be used to send events to the source.                                      |
 
-## Replica Introspection Relations
+## Replica introspection relations
 
 This section lists the available replica introspection relations.
 
@@ -1106,6 +1173,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
+[`text array`]: /sql/types/array
 [`text list`]: /sql/types/list
 [`uuid`]: /sql/types/uuid
 [`uint4`]: /sql/types/uint4
@@ -1118,7 +1186,6 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [Top K]: /transform-data/patterns/top-k
 [query hints]: /sql/select/#query-hints
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->

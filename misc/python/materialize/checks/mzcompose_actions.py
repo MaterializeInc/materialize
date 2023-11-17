@@ -12,9 +12,9 @@ from typing import TYPE_CHECKING, Any
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.util import MzVersion
 
 if TYPE_CHECKING:
     from materialize.checks.scenarios import Scenario
@@ -29,6 +29,7 @@ class MzcomposeAction(Action):
 class StartMz(MzcomposeAction):
     def __init__(
         self,
+        scenario: "Scenario",
         tag: MzVersion | None = None,
         environment_extra: list[str] = [],
         system_parameter_defaults: dict[str, str] | None = None,
@@ -36,6 +37,11 @@ class StartMz(MzcomposeAction):
         self.tag = tag
         self.environment_extra = environment_extra
         self.system_parameter_defaults = system_parameter_defaults
+        self.catalog_store = (
+            "shadow"
+            if scenario.base_version() >= MzVersion.parse("0.78.0-dev")
+            else "stash"
+        )
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -59,12 +65,39 @@ class StartMz(MzcomposeAction):
             system_parameter_defaults=self.system_parameter_defaults,
             additional_system_parameter_defaults=additional_system_parameter_defaults,
             sanity_restart=False,
+            catalog_store=self.catalog_store,
         )
 
         with c.override(mz):
             c.up("materialized")
 
-        mz_version = MzVersion.parse_sql(c)
+        # This should live in all_checks/ssh.py, but accessing the ssh bastion
+        # host from inside a check is not possible.
+        c.sql(
+            """
+            CREATE CONNECTION IF NOT EXISTS thancred TO SSH TUNNEL (
+            HOST 'ssh-bastion-host',
+            USER 'mz',
+            PORT 22
+            )"""
+        )
+
+        public_key = c.sql_query(
+            """
+                select public_key_1 from mz_ssh_tunnel_connections ssh \
+                join mz_connections c on c.id = ssh.id
+                where c.name = 'thancred';
+                """
+        )[0][0]
+
+        c.exec(
+            "ssh-bastion-host",
+            "bash",
+            "-c",
+            f"echo '{public_key}' > /etc/authorized_keys/mz",
+        )
+
+        mz_version = MzVersion.parse_mz(c.query_mz_version())
         if self.tag:
             assert (
                 self.tag == mz_version
@@ -151,11 +184,15 @@ class ConfigureMz(MzcomposeAction):
                 + "\n".join(system_settings)
             )
 
+        kafka_broker = "BROKER '${testdrive.kafka-addr}'"
+        print(e.current_mz_version)
+        if e.current_mz_version >= MzVersion.parse("0.78.0-dev"):
+            kafka_broker += ", SECURITY PROTOCOL PLAINTEXT"
         input += dedent(
-            """
-            > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+            f"""
+            > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA {kafka_broker}
 
-            > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
+            > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
             """
         )
 

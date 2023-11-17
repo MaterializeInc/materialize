@@ -82,10 +82,10 @@ fn main() {
 
     prost_build::Config::new()
         .btree_map(["."])
+        .extern_path(".mz_proto", "::mz_proto")
         .compile_protos(
             &[
                 "repr/src/antichain.proto",
-                "repr/src/chrono.proto",
                 "repr/src/global_id.proto",
                 "repr/src/row.proto",
                 "repr/src/strconv.proto",

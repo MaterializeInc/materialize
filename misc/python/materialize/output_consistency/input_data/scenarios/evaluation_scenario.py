@@ -15,3 +15,5 @@ class EvaluationScenario(Enum):
     """Data-flow rendering vs. constant folding"""
     POSTGRES_CONSISTENCY = 2
     """Materialize vs. Postgres"""
+    VERSION_CONSISTENCY = 3
+    """Two different versions of mz"""

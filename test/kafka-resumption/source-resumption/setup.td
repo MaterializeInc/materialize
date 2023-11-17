@@ -27,7 +27,7 @@ three
     )
   )
 
-> CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}')
+> CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE SOURCE topic
   IN CLUSTER clusterd

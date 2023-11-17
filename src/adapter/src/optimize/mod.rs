@@ -23,7 +23,7 @@
 //!
 //! - Implementors of this trait are structs that encapsulate all context
 //!   required to optimize a statement of type `T` end-to-end (for example
-//!   [`OptimizeMaterializedView`] for `T` = `MaterializedView`).
+//!   [`materialized_view::Optimizer`] for `T` = `MaterializedView`).
 //! - Each struct implements [`Optimize`] once for each optimization stage. The
 //!   `From` type represents the input of the stage and `Self::To` the
 //!   associated stage output. This allows to have more than one entrypoints to
@@ -41,25 +41,22 @@
 //!     shared reference. This ensures that client code can look up information
 //!     from intermediate stages but cannot modify it.
 //!   - Timestamp selection is modeled as a conversion between structs that are
-//!     adjacent in the pipeline.
+//!     adjacent in the pipeline using a method called `resolve`.
 //!   - The struct representing the result of the final stage of the
-//!     optimization pipeline can be destructed to access its internals.
-//! - The `Send + Sync` trait bounds on the `Self` and `From` types ensure that
-//!   [`Optimize`] instances can be passed to different threads.
+//!     optimization pipeline can be destructed to access its internals with a
+//!     method called `unapply`.
+//! - The `Send` trait bounds on the `Self` and `From` types ensure that
+//!   [`Optimize`] instances can be passed to different threads (this is
+//!   required of off-thread optimization).
 //!
 //! For details, see the `20230714_optimizer_interface.md` design doc in this
 //! repository.
 
-mod index;
-mod materialized_view;
-mod subscribe;
-mod view;
-
-// Re-export optimzier structs
-pub use index::{Index, OptimizeIndex};
-pub use materialized_view::OptimizeMaterializedView;
-pub use subscribe::OptimizeSubscribe;
-pub use view::OptimizeView;
+pub mod index;
+pub mod materialized_view;
+pub mod peek;
+pub mod subscribe;
+pub mod view;
 
 use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -90,11 +87,11 @@ use crate::AdapterError;
 /// The `'s: 'ctx` bound in the `optimize` method call ensures that an optimizer
 /// instance can run an optimization stage that produces a `Self::To` with
 /// `&'ctx` references.
-pub trait Optimize<From>: Send + Sync
+pub trait Optimize<From>: Send
 where
-    From: Send + Sync,
+    From: Send,
 {
-    type To: Send + Sync;
+    type To: Send;
 
     /// Execute the optimization stage, transforming the input plan of type
     /// `From` to an output plan of type `To`.
@@ -112,7 +109,7 @@ where
 }
 
 // Feature flags for the optimizer.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OptimizerConfig {
     /// The mode in which the optimizer runs.
     pub mode: OptimizeMode,
@@ -126,13 +123,14 @@ pub struct OptimizerConfig {
     /// The collection of type information happens in MIR ⇒ LIR lowering.
     pub enable_specialized_arrangements: bool,
     /// An exclusive upper bound on the number of results we may return from a
-    /// Persist fast-path peek.
+    /// Persist fast-path peek. Required by the `create_fast_path_plan` call in
+    /// [`peek::Optimizer`].
     pub persist_fast_path_limit: usize,
     /// Enable outer join lowering implemented in #22343.
     pub enable_new_outer_join_lowering: bool,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OptimizeMode {
     /// A mode where the optimized statement is executed.
     Execute,
@@ -221,12 +219,12 @@ impl<'a> DataflowBuilder<'a> {
                 if let CatalogItem::View(view) = &self.catalog.get_entry(&desc.id).item {
                     let span = tracing::span!(
                         target: "optimizer",
-                        tracing::Level::TRACE,
+                        tracing::Level::DEBUG,
                         "view",
                         path.segment = desc.id.to_string()
                     );
                     desc.plan = span.in_scope(|| {
-                        let mut view_optimizer = OptimizeView::new(config.clone());
+                        let mut view_optimizer = view::Optimizer::new(config.clone());
                         view_optimizer.optimize(view.raw_expr.clone())
                     })?;
                 }

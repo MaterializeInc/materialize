@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-* Additional tests for `dbt show`'s `--limit` flag
+* Mark `dbt source freshness` as not supported. Materialize supports the
+  functionality required to enable column- and metadata-based source freshness
+  checks, but the value of this feature in a real-time data warehouse is
+  limited.
 
 ## 1.6.1 - 2023-11-03
 

@@ -18,12 +18,14 @@
 
 use ::serde::Deserialize;
 use mz_ore::collections::HashMap;
-use mz_sql_parser::ast::{Raw, Statement};
+use mz_sql_parser::ast::{statement_kind_label_value, Raw, Statement};
+use mz_sql_parser::parser::parse_statements;
 use regex::Regex;
 use ropey::Rope;
-use serde_json::Value;
+use serde::Serialize;
+use serde_json::{json, Value};
 use tokio::sync::Mutex;
-use tower_lsp::jsonrpc::Result;
+use tower_lsp::jsonrpc::{Error, ErrorCode, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
@@ -41,6 +43,24 @@ pub struct ParseResult {
     pub asts: Vec<Statement<Raw>>,
     /// Text handler for big files.
     pub rope: Rope,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Serialize)]
+/// Represents the structure a client uses to understand
+/// statement's kind and sql content.
+pub struct ExecuteCommandParseStatement {
+    /// The sql content in the statement
+    pub sql: String,
+    /// The type of statement.
+    /// Represents the String version of [Statement].
+    pub kind: String,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Serialize)]
+/// Represents the response from the parse command.
+pub struct ExecuteCommandParseResponse {
+    /// Contains all the valid SQL statements.
+    pub statements: Vec<ExecuteCommandParseStatement>,
 }
 
 /// The [Backend] struct implements the [LanguageServer] trait, and thus must provide implementations for its methods.
@@ -125,6 +145,12 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec!["parse".to_string()],
+                    work_done_progress_options: WorkDoneProgressOptions {
+                        work_done_progress: None,
+                    },
+                }),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -165,18 +191,44 @@ impl LanguageServer for Backend {
             .await;
     }
 
-    async fn execute_command(&self, _: ExecuteCommandParams) -> Result<Option<Value>> {
-        self.client
-            .log_message(MessageType::INFO, "command executed!")
-            .await;
+    /// Executes a single command and returns the response. Def: [workspace/executeCommand](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#workspace_executeCommand)
+    ///
+    /// Commands implemented:
+    ///
+    /// * parse: returns multiple valid statements from a single sql code.
+    async fn execute_command(&self, command_params: ExecuteCommandParams) -> Result<Option<Value>> {
+        match command_params.command.as_str() {
+            "parse" => {
+                let json_args = command_params.arguments.get(0);
 
-        match self.client.apply_edit(WorkspaceEdit::default()).await {
-            Ok(res) if res.applied => self.client.log_message(MessageType::INFO, "applied").await,
-            Ok(_) => self.client.log_message(MessageType::INFO, "rejected").await,
-            Err(err) => self.client.log_message(MessageType::ERROR, err).await,
+                if let Some(json_args) = json_args {
+                    let args = serde_json::from_value::<String>(json_args.clone())
+                        .map_err(|_| build_error("Error deserializing parse args as String."))?;
+                    let statements = parse_statements(&args)
+                        .map_err(|_| build_error("Error parsing the statements."))?;
+
+                    // Transform raw statements to splitted statements
+                    // and infere the kind.
+                    // E.g. if it is a select or a create_table statement.
+                    let parse_statements: Vec<ExecuteCommandParseStatement> = statements
+                        .iter()
+                        .map(|x| ExecuteCommandParseStatement {
+                            kind: statement_kind_label_value(x.ast.clone().into()).to_string(),
+                            sql: x.sql.to_string(),
+                        })
+                        .collect();
+
+                    return Ok(Some(json!(ExecuteCommandParseResponse {
+                        statements: parse_statements
+                    })));
+                } else {
+                    return Err(build_error("Missing command args."));
+                }
+            }
+            _ => {
+                return Err(build_error("Unknown command."));
+            }
         }
-
-        Ok(None)
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
@@ -372,4 +424,15 @@ fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
     let column_u32 = column.try_into().ok()?;
 
     Some(Position::new(line_u32, column_u32))
+}
+
+/// Builds a [tower_lsp::jsonrpc::Error]
+///
+/// Use this function to map normal errors to the one the trait expects
+fn build_error(message: &'static str) -> tower_lsp::jsonrpc::Error {
+    Error {
+        code: ErrorCode::InternalError,
+        message: std::borrow::Cow::Borrowed(message),
+        data: None,
+    }
 }

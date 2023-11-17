@@ -21,8 +21,8 @@ pub struct ProjectionExtraction;
 
 impl crate::Transform for ProjectionExtraction {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "projection_extraction")
     )]

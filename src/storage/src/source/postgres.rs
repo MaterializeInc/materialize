@@ -305,7 +305,8 @@ impl From<DefiniteError> for SourceReaderError {
 
 /// Ensures the replication slot of this connection is created.
 async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), TransientError> {
-    let slot = Ident::from(slot).to_ast_string();
+    // Note: Using unchecked here is okay because we're using it in a SQL query.
+    let slot = Ident::new_unchecked(slot).to_ast_string();
     let query = format!("CREATE_REPLICATION_SLOT {slot} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT");
     match simple_query_opt(client, &query).await {
         Ok(_) => Ok(()),

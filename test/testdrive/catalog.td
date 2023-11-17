@@ -286,7 +286,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE MATERIALIZED VIEW mv AS SELECT (1);
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE source_data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -505,6 +505,8 @@ name
 mz_objects
 mz_relations
 mz_storage_usage
+mz_timezone_abbreviations
+mz_timezone_names
 
 # Check default sources, tables, and views in mz_internal.
 
@@ -611,6 +613,7 @@ mz_dataflows
 mz_dataflows_per_worker
 mz_expected_group_size_advice
 mz_global_frontiers
+mz_materialization_lag
 mz_message_counts
 mz_message_counts_per_worker
 mz_object_fully_qualified_names
@@ -669,7 +672,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-112
+113
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

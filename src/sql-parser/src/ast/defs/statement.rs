@@ -27,10 +27,10 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, ConnectionOption, CreateConnectionOption, CreateConnectionType,
     CreateSinkConnection, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
-    CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident, KeyConstraint, Query,
-    SelectItem, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident, KeyConstraint,
+    MaterializedViewOption, Query, SelectItem, SourceIncludeMetadata, SubscribeOutput, TableAlias,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -1139,7 +1139,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkOption<T> {
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
-    pub name: UnresolvedItemName,
+    pub name: Option<UnresolvedItemName>,
     pub in_cluster: Option<T::ClusterName>,
     pub if_not_exists: bool,
     pub from: T::ItemName,
@@ -1155,12 +1155,16 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         if self.if_not_exists {
             f.write_str("IF NOT EXISTS ");
         }
-        f.write_node(&self.name);
-        if let Some(cluster) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
-            f.write_node(cluster);
+        if let Some(name) = &self.name {
+            f.write_node(&name);
+            f.write_str(" ");
         }
-        f.write_str(" FROM ");
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str("IN CLUSTER ");
+            f.write_node(cluster);
+            f.write_str(" ");
+        }
+        f.write_str("FROM ");
         f.write_node(&self.from);
         f.write_str(" INTO ");
         f.write_node(&self.connection);
@@ -1244,7 +1248,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
-    pub non_null_assertions: Vec<Ident>,
+    pub with_options: Vec<MaterializedViewOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
@@ -1274,15 +1278,9 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
             f.write_node(cluster);
         }
 
-        if !self.non_null_assertions.is_empty() {
+        if !self.with_options.is_empty() {
             f.write_str(" WITH (");
-            for (i, nna) in self.non_null_assertions.iter().enumerate() {
-                f.write_str("ASSERT NOT NULL ");
-                f.write_node(nna);
-                if i + 1 != self.non_null_assertions.len() {
-                    f.write_str(", ")
-                }
-            }
+            f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
 

@@ -48,6 +48,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)Cargo\.lock$' \
     -e '^about\.toml$' \
     -e '^deny\.toml$' \
+    -e '(^|/)Gemfile\.lock$' \
     -e '^netlify\.toml$' \
     -e '^rustfmt\.toml$' \
     -e '^clippy\.toml$' \
@@ -61,6 +62,7 @@ copyright_files=$(grep -vE \
     -e '^ci/test/lint-deps/' \
     -e 'test/chbench/chbench' \
     -e 'src/pid-file/libbsd' \
+    -e 'src/pgtz/tznames/.*' \
     -e 'test/sqllogictest/postgres/testdata/.*\.data' \
     -e 'test/pgtest/.*\.pt' \
     -e 'test/pgtest-mz/.*\.pt' \
@@ -72,6 +74,7 @@ copyright_files=$(grep -vE \
     -e 'supply-chain/.*' \
     -e '.devcontainer/.*' \
     -e 'snapshots/.*\.snap' \
+    -e 'src/environmentd/tests/testdata/timezones/.*\.csv' \
     <<< "$files"
 )
 

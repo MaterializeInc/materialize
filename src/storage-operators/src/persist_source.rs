@@ -11,6 +11,8 @@
 
 use std::any::Any;
 use std::convert::Infallible;
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -22,7 +24,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
 use mz_persist_client::metrics::Metrics;
@@ -45,6 +47,7 @@ use mz_storage_types::sources::SourceData;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::probe::ProbeNotify;
+use serde::{Deserialize, Serialize};
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
@@ -64,6 +67,51 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::{trace, warn};
 
 use crate::metrics::BackpressureMetrics;
+
+/// This opaque token represents progress within a timestamp, allowing finer-grained frontier
+/// progress than would otherwise be possible.
+///
+/// This is "opaque" since we'd like to reserve the right to change the definition in the future
+/// without downstreams being able to rely on the precise representation. (At the moment, this
+/// is a simple batch counter, though we may change it to eg. reflect progress through the keyspace
+/// in the future.)
+#[derive(
+    Copy, Clone, PartialEq, Default, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize, Hash,
+)]
+pub struct Subtime(u64);
+
+impl PartialOrder for Subtime {
+    fn less_equal(&self, other: &Self) -> bool {
+        self.0.less_equal(&other.0)
+    }
+}
+
+impl TotalOrder for Subtime {}
+
+impl PathSummary<Subtime> for Subtime {
+    fn results_in(&self, src: &Subtime) -> Option<Subtime> {
+        self.0.results_in(&src.0).map(Subtime)
+    }
+
+    fn followed_by(&self, other: &Self) -> Option<Self> {
+        self.0.followed_by(&other.0).map(Subtime)
+    }
+}
+
+impl TimelyTimestamp for Subtime {
+    type Summary = Subtime;
+
+    fn minimum() -> Self {
+        Subtime(0)
+    }
+}
+
+impl Subtime {
+    /// The smallest non-zero summary for the opaque timestamp type.
+    pub const fn least_summary() -> Self {
+        Subtime(1)
+    }
+}
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -121,12 +169,23 @@ where
                 let flow_control = FlowControl {
                     progress_stream: feedback_data,
                     max_inflight_bytes,
-                    summary: (Default::default(), 1),
+                    summary: (Default::default(), Subtime::least_summary()),
                     metrics: Some(backpressure_metrics),
                 };
                 (Some(flow_control), Some(feedback_handle))
             }
             None => (None, None),
+        };
+
+        // Our default listen sleeps are tuned for the case of a shard that is
+        // written once a second, but persist-txns allows these to be lazy.
+        // Override the tuning to reduce crdb load. The pubsub fallback
+        // responsibility is then replaced by manual "one state" wakeups in the
+        // txns_progress operator.
+        let cfg = persist_clients.cfg().clone();
+        let subscribe_sleep = match metadata.txns_shard {
+            Some(_) => Some(move || cfg.dynamic.txns_data_shard_retry_params()),
+            None => None,
         };
 
         let (stream, token) = persist_source_core(
@@ -138,6 +197,7 @@ where
             until,
             map_filter_project,
             flow_control,
+            subscribe_sleep,
         );
 
         let stream = match feedback_handle {
@@ -192,7 +252,7 @@ where
     (ok_stream, err_stream, token)
 }
 
-type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, u64)>;
+type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)>;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -210,8 +270,17 @@ pub fn persist_source_core<'g, G>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<RefinedScope<'g, G>>>,
+    // If Some, an override for the default listen sleep retry parameters.
+    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
 ) -> (
-    Stream<RefinedScope<'g, G>, (Result<Row, DataflowError>, (mz_repr::Timestamp, u64), Diff)>,
+    Stream<
+        RefinedScope<'g, G>,
+        (
+            Result<Row, DataflowError>,
+            (mz_repr::Timestamp, Subtime),
+            Diff,
+        ),
+    >,
     Rc<dyn Any>,
 )
 where
@@ -276,6 +345,7 @@ where
                 true
             }
         },
+        listen_sleep,
     );
     let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);
     (rows, token)
@@ -312,7 +382,7 @@ pub fn decode_and_mfp<G>(
     mut map_filter_project: Option<&mut MfpPlan>,
 ) -> Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
 where
-    G: Scope<Timestamp = (mz_repr::Timestamp, u64)>,
+    G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
 {
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
@@ -389,7 +459,7 @@ where
 /// Pending work to read from fetched parts
 struct PendingWork {
     /// The time at which the work should happen.
-    capability: Capability<(mz_repr::Timestamp, u64)>,
+    capability: Capability<(mz_repr::Timestamp, Subtime)>,
     /// Pending fetched part.
     fetched_part: FetchedPart<SourceData, (), Timestamp, Diff>,
 }
@@ -408,7 +478,7 @@ impl PendingWork {
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
         output: &mut ConsolidateBuffer<
-            (mz_repr::Timestamp, u64),
+            (mz_repr::Timestamp, Subtime),
             Result<Row, DataflowError>,
             Diff,
             P,
@@ -417,8 +487,12 @@ impl PendingWork {
     where
         P: Push<
             Bundle<
-                (mz_repr::Timestamp, u64),
-                (Result<Row, DataflowError>, (mz_repr::Timestamp, u64), Diff),
+                (mz_repr::Timestamp, Subtime),
+                (
+                    Result<Row, DataflowError>,
+                    (mz_repr::Timestamp, Subtime),
+                    Diff,
+                ),
             >,
         >,
         YFn: Fn(Instant, usize) -> bool,
@@ -735,7 +809,7 @@ pub struct FlowControl<G: Scope> {
 /// and a `summary`. Note that the `data` input expects all the second part of the tuple
 /// timestamp to be 0, and all data to be on the `chosen_worker` worker.
 ///
-/// The `summary` represents the _minimum_ range of timestamp's that needs to be emitted before
+/// The `summary` represents the _minimum_ range of timestamps that needs to be emitted before
 /// reasoning about `max_inflight_bytes`. In practice this means that we may overshoot
 /// `max_inflight_bytes`.
 ///
@@ -747,11 +821,11 @@ pub fn backpressure<T, G, O>(
     flow_control: FlowControl<G>,
     chosen_worker: usize,
     // A probe used to inspect this operator during unit-testing
-    probe: Option<UnboundedSender<(Antichain<(T, u64)>, usize, usize)>>,
+    probe: Option<UnboundedSender<(Antichain<(T, Subtime)>, usize, usize)>>,
 ) -> (Stream<G, O>, Rc<dyn Any>)
 where
     T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
-    G: Scope<Timestamp = (T, u64)>,
+    G: Scope<Timestamp = (T, Subtime)>,
     O: Backpressureable + std::fmt::Debug,
 {
     let worker_index = scope.index();
@@ -781,16 +855,20 @@ where
 
     // Helper method used to synthesize current and next frontier for ordered times.
     fn synthesize_frontiers<T: PartialOrder + Clone>(
-        mut frontier: Antichain<(T, u64)>,
-        mut time: (T, u64),
+        mut frontier: Antichain<(T, Subtime)>,
+        mut time: (T, Subtime),
         part_number: &mut u64,
-    ) -> ((T, u64), Antichain<(T, u64)>, Antichain<(T, u64)>) {
+    ) -> (
+        (T, Subtime),
+        Antichain<(T, Subtime)>,
+        Antichain<(T, Subtime)>,
+    ) {
         let mut next_frontier = frontier.clone();
-        time.1 = *part_number;
+        time.1 = Subtime(*part_number);
         frontier.insert(time.clone());
         *part_number += 1;
         let mut next_time = time.clone();
-        next_time.1 = *part_number;
+        next_time.1 = Subtime(*part_number);
         next_frontier.insert(next_time);
         (time, frontier, next_frontier)
     }
@@ -799,7 +877,7 @@ where
     // ensures that we order the parts by time.
     let data_input = async_stream::stream!({
         let mut part_number = 0;
-        let mut parts: Vec<((T, u64), O)> = Vec::new();
+        let mut parts: Vec<((T, Subtime), O)> = Vec::new();
         loop {
             match data_input.next_mut().await {
                 None => {
@@ -1090,30 +1168,30 @@ mod tests {
         backpressure_runner(
             vec![(50, Part(101)), (50, Part(102)), (100, Part(1))],
             100,
-            (1, 0),
+            (1, Subtime(0)),
             vec![
                 // Assert we backpressure only after we have emitted
                 // the entire timestamp.
-                AssertOutputFrontier((50, 2)),
+                AssertOutputFrontier((50, Subtime(2))),
                 AssertBackpressured {
-                    frontier: (1, 0),
+                    frontier: (1, Subtime(0)),
                     inflight_parts: 1,
                     retired_parts: 0,
                 },
                 AssertBackpressured {
-                    frontier: (51, 0),
+                    frontier: (51, Subtime(0)),
                     inflight_parts: 1,
                     retired_parts: 0,
                 },
                 ProcessXParts(2),
                 AssertBackpressured {
-                    frontier: (101, 0),
+                    frontier: (101, Subtime(0)),
                     inflight_parts: 2,
                     retired_parts: 2,
                 },
                 // Assert we make later progress once processing
                 // the parts.
-                AssertOutputFrontier((100, 3)),
+                AssertOutputFrontier((100, Subtime(3))),
             ],
             true,
         );
@@ -1126,29 +1204,29 @@ mod tests {
                 (52, Part(1000)),
             ],
             50,
-            (1, 0),
+            (1, Subtime(0)),
             vec![
                 // Assert we backpressure only after we emitted enough bytes
-                AssertOutputFrontier((51, 3)),
+                AssertOutputFrontier((51, Subtime(3))),
                 AssertBackpressured {
-                    frontier: (1, 0),
+                    frontier: (1, Subtime(0)),
                     inflight_parts: 3,
                     retired_parts: 0,
                 },
                 ProcessXParts(3),
                 AssertBackpressured {
-                    frontier: (52, 0),
+                    frontier: (52, Subtime(0)),
                     inflight_parts: 3,
                     retired_parts: 2,
                 },
                 AssertBackpressured {
-                    frontier: (53, 0),
+                    frontier: (53, Subtime(0)),
                     inflight_parts: 1,
                     retired_parts: 1,
                 },
                 // Assert we make later progress once processing
                 // the parts.
-                AssertOutputFrontier((52, 4)),
+                AssertOutputFrontier((52, Subtime(4))),
             ],
             true,
         );
@@ -1168,33 +1246,33 @@ mod tests {
                 (100, Part(100)),
             ],
             100,
-            (1, 0),
+            (1, Subtime(0)),
             vec![
-                AssertOutputFrontier((51, 3)),
+                AssertOutputFrontier((51, Subtime(3))),
                 // Assert we backpressure after we have emitted enough bytes.
                 // We assert twice here because we get updates as
                 // `flow_control` progresses from `(0, 0)`->`(0, 1)`-> a real frontier.
                 AssertBackpressured {
-                    frontier: (1, 0),
+                    frontier: (1, Subtime(0)),
                     inflight_parts: 3,
                     retired_parts: 0,
                 },
                 AssertBackpressured {
-                    frontier: (51, 0),
+                    frontier: (51, Subtime(0)),
                     inflight_parts: 3,
                     retired_parts: 0,
                 },
                 ProcessXParts(1),
                 // Our output frontier doesn't move, as the downstream frontier hasn't moved past
                 // 50.
-                AssertOutputFrontier((51, 3)),
+                AssertOutputFrontier((51, Subtime(3))),
                 // After we process all of `50`, we can start emitting data at `52`, but only until
                 // we exhaust out budget. We don't need to emit all of `52` because we have emitted
                 // all of `51`.
                 ProcessXParts(1),
-                AssertOutputFrontier((52, 4)),
+                AssertOutputFrontier((52, Subtime(4))),
                 AssertBackpressured {
-                    frontier: (52, 0),
+                    frontier: (52, Subtime(0)),
                     inflight_parts: 3,
                     retired_parts: 2,
                 },
@@ -1206,18 +1284,18 @@ mod tests {
                 // parts at `52`
                 // This is an intermediate state.
                 AssertBackpressured {
-                    frontier: (53, 0),
+                    frontier: (53, Subtime(0)),
                     inflight_parts: 2,
                     retired_parts: 1,
                 },
                 // After we process all of `52`, we can continue to the next time.
                 ProcessXParts(5),
                 AssertBackpressured {
-                    frontier: (101, 0),
+                    frontier: (101, Subtime(0)),
                     inflight_parts: 5,
                     retired_parts: 5,
                 },
-                AssertOutputFrontier((100, 9)),
+                AssertOutputFrontier((100, Subtime(9))),
             ],
             true,
         );
@@ -1229,19 +1307,19 @@ mod tests {
         backpressure_runner(
             vec![(50, Part(101)), (50, Part(101))],
             100,
-            (0, 1),
+            (0, Subtime(1)),
             vec![
                 // Advance our frontier to outputting a single part.
-                AssertOutputFrontier((50, 1)),
+                AssertOutputFrontier((50, Subtime(1))),
                 // Receive backpressure updates until our frontier is up-to-date but
                 // not beyond the parts (while considering the summary).
                 AssertBackpressured {
-                    frontier: (0, 1),
+                    frontier: (0, Subtime(1)),
                     inflight_parts: 1,
                     retired_parts: 0,
                 },
                 AssertBackpressured {
-                    frontier: (50, 1),
+                    frontier: (50, Subtime(1)),
                     inflight_parts: 1,
                     retired_parts: 0,
                 },
@@ -1249,12 +1327,12 @@ mod tests {
                 ProcessXParts(1),
                 // Assert that we clear the backpressure status
                 AssertBackpressured {
-                    frontier: (50, 2),
+                    frontier: (50, Subtime(2)),
                     inflight_parts: 1,
                     retired_parts: 1,
                 },
                 // Ensure we make progress to the next part.
-                AssertOutputFrontier((50, 2)),
+                AssertOutputFrontier((50, Subtime(2))),
             ],
             false,
         );
@@ -1267,33 +1345,33 @@ mod tests {
                 (52, Part(100)),
             ],
             50,
-            (0, 1),
+            (0, Subtime(1)),
             vec![
                 // we can emit 3 parts before we hit the backpressure limit
-                AssertOutputFrontier((51, 3)),
+                AssertOutputFrontier((51, Subtime(3))),
                 AssertBackpressured {
-                    frontier: (0, 1),
+                    frontier: (0, Subtime(1)),
                     inflight_parts: 3,
                     retired_parts: 0,
                 },
                 AssertBackpressured {
-                    frontier: (50, 1),
+                    frontier: (50, Subtime(1)),
                     inflight_parts: 3,
                     retired_parts: 0,
                 },
                 // Retire the single part.
                 ProcessXParts(1),
                 AssertBackpressured {
-                    frontier: (50, 2),
+                    frontier: (50, Subtime(2)),
                     inflight_parts: 3,
                     retired_parts: 1,
                 },
                 // Ensure we make progress, and then
                 // can retire the next 2 parts.
-                AssertOutputFrontier((52, 4)),
+                AssertOutputFrontier((52, Subtime(4))),
                 ProcessXParts(2),
                 AssertBackpressured {
-                    frontier: (52, 4),
+                    frontier: (52, Subtime(4)),
                     inflight_parts: 3,
                     retired_parts: 2,
                 },
@@ -1302,7 +1380,7 @@ mod tests {
         );
     }
 
-    type Time = (u64, u64);
+    type Time = (u64, Subtime);
     #[derive(Clone, Debug)]
     struct Part(usize);
     impl Backpressureable for Part {
@@ -1360,7 +1438,7 @@ mod tests {
                         token,
                         backpressured,
                         finalizer_tx,
-                    ) = scope.scoped::<(u64, u64), _, _>("hybrid", |scope| {
+                    ) = scope.scoped::<(u64, Subtime), _, _>("hybrid", |scope| {
                         let (input, finalizer_tx) =
                             iterator_operator(scope.clone(), input.into_iter());
 
@@ -1494,7 +1572,7 @@ mod tests {
     /// An operator that emits `Part`'s at the specified timestamps. Does not
     /// drop its capability until it gets a signal from the `Sender` it returns.
     fn iterator_operator<
-        G: Scope<Timestamp = (u64, u64)>,
+        G: Scope<Timestamp = (u64, Subtime)>,
         I: Iterator<Item = (u64, Part)> + 'static,
     >(
         scope: G,
@@ -1510,7 +1588,7 @@ mod tests {
             while let Some(element) = input.next() {
                 let time = element.0.clone();
                 let part = element.1;
-                last = Some((time, 0));
+                last = Some((time, Subtime(0)));
                 output_handle
                     .give(&capability.as_ref().unwrap().delayed(&last.unwrap()), part)
                     .await;

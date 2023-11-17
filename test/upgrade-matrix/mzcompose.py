@@ -15,7 +15,7 @@ from collections.abc import Generator
 
 import networkx as nx
 
-from materialize.mzcompose.services.minio import Minio
+from materialize.util import all_subclasses
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
@@ -39,14 +39,16 @@ from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
-from materialize.util import MzVersion, all_subclasses
 from materialize.version_list import VersionsFromDocs
 
 SERVICES = [
@@ -55,7 +57,9 @@ SERVICES = [
     Redpanda(auto_create_topics=True),
     Debezium(redpanda=True),
     Minio(setup_materialize=True),
-    Materialized(external_minio=True),  # Overriden inside Platform Checks
+    Materialized(
+        external_minio=True, catalog_store="stash"
+    ),  # Overriden inside Platform Checks
     TestdriveService(
         default_timeout="300s",
         no_reset=True,
@@ -66,12 +70,13 @@ SERVICES = [
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
         ],
     ),
+    SshBastionHost(),
 ]
 
 
 def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
-    c.up("cockroach", "redpanda", "postgres", "debezium")
+    c.up("cockroach", "redpanda", "postgres", "debezium", "ssh-bastion-host")
 
 
 def teardown(c: Composition) -> None:

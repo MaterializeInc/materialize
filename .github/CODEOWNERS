@@ -35,6 +35,7 @@
 /src/build-id                       @umanwizard
 /src/build-info                     @benesch
 /src/catalog                        @MaterializeInc/adapter
+/src/catalog-debug                  @MaterializeInc/adapter
 /src/ccsr                           @benesch
 /src/cloud-resources                @MaterializeInc/cloud
 /src/cluster                        @MaterializeInc/compute @MaterializeInc/storage

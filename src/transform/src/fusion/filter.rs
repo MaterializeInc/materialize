@@ -58,8 +58,8 @@ pub struct Filter;
 
 impl crate::Transform for Filter {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "filter_fusion")
     )]

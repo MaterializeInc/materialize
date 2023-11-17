@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.66"
+array-concat = "0.5.2"
 aws-sdk-sts = { version = "0.26", default-features = false, features = [
     "native-tls",
     "rt-tokio",
@@ -43,7 +44,6 @@ mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-lexer = { path = "../sql-lexer" }
 mz-ssh-util = { path = "../ssh-util" }
-mz-stash-types = { path = "../stash-types" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 paste = "1.0"

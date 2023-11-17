@@ -21,7 +21,7 @@ one
 two
 three
 
-> CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}')
+> CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 # Test that the default consumer group ID is
 # `materialize-$ENVIRONMENTID-$CONNECTIONID-$SOURCEID`.

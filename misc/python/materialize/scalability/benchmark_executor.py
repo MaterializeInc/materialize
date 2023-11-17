@@ -19,10 +19,12 @@ from psycopg import Cursor
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.benchmark_result import BenchmarkResult
 from materialize.scalability.df import df_details_cols, df_totals_cols
+from materialize.scalability.df.df_details import DfDetails, concat_df_details
+from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.io import paths
 from materialize.scalability.operation import Operation
-from materialize.scalability.regression import RegressionOutcome
+from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.schema import Schema
 from materialize.scalability.workload import Workload
@@ -123,8 +125,8 @@ class BenchmarkExecutor:
     ) -> WorkloadResult:
         print(f"Running workload {workload.name()} on {endpoint}")
 
-        df_totals = pd.DataFrame()
-        df_details = pd.DataFrame()
+        df_totals = DfTotals()
+        df_details = DfDetails()
 
         concurrencies = self._get_concurrencies()
         print(f"Concurrencies: {concurrencies}")
@@ -136,8 +138,8 @@ class BenchmarkExecutor:
                 concurrency,
                 self.config.get_count_for_concurrency(concurrency),
             )
-            df_totals = pd.concat([df_totals, df_total], ignore_index=True)
-            df_details = pd.concat([df_details, df_detail], ignore_index=True)
+            df_totals = concat_df_totals([df_totals, df_total])
+            df_details = concat_df_details([df_details, df_detail])
 
             endpoint_version_name = endpoint.try_load_version()
             pathlib.Path(paths.endpoint_dir(endpoint_version_name)).mkdir(
@@ -161,7 +163,7 @@ class BenchmarkExecutor:
         workload: Workload,
         concurrency: int,
         count: int,
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    ) -> tuple[DfTotals, DfDetails]:
         print(
             f"Preparing benchmark for workload '{workload.name()}' at concurrency {concurrency} ..."
         )
@@ -204,6 +206,7 @@ class BenchmarkExecutor:
                         local,
                         cursor_pool,
                         operations[i % len(operations)],
+                        int(i / len(operations)),
                     )
                     for i in range(count)
                 ],
@@ -227,27 +230,27 @@ class BenchmarkExecutor:
                     df_totals_cols.COUNT: count,
                     df_totals_cols.TPS: count / wallclock_total,
                     df_totals_cols.MEAN_TX_DURATION: df_detail[
-                        df_totals_cols.WALLCLOCK
+                        df_details_cols.WALLCLOCK
                     ].mean(),
                     df_totals_cols.MEDIAN_TX_DURATION: df_detail[
-                        df_totals_cols.WALLCLOCK
+                        df_details_cols.WALLCLOCK
                     ].median(),
                     df_totals_cols.MIN_TX_DURATION: df_detail[
-                        df_totals_cols.WALLCLOCK
+                        df_details_cols.WALLCLOCK
                     ].min(),
                     df_totals_cols.MAX_TX_DURATION: df_detail[
-                        df_totals_cols.WALLCLOCK
+                        df_details_cols.WALLCLOCK
                     ].max(),
                 }
             ]
         )
 
-        return df_total, df_detail
+        return DfTotals(df_total), DfDetails(df_detail)
 
     def execute_operation(
-        self, args: tuple[Workload, int, threading.local, list[Cursor], Operation]
+        self, args: tuple[Workload, int, threading.local, list[Cursor], Operation, int]
     ) -> dict[str, Any]:
-        workload, concurrency, local, cursor_pool, operation = args
+        workload, concurrency, local, cursor_pool, operation, transaction_index = args
         assert (
             len(cursor_pool) >= local.worker_id + 1
         ), f"len(cursor_pool) is {len(cursor_pool)} but local.worker_id is {local.worker_id}"
@@ -262,6 +265,7 @@ class BenchmarkExecutor:
             df_details_cols.WALLCLOCK: wallclock,
             df_details_cols.OPERATION: type(operation).__name__,
             df_details_cols.WORKLOAD: workload.name(),
+            df_details_cols.TRANSACTION_INDEX: transaction_index,
         }
 
     def initialize_worker(self, local: threading.local, lock: threading.Lock):

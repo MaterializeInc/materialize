@@ -23,6 +23,10 @@ class StoragedStart(Action):
     def requires(cls) -> set[type[Capability]]:
         return {CockroachIsRunning, MinioIsRunning}
 
+    @classmethod
+    def incompatible_with(cls) -> set[type[Capability]]:
+        return {StoragedRunning}
+
     def run(self, c: Composition) -> None:
         c.up("storaged")
 

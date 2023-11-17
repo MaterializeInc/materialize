@@ -1842,7 +1842,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// Convert the dataflow description into one that uses render plans.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = "finalize_dataflow")
     )]
@@ -1902,7 +1902,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// creates plans for every object to be built for the dataflow.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment ="mir_to_lir")
     )]
@@ -1981,7 +1981,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// push down common MFP expressions.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = "refine_source_mfps")
     )]
@@ -2038,7 +2038,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// Changes the `consolidate_output` flag of such Unions that have at least one Negated input.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = "refine_union_negate_consolidation")
     )]
@@ -2071,7 +2071,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// one-shot SELECT query.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = "refine_single_time_operator_selection")
     )]
@@ -2123,7 +2123,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// whenever the input is deemed to be physically monotonic.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = "refine_single_time_consolidation")
     )]

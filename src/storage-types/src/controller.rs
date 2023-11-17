@@ -11,14 +11,19 @@ use std::error::Error;
 use std::fmt::{self, Debug};
 
 use itertools::Itertools;
+use mz_persist_client::stats::PartStats;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_persist_types::columnar::Data;
+use mz_persist_types::dyn_struct::DynStruct;
+use mz_persist_types::stats::StructStats;
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_stash_types::StashError;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
 use crate::errors::DataflowError;
 use crate::instances::StorageInstanceId;
@@ -42,6 +47,52 @@ pub struct CollectionMetadata {
     /// The shard id of the persist-txn shard, if `self.data_shard` is managed
     /// by the persist-txn system, or None if it's not.
     pub txns_shard: Option<ShardId>,
+}
+
+impl crate::AlterCompatible for CollectionMetadata {
+    fn alter_compatible(
+        &self,
+        id: mz_repr::GlobalId,
+        other: &Self,
+    ) -> Result<(), self::StorageError> {
+        if self == other {
+            return Ok(());
+        }
+
+        let CollectionMetadata {
+            // persist locations may change (though not as a result of ALTER);
+            // we allow this because if this changes unexpectedly, we will
+            // notice in other ways.
+            persist_location: _,
+            remap_shard,
+            data_shard,
+            status_shard,
+            relation_desc,
+            txns_shard,
+        } = self;
+
+        let compatibility_checks = [
+            (remap_shard == &other.remap_shard, "remap_shard"),
+            (data_shard == &other.data_shard, "data_shard"),
+            (status_shard == &other.status_shard, "status_shard"),
+            (relation_desc == &other.relation_desc, "relation_desc"),
+            (txns_shard == &other.txns_shard, "txns_shard"),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "CollectionMetadata incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlter { id });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
@@ -109,24 +160,6 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
     }
 }
 
-impl RustType<mz_stash_types::objects::proto::DurableCollectionMetadata>
-    for DurableCollectionMetadata
-{
-    fn into_proto(&self) -> mz_stash_types::objects::proto::DurableCollectionMetadata {
-        mz_stash_types::objects::proto::DurableCollectionMetadata {
-            data_shard: self.data_shard.into_proto(),
-        }
-    }
-
-    fn from_proto(
-        proto: mz_stash_types::objects::proto::DurableCollectionMetadata,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok(DurableCollectionMetadata {
-            data_shard: proto.data_shard.into_rust()?,
-        })
-    }
-}
-
 #[derive(Debug)]
 pub enum StorageError {
     /// The source identifier was re-created after having been dropped,
@@ -159,8 +192,8 @@ pub enum StorageError {
     },
     /// Dataflow was not able to process a request
     DataflowError(DataflowError),
-    /// Response to an invalid/unsupported `ALTER SOURCE` command.
-    InvalidAlterSource { id: GlobalId },
+    /// Response to an invalid/unsupported `ALTER..` command.
+    InvalidAlter { id: GlobalId },
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
@@ -168,9 +201,6 @@ pub enum StorageError {
     ResourceExhausted(&'static str),
     /// The specified component is shutting down.
     ShuttingDown(&'static str),
-    /// Response if we try to change a sink's description to a state
-    /// incompatible with its current state.
-    IncompatibleSinkDescriptions { id: GlobalId },
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -190,11 +220,10 @@ impl Error for StorageError {
             Self::ExportInstanceMissing { .. } => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
-            Self::InvalidAlterSource { .. } => None,
+            Self::InvalidAlter { .. } => None,
             Self::InvalidUsage(_) => None,
             Self::ResourceExhausted(_) => None,
             Self::ShuttingDown(_) => None,
-            Self::IncompatibleSinkDescriptions { .. } => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -252,21 +281,12 @@ impl fmt::Display for StorageError {
             // N.B. For these errors, the underlying error is reported in `source()`, and it
             // is the responsibility of the caller to print the chain of errors, when desired.
             Self::DataflowError(_err) => write!(f, "dataflow failed to process request",),
-            Self::InvalidAlterSource { id } => {
+            Self::InvalidAlter { id } => {
                 write!(f, "{id} cannot be altered in the requested way")
             }
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
             Self::ResourceExhausted(rsc) => write!(f, "{rsc} is exhausted"),
             Self::ShuttingDown(cmp) => write!(f, "{cmp} is shutting down"),
-            Self::IncompatibleSinkDescriptions { id } => {
-                // n.b. this error is only used in assertions currently, so
-                // doesn't need to contain more detail until we support `ALTER
-                // SINK`.
-                write!(
-                    f,
-                    "{id} cannot be have its description changed in the requested way"
-                )
-            }
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
     }
@@ -330,5 +350,18 @@ impl TxnsCodec for TxnsCodecRow {
         } else {
             TxnsEntry::Append(data_id, batch.unwrap_bytes().to_vec())
         }
+    }
+
+    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
+        fn col<'a, T: Data>(stats: &'a StructStats, col: &str) -> Option<&'a T::Stats> {
+            stats
+                .col::<T>(col)
+                .map_err(|err| error!("unexpected stats type for col {}: {}", col, err))
+                .ok()?
+        }
+        let stats = col::<Option<DynStruct>>(&stats.key, "ok")?;
+        let stats = col::<String>(&stats.some, "shard_id")?;
+        let data_id_str = data_id.to_string();
+        Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
     }
 }

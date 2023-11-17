@@ -20,11 +20,26 @@ def is_in_buildkite() -> bool:
 
 
 def is_in_pull_request() -> bool:
-    """
-    Note that this does not work in (manually triggered) nightly builds because they don't carry this information!
-    Consider using #is_on_default_branch() instead.
-    """
-    return ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
+    """Note that this is a heuristic."""
+
+    if not is_in_buildkite():
+        return False
+
+    if is_pull_request_marker_set():
+        return True
+
+    if is_on_default_branch():
+        return False
+
+    if git.is_on_release_version():
+        return False
+
+    return True
+
+
+def is_pull_request_marker_set() -> bool:
+    # If set, this variable will contain either the ID of the pull request or the string "false".
+    return os.getenv("BUILDKITE_PULL_REQUEST", "false") != "false"
 
 
 def is_on_default_branch() -> bool:

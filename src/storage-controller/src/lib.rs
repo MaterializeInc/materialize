@@ -89,7 +89,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::BufMut;
 use differential_dataflow::lattice::Lattice;
-use futures::Stream;
+use futures::stream::BoxStream;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
@@ -112,7 +112,6 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
-use mz_stash_types::objects::proto;
 use mz_storage_client::client::{
     CreateSinkCommand, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
     SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
@@ -128,6 +127,7 @@ use mz_storage_client::healthcheck::{
     MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
+use mz_storage_types::collections as proto;
 use mz_storage_types::controller::{
     CollectionMetadata, DurableCollectionMetadata, StorageError, TxnsCodecRow,
 };
@@ -135,6 +135,7 @@ use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData, SourceExport};
+use mz_storage_types::AlterCompatible;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -223,17 +224,17 @@ impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Tim
     }
 }
 
-impl RustType<mz_stash_types::objects::proto::DurableExportMetadata>
+impl RustType<mz_storage_types::collections::DurableExportMetadata>
     for DurableExportMetadata<mz_repr::Timestamp>
 {
-    fn into_proto(&self) -> mz_stash_types::objects::proto::DurableExportMetadata {
-        mz_stash_types::objects::proto::DurableExportMetadata {
+    fn into_proto(&self) -> mz_storage_types::collections::DurableExportMetadata {
+        mz_storage_types::collections::DurableExportMetadata {
             initial_as_of: Some(self.initial_as_of.into_proto()),
         }
     }
 
     fn from_proto(
-        proto: mz_stash_types::objects::proto::DurableExportMetadata,
+        proto: mz_storage_types::collections::DurableExportMetadata,
     ) -> Result<Self, TryFromProtoError> {
         Ok(DurableExportMetadata {
             initial_as_of: proto
@@ -295,9 +296,11 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
-    /// A handle to serve reads on table shards stored in the persist-txn system. None if
-    /// persist-txn is not enabled.
-    txns_cache: Option<TxnsCache<T, TxnsCodecRow>>,
+    /// The shard id of the persist-txn txns shard or None if persist-txn is not
+    /// enabled.
+    txns_id: Option<ShardId>,
+    /// A PersistClient usable for opening txns_id.
+    txns_client: PersistClient,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
@@ -408,13 +411,12 @@ where
         Box::new(self.collections.iter())
     }
 
-    fn create_instance(&mut self, id: StorageInstanceId, variable_length_row_encoding: bool) {
+    fn create_instance(&mut self, id: StorageInstanceId) {
         let mut client = RehydratingStorageClient::new(
             self.build_info,
             self.metrics.for_instance(id),
             self.envd_epoch,
             self.config.grpc_client.clone(),
-            variable_length_row_encoding,
         );
         if self.initialized {
             client.send(StorageCommand::InitializationComplete);
@@ -531,21 +533,20 @@ where
             )
             .await?;
 
-        let mut durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> =
-            METADATA_COLLECTION
-                .peek_one(&mut self.stash)
-                .await?
-                .into_iter()
-                .map(RustType::from_proto)
-                .collect::<Result<_, _>>()
-                .map_err(|e| StorageError::IOError(e.into()))?;
+        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(RustType::from_proto)
+            .collect::<Result<_, _>>()
+            .map_err(|e| StorageError::IOError(e.into()))?;
 
         // We first enrich each collection description with some additional metadata...
         use futures::stream::{StreamExt, TryStreamExt};
         let enriched_with_metadata = collections
             .into_iter()
             .map(|(id, description)| {
-                let collection_shards = durable_metadata.remove(&id).expect("inserted above");
+                let collection_shards = durable_metadata.get(&id).expect("inserted above");
 
                 let status_shard =
                     if let Some(status_collection_id) = description.status_collection_id {
@@ -581,9 +582,9 @@ where
                 // pass along the shard id for the txns shard to dataflow rendering.
                 let txns_shard = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) => {
-                        // `self.txns_cache` is None if persist-txn is not enabled, which makes this
+                        // `self.txns_id` is None if persist-txn is not enabled, which makes this
                         // do the right thing.
-                        self.txns_cache.as_ref().map(|x| x.txns_id())
+                        self.txns_id.clone()
                     }
                     DataSource::Ingestion(_)
                     | DataSource::Introspection(_)
@@ -1209,8 +1210,8 @@ where
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError> {
-        let data_shard = self.collection(id)?.collection_metadata.data_shard;
-        let contents = match self.txns_cache.as_mut() {
+        let metadata = &self.collection(id)?.collection_metadata;
+        let contents = match metadata.txns_shard.as_ref() {
             None => {
                 // We're not using persist-txn for tables, so we can take a snapshot directly.
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
@@ -1218,7 +1219,7 @@ where
                     .snapshot_and_fetch(Antichain::from_elem(as_of))
                     .await
             }
-            Some(txns_cache) => {
+            Some(txns_id) => {
                 // We _are_ using persist-txn for tables. It advances the physical upper of the
                 // shard lazily, so we need to ask it for the snapshot to ensure the read is
                 // unblocked.
@@ -1232,14 +1233,23 @@ where
                 // - This branch allows it to handle that advancing the physical upper of Table A to
                 //   10 (NB but only once we see it get past the write at 5!)
                 // - Then we can read it normally.
+                //
+                // TODO(txn): We do a series of snapshots at boot and then never again. It's
+                // wasteful to create this TxnsCache and then throw it away for each of them, but
+                // it's better than the alternative of keeping it alive for snapshot calls that will
+                // never come (worse, it's tricky to keep it making progress, which results in a
+                // stuck since). Replace this with the shared TxnsCache thing we'll have to do
+                // anyway for the dataflow operators.
+                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
+                    &self.txns_client,
+                    *txns_id,
+                    Some(metadata.data_shard),
+                )
+                .await;
                 txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(data_shard, as_of.clone());
+                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
-                let data_write = self.write_handle_for_snapshot(id).await?;
-                // TODO(txn): It's quite confusing that this read needs a write handle. Remove it.
-                data_snapshot
-                    .snapshot_and_fetch(&mut read_handle, data_write)
-                    .await
+                data_snapshot.snapshot_and_fetch(&mut read_handle).await
             }
         };
         match contents {
@@ -1258,23 +1268,51 @@ where
     }
 
     async fn snapshot_cursor(
-        &self,
+        &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
     where
         Self::Timestamp: Timestamp + Lattice + Codec64,
     {
-        let mut handle = self.read_handle_for_snapshot(id).await?;
-        let cursor = handle
-            .snapshot_cursor(Antichain::from_elem(as_of))
-            .await
-            .map_err(|_| StorageError::ReadBeforeSince(id))?;
+        let metadata = &self.collection(id)?.collection_metadata;
+        // See the comments in Self::snapshot for what's going on here.
+        let cursor = match metadata.txns_shard.as_ref() {
+            None => {
+                let mut handle = self.read_handle_for_snapshot(id).await?;
+                let cursor = handle
+                    .snapshot_cursor(Antichain::from_elem(as_of))
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                SnapshotCursor {
+                    _read_handle: handle,
+                    cursor,
+                }
+            }
+            Some(txns_id) => {
+                // TODO(txn): Replace this with the shared TxnsCache thing
+                // we'll have to do anyway for the dataflow operators.
+                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
+                    &self.txns_client,
+                    *txns_id,
+                    Some(metadata.data_shard),
+                )
+                .await;
+                txns_cache.update_gt(&as_of).await;
+                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let mut handle = self.read_handle_for_snapshot(id).await?;
+                let cursor = data_snapshot
+                    .snapshot_cursor(&mut handle)
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                SnapshotCursor {
+                    _read_handle: handle,
+                    cursor,
+                }
+            }
+        };
 
-        Ok(SnapshotCursor {
-            _read_handle: handle,
-            cursor,
-        })
+        Ok(cursor)
     }
 
     async fn snapshot_stats(
@@ -2001,11 +2039,11 @@ where
             .await
             .expect("stash operation must succeed");
 
-        let (persist_table_worker, txns_cache) = if enable_persist_txn_tables {
-            let client = persist_clients
-                .open(persist_location.clone())
-                .await
-                .expect("location should be valid");
+        let txns_client = persist_clients
+            .open(persist_location.clone())
+            .await
+            .expect("location should be valid");
+        let (persist_table_worker, txns_id) = if enable_persist_txn_tables {
             let txns_id = PERSIST_TXNS_SHARD
                 .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
                 .await
@@ -2014,15 +2052,14 @@ where
                 .expect("should be valid shard id");
             let txns = TxnsHandle::open(
                 T::minimum(),
-                client.clone(),
+                txns_client.clone(),
                 txns_id,
                 Arc::new(RelationDesc::empty()),
                 Arc::new(UnitSchema),
             )
             .await;
-            let txns_cache = TxnsCache::open(&client, txns_id).await;
             let worker = persist_handles::PersistTableWriteWorker::new_txns(tx.clone(), txns);
-            (worker, Some(txns_cache))
+            (worker, Some(txns_id))
         } else {
             let worker = persist_handles::PersistTableWriteWorker::new_legacy(tx.clone());
             (worker, None)
@@ -2042,7 +2079,8 @@ where
             persist_table_worker,
             persist_monotonic_worker,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
-            txns_cache,
+            txns_id,
+            txns_client,
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
@@ -2404,11 +2442,10 @@ where
             .get_by_name(&ColumnName::from("finished_status"))
             .expect("schema has not changed");
 
-        let mut mseh_rows = Box::pin(
-            self.snapshot_and_stream(mseh_id, mseh_ts)
-                .await
-                .expect("snapshot_succeeds"),
-        );
+        let mut mseh_rows = self
+            .snapshot_and_stream(mseh_id, mseh_ts)
+            .await
+            .expect("snapshot_succeeds");
 
         let mut mseh_updates = vec![];
         let mut ps_to_keep = HashSet::new();
@@ -2459,11 +2496,10 @@ where
         let mut mpsh_updates = vec![];
         let mut sessions_to_keep = HashSet::new();
 
-        let mut mpsh_rows = Box::pin(
-            self.snapshot_and_stream(mpsh_id, mpsh_ts)
-                .await
-                .expect("snapshot_succeeds"),
-        );
+        let mut mpsh_rows = self
+            .snapshot_and_stream(mpsh_id, mpsh_ts)
+            .await
+            .expect("snapshot_succeeds");
 
         let (mpsh_id_col, _) = MZ_PREPARED_STATEMENT_HISTORY_DESC
             .get_by_name(&ColumnName::from("id"))
@@ -2485,11 +2521,10 @@ where
         let ps_kept = ps_to_keep.len();
         std::mem::drop(ps_to_keep);
 
-        let mut msh_rows = Box::pin(
-            self.snapshot_and_stream(msh_id, msh_ts)
-                .await
-                .expect("snapshot_succeeds"),
-        );
+        let mut msh_rows = self
+            .snapshot_and_stream(msh_id, msh_ts)
+            .await
+            .expect("snapshot_succeeds");
 
         let (msh_id_col, _) = MZ_SESSION_HISTORY_DESC
             .get_by_name(&ColumnName::from("id"))
@@ -2963,7 +2998,7 @@ where
                     "{id:?} inalterable because its data source is {:?} and not an ingestion",
                     o
                 );
-                return Err(StorageError::InvalidAlterSource { id });
+                return Err(StorageError::InvalidAlter { id });
             }
         };
 
@@ -2975,7 +3010,7 @@ where
                     prev_storage_dependencies,
                     new_storage_dependencies
                 );
-            return Err(StorageError::InvalidAlterSource { id });
+            return Err(StorageError::InvalidAlter { id });
         }
 
         Ok(())
@@ -3173,48 +3208,55 @@ where
         Ok(read_handle)
     }
 
-    async fn write_handle_for_snapshot(
-        &self,
-        id: GlobalId,
-    ) -> Result<WriteHandle<SourceData, (), T, Diff>, StorageError> {
-        let metadata = &self.collection(id)?.collection_metadata;
-
-        let persist_client = self
-            .persist
-            .open(metadata.persist_location.clone())
-            .await
-            .unwrap();
-
-        let write_handle = persist_client
-            .open_writer::<SourceData, (), _, _>(
-                metadata.data_shard,
-                Arc::new(metadata.relation_desc.clone()),
-                Arc::new(UnitSchema),
-                Diagnostics {
-                    shard_name: id.to_string(),
-                    handle_purpose: format!("snapshot {}", id),
-                },
-            )
-            .await
-            .expect("invalid persist usage");
-        Ok(write_handle)
-    }
-
     async fn snapshot_and_stream(
         &self,
         id: GlobalId,
         as_of: T,
-    ) -> Result<impl Stream<Item = (SourceData, T, Diff)>, StorageError> {
-        let as_of = Antichain::from_elem(as_of);
-        let mut read_handle = self.read_handle_for_snapshot(id).await?;
+    ) -> Result<BoxStream<(SourceData, T, Diff)>, StorageError> {
         use futures::stream::StreamExt;
-        match read_handle.snapshot_and_stream(as_of).await {
-            Ok(contents) => Ok(contents.map(|((result_k, result_v), t, diff)| {
-                let () = result_v.expect("invalid empty value");
-                let data = result_k.expect("invalid key data");
-                (data, t, diff)
-            })),
-            Err(_) => Err(StorageError::ReadBeforeSince(id)),
+
+        let metadata = &self.collection(id)?.collection_metadata;
+        // See the comments in Self::snapshot for what's going on here.
+        match metadata.txns_shard.as_ref() {
+            None => {
+                let as_of = Antichain::from_elem(as_of);
+                let mut read_handle = self.read_handle_for_snapshot(id).await?;
+                let contents = read_handle.snapshot_and_stream(as_of).await;
+                match contents {
+                    Ok(contents) => {
+                        Ok(Box::pin(contents.map(|((result_k, result_v), t, diff)| {
+                            let () = result_v.expect("invalid empty value");
+                            let data = result_k.expect("invalid key data");
+                            (data, t, diff)
+                        })))
+                    }
+                    Err(_) => Err(StorageError::ReadBeforeSince(id)),
+                }
+            }
+            Some(txns_id) => {
+                // TODO(txn): Replace this with the shared TxnsCache thing
+                // we'll have to do anyway for the dataflow operators.
+                let mut txns_cache = TxnsCache::<T, TxnsCodecRow>::open(
+                    &self.txns_client,
+                    *txns_id,
+                    Some(metadata.data_shard),
+                )
+                .await;
+                txns_cache.update_gt(&as_of).await;
+                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let mut handle = self.read_handle_for_snapshot(id).await?;
+                let contents = data_snapshot.snapshot_and_stream(&mut handle).await;
+                match contents {
+                    Ok(contents) => {
+                        Ok(Box::pin(contents.map(|((result_k, result_v), t, diff)| {
+                            let () = result_v.expect("invalid empty value");
+                            let data = result_k.expect("invalid key data");
+                            (data, t, diff)
+                        })))
+                    }
+                    Err(_) => Err(StorageError::ReadBeforeSince(id)),
+                }
+            }
         }
     }
 }

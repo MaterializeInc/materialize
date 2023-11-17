@@ -21,7 +21,7 @@ use mz_compute_types::dataflows::YieldSpec;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_repr::fixed_length::IntoRowByTypes;
-use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena};
+use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::dataflow::operators::OkErr;
@@ -185,8 +185,9 @@ where
                         let (j, errs) = joined.flat_map_fallible("LinearJoinInitialization", {
                             // Reuseable allocation for unpacking.
                             let mut datums = DatumVec::new();
-                            let mut row_builder = Row::default();
                             move |row| {
+                                let binding = SharedRow::get();
+                                let mut row_builder = binding.borrow_mut();
                                 let temp_storage = RowArena::new();
                                 let mut datums_local = datums.borrow_with(&row);
                                 // TODO(mcsherry): re-use `row` allocation.
@@ -226,8 +227,9 @@ where
                     let (updates, errs) = joined.flat_map_fallible("LinearJoinFinalization", {
                         // Reuseable allocation for unpacking.
                         let mut datums = DatumVec::new();
-                        let mut row_builder = Row::default();
                         move |row| {
+                            let binding = SharedRow::get();
+                            let mut row_builder = binding.borrow_mut();
                             let temp_storage = RowArena::new();
                             let mut datums_local = datums.borrow_with(&row);
                             // TODO(mcsherry): re-use `row` allocation.
@@ -274,23 +276,24 @@ where
     {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
-            let mut row_buf = Row::default();
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
                 move |row| {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
                     let temp_storage = RowArena::new();
                     let datums_local = datums.borrow_with(&row);
-                    row_buf.packer().try_extend(
+                    row_builder.packer().try_extend(
                         stream_key
                             .iter()
                             .map(|e| e.eval(&datums_local, &temp_storage)),
                     )?;
-                    let key = row_buf.clone();
-                    row_buf
+                    let key = row_builder.clone();
+                    row_builder
                         .packer()
                         .extend(stream_thinning.iter().map(|e| datums_local[*e]));
-                    let value = row_buf.clone();
+                    let value = row_builder.clone();
                     Ok((key, value))
                 }
             });
@@ -414,7 +417,6 @@ where
     {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
-        let mut row_builder = Row::default();
 
         if closure.could_error() {
             let (oks, err) = self
@@ -424,6 +426,8 @@ where
                     &next_input,
                     self.shutdown_token.clone(),
                     move |key, old, new| {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
                         let temp_storage = RowArena::new();
 
                         let key = key.into_datum_iter(key_types.as_deref());
@@ -457,6 +461,8 @@ where
                 &next_input,
                 self.shutdown_token.clone(),
                 move |key, old, new| {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
                     let temp_storage = RowArena::new();
 
                     let key = key.into_datum_iter(key_types.as_deref());

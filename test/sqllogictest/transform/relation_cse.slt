@@ -1564,7 +1564,7 @@ Explained Query:
   Return // { arity: 2 }
     Return // { arity: 2 }
       Project (#0, #3) // { arity: 2 }
-        Join on=(eq(#0, #1, #2)) type=delta // { arity: 4 }
+        Join on=(#0 = #1 = #2) type=delta // { arity: 4 }
           implementation
             %0 » %1:l3[#0]UKA » %2[#0]KA
             %1:l3 » %0[#0]UKA » %2[#0]KA

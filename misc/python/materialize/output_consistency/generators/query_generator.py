@@ -18,7 +18,9 @@ from materialize.output_consistency.execution.value_storage_layout import (
 )
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
-    InconsistencyIgnoreFilter,
+    GenericInconsistencyIgnoreFilter,
+)
+from materialize.output_consistency.ignore_filter.internal_output_inconsistency_ignore_filter import (
     YesIgnore,
 )
 from materialize.output_consistency.input_data.test_input_data import (
@@ -40,7 +42,7 @@ class QueryGenerator:
         config: ConsistencyTestConfiguration,
         randomized_picker: RandomizedPicker,
         input_data: ConsistencyTestInputData,
-        ignore_filter: InconsistencyIgnoreFilter,
+        ignore_filter: GenericInconsistencyIgnoreFilter,
     ):
         self.config = config
         self.randomized_picker = randomized_picker

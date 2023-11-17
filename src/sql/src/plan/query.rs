@@ -65,6 +65,7 @@ use mz_sql_parser::ast::{
     ShowStatement, SubscriptPosition, TableAlias, TableFactor, TableWithJoins, UnresolvedItemName,
     UpdateStatement, Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
+use mz_sql_parser::ident;
 use uuid::Uuid;
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
@@ -1069,6 +1070,7 @@ pub fn plan_webhook_validate_using(
         .lower_uncorrelated()?;
     let validation = WebhookValidation {
         expression: expr,
+        relation_desc: desc,
         bodies: body_tuples,
         headers: header_tuples,
         secrets: validation_secrets,
@@ -2378,7 +2380,8 @@ fn plan_scalar_table_funcs(
     for (table_func, id) in table_funcs.iter() {
         table_func_names.insert(
             id.clone(),
-            table_func.name.full_item_name().item.clone().into(),
+            // TODO(parkmycar): Re-visit after having `FullItemName` use `Ident`s.
+            Ident::new_unchecked(table_func.name.full_item_name().item.clone()),
         );
     }
     // If there's only a single table function, we can skip generating
@@ -2933,7 +2936,7 @@ fn plan_table_function_internal(
 
             let relation = RelationType::new(vec![output]);
 
-            let function_ident = Ident::from(name.full_item_name().item.clone());
+            let function_ident = Ident::new(name.full_item_name().item.clone())?;
             let column_name = normalize::column_name(function_ident);
             let name = column_name.to_string();
 
@@ -3241,7 +3244,7 @@ fn expand_select_item<'a>(
                     } else {
                         let item = ExpandedSelectItem::Expr(Cow::Owned(Expr::FieldAccess {
                             expr: sql_expr.clone(),
-                            field: Ident::new(name.as_str()),
+                            field: name.clone().into(),
                         }));
                         Some((item, name.clone()))
                     }
@@ -4278,8 +4281,8 @@ fn plan_collate(
     collation: &UnresolvedItemName,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     if collation.0.len() == 2
-        && collation.0[0] == Ident::new(mz_repr::namespaces::PG_CATALOG_SCHEMA)
-        && collation.0[1] == Ident::new("default")
+        && collation.0[0] == ident!(mz_repr::namespaces::PG_CATALOG_SCHEMA)
+        && collation.0[1] == ident!("default")
     {
         plan_expr(ecx, expr)
     } else {
@@ -5728,7 +5731,9 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
                     .tables
                     .entry(func)
                     .or_insert_with(|| format!("table_func_{}", Uuid::new_v4()));
-                *expr = Expr::Identifier(vec![Ident::from(id.clone())]);
+                // We know this is okay because id is is 11 characters + 36 characters, which is
+                // less than our max length.
+                *expr = Expr::Identifier(vec![Ident::new_unchecked(id.clone())]);
             }
         }
         if let Some(context) = disallowed_context {

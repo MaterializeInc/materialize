@@ -11,6 +11,7 @@ import os
 import random
 
 from materialize.mzcompose import (
+    DEFAULT_MZ_ENVIRONMENT_ID,
     DEFAULT_MZ_VOLUMES,
 )
 from materialize.mzcompose.service import (
@@ -39,6 +40,7 @@ class Testdrive(Service):
         entrypoint: list[str] | None = None,
         entrypoint_extra: list[str] = [],
         environment: list[str] | None = None,
+        environment_id: str | None = None,
         volumes_extra: list[str] = [],
         volume_workdir: str = ".:/workdir",
         propagate_uid_gid: bool = True,
@@ -81,7 +83,6 @@ class Testdrive(Service):
                 f"--schema-registry-url={schema_registry_url}",
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
-                "--variable-length-row-encoding",
             ]
 
         if aws_region:
@@ -142,6 +143,10 @@ class Testdrive(Service):
             entrypoint.append(
                 "--persist-consensus-url=postgres://root@materialized:26257?options=--search_path=consensus"
             )
+
+        if not environment_id:
+            environment_id = DEFAULT_MZ_ENVIRONMENT_ID
+        entrypoint.append(f"--environment-id={environment_id}")
 
         entrypoint.extend(entrypoint_extra)
 

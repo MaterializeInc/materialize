@@ -38,13 +38,16 @@ use std::error::Error;
 use std::{char, fmt};
 
 use mz_ore::lex::LexBuf;
-use mz_ore::str::StrExt;
+use mz_ore::str::{MaxLenString, StrExt};
 use serde::{Deserialize, Serialize};
 
 use crate::keywords::Keyword;
 
-// Maximum allowed identifier length in bytes.
+/// Maximum allowed identifier length in bytes.
 pub const MAX_IDENTIFIER_LENGTH: usize = 255;
+
+/// Newtype that limits the length of identifiers.
+pub type IdentString = MaxLenString<MAX_IDENTIFIER_LENGTH>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LexerError {
@@ -78,7 +81,7 @@ impl LexerError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Keyword(Keyword),
-    Ident(String),
+    Ident(IdentString),
     String(String),
     HexString(String),
     Number(String),
@@ -223,13 +226,13 @@ fn lex_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
     match word.parse() {
         Ok(kw) => Ok(Token::Keyword(kw)),
         Err(_) => {
-            if word.len() > MAX_IDENTIFIER_LENGTH {
+            let Ok(small) = IdentString::new(word.to_lowercase()) else {
                 bail!(
                     pos,
                     "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"
                 )
-            }
-            Ok(Token::Ident(word.to_lowercase()))
+            };
+            Ok(Token::Ident(small))
         }
     }
 }
@@ -246,13 +249,13 @@ fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
             None => bail!(pos, "unterminated quoted identifier"),
         }
     }
-    if s.len() > MAX_IDENTIFIER_LENGTH {
+    let Ok(small) = IdentString::new(s) else {
         bail!(
             pos,
             "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"
         )
-    }
-    Ok(Token::Ident(s))
+    };
+    Ok(Token::Ident(small))
 }
 
 fn lex_string(buf: &mut LexBuf) -> Result<String, LexerError> {

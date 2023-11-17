@@ -77,6 +77,7 @@
 
 //! Shared types for the `mz-storage*` crates
 
+pub mod collections;
 pub mod connections;
 pub mod controller;
 pub mod errors;
@@ -85,3 +86,23 @@ pub mod parameters;
 pub mod shim;
 pub mod sinks;
 pub mod sources;
+
+/// Explicitly states the contract between storage and higher levels of
+/// Materialize w/r/t which facets of objects managed by storage (e.g. sources,
+/// sinks, connections) may be altered.
+///
+/// n.b. when implementing this trait, leave a warning log with more details as
+/// to what the problem was, given that the returned error is scant on details.
+pub trait AlterCompatible: std::fmt::Debug + PartialEq {
+    fn alter_compatible(
+        &self,
+        id: mz_repr::GlobalId,
+        other: &Self,
+    ) -> Result<(), controller::StorageError> {
+        if self == other {
+            Ok(())
+        } else {
+            Err(controller::StorageError::InvalidAlter { id })
+        }
+    }
+}

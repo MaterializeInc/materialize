@@ -248,6 +248,7 @@ class Composition:
         stdin: str | None = None,
         check: bool = True,
         max_tries: int = 1,
+        silent: bool = False,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
 
@@ -260,8 +261,8 @@ class Composition:
             input: A string to provide as stdin for the command.
         """
 
-        if not self.silent:
-            print(f"$ docker compose {' '.join(args)}", file=sys.stderr)
+        if not self.silent and not silent:
+            print(f"--- docker compose {' '.join(args)}", file=sys.stderr)
 
         self.file.seek(0)
 
@@ -322,7 +323,9 @@ class Composition:
             service: The name of a service in the composition.
             private_port: A private port exposed by the service.
         """
-        proc = self.invoke("port", service, str(private_port), capture=True)
+        proc = self.invoke(
+            "port", service, str(private_port), capture=True, silent=True
+        )
         if not proc.stdout.strip():
             raise UIError(
                 f"service f{service!r} is not exposing port {private_port!r}",
@@ -419,9 +422,9 @@ class Composition:
                     not in self.compose["services"]["materialized"]["labels"]
                 ):
                     print("sanity_restart disabled by override(), keeping it disabled")
-                    old_compose["services"]["materialized"]["labels"].remove(
+                    del old_compose["services"]["materialized"]["labels"][
                         "sanity_restart"
-                    )
+                    ]
 
             # Restore the old composition.
             self.compose = old_compose
@@ -471,7 +474,7 @@ class Composition:
             ui.header(f"mzcompose: test case {name} succeeded")
         except Exception as e:
             error = f"{str(type(e))}: {e}"
-            print(f"mzcompose: test case {name} failed: {error}", file=sys.stderr)
+            ui.header(f"mzcompose: test case {name} failed: {error}")
 
             if not isinstance(e, UIError):
                 traceback.print_exc()
@@ -534,6 +537,9 @@ class Composition:
         ) as cursor:
             cursor.execute(sql)
             return cursor.fetchall()
+
+    def query_mz_version(self) -> str:
+        return self.sql_query("SELECT mz_version()")[0][0]
 
     def run(
         self,

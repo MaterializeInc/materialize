@@ -976,20 +976,254 @@ EOF
 statement ok
 COMMIT
 
-statement ok
-BEGIN
-
-statement error db error: ERROR: ALTER SCHEMA s SWAP WITH t cannot be run inside a transaction block
-ALTER SCHEMA s SWAP WITH t
-
-statement ok
-ROLLBACK
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_swap = true;
+----
+COMPLETE 0
 
 statement ok
-BEGIN
-
-statement error db error: ERROR: ALTER CLUSTER s SWAP WITH t cannot be run inside a transaction block
-ALTER CLUSTER s SWAP WITH t
+CREATE SCHEMA blue;
 
 statement ok
-ROLLBACK
+CREATE SCHEMA green;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+blue  u6
+green  u7
+public  u3
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER SCHEMA blue SWAP WITH green;
+
+statement ok
+COMMIT;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+blue  u7
+green  u6
+public  u3
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER SCHEMA blue SWAP WITH green;
+
+statement ok
+ALTER SCHEMA green RENAME TO purple;
+
+statement ok
+ROLLBACK;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+blue  u7
+green  u6
+public  u3
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER SCHEMA green RENAME TO purple;
+
+# Modify the Catalog from a different session while a transaction is open.
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE yellow_t1 (x int);
+----
+COMPLETE 0
+
+statement error db error: ERROR: object state changed while transaction was in progress
+ALTER SCHEMA blue RENAME to pink;
+
+statement ok
+ROLLBACK;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+blue  u7
+green  u6
+public  u3
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER SCHEMA blue RENAME TO pink;
+
+statement ok
+ALTER SCHEMA pink RENAME TO purple;
+
+statement ok
+ALTER SCHEMA purple RENAME TO orange;
+
+statement ok
+ALTER SCHEMA orange RENAME TO red;
+
+statement ok
+ALTER SCHEMA red RENAME TO orange;
+
+statement ok
+COMMIT;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+green  u6
+orange  u7
+public  u3
+
+statement ok
+BEGIN;
+
+statement error db error: ERROR: schema 'green' already exists
+ALTER SCHEMA orange RENAME TO green;
+
+statement ok
+COMMIT;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+green  u6
+orange  u7
+public  u3
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER SCHEMA green RENAME TO red;
+
+statement error db error: ERROR: schema 'red' already exists
+ALTER SCHEMA orange RENAME TO red;
+
+statement ok
+COMMIT;
+
+# Transaction should be rolled back and nothing should change.
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+green  u6
+orange  u7
+public  u3
+
+statement ok
+CREATE TABLE green_t1 (x int);
+
+statement ok
+CREATE VIEW green_v1 AS ( SELECT SUM(x) FROM green_t1 );
+
+statement ok
+CREATE CLUSTER green_compute SIZE '1';
+
+statement ok
+CREATE MATERIALIZED VIEW green_mv1 IN CLUSTER green_compute AS ( SELECT AVG(x) FROM green_t1 );
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE green_t1 RENAME TO blue_t1;
+
+statement ok
+ALTER VIEW green_v1 RENAME TO blue_v1;
+
+statement ok
+ALTER MATERIALIZED VIEW green_mv1 RENAME TO blue_mv1;
+
+statement ok
+ALTER CLUSTER green_compute RENAME TO blue_compute;
+
+statement ok
+COMMIT;
+
+statement ok
+INSERT INTO blue_t1 VALUES (10), (20), (30);
+
+query I
+SELECT * FROM blue_v1;
+----
+60
+
+query I
+SELECT * FROM blue_mv1;
+----
+20
+
+query TT
+SELECT name, id FROM mz_clusters WHERE id LIKE 'u%';
+----
+c u3
+default u1
+blue_compute u4
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO blue_t1 VALUES (40), (50), (60);
+
+statement error db error: ERROR: transaction in write-only mode
+ALTER TABLE blue_t1 RENAME TO red_t1;
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM blue_t1 LIMIT 1;
+----
+10
+
+statement ok
+BEGIN;
+
+query I
+SELECT * FROM blue_v1;
+----
+60
+
+statement error db error: ERROR: transaction in read-only mode
+ALTER TABLE blue_t1 RENAME TO red_t1;
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM blue_t1 LIMIT 1;
+----
+10
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE blue_t1 RENAME TO purple_t1;
+
+statement error db error: ERROR: transactions which modify objects are restricted to just modifying objects
+SELECT * FROM blue_mv1;
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM blue_t1 LIMIT 1;
+----
+10
+
+# Cleanup.
+
+statement ok
+DROP CLUSTER blue_compute CASCADE;

@@ -458,6 +458,32 @@ Field        | Type                 | Meaning
 `owner_id`   | [`text`]             | The role ID of the owner of the table. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges` | [`mz_aclitem array`] | The privileges belonging to the table.
 
+### `mz_timezone_abbreviations`
+
+The `mz_timezone_abbreviations` view contains a row for each supported timezone abbreviation.
+A "fixed" abbreviation does not change its offset or daylight status based on the current time.
+A non-"fixed" abbreviation is dependent on the current time for its offset, and must use the [`timezone_offset`](/sql/functions/#timezone_offset) function to find its properties.
+These correspond to the `pg_catalog.pg_timezone_abbrevs` table, but can be materialized as they do not depend on the current time.
+
+<!-- RELATION_SPEC mz_catalog.mz_timezone_abbreviations -->
+Field           | Type         | Meaning
+----------------|--------------|----------
+`abbreviation`  | [`text`]     | The timezone abbreviation.
+`utc_offset`    | [`interval`] | The UTC offset of the timezone or `NULL` if fixed.
+`dst`           | [`boolean`]  | Whether the timezone is in daylight savings or `NULL` if fixed.
+`timezone_name` | [`text`]     | The full name of the non-fixed timezone or `NULL` if not fixed.
+
+### `mz_timezone_names`
+
+The `mz_timezone_names` view contains a row for each supported timezone.
+Use the [`timezone_offset`](/sql/functions/#timezone_offset) function for properties of a timezone at a certain timestamp.
+These correspond to the `pg_catalog.pg_timezone_names` table, but can be materialized as they do not depend on the current time.
+
+<!-- RELATION_SPEC mz_catalog.mz_timezone_names -->
+Field        | Type                 | Meaning
+-------------|----------------------|----------
+`name`       | [`text`]             | The timezone name.
+
 ### `mz_types`
 
 The `mz_types` table contains a row for each type in the system.
@@ -500,5 +526,6 @@ Field          | Type                 | Meaning
 [`uint8`]: /sql/types/uint8
 [`uint4`]: /sql/types/uint4
 [`mz_aclitem array`]: /sql/types/mz_aclitem
+[`interval`]: /sql/types/interval
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_operators -->

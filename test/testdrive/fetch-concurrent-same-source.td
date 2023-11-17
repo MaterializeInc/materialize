@@ -22,7 +22,7 @@ $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "ty
 $ kafka-create-topic topic=fetch-concurrent-same-source
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE fetch_concurrent_same_source
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-same-source-${testdrive.seed}')

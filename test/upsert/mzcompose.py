@@ -18,6 +18,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -43,6 +44,7 @@ SERVICES = [
     Clusterd(
         name="clusterd1",
     ),
+    Redpanda(),
 ]
 
 
@@ -58,7 +60,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         materialized_environment_extra[0] = "MZ_PERSIST_COMPACTION_DISABLED=true"
 
     for name in c.workflows:
-        if name == "default":
+        if name in ["default", "load-test"]:
             continue
         with c.test_case(name):
             c.workflow(name)
@@ -211,7 +213,6 @@ def workflow_rehydration(c: Composition) -> None:
             clusterd,
             Testdrive(no_reset=True, consistent_seed=True),
         ):
-
             print(f"Running rehydration workflow {style}")
             c.down(destroy_volumes=True)
 
@@ -360,7 +361,11 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
         )[0]
         prefix = "/scratch"
         cluster_prefix = f"cluster-{cluster_id}-replica-{replica_id}"
-        return f"{prefix}/{cluster_prefix}", f"{prefix}/{cluster_prefix}/{source_id}"
+        postfix = "storage/upsert"
+        return (
+            f"{prefix}/{cluster_prefix}/{postfix}",
+            f"{prefix}/{cluster_prefix}/{postfix}/{source_id}",
+        )
 
     # Returns the number of files recursive in a given directory
     def num_files(dir: str) -> int:
@@ -433,3 +438,155 @@ def workflow_autospill(c: Composition) -> None:
     ):
         c.up(*dependencies)
         c.run("testdrive", "autospill/bytes.td")
+
+
+# This should not be run on ci and is not added to workflow_default above!
+# This test is there to compare rehydration metrics with different configs.
+# Can be run locally with the command ./mzcompose run load-test
+def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
+    from textwrap import dedent
+
+    # Following variables can be updated to tweak how much data the kafka
+    # topic should be populated with and what should be the upsert state size.
+    pad_len = 1024
+    string_pad = "x" * pad_len  # 1KB
+    repeat = 250 * 1024  # repeat * string_pad = 250MB upsert state size
+    updates_count = 2  # repeat * updates_count = 500MB total kafka topic size with multiple updates for the same key
+
+    backpressure_bytes = 50 * 1024 * 1024  # 50MB
+
+    c.down(destroy_volumes=True)
+    c.up("redpanda", "materialized", "clusterd1")
+    # initial hydration
+    with c.override(
+        Testdrive(no_reset=True, consistent_seed=True, default_timeout=f"{5 * 60}s"),
+        Materialized(
+            options=[
+                "--orchestrator-process-scratch-directory=/scratch",
+            ],
+            additional_system_parameter_defaults={
+                "disk_cluster_replicas_default": "true",
+                "enable_disk_cluster_replicas": "true",
+                # Force backpressure to be enabled.
+                "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
+                "storage_dataflow_max_inflight_bytes_disk_only": "true",
+            },
+            environment_extra=materialized_environment_extra,
+        ),
+        Clusterd(
+            name="clusterd1",
+            options=[
+                "--scratch-directory=/scratch",
+            ],
+        ),
+    ):
+        c.up("testdrive", persistent=True)
+        c.exec("testdrive", "load-test/setup.td")
+        c.testdrive(
+            dedent(
+                """
+                $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
+                "AAA":"START MARKER"
+                """
+            )
+        )
+        for number in range(updates_count):
+            c.exec(
+                "testdrive",
+                f"--var=value={number}{string_pad}",
+                f"--var=repeat={repeat}",
+                "load-test/insert.td",
+            )
+
+        c.testdrive(
+            dedent(
+                """
+                $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
+                "ZZZ":"END MARKER"
+                """
+            )
+        )
+
+        c.testdrive(
+            dedent(
+                f"""
+                > select * from v1;
+                {repeat + 2}
+                """
+            )
+        )
+
+        scenarios = [
+            (
+                "default",
+                {
+                    "disk_cluster_replicas_default": "true",
+                    "enable_disk_cluster_replicas": "true",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
+                    "storage_dataflow_max_inflight_bytes_disk_only": "true",
+                },
+            ),
+            (
+                "with write_buffer_manager no stall",
+                {
+                    "disk_cluster_replicas_default": "true",
+                    "enable_disk_cluster_replicas": "true",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
+                    "storage_dataflow_max_inflight_bytes_disk_only": "true",
+                    "upsert_rocksdb_write_buffer_manager_memory_bytes": f"{5 * 1024 * 1024}",
+                    "upsert_rocksdb_write_buffer_manager_allow_stall": "false",
+                },
+            ),
+            (
+                "with write_buffer_manager stall enabled",
+                {
+                    "disk_cluster_replicas_default": "true",
+                    "enable_disk_cluster_replicas": "true",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
+                    "storage_dataflow_max_inflight_bytes_disk_only": "true",
+                    "upsert_rocksdb_write_buffer_manager_memory_bytes": f"{5 * 1024 * 1024}",
+                    "upsert_rocksdb_write_buffer_manager_allow_stall": "true",
+                },
+            ),
+        ]
+        for scenario_name, mz_configs in scenarios:
+            with c.override(
+                Materialized(
+                    options=[
+                        "--orchestrator-process-scratch-directory=/scratch",
+                    ],
+                    additional_system_parameter_defaults=mz_configs,
+                    environment_extra=materialized_environment_extra,
+                ),
+            ):
+                c.kill("materialized", "clusterd1")
+                print(f"Running rehydration for scenario {scenario_name}")
+                c.up("materialized", "clusterd1")
+                c.testdrive(
+                    dedent(
+                        f"""
+                > select sum(envelope_state_count)
+                  from mz_internal.mz_source_statistics st
+                  join mz_sources s on s.id = st.id
+                  where name = 's1';
+                {repeat + 2}
+
+                > select bool_and(rehydration_latency_ms IS NOT NULL)
+                  from mz_internal.mz_source_statistics st
+                  join mz_sources s on s.id = st.id
+                  where name = 's1';
+                true
+                """
+                    )
+                )
+
+                rehydration_latency_ms = c.sql_query(
+                    """select max(rehydration_latency_ms)
+                    from mz_internal.mz_source_statistics st
+                    join mz_sources s on s.id = st.id
+                    where name = 's1';"""
+                )[0]
+                print(f"Scenario {scenario_name} took {rehydration_latency_ms} ms")

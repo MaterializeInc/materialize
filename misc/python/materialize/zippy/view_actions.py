@@ -11,6 +11,7 @@ import random
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.debezium_capabilities import DebeziumSourceExists
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
@@ -27,10 +28,10 @@ class CreateViewParameterized(ActionFactory):
     @classmethod
     def requires(cls) -> list[set[type[Capability]]]:
         return [
-            {MzIsRunning, SourceExists},
-            {MzIsRunning, TableExists},
-            {MzIsRunning, DebeziumSourceExists},
-            {MzIsRunning, PostgresCdcTableExists},
+            {BalancerdIsRunning, MzIsRunning, SourceExists},
+            {BalancerdIsRunning, MzIsRunning, TableExists},
+            {BalancerdIsRunning, MzIsRunning, DebeziumSourceExists},
+            {BalancerdIsRunning, MzIsRunning, PostgresCdcTableExists},
         ]
 
     def __init__(
@@ -126,7 +127,7 @@ class ValidateView(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, StoragedRunning, ViewExists}
+        return {BalancerdIsRunning, MzIsRunning, StoragedRunning, ViewExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.view = random.choice(capabilities.get(ViewExists))

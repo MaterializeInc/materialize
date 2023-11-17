@@ -10,6 +10,7 @@
 
 from copy import copy
 
+from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
     DEFAULT_MZ_ENVIRONMENT_ID,
@@ -22,7 +23,6 @@ from materialize.mzcompose.service import (
     ServiceDependency,
 )
 from materialize.mzcompose.services.minio import MINIO_BLOB_URI
-from materialize.util import MzVersion
 
 
 class Materialized(Service):
@@ -52,6 +52,7 @@ class Materialized(Service):
         additional_system_parameter_defaults: dict[str, str] | None = None,
         soft_assertions: bool = True,
         sanity_restart: bool = True,
+        catalog_store: str | None = "shadow",
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -69,6 +70,7 @@ class Materialized(Service):
             "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
             "MZ_BOOTSTRAP_ROLE=materialize",
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
+            f"MZ_CATALOG_STORE={catalog_store}",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
             # then accidentally dependent on the state of the host machine.
@@ -154,7 +156,15 @@ class Materialized(Service):
 
         command += options
 
-        config: ServiceConfig = {}
+        config: ServiceConfig = {
+            # Use the service name as the hostname so that it is stable across
+            # container recreation. (The default hostname is the container ID,
+            # which changes when the container is recreated.) This is important
+            # when using `external_cockroach=False`, as the consensus/blob URLs
+            # refer to the container's hostname, and we don't want those URLs to
+            # change when the container is recreated.
+            "hostname": name,
+        }
 
         if image:
             config["image"] = image
@@ -171,7 +181,8 @@ class Materialized(Service):
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
 
         if sanity_restart:
-            config.setdefault("labels", []).append("sanity_restart")
+            # Workaround for https://bytemeta.vip/repo/docker/compose/issues/11133
+            config["labels"] = {"sanity_restart": True}
 
         volumes = []
         if use_default_volumes:

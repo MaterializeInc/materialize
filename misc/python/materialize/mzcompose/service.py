@@ -99,7 +99,7 @@ class ServiceConfig(TypedDict, total=False):
     hostname: str
     """The hostname to use.
 
-    By default, the name of the service is used as the hostname.
+    By default, the container's ID is used as the hostname.
     """
 
     extra_hosts: list[str]
@@ -159,7 +159,7 @@ class ServiceConfig(TypedDict, total=False):
     restart: str
     """Restart policy."""
 
-    labels: list[str]
+    labels: dict[str, Any]
     """Container labels."""
 
 

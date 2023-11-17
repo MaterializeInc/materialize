@@ -6,8 +6,11 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from materialize.scalability.df import df_totals_cols
 
-
+CONCURRENCY = df_totals_cols.CONCURRENCY
+WORKLOAD = df_totals_cols.WORKLOAD
+COUNT = df_totals_cols.COUNT
 TPS_DIFF = "tps_diff"
 TPS_DIFF_PERC = "tps_diff_perc"
 TPS_BASELINE = "baseline_tps"

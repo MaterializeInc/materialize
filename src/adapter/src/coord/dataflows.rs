@@ -16,6 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
@@ -43,7 +44,6 @@ use timely::PartialOrder;
 use tracing::warn;
 
 use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View};
-use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
@@ -79,6 +79,11 @@ impl ComputeInstanceSnapshot {
     pub fn contains_collection(&self, id: &GlobalId) -> bool {
         self.collections.contains(id)
     }
+
+    /// Inserts the given collection into the snapshot.
+    pub fn insert_collection(&mut self, id: GlobalId) {
+        self.collections.insert(id);
+    }
 }
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
@@ -103,9 +108,15 @@ pub enum ExprPrepStyle<'a> {
     OneShot {
         logical_time: EvalTime,
         session: &'a Session,
+        catalog_state: &'a CatalogState,
     },
     /// The expression is being prepared for evaluation in an AS OF or UP TO clause.
     AsOfUpTo,
+    /// The expression is being prepared for evaluation in a CHECK expression of a webhook source.
+    WebhookValidation {
+        /// Time at which this expression is being evaluated.
+        now: DateTime<Utc>,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -134,22 +145,6 @@ impl Coordinator {
         ComputeInstanceSnapshot::new(&self.controller, id)
     }
 
-    /// Finalizes a dataflow and then broadcasts it to all workers.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the dataflow fails to ship.
-    pub(crate) async fn must_ship_dataflow(
-        &mut self,
-        dataflow: DataflowDesc,
-        instance: ComputeInstanceId,
-    ) -> DataflowDescription<Plan> {
-        #[allow(deprecated)]
-        self.ship_dataflow(dataflow, instance)
-            .await
-            .expect("failed to ship dataflow")
-    }
-
     /// Call into the compute controller to install a finalized dataflow, and
     /// initialize the read policies for its exported objects.
     pub(crate) async fn ship_dataflow_new(
@@ -174,9 +169,6 @@ impl Coordinator {
 
     #[deprecated = "This is being replaced by ship_dataflow_new (see #20569)."]
     /// Finalizes a dataflow and then broadcasts it to all workers.
-    ///
-    /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
-    /// [`Self::must_ship_dataflow`].
     pub(crate) async fn ship_dataflow(
         &mut self,
         mut dataflow: DataflowDesc,
@@ -215,34 +207,6 @@ impl Coordinator {
     /// invariants such as ensuring that the `as_of` frontier is in advance of
     /// the various `since` frontiers of participating data inputs.
     ///
-    /// In particular, there are requirement on the `as_of` field for the dataflow
-    /// and the `since` frontiers of created arrangements, as a function of the `since`
-    /// frontiers of dataflow inputs (sources and imported arrangements).
-    ///
-    /// # Panics
-    ///
-    /// Panics if as_of is < the `since` frontiers.
-    ///
-    /// Panics if the dataflow descriptions contain an invalid plan.
-    pub(crate) fn must_finalize_dataflow(
-        &self,
-        dataflow: DataflowDesc,
-        compute_instance: ComputeInstanceId,
-    ) -> DataflowDescription<mz_compute_types::plan::Plan> {
-        // This function must succeed because catalog_transact has generally been run
-        // before calling this function. We don't have plumbing yet to rollback catalog
-        // operations if this function fails, and environmentd will be in an unsafe
-        // state if we do not correctly clean up the catalog.
-        self.finalize_dataflow(dataflow, compute_instance)
-            .expect("Dataflow planning failed; unrecoverable error")
-    }
-
-    /// Finalizes a dataflow.
-    ///
-    /// Finalization includes optimization, but also validation of various
-    /// invariants such as ensuring that the `as_of` frontier is in advance of
-    /// the various `since` frontiers of participating data inputs.
-    ///
     /// In particular, there are requirements on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
@@ -250,9 +214,6 @@ impl Coordinator {
     /// Additionally, this method requires that the `until` field of the dataflow
     /// has been set, so that any plan improvements based on its difference to `as_of`
     /// can be carried out.
-    ///
-    /// This method will return an error if the finalization fails. DO NOT call this
-    /// method for DDL. Instead, use the non-fallible version [`Self::must_finalize_dataflow`].
     ///
     /// # Panics
     ///
@@ -301,8 +262,8 @@ impl Coordinator {
 }
 
 /// Returns an ID bundle with the given dataflows imports.
-pub fn dataflow_import_id_bundle(
-    dataflow: &DataflowDesc,
+pub fn dataflow_import_id_bundle<P>(
+    dataflow: &DataflowDescription<P>,
     compute_instance: ComputeInstanceId,
 ) -> CollectionIdBundle {
     let storage_ids = dataflow.source_imports.keys().copied().collect();
@@ -310,15 +271,6 @@ pub fn dataflow_import_id_bundle(
     CollectionIdBundle {
         storage_ids,
         compute_ids: btreemap! {compute_instance => compute_ids},
-    }
-}
-
-impl CatalogTxn<'_, mz_repr::Timestamp> {
-    /// Creates a new dataflow builder from an ongoing catalog transaction.
-    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
-        let snapshot = ComputeInstanceSnapshot::new(self.dataflow_client, instance)
-            .expect("compute instance does not exist");
-        DataflowBuilder::new(self.catalog, snapshot)
     }
 }
 
@@ -419,54 +371,6 @@ impl<'a> DataflowBuilder<'a> {
         Ok(())
     }
 
-    /// Builds a dataflow description for the index with the specified ID.
-    pub fn build_index_dataflow(
-        &mut self,
-        id: GlobalId,
-    ) -> Result<(DataflowDesc, DataflowMetainfo), AdapterError> {
-        let index_entry = self.catalog.get_entry(&id);
-        let index = match index_entry.item() {
-            CatalogItem::Index(index) => index,
-            _ => unreachable!("cannot create index dataflow on non-index"),
-        };
-        let on_entry = self.catalog.get_entry(&index.on);
-        let on_type = on_entry
-            .desc(
-                &self
-                    .catalog
-                    .resolve_full_name(on_entry.name(), on_entry.conn_id()),
-            )
-            .expect("can only create indexes on items with a valid description")
-            .typ()
-            .clone();
-        let name = self
-            .catalog
-            .resolve_full_name(index_entry.name(), index_entry.conn_id())
-            .to_string();
-        let mut dataflow = DataflowDesc::new(name);
-        self.import_into_dataflow(&index.on, &mut dataflow)?;
-        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
-        }
-        let mut index_description = IndexDesc {
-            on_id: index.on,
-            key: index.keys.clone(),
-        };
-        for key in &mut index_description.key {
-            prep_scalar_expr(self.catalog, key, ExprPrepStyle::Index)?;
-        }
-        dataflow.export_index(id, index_description, on_type);
-
-        // Optimize the dataflow across views, and any other ways that appeal.
-        let dataflow_metainfo = mz_transform::optimize_dataflow(
-            &mut dataflow,
-            self,
-            &mz_transform::EmptyStatisticsOracle,
-        )?;
-
-        Ok((dataflow, dataflow_metainfo))
-    }
-
     /// Builds a dataflow description for the sink with the specified name,
     /// ID, source, and output connection.
     ///
@@ -494,7 +398,7 @@ impl<'a> DataflowBuilder<'a> {
     ) -> Result<DataflowMetainfo, AdapterError> {
         self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
+            prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
         dataflow.export_sink(id, sink_description);
 
@@ -608,7 +512,6 @@ impl<'a> CheckedRecursion for DataflowBuilder<'a> {
 /// contained scalar expressions (see `prep_scalar_expr`) in the specified
 /// style.
 pub fn prep_relation_expr(
-    catalog: &CatalogState,
     expr: &mut OptimizedMirRelationExpr,
     style: ExprPrepStyle,
 ) -> Result<(), AdapterError> {
@@ -623,30 +526,36 @@ pub fn prep_relation_expr(
                         Err(e) => coord_bail!("{:?}", e),
                         Ok(mut mfp) => {
                             for s in mfp.iter_nontemporal_exprs() {
-                                prep_scalar_expr(catalog, s, style)?;
+                                prep_scalar_expr(s, style)?;
                             }
                             Ok(())
                         }
                     }
                 } else {
-                    e.try_visit_scalars_mut1(&mut |s| prep_scalar_expr(catalog, s, style))
+                    e.try_visit_scalars_mut1(&mut |s| prep_scalar_expr(s, style))
                 }
             })
         }
-        ExprPrepStyle::OneShot { .. } | ExprPrepStyle::AsOfUpTo => expr
+        ExprPrepStyle::OneShot { .. }
+        | ExprPrepStyle::AsOfUpTo
+        | ExprPrepStyle::WebhookValidation { .. } => expr
             .0
-            .try_visit_scalars_mut(&mut |s| prep_scalar_expr(catalog, s, style)),
+            .try_visit_scalars_mut(&mut |s| prep_scalar_expr(s, style)),
     }
 }
 
 /// Prepares a scalar expression for execution by handling unmaterializable
 /// functions.
 ///
-/// Specifically, calls to unmaterializable functions are replaced if
-/// `style` is `OneShot`. If `style` is `Index`, then an error is produced
-/// if a call to a unmaterializable function is encountered.
+/// How we prepare the scalar expression depends on which `style` is specificed.
+///
+/// * `OneShot`: Calls to all unmaterializable functions are replaced.
+/// * `Index`: An error is produced if a call to an unmaterializable function is encountered.
+/// * `AsOfUpTo`: An error is produced if a call to an unmaterializable function is encountered.
+/// * `WebhookValidation`: Only calls to `UnmaterializableFunc::CurrentTimestamp` are replaced,
+///   others are left untouched.
+///
 pub fn prep_scalar_expr(
-    state: &CatalogState,
     expr: &mut MirScalarExpr,
     style: ExprPrepStyle,
 ) -> Result<(), AdapterError> {
@@ -656,9 +565,10 @@ pub fn prep_scalar_expr(
         ExprPrepStyle::OneShot {
             logical_time,
             session,
+            catalog_state,
         } => expr.try_visit_mut_post(&mut |e| {
             if let MirScalarExpr::CallUnmaterializable(f) = e {
-                *e = eval_unmaterializable_func(state, f, logical_time, session)?;
+                *e = eval_unmaterializable_func(catalog_state, f, logical_time, session)?;
             }
             Ok(())
         }),
@@ -683,6 +593,21 @@ pub fn prep_scalar_expr(
                 };
                 return Err(err);
             }
+            Ok(())
+        }
+
+        ExprPrepStyle::WebhookValidation { now } => {
+            expr.try_visit_mut_post(&mut |e| {
+                if let MirScalarExpr::CallUnmaterializable(
+                    f @ UnmaterializableFunc::CurrentTimestamp,
+                ) = e
+                {
+                    let now: Datum = now.try_into()?;
+                    let const_expr = MirScalarExpr::literal_ok(now, f.output_type().scalar_type);
+                    *e = const_expr;
+                }
+                Ok::<_, anyhow::Error>(())
+            })?;
             Ok(())
         }
     }
@@ -889,21 +814,16 @@ fn role_oid_memberships_inner<'a>(
 #[cfg(test)]
 impl Coordinator {
     #[allow(dead_code)]
-    async fn verify_ship_dataflow_no_error(&mut self) {
-        // must_ship_dataflow and must_finalize_dataflow are not allowed
-        // to have a `Result` return because these functions are called after
-        // `catalog_transact`, after which no errors are allowed. This test exists to
-        // prevent us from incorrectly teaching those functions how to return errors
-        // (which has happened twice and is the motivation for this test).
+    async fn verify_ship_dataflow_no_error(&mut self, dataflow: DataflowDescription<Plan>) {
+        // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
+        // called after `catalog_transact`, after which no errors are allowed. This test exists to
+        // prevent us from incorrectly teaching those functions how to return errors (which has
+        // happened twice and is the motivation for this test).
 
         // An arbitrary compute instance ID to satisfy the function calls below. Note that
         // this only works because this function will never run.
         let compute_instance = ComputeInstanceId::User(1);
 
-        let dataflow = || DataflowDesc::new("".into());
-        let _: DataflowDescription<mz_compute_types::plan::Plan> =
-            self.must_ship_dataflow(dataflow(), compute_instance).await;
-        let _: DataflowDescription<mz_compute_types::plan::Plan> =
-            self.must_finalize_dataflow(dataflow(), compute_instance);
+        let _: () = self.ship_dataflow_new(dataflow, compute_instance).await;
     }
 }

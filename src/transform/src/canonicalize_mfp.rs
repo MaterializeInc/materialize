@@ -39,8 +39,8 @@ pub struct CanonicalizeMfp;
 
 impl crate::Transform for CanonicalizeMfp {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "canonicalize_mfp")
     )]

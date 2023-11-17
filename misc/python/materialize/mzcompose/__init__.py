@@ -33,7 +33,7 @@ T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.5.0"
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
@@ -49,15 +49,14 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_pubsub_push_diff_enabled": "true",
     "persist_pubsub_client_enabled": "true",
     "persist_stats_audit_percent": "100",
+    "persist_batch_delete_enabled": "true",
+    "enable_columnation_lgalloc": "true",
     "enable_rbac_checks": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
     "enable_dangerous_functions": "true",
     "enable_disk_cluster_replicas": "true",
     "statement_logging_max_sample_rate": "1.0",
     "statement_logging_default_sample_rate": "1.0",
-    # This needs to be kept in sync with the --variable-length-row-encoding
-    # flag to testdrive.
-    "variable_length_row_encoding": "true",
     # Following values are set based on Load Test environment to
     # reduce CRDB load as we are struggling with it in CI:
     "persist_next_listen_batch_retryer_clamp": "100ms",
@@ -66,6 +65,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_streaming_compaction_enabled": "true",
     "persist_streaming_snapshot_and_fetch_enabled": "true",
     "storage_source_decode_fuel": "100000",
+    # 128 MiB,
+    "compute_dataflow_max_inflight_bytes": "134217728",
     "enable_unified_clusters": "true",
     "enable_jemalloc_profiling": "true",
     "enable_comment": "true",

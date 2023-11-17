@@ -82,7 +82,7 @@ $ set schema={
   }
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -100,6 +100,12 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 contains:ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified
+
+! CREATE SOURCE doin_upsert
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+  KEY FORMAT JSON VALUE FORMAT JSON
+  ENVELOPE DEBEZIUM
+contains:ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO
 
 > CREATE SOURCE doin_upsert
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')

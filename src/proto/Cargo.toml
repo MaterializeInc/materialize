@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.66"
+chrono = { version = "0.4.23", default-features = false, features = ["serde", "std"], optional = true }
+chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"], optional = true }
 globset = "0.4.9"
 http = "0.2.8"
 mz-ore = { path = "../ore", default-features = false }
@@ -20,6 +22,9 @@ tokio-postgres = { version = "0.7.8", optional = true }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[features]
+chrono = ["dep:chrono", "dep:chrono-tz"]
 
 [build-dependencies]
 prost-build = "0.11.2"
