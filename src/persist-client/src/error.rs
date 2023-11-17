@@ -11,42 +11,10 @@
 
 use std::fmt::Debug;
 
-use mz_persist::location::{Determinate, ExternalError, Indeterminate};
 use timely::progress::{Antichain, Timestamp};
 
 use crate::internal::paths::PartialBatchKey;
 use crate::ShardId;
-
-/// An indication of whether the given error type indicates an operation
-/// _definitely_ failed or if it _maybe_ failed.
-///
-/// This is more commonly called definite and indefinite, but "definite" already
-/// means something very specific within Materialize.
-pub trait Determinacy {
-    /// Whether errors of this type are determinate or indeterminate.
-    ///
-    /// True indicates a determinate error: one where the operation definitely
-    /// failed.
-    ///
-    /// False indicates an indeterminate error: one where the operation may have
-    /// failed, but may have succeeded (the most common example being a
-    /// timeout).
-    const DETERMINANT: bool;
-}
-
-impl Determinacy for Determinate {
-    const DETERMINANT: bool = true;
-}
-
-impl Determinacy for Indeterminate {
-    const DETERMINANT: bool = false;
-}
-
-// An external error's variant declares whether it's determinate, but at the
-// type level we have to fall back to indeterminate.
-impl Determinacy for ExternalError {
-    const DETERMINANT: bool = false;
-}
 
 /// An error resulting from invalid usage of the API.
 #[derive(Debug)]
@@ -149,10 +117,6 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
 
 impl<T: Debug> std::error::Error for InvalidUsage<T> {}
 
-impl<T> Determinacy for InvalidUsage<T> {
-    const DETERMINANT: bool = true;
-}
-
 /// The requested codecs don't match the actual ones in durable storage.
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
@@ -170,10 +134,6 @@ pub struct CodecMismatch {
 }
 
 impl std::error::Error for CodecMismatch {}
-
-impl Determinacy for CodecMismatch {
-    const DETERMINANT: bool = true;
-}
 
 impl std::fmt::Display for CodecMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
