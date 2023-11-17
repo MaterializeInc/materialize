@@ -220,6 +220,21 @@ impl Coordinator {
                     });
                 }
 
+                Command::TimestampOracle { timeline, tx } => {
+                    let oracle = self.get_timestamp_oracle(&timeline);
+                  
+                    let _ = tx.send(oracle);
+                }
+
+                Command::GetPeekClient { instance_id, tx } => {
+                    let peek_client = self
+                        .controller
+                        .active_compute()
+                        .get_peek_client(instance_id)
+                        .expect("missing instance");
+                    let _ = tx.send(peek_client);
+                }
+
                 Command::CheckConsistency { tx } => {
                     let _ = tx.send(self.check_consistency());
                 }

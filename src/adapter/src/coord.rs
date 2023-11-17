@@ -287,6 +287,8 @@ impl Message {
         match self {
             Message::Command(_, msg) => match msg {
                 Command::CatalogSnapshot { .. } => "command-catalog_snapshot",
+                Command::TimestampOracle { .. } => "command-timestamp_oracle",
+                Command::GetPeekClient { .. } => "command-peek_client",
                 Command::Startup { .. } => "command-startup",
                 Command::Execute { .. } => "command-execute",
                 Command::Commit { .. } => "command-commit",

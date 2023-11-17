@@ -21,6 +21,8 @@ use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
+use mz_compute_client::controller::PeekClient;
+use mz_compute_types::ComputeInstanceId;
 use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{org_id_conn_bits, IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID};
@@ -30,7 +32,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{GlobalId, Row, ScalarType};
+use mz_repr::{GlobalId, Row, ScalarType, Timestamp};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
@@ -38,6 +40,8 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
 use mz_sql::session::vars::{OwnedVarInput, Var, CLUSTER};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
+use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::TimestampOracle;
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
@@ -201,6 +205,8 @@ impl Client {
             timeouts: Timeout::new(),
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
+            timestamp_oracles: BTreeMap::new(),
+            peek_clients: BTreeMap::new(),
         };
 
         let StartupResponse {
@@ -433,6 +439,8 @@ pub struct SessionClient {
     timeouts: Timeout,
     segment_client: Option<mz_segment::Client>,
     environment_id: EnvironmentId,
+    timestamp_oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
+    peek_clients: BTreeMap<ComputeInstanceId, PeekClient<Timestamp>>,
 }
 
 impl SessionClient {
@@ -646,6 +654,55 @@ impl SessionClient {
         catalog
     }
 
+    /// Fetches the shared `TimestampOracle` for the given timeline.
+    pub async fn get_timestamp_oracle(
+        &mut self,
+        timeline: &Timeline,
+    ) -> Arc<dyn TimestampOracle<Timestamp> + Send + Sync> {
+        let oracle = self.timestamp_oracles.get_mut(timeline);
+        if let Some(oracle) = oracle {
+            return Arc::clone(oracle);
+        }
+
+        let oracle = self
+            .send_without_session(|tx| Command::TimestampOracle {
+                timeline: timeline.clone(),
+                tx,
+            })
+            .await;
+        self.timestamp_oracles.insert(timeline.clone(), oracle);
+
+        let oracle = self
+            .timestamp_oracles
+            .get_mut(timeline)
+            .expect("known to exist");
+
+        Arc::clone(oracle)
+    }
+
+    /// Fetches a `PeekClient` for the given compute instance/cluster.
+    pub async fn get_peek_client(
+        &mut self,
+        instance_id: ComputeInstanceId,
+    ) -> PeekClient<Timestamp> {
+        let peek_client = self.peek_clients.get_mut(&instance_id);
+        if let Some(peek_client) = peek_client {
+            return peek_client.clone();
+        }
+
+        let peek_client = self
+            .send_without_session(|tx| Command::GetPeekClient {
+                instance_id: instance_id.clone(),
+                tx,
+            })
+            .await;
+        self.peek_clients.insert(instance_id, peek_client);
+
+        self.peek_clients
+            .get_mut(&instance_id)
+            .expect("known to exist")
+            .clone()
+    }
     /// Dumps the catalog to a JSON string.
     ///
     /// No authorization is performed, so access to this function must be limited to internal
@@ -844,6 +901,8 @@ impl SessionClient {
                 Command::GetWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
                 | Command::CatalogSnapshot { .. }
+                | Command::TimestampOracle { .. }
+                | Command::GetPeekClient { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
                 | Command::PrivilegedCancelRequest { .. }

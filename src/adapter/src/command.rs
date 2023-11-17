@@ -16,18 +16,22 @@ use derivative::Derivative;
 use enum_kinds::EnumKind;
 use futures::future::BoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_compute_client::controller::PeekClient;
+use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Row};
+use mz_repr::{GlobalId, Row, Timestamp};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{OwnedVarInput, Var};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
+use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::TimestampOracle;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -51,6 +55,16 @@ pub struct CatalogSnapshot {
 pub enum Command {
     CatalogSnapshot {
         tx: oneshot::Sender<CatalogSnapshot>,
+    },
+
+    TimestampOracle {
+        timeline: Timeline,
+        tx: oneshot::Sender<Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
+    },
+
+    GetPeekClient {
+        instance_id: ComputeInstanceId,
+        tx: oneshot::Sender<PeekClient<Timestamp>>,
     },
 
     Startup {
@@ -135,6 +149,8 @@ impl Command {
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
+            | Command::TimestampOracle { .. }
+            | Command::GetPeekClient { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
             | Command::Terminate { .. }
@@ -152,6 +168,8 @@ impl Command {
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
+            | Command::TimestampOracle { .. }
+            | Command::GetPeekClient { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
             | Command::Terminate { .. }
