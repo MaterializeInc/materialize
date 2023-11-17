@@ -52,7 +52,7 @@ use crate::util::viewable_variables;
 #[derive(Debug, Clone)]
 pub struct ComputeInstanceSnapshot {
     instance_id: ComputeInstanceId,
-    collections: BTreeSet<GlobalId>,
+    collections: Option<BTreeSet<GlobalId>>,
 }
 
 impl ComputeInstanceSnapshot {
@@ -62,8 +62,17 @@ impl ComputeInstanceSnapshot {
             .instance_ref(id)
             .map(|instance| ComputeInstanceSnapshot {
                 instance_id: id,
-                collections: BTreeSet::from_iter(instance.collections().map(|(id, _state)| *id)),
+                collections: Some(BTreeSet::from_iter(
+                    instance.collections().map(|(id, _state)| *id),
+                )),
             })
+    }
+
+    pub fn new_without_collections(id: ComputeInstanceId) -> Result<Self, InstanceMissing> {
+        Ok(ComputeInstanceSnapshot {
+            instance_id: id,
+            collections: None,
+        })
     }
 
     /// Return the ID of this compute instance.
@@ -73,7 +82,11 @@ impl ComputeInstanceSnapshot {
 
     /// Reports whether the instance contains the indicated collection.
     pub fn contains_collection(&self, id: &GlobalId) -> bool {
-        self.collections.contains(id)
+        if let Some(collections) = self.collections.as_ref() {
+            collections.contains(id)
+        } else {
+            true
+        }
     }
 
     /// Inserts the given collection into the snapshot.
