@@ -74,6 +74,8 @@ mod instance;
 mod replica;
 mod sequential_hydration;
 
+pub use instance::PeekClient;
+
 pub mod error;
 
 type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
@@ -660,6 +662,14 @@ where
             result_tx,
         )?;
         Ok(())
+    }
+
+    /// Returns a [PeekClient] for the specified instance.
+    pub fn get_peek_client(
+        &mut self,
+        instance_id: ComputeInstanceId,
+    ) -> Result<PeekClient<T>, PeekError> {
+        Ok(self.instance(instance_id)?.get_peek_client())
     }
 
     /// Cancel an existing peek request.

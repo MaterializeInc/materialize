@@ -90,7 +90,7 @@ impl From<CollectionMissing> for DataflowCreationError {
 }
 
 #[derive(Error, Debug)]
-pub(super) enum PeekError {
+pub enum PeekError {
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
     #[error("replica does not exist: {0}")]
@@ -1416,6 +1416,21 @@ where
         Ok(())
     }
 
+    /// Returns a [PeekClient].
+    pub fn get_peek_client(&self) -> PeekClient<T> {
+        // Yeah yeah, this _is_ dangerous, exposing a general command channel...
+        let command_txs = self
+            .compute
+            .replicas
+            .iter()
+            .map(|(id, r)| (id.clone(), r.client.command_tx.clone()))
+            .collect();
+        PeekClient {
+            peeks: Arc::clone(&self.compute.peeks),
+            command_txs,
+        }
+    }
+
     /// Cancels an existing peek request.
     pub fn cancel_peek(&mut self, uuid: Uuid, reason: PeekResponse) {
         let Some(peek) = self.remove_peek(&uuid) else {
@@ -2555,3 +2570,67 @@ where
     }
 }
 
+/// A client for running peeks against COMPUTE.
+#[derive(Clone, Debug)]
+pub struct PeekClient<T> {
+    peeks: Arc<Mutex<BTreeMap<Uuid, PendingPeek<T>>>>,
+    command_txs: BTreeMap<ReplicaId, UnboundedSender<ComputeCommand<T>>>,
+}
+
+impl<T> PeekClient<T>
+where
+    T: Timestamp,
+{
+    /// Initiate a peek request for the contents of `id` at `timestamp`.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn peek(
+        &mut self,
+        id: GlobalId,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: T,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        target_replica: Option<ReplicaId>,
+        peek_target: PeekTarget,
+        result_tx: oneshot::Sender<PeekResponse>,
+    ) -> Result<(), crate::controller::error::PeekError> {
+
+        let otel_ctx = OpenTelemetryContext::obtain();
+        {
+            let mut peeks = self.peeks.lock().expect("lock poisoned");
+            peeks.insert(
+                uuid,
+            PendingPeek {
+                target: peek_target.clone(),
+                time: timestamp.clone(),
+                target_replica,
+                // TODO(guswynn): can we just hold the `tracing::Span` here instead?
+                otel_ctx: otel_ctx.clone(),
+                requested_at: Instant::now(),
+                result_tx,
+            },
+            );
+        }
+
+        let cmd = ComputeCommand::Peek(Peek {
+            literal_constraints,
+            uuid,
+            timestamp,
+            finishing,
+            map_filter_project,
+            // Obtain an `OpenTelemetryContext` from the thread-local tracing
+            // tree to forward it on to the compute worker.
+            otel_ctx,
+            target: peek_target,
+        });
+
+        for (_replica_id, command_tx) in self.command_txs.iter() {
+            command_tx
+                .send(cmd.clone())
+                .expect("can't send peek command");
+        }
+
+        Ok(())
+    }
+}

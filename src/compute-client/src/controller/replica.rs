@@ -54,7 +54,7 @@ pub(super) struct ReplicaClient<T> {
     ///
     /// If sending to this channel fails, the replica has failed and requires
     /// rehydration.
-    command_tx: UnboundedSender<ComputeCommand<T>>,
+    pub command_tx: UnboundedSender<ComputeCommand<T>>,
     /// A handle to the task that aborts it when the replica is dropped.
     _task: AbortOnDropHandle<()>,
     /// Replica metrics.

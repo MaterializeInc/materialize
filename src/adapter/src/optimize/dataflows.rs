@@ -91,7 +91,9 @@ impl ComputeInstanceSnapshot {
 
     /// Inserts the given collection into the snapshot.
     pub fn insert_collection(&mut self, id: GlobalId) {
-        self.collections.insert(id);
+        if let Some(collections) = self.collections.as_mut() {
+            collections.insert(id);
+        }
     }
 }
 
