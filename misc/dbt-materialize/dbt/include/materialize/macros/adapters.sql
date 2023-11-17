@@ -173,7 +173,7 @@
         d.name as database,
         s.name as schema,
         o.name,
-        case when o.type = 'materialized-view' then 'materializedview'
+        case when o.type = 'materialized-view' then 'materialized_view'
              else o.type
         end as type
     from mz_objects o

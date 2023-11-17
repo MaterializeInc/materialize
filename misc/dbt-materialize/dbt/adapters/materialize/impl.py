@@ -90,6 +90,9 @@ class MaterializeAdapter(PostgresAdapter):
     # warehouse built for real-time is limited, so we do not implement it.
     _capabilities = CapabilityDict(
         {
+            Capability.SchemaMetadataByRelations: CapabilitySupport(
+                support=Support.NotImplemented
+            ),
             Capability.TableLastModifiedMetadata: CapabilitySupport(
                 support=Support.NotImplemented
             ),

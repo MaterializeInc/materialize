@@ -16,14 +16,14 @@
 from dbt.tests.adapter.hooks import test_model_hooks as core_base
 
 test_materialized_view = """
-{{ config(materialized='materializedview') }}
+{{ config(materialized='materialized_view') }}
 
     SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
 """
 
 test_materialized_view_index = """
 {{ config(
-    materialized='materializedview',
+    materialized='materialized_view',
     indexes=[{'columns': ['a', 'length(a)'], 'name': 'a_idx'}]
 ) }}
 
@@ -47,6 +47,13 @@ test_table_index = """
 
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
 """
+
+test_seed = """
+id,value
+1,100
+2,200
+3,300
+""".strip()
 
 test_source = """
 {{ config(
@@ -85,7 +92,10 @@ FOR ALL TABLES;
 """
 
 test_sink = """
-{{ config(materialized='sink') }}
+{{ config(
+    materialized='sink'
+    )
+}}
  CREATE SINK {{ this }}
  FROM {{ ref('test_materialized_view') }}
  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink')
@@ -137,14 +147,14 @@ unique = """
 """
 
 expected_base_relation_types = {
-    "base": "materializedview",
+    "base": "materialized_view",
     "view_model": "view",
-    "table_model": "materializedview",
-    "swappable": "materializedview",
+    "table_model": "materialized_view",
+    "swappable": "materialized_view",
 }
 
 test_relation_name_length = """
-{{ config(materialized='materializedview') }}
+{{ config(materialized='materialized_view') }}
 
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
 """

@@ -68,8 +68,8 @@ class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
         expected = {
             "base": "table",
             "view_model": "view",
-            "table_model": "materializedview",
-            "swappable": "materializedview",
+            "table_model": "materialized_view",
+            "swappable": "materialized_view",
         }
         check_relation_types(project.adapter, expected)
 
@@ -194,5 +194,5 @@ class TestDocsGenReferencesMaterialize(BaseDocsGenReferences):
         # materializations still use materialized views.
         catalog["nodes"]["model.test.ephemeral_summary"]["metadata"][
             "type"
-        ] = "materializedview"
+        ] = "materialized_view"
         return catalog
