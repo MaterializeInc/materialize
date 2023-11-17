@@ -13,8 +13,11 @@ use futures::future::BoxFuture;
 use mz_catalog::durable::Transaction;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Raw;
+use mz_sql::catalog::SessionCatalog;
+use mz_sql::session::user::MZ_SUPPORT_ROLE_ID;
 use mz_storage_types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
@@ -49,7 +52,7 @@ where
 }
 
 pub(crate) async fn migrate(
-    state: &mut CatalogState,
+    state: &CatalogState,
     txn: &mut Transaction<'_>,
     now: NowFn,
     _connection_context: Option<ConnectionContext>,
@@ -85,6 +88,8 @@ pub(crate) async fn migrate(
         })
     })
     .await?;
+
+    mz_support_read_progress_sources(txn, &conn_cat)?;
 
     info!(
         "migration from catalog version {:?} complete",
@@ -203,6 +208,35 @@ fn ast_rewrite_create_connection_options_0_78_0(
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog
 // ****************************************************************************
+
+/// Grant SELECT on all progress sources to the mz_support role.
+fn mz_support_read_progress_sources(
+    txn: &mut Transaction<'_>,
+    conn_catalog: &ConnCatalog,
+) -> Result<(), anyhow::Error> {
+    let mut updated_items = BTreeMap::new();
+    for mut item in txn.loaded_items() {
+        let catalog_item = conn_catalog.get_item(&item.id);
+        if catalog_item.is_progress_source() {
+            let privileges = catalog_item.privileges();
+            match privileges.get_acl_item(&MZ_SUPPORT_ROLE_ID, &catalog_item.owner_id()) {
+                Some(acl_item) if acl_item.acl_mode.contains(AclMode::SELECT) => {}
+                _ => {
+                    let mut new_privileges = privileges.clone();
+                    new_privileges.grant(MzAclItem {
+                        grantee: MZ_SUPPORT_ROLE_ID,
+                        grantor: catalog_item.owner_id(),
+                        acl_mode: AclMode::SELECT,
+                    });
+                    item.privileges = new_privileges.into_all_values().collect();
+                    updated_items.insert(item.id, item);
+                }
+            }
+        }
+    }
+    txn.update_items(updated_items)?;
+    Ok(())
+}
 
 fn _add_to_audit_log(
     tx: &mut Transaction,

@@ -817,7 +817,7 @@ impl Catalog {
                 .unwrap_or_else(|| "new".to_string());
 
             if !config.skip_migrations {
-                migrate::migrate(&mut state, &mut txn, config.now, config.connection_context)
+                migrate::migrate(&state, &mut txn, config.now, config.connection_context)
                     .await
                     .map_err(|e| {
                         Error::new(ErrorKind::FailedMigration {

@@ -4708,6 +4708,7 @@ materialize,materialize,materialize,public,t,UPDATE,NO,NO
 materialize,materialize,materialize,public,s,SELECT,NO,YES
 materialize,materialize,materialize,public,t,SELECT,NO,YES
 materialize,materialize,materialize,public,v,SELECT,NO,YES
+materialize,mz_support,materialize,public,s_progress,SELECT,NO,YES
 materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_session_history,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_activity_log_redacted,SELECT,NO,YES
@@ -4754,6 +4755,7 @@ materialize,materialize,materialize,public,t,UPDATE,NO,NO
 materialize,materialize,materialize,public,s,SELECT,NO,YES
 materialize,materialize,materialize,public,t,SELECT,NO,YES
 materialize,materialize,materialize,public,v,SELECT,NO,YES
+materialize,mz_support,materialize,public,s_progress,SELECT,NO,YES
 materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_session_history,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_activity_log_redacted,SELECT,NO,YES

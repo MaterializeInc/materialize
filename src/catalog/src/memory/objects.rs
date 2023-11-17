@@ -791,6 +791,17 @@ impl CatalogItem {
         }
     }
 
+    /// Reports whether this catalog entry is a progress source.
+    pub fn is_progress_source(&self) -> bool {
+        matches!(
+            self,
+            CatalogItem::Source(Source {
+                data_source: DataSourceDesc::Progress,
+                ..
+            })
+        )
+    }
+
     /// Collects the identifiers of the objects that were encountered when
     /// resolving names in the item's DDL statement.
     pub fn uses(&self) -> &ResolvedIds {
@@ -1237,6 +1248,11 @@ impl CatalogEntry {
             ),
             _ => false,
         }
+    }
+
+    /// Reports whether this catalog entry is a progress source.
+    pub fn is_progress_source(&self) -> bool {
+        self.item().is_progress_source()
     }
 
     /// Returns the `GlobalId` of all of this entry's subsources.
@@ -1953,6 +1969,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn is_subsource(&self) -> bool {
         self.is_subsource()
+    }
+
+    fn is_progress_source(&self) -> bool {
+        self.is_progress_source()
     }
 
     fn subsources(&self) -> BTreeSet<GlobalId> {
