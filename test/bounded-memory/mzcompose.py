@@ -379,7 +379,7 @@ SCENARIOS = [
             """
         ),
         materialized_memory="10Gb",
-        clusterd_memory="6.1Gb",
+        clusterd_memory="7.1Gb",
     ),
     KafkaScenario(
         name="upsert-index-hydration",
