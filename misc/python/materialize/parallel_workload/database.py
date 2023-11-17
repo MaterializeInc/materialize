@@ -37,12 +37,13 @@ from materialize.util import naughty_strings
 MAX_COLUMNS = 10
 MAX_INCLUDE_HEADERS = 5
 MAX_ROWS = 100
-MAX_CLUSTERS = 10
-MAX_CLUSTER_REPLICAS = 4
+MAX_CLUSTERS = 5
+MAX_CLUSTER_REPLICAS = 2
 MAX_DBS = 10
 MAX_SCHEMAS = 20
-MAX_TABLES = 100
+MAX_TABLES = 40
 MAX_VIEWS = 100
+MAX_INDEXES = 100
 MAX_ROLES = 100
 MAX_WEBHOOK_SOURCES = 20
 MAX_KAFKA_SOURCES = 20
@@ -224,8 +225,6 @@ class Table(DBObject):
         query += ",\n    ".join(column.create() for column in self.columns)
         query += ")"
         exe.execute(query)
-        query = f"CREATE DEFAULT INDEX ON {self}"
-        exe.execute(query)
 
 
 class View(DBObject):
@@ -329,8 +328,6 @@ class View(DBObject):
             else:
                 query += " ON TRUE"
 
-        exe.execute(query)
-        query = f"CREATE DEFAULT INDEX ON {self}"
         exe.execute(query)
 
 
@@ -780,7 +777,7 @@ class Database:
             Cluster(
                 i,
                 managed=rng.choice([True, False]),
-                size=rng.choice(["1", "2", "4"]),
+                size=rng.choice(["1", "2"]),
                 replication_factor=1,
                 introspection_interval=rng.choice(["0", "1s", "10s"]),
             )

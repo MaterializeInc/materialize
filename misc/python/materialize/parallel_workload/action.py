@@ -29,6 +29,7 @@ from materialize.parallel_workload.database import (
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
     MAX_DBS,
+    MAX_INDEXES,
     MAX_KAFKA_SINKS,
     MAX_KAFKA_SOURCES,
     MAX_POSTGRES_SOURCES,
@@ -252,7 +253,11 @@ class SQLsmithAction(Action):
                         capture_stderr=True,
                         rm=True,
                     )
-                    data = json.loads(result.stdout)
+                    try:
+                        data = json.loads(result.stdout)
+                    except:
+                        print(f"Loading json failed: {result.stdout}")
+                        raise
                     self.queries.extend(data["queries"])
                 except:
                     if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
@@ -396,6 +401,9 @@ class CreateIndexAction(Action):
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
+        if len(exe.db.indexes) >= MAX_INDEXES:
+            return
+
         obj = self.rng.choice(exe.db.db_objects())
         columns = self.rng.sample(obj.columns, len(obj.columns))
         columns_str = "_".join(column.name() for column in columns)
@@ -433,7 +441,7 @@ class DropIndexAction(Action):
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> None:
-        if len(exe.db.tables) > MAX_TABLES:
+        if len(exe.db.tables) >= MAX_TABLES:
             return
         table_id = exe.db.table_id
         exe.db.table_id += 1
@@ -526,7 +534,7 @@ class RenameSinkAction(Action):
 class CreateDatabaseAction(Action):
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
-            if len(exe.db.dbs) > MAX_DBS:
+            if len(exe.db.dbs) >= MAX_DBS:
                 return
             db_id = exe.db.db_id
             exe.db.db_id += 1
@@ -555,7 +563,7 @@ class DropDatabaseAction(Action):
 class CreateSchemaAction(Action):
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
-            if len(exe.db.schemas) > MAX_SCHEMAS:
+            if len(exe.db.schemas) >= MAX_SCHEMAS:
                 return
             schema_id = exe.db.schema_id
             exe.db.schema_id += 1
@@ -663,7 +671,7 @@ class CommitRollbackAction(Action):
 class CreateViewAction(Action):
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
-            if len(exe.db.views) > MAX_VIEWS:
+            if len(exe.db.views) >= MAX_VIEWS:
                 return
             view_id = exe.db.view_id
             exe.db.view_id += 1
@@ -717,7 +725,7 @@ class DropViewAction(Action):
 class CreateRoleAction(Action):
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
-            if len(exe.db.roles) > MAX_ROLES:
+            if len(exe.db.roles) >= MAX_ROLES:
                 return
             role_id = exe.db.role_id
             exe.db.role_id += 1
@@ -751,15 +759,15 @@ class DropRoleAction(Action):
 class CreateClusterAction(Action):
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
-            if len(exe.db.clusters) > MAX_CLUSTERS:
+            if len(exe.db.clusters) >= MAX_CLUSTERS:
                 return
             cluster_id = exe.db.cluster_id
             exe.db.cluster_id += 1
         cluster = Cluster(
             cluster_id,
             managed=self.rng.choice([True, False]),
-            size=self.rng.choice(["1", "2", "4"]),
-            replication_factor=self.rng.choice([1, 2, 4, 5]),
+            size=self.rng.choice(["1", "2"]),
+            replication_factor=self.rng.choice([1, 2]),
             introspection_interval=self.rng.choice(["0", "1s", "10s"]),
         )
         cluster.create(exe)
@@ -859,7 +867,7 @@ class CreateClusterReplicaAction(Action):
             if not unmanaged_clusters:
                 return
             cluster = self.rng.choice(unmanaged_clusters)
-            if len(cluster.replicas) > MAX_CLUSTER_REPLICAS:
+            if len(cluster.replicas) >= MAX_CLUSTER_REPLICAS:
                 return
             replica = ClusterReplica(
                 cluster.replica_id,
@@ -906,11 +914,11 @@ class GrantPrivilegesAction(Action):
             if not exe.db.roles:
                 return
             role = self.rng.choice(exe.db.roles)
-        privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
-        tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
-        table = self.rng.choice(tables_views)
-        query = f"GRANT {privilege} ON {table} TO {role}"
-        exe.execute(query)
+            privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
+            tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
+            table = self.rng.choice(tables_views)
+            query = f"GRANT {privilege} ON {table} TO {role}"
+            exe.execute(query)
 
 
 class RevokePrivilegesAction(Action):
@@ -1110,7 +1118,7 @@ class CreateWebhookSourceAction(Action):
 
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
-            if len(exe.db.webhook_sources) > MAX_WEBHOOK_SOURCES:
+            if len(exe.db.webhook_sources) >= MAX_WEBHOOK_SOURCES:
                 return
             webhook_source_id = exe.db.webhook_source_id
             exe.db.webhook_source_id += 1
@@ -1158,7 +1166,7 @@ class CreateKafkaSourceAction(Action):
 
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
-            if len(exe.db.kafka_sources) > MAX_KAFKA_SOURCES:
+            if len(exe.db.kafka_sources) >= MAX_KAFKA_SOURCES:
                 return
             source_id = exe.db.kafka_source_id
             exe.db.kafka_source_id += 1
@@ -1220,7 +1228,7 @@ class CreatePostgresSourceAction(Action):
             return
 
         with exe.db.lock:
-            if len(exe.db.postgres_sources) > MAX_POSTGRES_SOURCES:
+            if len(exe.db.postgres_sources) >= MAX_POSTGRES_SOURCES:
                 return
             source_id = exe.db.postgres_source_id
             exe.db.postgres_source_id += 1
@@ -1276,22 +1284,22 @@ class CreateKafkaSinkAction(Action):
 
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
-            if len(exe.db.kafka_sinks) > MAX_KAFKA_SINKS:
+            if len(exe.db.kafka_sinks) >= MAX_KAFKA_SINKS:
                 return
             sink_id = exe.db.kafka_sink_id
             exe.db.kafka_sink_id += 1
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
             cluster = self.rng.choice(potential_clusters)
             schema = self.rng.choice(exe.db.schemas)
-        sink = KafkaSink(
-            sink_id,
-            cluster,
-            schema,
-            self.rng.choice(exe.db.db_objects_without_views()),
-            self.rng,
-        )
-        sink.create(exe)
-        exe.db.kafka_sinks.append(sink)
+            sink = KafkaSink(
+                sink_id,
+                cluster,
+                schema,
+                self.rng.choice(exe.db.db_objects_without_views()),
+                self.rng,
+            )
+            sink.create(exe)
+            exe.db.kafka_sinks.append(sink)
 
 
 class DropKafkaSinkAction(Action):
