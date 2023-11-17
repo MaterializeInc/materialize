@@ -1,0 +1,39 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+query T
+SELECT pretty_sql('select 1,2,3')
+----
+SELECT 1, 2, 3;
+
+query T multiline
+SELECT pretty_sql('select 1,2,3', 0)
+----
+SELECT
+    1,
+    2,
+    3;
+EOF
+
+query T
+SELECT pretty_sql('select 1,2,3', 100)
+----
+SELECT 1, 2, 3;
+
+query error db error: ERROR: invalid width
+SELECT pretty_sql('select 1,2,3', -1)
+
+query error db error: ERROR: expected exactly one statement
+SELECT pretty_sql('select 1; select 2')
+
+query error db error: ERROR: expected exactly one statement
+SELECT pretty_sql('')
+
+query error db error: ERROR: expected exactly one statement
+SELECT pretty_sql(';')

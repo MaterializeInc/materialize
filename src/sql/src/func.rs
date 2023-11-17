@@ -3665,6 +3665,13 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "mz_version_num" => Scalar {
             params!() => UnmaterializableFunc::MzVersionNum => Int32, oid::FUNC_MZ_VERSION_NUM_OID;
         },
+        "pretty_sql" => Scalar {
+            params!(String, Int32) => BinaryFunc::PrettySql => String, oid::FUNC_PRETTY_SQL;
+            params!(String) => Operation::unary(|_ecx, s| {
+                let width = HirScalarExpr::literal(Datum::Int32(100), ScalarType::Int32);
+                Ok(s.call_binary(width, BinaryFunc::PrettySql))
+            }) => String, oid::FUNC_PRETTY_SQL_NOWIDTH;
+        },
         "regexp_extract" => Table {
             params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
                 let regex = match regex.into_literal_string() {
