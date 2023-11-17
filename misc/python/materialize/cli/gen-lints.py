@@ -176,6 +176,9 @@ WARN_LINTS = [
     # Implementing `From` gives you `Into` for free, but the reverse is not
     # true.
     "clippy::from_over_into",
+    # Futures get compiled into state machines, which can end up being very large (10's of KB).
+    # It's inefficient to moves these around on the stack, so require that they get boxed.
+    "clippy::large_futures",
 ]
 
 

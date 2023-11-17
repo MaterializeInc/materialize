@@ -73,6 +73,7 @@
 #![warn(clippy::disallowed_macros)]
 #![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
+#![warn(clippy::large_futures)]
 // END LINT CONFIG
 
 // This file does comparison tests between postgres and materialize for the pg_timezone_abbrevs and

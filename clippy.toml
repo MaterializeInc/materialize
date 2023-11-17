@@ -83,3 +83,5 @@ disallowed-types = [
     { path = "std::collections::HashMap", reason = "use `std::collections::BTreeMap` or `mz_ore::collections::HashMap` instead" },
     { path = "std::collections::HashSet", reason = "use `std::collections::BTreeSet` or `mz_ore::collections::HashSet` instead" },
 ]
+
+future-size-threshold = 8192

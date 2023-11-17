@@ -18,7 +18,8 @@ use std::time::Instant;
 use anyhow::{anyhow, bail};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::future::BoxFuture;
+use futures_util::{stream, FutureExt, StreamExt, TryStreamExt};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{Blob, Consensus, ExternalError};
@@ -228,125 +229,128 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
 }
 
 /// Manually completes all fueled compactions in a shard.
-pub async fn force_compaction<K, V, T, D>(
+pub fn force_compaction<'a, K, V, T, D>(
     cfg: PersistConfig,
-    metrics_registry: &MetricsRegistry,
+    metrics_registry: &'a MetricsRegistry,
     shard_id: ShardId,
-    consensus_uri: &str,
-    blob_uri: &str,
+    consensus_uri: &'a str,
+    blob_uri: &'a str,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     commit: bool,
-) -> Result<(), anyhow::Error>
+) -> BoxFuture<'a, Result<(), anyhow::Error>>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
-    let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
-    let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
+    async move {
+        let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
+        let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
+        let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
 
-    let mut machine = make_typed_machine::<K, V, T, D>(
-        &cfg,
-        consensus,
-        Arc::clone(&blob),
-        Arc::clone(&metrics),
-        shard_id,
-        commit,
-    )
-    .await?;
+        let mut machine = make_typed_machine::<K, V, T, D>(
+            &cfg,
+            consensus,
+            Arc::clone(&blob),
+            Arc::clone(&metrics),
+            shard_id,
+            commit,
+        )
+        .await?;
 
-    let writer_id = WriterId::new();
+        let writer_id = WriterId::new();
 
-    let mut attempt = 0;
-    'outer: loop {
-        machine.applier.fetch_and_update_state(None).await;
-        let reqs = machine.applier.all_fueled_merge_reqs();
-        info!("attempt {}: got {} compaction reqs", attempt, reqs.len());
-        for (idx, req) in reqs.clone().into_iter().enumerate() {
-            let req = CompactReq {
-                shard_id,
-                desc: req.desc,
-                inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
-            };
-            let parts = req.inputs.iter().map(|x| x.parts.len()).sum::<usize>();
-            let bytes = req
-                .inputs
-                .iter()
-                .flat_map(|x| x.parts.iter().map(|x| x.encoded_size_bytes))
-                .sum::<usize>();
-            let start = Instant::now();
-            info!(
-                "attempt {} req {}: compacting {} batches {} in parts {} totaling bytes: lower={:?} upper={:?} since={:?}",
-                attempt,
-                idx,
-                req.inputs.len(),
-                parts,
-                bytes,
-                req.desc.lower().elements(),
-                req.desc.upper().elements(),
-                req.desc.since().elements(),
-            );
-            if !commit {
-                info!("skipping compaction because --commit is not set");
-                continue;
-            }
-            let schemas = Schemas {
-                key: Arc::clone(&key_schema),
-                val: Arc::clone(&val_schema),
-            };
-
-            let res = Compactor::<K, V, T, D>::compact(
-                CompactConfig::new(&cfg, &writer_id),
-                Arc::clone(&blob),
-                Arc::clone(&metrics),
-                Arc::clone(&machine.applier.shard_metrics),
-                Arc::new(IsolatedRuntime::new()),
-                req,
-                schemas,
-            )
-            .await?;
-            info!(
-                "attempt {} req {}: compacted into {} parts {} bytes in {:?}",
-                attempt,
-                idx,
-                res.output.parts.len(),
-                res.output
-                    .parts
+        let mut attempt = 0;
+        'outer: loop {
+            machine.applier.fetch_and_update_state(None).await;
+            let reqs = machine.applier.all_fueled_merge_reqs();
+            info!("attempt {}: got {} compaction reqs", attempt, reqs.len());
+            for (idx, req) in reqs.clone().into_iter().enumerate() {
+                let req = CompactReq {
+                    shard_id,
+                    desc: req.desc,
+                    inputs: req.inputs.iter().map(|b| b.batch.clone()).collect(),
+                };
+                let parts = req.inputs.iter().map(|x| x.parts.len()).sum::<usize>();
+                let bytes = req
+                    .inputs
                     .iter()
-                    .map(|x| x.encoded_size_bytes)
-                    .sum::<usize>(),
-                start.elapsed(),
-            );
-            let (apply_res, maintenance) = machine
-                .merge_res(&FueledMergeRes { output: res.output })
-                .await;
-            if !maintenance.is_empty() {
-                info!("ignoring non-empty requested maintenance: {maintenance:?}")
-            }
-            match apply_res {
-                ApplyMergeResult::AppliedExact | ApplyMergeResult::AppliedSubset => {
-                    info!("attempt {} req {}: {:?}", attempt, idx, apply_res);
+                    .flat_map(|x| x.parts.iter().map(|x| x.encoded_size_bytes))
+                    .sum::<usize>();
+                let start = Instant::now();
+                info!(
+                    "attempt {} req {}: compacting {} batches {} in parts {} totaling bytes: lower={:?} upper={:?} since={:?}",
+                    attempt,
+                    idx,
+                    req.inputs.len(),
+                    parts,
+                    bytes,
+                    req.desc.lower().elements(),
+                    req.desc.upper().elements(),
+                    req.desc.since().elements(),
+                );
+                if !commit {
+                    info!("skipping compaction because --commit is not set");
+                    continue;
                 }
-                ApplyMergeResult::NotAppliedInvalidSince
-                | ApplyMergeResult::NotAppliedNoMatch
-                | ApplyMergeResult::NotAppliedTooManyUpdates => {
-                    info!(
-                        "attempt {} req {}: {:?} trying again",
-                        attempt, idx, apply_res
-                    );
-                    attempt += 1;
-                    continue 'outer;
+                let schemas = Schemas {
+                    key: Arc::clone(&key_schema),
+                    val: Arc::clone(&val_schema),
+                };
+
+                let res = Compactor::<K, V, T, D>::compact(
+                    CompactConfig::new(&cfg, &writer_id),
+                    Arc::clone(&blob),
+                    Arc::clone(&metrics),
+                    Arc::clone(&machine.applier.shard_metrics),
+                    Arc::new(IsolatedRuntime::new()),
+                    req,
+                    schemas,
+                )
+                .await?;
+                info!(
+                    "attempt {} req {}: compacted into {} parts {} bytes in {:?}",
+                    attempt,
+                    idx,
+                    res.output.parts.len(),
+                    res.output
+                        .parts
+                        .iter()
+                        .map(|x| x.encoded_size_bytes)
+                        .sum::<usize>(),
+                    start.elapsed(),
+                );
+                let (apply_res, maintenance) = machine
+                    .merge_res(&FueledMergeRes { output: res.output })
+                    .await;
+                if !maintenance.is_empty() {
+                    info!("ignoring non-empty requested maintenance: {maintenance:?}")
+                }
+                match apply_res {
+                    ApplyMergeResult::AppliedExact | ApplyMergeResult::AppliedSubset => {
+                        info!("attempt {} req {}: {:?}", attempt, idx, apply_res);
+                    }
+                    ApplyMergeResult::NotAppliedInvalidSince
+                    | ApplyMergeResult::NotAppliedNoMatch
+                    | ApplyMergeResult::NotAppliedTooManyUpdates => {
+                        info!(
+                            "attempt {} req {}: {:?} trying again",
+                            attempt, idx, apply_res
+                        );
+                        attempt += 1;
+                        continue 'outer;
+                    }
                 }
             }
+            info!("attempt {}: did {} compactions", attempt, reqs.len());
+            let _ = machine.expire_writer(&writer_id).await;
+            info!("expired writer {}", writer_id);
+            return Ok(());
         }
-        info!("attempt {}: did {} compactions", attempt, reqs.len());
-        let _ = machine.expire_writer(&writer_id).await;
-        info!("expired writer {}", writer_id);
-        return Ok(());
     }
+    .boxed()
 }
 
 async fn make_machine(

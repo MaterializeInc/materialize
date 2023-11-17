@@ -81,6 +81,7 @@
 #![warn(clippy::disallowed_macros)]
 #![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
+#![warn(clippy::large_futures)]
 // END LINT CONFIG
 
 use std::path::PathBuf;
