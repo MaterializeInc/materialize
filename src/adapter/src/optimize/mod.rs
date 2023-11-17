@@ -62,7 +62,7 @@ use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::OptimizedMirRelationExpr;
-use mz_repr::explain::ExplainConfig;
+use mz_repr::explain::{trace_plan, ExplainConfig};
 use mz_repr::GlobalId;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
@@ -219,16 +219,19 @@ impl<'a> DataflowBuilder<'a> {
                     continue;
                 }
                 if let CatalogItem::View(view) = &self.catalog.get_entry(&desc.id).item {
-                    let span = tracing::span!(
+                    let _span = tracing::span!(
                         target: "optimizer",
                         tracing::Level::DEBUG,
                         "view",
                         path.segment = desc.id.to_string()
-                    );
-                    desc.plan = span.in_scope(|| {
-                        let mut view_optimizer = view::Optimizer::new(config.clone());
-                        view_optimizer.optimize(view.raw_expr.clone())
-                    })?;
+                    )
+                    .entered();
+
+                    let mut view_optimizer = view::Optimizer::new(config.clone());
+                    desc.plan = view_optimizer.optimize(view.raw_expr.clone())?;
+
+                    // Report the optimized plan under this span.
+                    trace_plan(desc.plan.as_inner());
                 }
             }
         }

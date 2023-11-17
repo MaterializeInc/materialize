@@ -41,7 +41,8 @@ use crate::coord::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
-    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig,
+    OptimizerError,
 };
 
 pub struct Optimizer {
@@ -147,6 +148,24 @@ impl Optimize<Index> for Optimizer {
 
         let mut df_builder = DataflowBuilder::new(state, self.compute_instance.clone());
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
+
+        // In EXPLAIN mode we should configure the dataflow builder to
+        // not consider existing indexes that are identical to the one that
+        // we are currently trying to explain.
+        if self.config.mode == OptimizeMode::Explain {
+            let ignored_indexes = state
+                .get_indexes_on(index.on, self.compute_instance.instance_id())
+                .filter_map(|(idx_id, idx)| {
+                    // Ignore `idx` if it is idential to the `index` we are
+                    // currently trying to optimize.
+                    if idx.on == index.on && idx.keys == index.keys {
+                        Some(idx_id)
+                    } else {
+                        None
+                    }
+                });
+            df_builder.ignore_indexes(ignored_indexes);
+        }
 
         df_builder.import_into_dataflow(&index.on, &mut df_desc)?;
         df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
