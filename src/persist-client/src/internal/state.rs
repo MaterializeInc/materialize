@@ -33,7 +33,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
-use crate::error::{Determinacy, InvalidUsage};
+use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyPartStats};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
@@ -1428,19 +1428,9 @@ pub struct ExpiryMetrics {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Since<T>(pub Antichain<T>);
 
-// When used as an error, Since is determinate.
-impl<T> Determinacy for Since<T> {
-    const DETERMINANT: bool = true;
-}
-
 /// Wrapper for Antichain that represents an Upper
 #[derive(Debug, PartialEq)]
 pub struct Upper<T>(pub Antichain<T>);
-
-// When used as an error, Upper is determinate.
-impl<T> Determinacy for Upper<T> {
-    const DETERMINANT: bool = true;
-}
 
 #[cfg(test)]
 pub(crate) mod tests {
