@@ -168,7 +168,7 @@ where
             match event {
                 ListenEvent::Updates(parts) => {
                     for part in parts {
-                        let fetched_part = self.listen.fetch_batch_part(part).await;
+                        let fetched_part = self.listen.handle.fetch_batch_part(part).await;
                         let updates = fetched_part.collect::<Vec<_>>();
                         if !updates.is_empty() {
                             ret.push(ListenEvent::Updates(updates));
@@ -183,7 +183,7 @@ where
 
     /// Fetches the contents of `part` and returns its lease.
     pub async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
-        self.listen.fetch_batch_part(part).await
+        self.listen.handle.fetch_batch_part(part).await
     }
 
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
@@ -409,7 +409,7 @@ where
         let (parts, progress) = self.next(None).await;
         let mut ret = Vec::with_capacity(parts.len() + 1);
         for part in parts {
-            let fetched_part = self.fetch_batch_part(part).await;
+            let fetched_part = self.handle.fetch_batch_part(part).await;
             let updates = fetched_part.collect::<Vec<_>>();
             if !updates.is_empty() {
                 ret.push(ListenEvent::Updates(updates));
@@ -417,25 +417,6 @@ where
         }
         ret.push(ListenEvent::Progress(progress));
         ret
-    }
-
-    /// Fetches the contents of `part` and returns its lease.
-    ///
-    /// This is broken out into its own function to provide a trivial means for
-    /// [`Subscribe`], which contains a [`Listen`], to fetch batches.
-    async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
-        let fetched_part = fetch_leased_part(
-            &part,
-            self.handle.blob.as_ref(),
-            Arc::clone(&self.handle.metrics),
-            &self.handle.metrics.read.listen,
-            &self.handle.machine.applier.shard_metrics,
-            Some(&self.handle.reader_id),
-            self.handle.schemas.clone(),
-        )
-        .await;
-        self.handle.process_returned_leased_part(part);
-        fetched_part
     }
 
     /// Politely expires this listen, releasing its lease.
@@ -609,6 +590,30 @@ where
     /// This will always be greater or equal to the shard-global `since`.
     pub fn since(&self) -> &Antichain<T> {
         &self.since
+    }
+
+    /// Fetches the contents of `part` and returns its lease.
+    ///
+    /// This is broken out into its own function to provide a trivial means for
+    /// [`Subscribe`], which contains a [`Listen`], to fetch batches.
+    async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
+        let fetched_part = fetch_leased_part(
+            &part,
+            self.blob.as_ref(),
+            Arc::clone(&self.metrics),
+            &self.metrics.read.listen,
+            &self.machine.applier.shard_metrics,
+            self.schemas.clone(),
+        )
+        .await
+        .unwrap_or_else(|| {
+            panic!(
+                "{} could not fetch batch part {}",
+                self.reader_id, &part.key
+            )
+        });
+        self.process_returned_leased_part(part);
+        fetched_part
     }
 
     /// Forwards the since frontier of this handle, giving up the ability to
@@ -1027,17 +1032,7 @@ where
         let mut last_consolidate_len = 0;
         let mut is_consolidated = true;
         for part in snap {
-            let fetched_part = fetch_leased_part(
-                &part,
-                self.blob.as_ref(),
-                Arc::clone(&self.metrics),
-                &self.metrics.read.snapshot,
-                &self.machine.applier.shard_metrics,
-                Some(&self.reader_id),
-                self.schemas.clone(),
-            )
-            .await;
-            self.process_returned_leased_part(part);
+            let fetched_part = self.fetch_batch_part(part).await;
             contents.extend(fetched_part);
             // NB: FetchedPart streaming consolidates its output, but it's possible
             // that decoding introduces duplicates again.
@@ -1146,30 +1141,12 @@ where
     pub async fn snapshot_and_stream(
         &mut self,
         as_of: Antichain<T>,
-    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)> + '_, Since<T>>
+    {
         let snap = self.snapshot(as_of).await?;
-
-        let blob = Arc::clone(&self.blob);
-        let metrics = Arc::clone(&self.metrics);
-        let snapshot_metrics = self.metrics.read.snapshot.clone();
-        let shard_metrics = Arc::clone(&self.machine.applier.shard_metrics);
-        let reader_id = self.reader_id.clone();
-        let schemas = self.schemas.clone();
-        let mut lease_returner = self.lease_returner.clone();
         let stream = async_stream::stream! {
             for part in snap {
-                let mut fetched_part = fetch_leased_part(
-                    &part,
-                    blob.as_ref(),
-                    Arc::clone(&metrics),
-                    &snapshot_metrics,
-                    &shard_metrics,
-                    Some(&reader_id),
-                    schemas.clone(),
-                )
-                .await;
-                lease_returner.return_leased_part(part);
-
+                let mut fetched_part = self.fetch_batch_part(part).await;
                 while let Some(next) = fetched_part.next() {
                     yield next;
                 }

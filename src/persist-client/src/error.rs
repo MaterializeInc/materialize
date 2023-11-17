@@ -11,9 +11,11 @@
 
 use std::fmt::Debug;
 
+use mz_persist::location::SeqNo;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::internal::paths::PartialBatchKey;
+use crate::read::LeasedReaderId;
 use crate::ShardId;
 
 /// An error resulting from invalid usage of the API.
@@ -71,6 +73,14 @@ pub enum InvalidUsage<T> {
     },
     /// The requested codecs don't match the actual ones in durable storage.
     CodecMismatch(Box<CodecMismatch>),
+    /// The client has attempted to fetch a part with an expired lease...
+    /// using an API, like BatchFetcher, which does not itself hold a lease.
+    LeaseExpired {
+        /// The reader who was expected to be holding the lease.
+        reader_id: LeasedReaderId,
+        /// The seqno that the lease was supposed to be held back to.
+        leased_seqno: SeqNo,
+    },
 }
 
 impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
@@ -111,6 +121,15 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
                 handle_shard,
             } => write!(f, "batch was from {} not {}", batch_shard, handle_shard),
             InvalidUsage::CodecMismatch(err) => std::fmt::Display::fmt(err, f),
+            InvalidUsage::LeaseExpired {
+                reader_id,
+                leased_seqno,
+            } => {
+                write!(
+                    f,
+                    "lease for part from {reader_id} at {leased_seqno} was expired"
+                )
+            }
         }
     }
 }

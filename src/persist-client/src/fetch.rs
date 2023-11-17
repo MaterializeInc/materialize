@@ -70,10 +70,7 @@ where
         LeasedBatchPart::from(x, Arc::clone(&self.metrics))
     }
 
-    /// Trade in an exchange-able [LeasedBatchPart] for the data it represents.
-    ///
-    /// Note to check the `LeasedBatchPart` documentation for how to handle the
-    /// returned value.
+    /// Fetch the data for a particular `LeasedBatchPart`.
     pub async fn fetch_leased_part(
         &self,
         part: &LeasedBatchPart<T>,
@@ -86,17 +83,22 @@ where
             });
         }
 
-        let fetched_part = fetch_leased_part(
+        fetch_leased_part(
             &part,
             self.blob.as_ref(),
             Arc::clone(&self.metrics),
             &self.metrics.read.batch_fetcher,
             &self.shard_metrics,
-            None,
             self.schemas.clone(),
         )
-        .await;
-        Ok(fetched_part)
+        .await
+        .ok_or_else(|| {
+            // TODO: keep a copy of state to check the current state of the lease against?
+            InvalidUsage::LeaseExpired {
+                reader_id: part.reader_id.clone(),
+                leased_seqno: part.leased_seqno.expect("fetching leased part"),
+            }
+        })
     }
 }
 
@@ -180,9 +182,8 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     metrics: Arc<Metrics>,
     read_metrics: &ReadMetrics,
     shard_metrics: &ShardMetrics,
-    reader_id: Option<&LeasedReaderId>,
     schemas: Schemas<K, V>,
-) -> FetchedPart<K, V, T, D>
+) -> Option<FetchedPart<K, V, T, D>>
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -200,24 +201,8 @@ where
         &part.key,
         &part.desc,
     )
-    .await
-    .unwrap_or_else(|| {
-        // Ideally, readers should never encounter a missing blob. They place a seqno
-        // hold as they consume their snapshot/listen, preventing any blobs they need
-        // from being deleted by garbage collection, and all blob implementations are
-        // linearizable so there should be no possibility of stale reads.
-        //
-        // If we do have a bug and a reader does encounter a missing blob, the state
-        // cannot be recovered, and our best option is to panic and retry the whole
-        // process.
-        panic!(
-            "{} could not fetch batch part {}",
-            reader_id
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "batch fetcher".to_string()),
-            &part.key
-        )
-    });
+    .await?;
+
     let fetched_part = FetchedPart {
         metrics,
         ts_filter,
@@ -232,7 +217,7 @@ where
         _phantom: PhantomData,
     };
 
-    fetched_part
+    Some(fetched_part)
 }
 
 pub(crate) async fn fetch_batch_part<T>(

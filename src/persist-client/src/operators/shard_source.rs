@@ -577,7 +577,7 @@ where
                     let fetched = fetcher
                         .fetch_leased_part(&leased_part)
                         .await
-                        .expect("shard_id should match across all workers");
+                        .expect("unable to fetch part; is the read handle still active?");
                     {
                         // Do very fine-grained output activation/session
                         // creation to ensure that we don't hold activated
