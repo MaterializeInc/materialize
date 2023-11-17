@@ -2405,6 +2405,7 @@ impl<'a> Parser<'a> {
         Ok(
             match self.expect_one_of_keywords(&[
                 ACCESS,
+                ASSUME,
                 AVAILABILITY,
                 AWS,
                 BROKER,
@@ -2432,6 +2433,17 @@ impl<'a> Parser<'a> {
                     self.expect_keywords(&[KEY, ID])?;
                     ConnectionOptionName::AccessKeyId
                 }
+                ASSUME => {
+                    self.expect_keyword(ROLE)?;
+                    match self.expect_one_of_keywords(&[ARN, SESSION])? {
+                        ARN => ConnectionOptionName::AssumeRoleArn,
+                        SESSION => {
+                            self.expect_keyword(NAME)?;
+                            ConnectionOptionName::AssumeRoleSessionName
+                        }
+                        _ => unreachable!(),
+                    }
+                }
                 AVAILABILITY => {
                     self.expect_keyword(ZONES)?;
                     ConnectionOptionName::AvailabilityZones
@@ -2456,10 +2468,6 @@ impl<'a> Parser<'a> {
                     ConnectionOptionName::SecurityProtocol
                 }
                 REGION => ConnectionOptionName::Region,
-                ROLE => {
-                    self.expect_keyword(ARN)?;
-                    ConnectionOptionName::RoleArn
-                }
                 SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
                     MECHANISMS => ConnectionOptionName::SaslMechanisms,
                     PASSWORD => ConnectionOptionName::SaslPassword,

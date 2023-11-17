@@ -477,6 +477,7 @@ name
 mz_array_types
 mz_audit_events
 mz_aws_privatelink_connections
+mz_aws_connections
 mz_base_types
 mz_clusters
 mz_cluster_replicas

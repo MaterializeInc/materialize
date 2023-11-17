@@ -20,7 +20,9 @@ use mz_sql_parser::ast::{
     ConnectionOption, ConnectionOptionName, CreateConnectionType, KafkaBroker,
     KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
 };
-use mz_storage_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
+use mz_storage_types::connections::aws::{
+    AwsAssumeRole, AwsAuth, AwsConfig, AwsCredentials, MaterializePrincipal,
+};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
@@ -28,6 +30,7 @@ use mz_storage_types::connections::{
     StringOrSecret, TlsIdentity, Tunnel,
 };
 
+use crate::catalog::{CatalogError, CatalogItemType};
 use crate::names::Aug;
 use crate::plan::statement::{Connection, ResolvedItemName};
 use crate::plan::with_options::{self, TryFromValue};
@@ -36,6 +39,8 @@ use crate::plan::{PlanError, StatementContext};
 generate_extracted_config!(
     ConnectionOption,
     (AccessKeyId, StringOrSecret),
+    (AssumeRoleArn, String),
+    (AssumeRoleSessionName, String),
     (AvailabilityZones, Vec<String>),
     (AwsPrivatelink, with_options::Object),
     (Broker, Vec<KafkaBroker<Aug>>),
@@ -47,7 +52,6 @@ generate_extracted_config!(
     (Port, u16),
     (ProgressTopic, String),
     (Region, String),
-    (RoleArn, String),
     (SaslMechanisms, String),
     (SaslPassword, with_options::Secret),
     (SaslUsername, StringOrSecret),
@@ -88,7 +92,8 @@ pub(super) fn validate_options_per_connection_type(
             Token,
             Endpoint,
             Region,
-            RoleArn,
+            AssumeRoleArn,
+            AssumeRoleSessionName,
         ]
         .as_slice(),
         CreateConnectionType::AwsPrivatelink => &[AvailabilityZones, Port, ServiceName],
@@ -164,17 +169,102 @@ impl ConnectionOptionExtracted {
 
         let connection: Connection<ReferencedConnection> = match connection_type {
             CreateConnectionType::Aws => {
+                let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
+                    (Some(access_key_id), Some(secret_access_key), session_token) => {
+                        Some(AwsAuth::Credentials(AwsCredentials {
+                            access_key_id,
+                            secret_access_key: secret_access_key.into(),
+                            session_token,
+                        }))
+                    }
+                    (None, Some(_), _) => {
+                        return Err(PlanError::MissingRequiredOptions {
+                            option_names: vec![ConnectionOptionName::AccessKeyId.to_string()],
+                            item_type: CatalogItemType::Connection,
+                            item_sub_type: Some("AWS Credentials".to_string()),
+                        })
+                    }
+                    (Some(_), None, _) => {
+                        return Err(PlanError::MissingRequiredOptions {
+                            option_names: vec![ConnectionOptionName::SecretAccessKey.to_string()],
+                            item_type: CatalogItemType::Connection,
+                            item_sub_type: Some("AWS Credentials".to_string()),
+                        })
+                    }
+                    (None, None, Some(_)) => {
+                        return Err(PlanError::MissingRequiredOptions {
+                            option_names: vec![
+                                ConnectionOptionName::AccessKeyId.to_string(),
+                                ConnectionOptionName::SecretAccessKey.to_string(),
+                            ],
+                            item_type: CatalogItemType::Connection,
+                            item_sub_type: Some("AWS Credentials".to_string()),
+                        })
+                    }
+                    _ => None,
+                };
+
+                let assume_role = match (self.assume_role_arn, self.assume_role_session_name) {
+                    (Some(arn), session_name) => {
+                        let mz_arn =
+                            scx.catalog.aws_external_connection_role().ok_or_else(|| {
+                                PlanError::Catalog(CatalogError::MissingState(
+                                    "AWS external connection role".to_string(),
+                                ))
+                            })?;
+                        let external_id_prefix =
+                            scx.catalog.aws_external_id_prefix().ok_or_else(|| {
+                                PlanError::Catalog(CatalogError::MissingState(
+                                    "AWS External ID prefix".to_string(),
+                                ))
+                            })?;
+                        Some(AwsAuth::AssumeRole(AwsAssumeRole {
+                            arn,
+                            session_name,
+                            mz_principal: MaterializePrincipal {
+                                arn: mz_arn,
+                                external_id_prefix,
+                            },
+                        }))
+                    }
+                    (None, Some(_)) => {
+                        return Err(PlanError::MissingRequiredOptions {
+                            option_names: vec![ConnectionOptionName::AssumeRoleArn.to_string()],
+                            item_type: CatalogItemType::Connection,
+                            item_sub_type: Some("AWS AssumeRole".to_string()),
+                        })
+                    }
+                    _ => None,
+                };
+
+                if credentials.is_some() && assume_role.is_some() {
+                    return Err(PlanError::ConflictingOptions {
+                        option_names: vec![
+                            format!(
+                                "{} and {}",
+                                ConnectionOptionName::AccessKeyId,
+                                ConnectionOptionName::SecretAccessKey
+                            ),
+                            ConnectionOptionName::AssumeRoleArn.to_string(),
+                        ],
+                        item_type: CatalogItemType::Connection,
+                        item_sub_type: Some(CreateConnectionType::Aws.to_string()),
+                    });
+                }
+
                 Connection::Aws(AwsConfig {
-                    credentials: AwsCredentials {
-                        access_key_id: self
-                            .access_key_id
-                            .ok_or_else(|| sql_err!("ACCESS KEY ID option is required"))?,
-                        secret_access_key: self
-                            .secret_access_key
-                            .ok_or_else(|| sql_err!("SECRET ACCESS KEY option is required"))?
-                            .into(),
-                        session_token: self.token,
-                    },
+                    auth: credentials.or(assume_role).ok_or_else(|| {
+                        PlanError::MissingRequiredOptions {
+                            option_names: vec![format!(
+                                "{} and {} or {}",
+                                ConnectionOptionName::AccessKeyId,
+                                ConnectionOptionName::SecretAccessKey,
+                                ConnectionOptionName::AssumeRoleArn
+                            )],
+                            item_type: CatalogItemType::Connection,
+                            item_sub_type: Some(CreateConnectionType::Aws.to_string()),
+                        }
+                    })?,
                     endpoint: match self.endpoint {
                         // TODO(benesch): this should not treat an empty endpoint as equivalent to a `NULL`
                         // endpoint, but making that change now would break testdrive. AWS connections are
@@ -184,7 +274,6 @@ impl ConnectionOptionExtracted {
                         _ => None,
                     },
                     region: self.region,
-                    role: self.role_arn.map(|arn| AwsAssumeRole { arn }),
                 })
             }
             CreateConnectionType::AwsPrivatelink => {

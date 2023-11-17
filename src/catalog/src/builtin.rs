@@ -2648,6 +2648,27 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| Bui
     sensitivity: DataSensitivity::Public,
 });
 
+pub static MZ_AWS_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_aws_connections",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("endpoint", ScalarType::String.nullable(true))
+        .with_column("region", ScalarType::String.nullable(true))
+        .with_column("access_key_id", ScalarType::String.nullable(true))
+        .with_column("access_key_id_secret_id", ScalarType::String.nullable(true))
+        .with_column("assume_role_arn", ScalarType::String.nullable(true))
+        .with_column(
+            "assume_role_session_name",
+            ScalarType::String.nullable(true),
+        )
+        .with_column("principal", ScalarType::String.nullable(true))
+        .with_column("external_id", ScalarType::String.nullable(true))
+        .with_column("example_trust_policy", ScalarType::Jsonb.nullable(true)),
+    is_retained_metrics_object: false,
+    sensitivity: DataSensitivity::Public,
+});
+
 pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_metrics",
     // TODO[btv] - make this public once we work out whether and how to fuse it with
@@ -6187,6 +6208,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_STORAGE_USAGE_BY_SHARD),
         Builtin::Table(&MZ_EGRESS_IPS),
         Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),
+        Builtin::Table(&MZ_AWS_CONNECTIONS),
         Builtin::Table(&MZ_SUBSCRIPTIONS),
         Builtin::Table(&MZ_SESSIONS),
         Builtin::Table(&MZ_DEFAULT_PRIVILEGES),

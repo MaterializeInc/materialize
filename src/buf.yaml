@@ -43,6 +43,8 @@ breaking:
     - persist-types/src/stats.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
+    # reason: currently does not require backward-compatibility
+    - storage-types/src/connections/aws.proto
 lint:
   use:
     - DEFAULT

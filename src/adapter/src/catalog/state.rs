@@ -129,6 +129,7 @@ pub struct CatalogState {
     #[serde(skip)]
     pub(super) system_configuration: SystemVars,
     pub(super) egress_ips: Vec<Ipv4Addr>,
+    #[serde(skip)] // Skipping, the aws principal context is not modifed during any DDL operation
     pub(super) aws_principal_context: Option<AwsPrincipalContext>,
     pub(super) aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     pub(super) http_host_name: Option<String>,

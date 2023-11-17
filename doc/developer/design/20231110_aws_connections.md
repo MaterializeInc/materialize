@@ -127,7 +127,7 @@ CREATE TABLE mz_internal.mz_aws_connections (
     -- The value of the `AWS ACCESS KEY ID` option, if specified as a string.
     -- `NULL` otherwise.
     access_key_id text,
-    -- The value of the `AWS ACCESS KEY ID` option, if specified as a secret.
+    -- The ID of the `AWS ACCESS KEY ID` secret in `mz_secrets`, if specified as a secret.
     -- `NULL` otherwise.
     access_key_id_secret_id text,
     -- The value of the `ASSUME ROLE ARN` option, if specified. `NULL` otherwise.
