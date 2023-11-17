@@ -1096,15 +1096,6 @@ impl<'a> Transaction<'a> {
         self.system_configurations.delete(|_k, _v| true);
     }
 
-    pub fn remove_timestamp(&mut self, timeline: Timeline) {
-        let timeline_str = timeline.to_string();
-        let prev = self
-            .timestamps
-            .set(TimestampKey { id: timeline_str }, None)
-            .expect("cannot have uniqueness violation");
-        assert!(prev.is_some());
-    }
-
     pub(crate) fn insert_config(&mut self, key: String, value: u64) -> Result<(), CatalogError> {
         match self
             .configs
