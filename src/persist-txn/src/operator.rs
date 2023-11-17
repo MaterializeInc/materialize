@@ -34,7 +34,7 @@ use timely::worker::Worker;
 use timely::{Data, WorkerConfig};
 use tracing::{debug, trace};
 
-use crate::txn_read::{DataListenNext, TxnsCache};
+use crate::txn_read::{DataListenNext, TxnsRead};
 use crate::{TxnsCodec, TxnsCodecDefault};
 
 /// An operator for translating physical data shard frontiers into logical ones.
@@ -109,10 +109,11 @@ where
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
+        // TODO(txn): Share a single TxnsRead process-wide.
+        let txns_read = TxnsRead::start::<C>(client.clone(), txns_id);
 
-        txns_cache.update_gt(&as_of).await;
-        let snap = txns_cache.data_snapshot(data_id, as_of.clone());
+        txns_read.update_gt(as_of.clone()).await;
+        let snap = txns_read.data_snapshot(data_id, as_of.clone()).await;
         let data_write = client
             .open_writer::<K, V, T, D>(
                 data_id,
@@ -188,16 +189,19 @@ where
             // physically written to the data shard. Query the txns shard to
             // find out what to do next given our current progress.
             loop {
-                txns_cache.update_ge(&output_progress_exclusive).await;
-                txns_cache.compact_to(&output_progress_exclusive);
-                let data_listen_next =
-                    txns_cache.data_listen_next(&data_id, output_progress_exclusive.clone());
+                txns_read.update_ge(output_progress_exclusive.clone()).await;
+                // TODO(txn): Hook compaction up TxnsRead, probably a
+                // capabilities based system.
+                //
+                // txns_read.compact_to(&output_progress_exclusive);
+                let data_listen_next = txns_read
+                    .data_listen_next(data_id, output_progress_exclusive.clone())
+                    .await;
                 debug!(
-                    "txns_progress({}) {:.9} data_listen_next at {:?}({:?}): {:?}",
+                    "txns_progress({}) {:.9} data_listen_next at {:?}: {:?}",
                     name,
                     data_id.to_string(),
                     read_data_to,
-                    txns_cache.progress_exclusive,
                     data_listen_next,
                 );
                 match data_listen_next {
@@ -209,7 +213,7 @@ where
                     // after this update_gt call), we're guaranteed to get an
                     // answer.
                     DataListenNext::WaitForTxnsProgress => {
-                        txns_cache.update_gt(&output_progress_exclusive).await;
+                        txns_read.update_gt(output_progress_exclusive.clone()).await;
                         continue;
                     }
                     // The data shard got a write! Loop back above and pass
