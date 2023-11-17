@@ -357,7 +357,6 @@ pub(crate) enum SerdeLeasedBatchPartMetadata {
 ///
 /// `LeasedBatchPart` may only be dropped if it:
 /// - Does not have a leased `SeqNo (i.e. `self.leased_seqno.is_none()`)
-/// - Is consumed through `self.get_droppable_part()`
 ///
 /// In any other circumstance, dropping `LeasedBatchPart` panics.
 #[derive(Debug)]
