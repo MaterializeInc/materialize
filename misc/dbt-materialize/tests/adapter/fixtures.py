@@ -16,14 +16,14 @@
 from dbt.tests.adapter.hooks import test_model_hooks as core_base
 
 test_materialized_view = """
-{{ config(materialized='materializedview') }}
+{{ config(materialized='materialized_view') }}
 
     SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
 """
 
 test_materialized_view_index = """
 {{ config(
-    materialized='materializedview',
+    materialized='materialized_view',
     indexes=[{'columns': ['a', 'length(a)'], 'name': 'a_idx'}]
 ) }}
 
@@ -147,14 +147,14 @@ unique = """
 """
 
 expected_base_relation_types = {
-    "base": "materializedview",
+    "base": "materialized_view",
     "view_model": "view",
-    "table_model": "materializedview",
-    "swappable": "materializedview",
+    "table_model": "materialized_view",
+    "swappable": "materialized_view",
 }
 
 test_relation_name_length = """
-{{ config(materialized='materializedview') }}
+{{ config(materialized='materialized_view') }}
 
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
 """

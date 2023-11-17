@@ -59,7 +59,7 @@ class TestCatalogRelationTypes:
             # ("model.test.test_subsource", "subsource"),
             # NOTE(dehume): Tables are materialized as materialized views
             # https://github.com/MaterializeInc/materialize/issues/5266
-            ("model.test.test_table", "materializedview"),
+            ("model.test.test_table", "materialized_view"),
             ("model.test.test_view", "view"),
         ],
     )
