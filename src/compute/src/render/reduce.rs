@@ -31,7 +31,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::Columnation;
+use timely::container::columnation::{Columnation, CopyRegion};
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
@@ -1513,7 +1513,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
 /// point representation has less precision than a double. It is entirely possible
 /// that the values of the accumulator overflow, thus we have to use wrapping arithmetic
 /// to preserve group guarantees.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum Accum {
     /// Accumulates boolean values.
     Bool {
@@ -1755,6 +1755,10 @@ impl Multiply<Diff> for Accum {
     }
 }
 
+impl Columnation for Accum {
+    type InnerRegion = CopyRegion<Self>;
+}
+
 /// Monoids for in-place compaction of monotonic streams.
 mod monoids {
 
@@ -1778,12 +1782,22 @@ mod monoids {
     use mz_ore::soft_panic_or_log;
     use mz_repr::{Datum, Diff, Row};
     use serde::{Deserialize, Serialize};
+    use timely::container::columnation::{Columnation, Region};
 
     /// A monoid containing a single-datum row.
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
     pub enum ReductionMonoid {
         Min(Row),
         Max(Row),
+    }
+
+    impl ReductionMonoid {
+        pub fn finalize(&self) -> &Row {
+            use ReductionMonoid::*;
+            match self {
+                Min(row) | Max(row) => row,
+            }
+        }
     }
 
     impl Multiply<Diff> for ReductionMonoid {
@@ -1839,7 +1853,6 @@ mod monoids {
                 }
             }
         }
-
         fn is_zero(&self) -> bool {
             // It totally looks like we could return true here for `Datum::Null`, but don't do this!
             // DD uses true results of this method to make stuff disappear. This makes sense when
@@ -1847,6 +1860,55 @@ mod monoids {
             // We don't want funny stuff, like disappearing, happening to reduction results even
             // when they are null. (This would confuse, e.g., `ReduceCollation` for null inputs.)
             false
+        }
+    }
+
+    impl Columnation for ReductionMonoid {
+        type InnerRegion = ReductionMonoidRegion;
+    }
+
+    /// Region for [`ReductionMonoid`]. This region is special in that it stores both enum variants
+    /// in the same backing region. Alternatively, it could store it in two regions, but we select
+    /// the former for simplicity reasons.
+    #[derive(Default)]
+    pub struct ReductionMonoidRegion {
+        inner: <Row as Columnation>::InnerRegion,
+    }
+
+    impl Region for ReductionMonoidRegion {
+        type Item = ReductionMonoid;
+
+        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+            use ReductionMonoid::*;
+            match item {
+                Min(row) => Min(self.inner.copy(row)),
+                Max(row) => Max(self.inner.copy(row)),
+            }
+        }
+
+        fn clear(&mut self) {
+            self.inner.clear();
+        }
+
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            self.inner
+                .reserve_items(items.map(ReductionMonoid::finalize));
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            self.inner.reserve_regions(regions.map(|r| &r.inner));
+        }
+
+        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.inner.heap_size(callback);
         }
     }
 
@@ -1909,15 +1971,6 @@ mod monoids {
             | AggregateFunc::FirstValue { .. }
             | AggregateFunc::LastValue { .. }
             | AggregateFunc::WindowAggregate { .. } => None,
-        }
-    }
-
-    impl ReductionMonoid {
-        pub fn finalize(&self) -> &Row {
-            use ReductionMonoid::*;
-            match &self {
-                Min(row) | Max(row) => row,
-            }
         }
     }
 }
