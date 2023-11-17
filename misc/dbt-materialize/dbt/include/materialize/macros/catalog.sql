@@ -24,7 +24,7 @@
             d.name as table_database,
             s.name as table_schema,
             o.name as table_name,
-            case when o.type = 'materialized-view' then 'materializedview'
+            case when o.type = 'materialized-view' then 'materialized_view'
                  --This macro is used for the dbt documentation. We use
                  --the source type in mz_sources here instead of that
                  --in mz_objects to correctly report subsources.

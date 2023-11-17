@@ -53,7 +53,7 @@ class TestCatalogRelationTypes:
         "node_name,relation_type",
         [
             ("seed.test.test_seed", "table"),
-            ("model.test.test_materialized_view", "materializedview"),
+            ("model.test.test_materialized_view", "materialized_view"),
             # ("model.test.test_sink", "sink"),
             ("model.test.test_source", "source"),
             # ("model.test.test_subsource", "subsource"),
