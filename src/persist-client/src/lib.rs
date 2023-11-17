@@ -1170,10 +1170,14 @@ mod tests {
             let shard_id1 = "s11111111-1111-1111-1111-111111111111"
                 .parse::<ShardId>()
                 .expect("invalid shard id");
-            let (_, read1) = client
-                .expect_open::<String, String, u64, i64>(shard_id1)
+            let fetcher1 = client
+                .create_batch_fetcher::<String, String, u64, i64>(
+                    shard_id1,
+                    Default::default(),
+                    Default::default(),
+                    Diagnostics::for_tests(),
+                )
                 .await;
-            let fetcher1 = read1.clone("").await.batch_fetcher().await;
             for batch in snap {
                 let (batch, res) = fetcher1.fetch_leased_part(batch).await;
                 read0.process_returned_leased_part(batch);

@@ -35,8 +35,8 @@ use uuid::Uuid;
 
 use crate::cfg::{PersistFeatureFlag, RetryParameters};
 use crate::fetch::{
-    fetch_leased_part, BatchFetcher, FetchBatchFilter, FetchedPart, LeasedBatchPart,
-    SerdeLeasedBatchPart, SerdeLeasedBatchPartMetadata,
+    fetch_leased_part, FetchBatchFilter, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
+    SerdeLeasedBatchPartMetadata,
 };
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
@@ -695,13 +695,6 @@ where
         Ok(Listen::new(self, as_of).await)
     }
 
-    /// Returns a [`BatchFetcher`], which does not hold since or seqno
-    /// capabilities.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn batch_fetcher(self) -> BatchFetcher<K, V, T, D> {
-        BatchFetcher::new(self).await
-    }
-
     /// Returns all of the contents of the shard TVC at `as_of` broken up into
     /// [`LeasedBatchPart`]es. These parts can be "turned in" via
     /// `crate::fetch::fetch_batch_part` to receive the data they contain.
@@ -1278,7 +1271,7 @@ mod tests {
     use crate::internal::metrics::Metrics;
     use crate::rpc::NoopPubSubSender;
     use crate::tests::{all_ok, new_test_client};
-    use crate::{PersistClient, PersistConfig, ShardId};
+    use crate::{Diagnostics, PersistClient, PersistConfig, ShardId};
 
     use super::*;
 
@@ -1409,9 +1402,11 @@ mod tests {
             data.push(((i.to_string(), i.to_string()), i, 1))
         }
 
-        let (mut write, read) = new_test_client()
-            .await
-            .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+        let shard_id = ShardId::new();
+
+        let client = new_test_client().await;
+        let (mut write, read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
             .await;
 
         // Seed with some values
@@ -1430,8 +1425,14 @@ mod tests {
         offset += width;
 
         // Create machinery for subscribe + fetch
-
-        let fetcher = read.clone("").await.batch_fetcher().await;
+        let fetcher = client
+            .create_batch_fetcher::<String, String, u64, i64>(
+                shard_id,
+                Default::default(),
+                Default::default(),
+                Diagnostics::for_tests(),
+            )
+            .await;
 
         let mut subscribe = read
             .subscribe(timely::progress::Antichain::from_elem(1))
