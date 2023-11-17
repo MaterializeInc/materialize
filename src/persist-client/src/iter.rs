@@ -9,7 +9,7 @@
 
 //! Code for iterating through one or more parts, including streaming consolidation.
 
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -429,10 +429,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         self.metrics.consolidation.parts_fetched.inc();
                         let maybe_unconsolidated = data.maybe_unconsolidated();
                         *part = ConsolidationPart::from_encoded(
-                            data.take()
-                                .fetch()
-                                .await
-                                .ok_or_else(anyhow!("unexpectedly missing part"))?,
+                            data.take().fetch().await?,
                             &self.filter,
                             maybe_unconsolidated,
                         );
@@ -449,9 +446,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         }
                         self.metrics.consolidation.parts_fetched.inc();
                         *part = ConsolidationPart::from_encoded(
-                            handle
-                                .await?
-                                .ok_or_else(anyhow!("unexpectedly missing part"))?,
+                            handle.await??,
                             &self.filter,
                             *maybe_unconsolidated,
                         );
