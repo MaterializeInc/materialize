@@ -57,21 +57,7 @@ pub fn plan_show_create_view(
     scx: &StatementContext,
     ShowCreateViewStatement { view_name }: ShowCreateViewStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    let view = scx.get_item_by_resolved_name(&view_name)?;
-    match view.item_type() {
-        CatalogItemType::View => {
-            let name = view_name.full_name_str();
-            let create_sql = simplify_names(scx.catalog, view.create_sql())?;
-            Ok(ShowCreatePlan {
-                id: view.id(),
-                row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
-            })
-        }
-        CatalogItemType::MaterializedView => Err(PlanError::ShowCreateViewOnMaterializedView(
-            view_name.full_name_str(),
-        )),
-        _ => sql_bail!("{} is not a view", view_name.full_name_str()),
-    }
+    plan_show_create(scx, &view_name, CatalogItemType::View)
 }
 
 pub fn describe_show_create_materialized_view(
@@ -87,20 +73,15 @@ pub fn describe_show_create_materialized_view(
 
 pub fn plan_show_create_materialized_view(
     scx: &StatementContext,
-    stmt: ShowCreateMaterializedViewStatement<Aug>,
+    ShowCreateMaterializedViewStatement {
+        materialized_view_name,
+    }: ShowCreateMaterializedViewStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    let name = stmt.materialized_view_name;
-    let mview = scx.get_item_by_resolved_name(&name)?;
-    if let CatalogItemType::MaterializedView = mview.item_type() {
-        let full_name = name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, mview.create_sql())?;
-        Ok(ShowCreatePlan {
-            id: mview.id(),
-            row: Row::pack_slice(&[Datum::String(&full_name), Datum::String(&create_sql)]),
-        })
-    } else {
-        sql_bail!("{} is not a materialized view", name.full_name_str());
-    }
+    plan_show_create(
+        scx,
+        &materialized_view_name,
+        CatalogItemType::MaterializedView,
+    )
 }
 
 pub fn describe_show_create_table(
@@ -114,27 +95,40 @@ pub fn describe_show_create_table(
     )))
 }
 
+fn plan_show_create(
+    scx: &StatementContext,
+    name: &ResolvedItemName,
+    expect_type: CatalogItemType,
+) -> Result<ShowCreatePlan, PlanError> {
+    let item = scx.get_item_by_resolved_name(name)?;
+    let name = name.full_name_str();
+    if item.id().is_system()
+        && matches!(
+            expect_type,
+            CatalogItemType::Table | CatalogItemType::Source
+        )
+    {
+        sql_bail!("cannot show create for system object {name}");
+    }
+    if item.item_type() == CatalogItemType::MaterializedView && expect_type == CatalogItemType::View
+    {
+        return Err(PlanError::ShowCreateViewOnMaterializedView(name));
+    }
+    if item.item_type() != expect_type {
+        sql_bail!("{name} is not a {expect_type}");
+    }
+    let create_sql = simplify_names(scx.catalog, item.create_sql())?;
+    Ok(ShowCreatePlan {
+        id: item.id(),
+        row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
+    })
+}
+
 pub fn plan_show_create_table(
     scx: &StatementContext,
     ShowCreateTableStatement { table_name }: ShowCreateTableStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    let table = scx.get_item_by_resolved_name(&table_name)?;
-    if table.id().is_system() {
-        sql_bail!(
-            "cannot show create for system object {}",
-            table_name.full_name_str()
-        );
-    }
-    if let CatalogItemType::Table = table.item_type() {
-        let name = table_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, table.create_sql())?;
-        Ok(ShowCreatePlan {
-            id: table.id(),
-            row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
-        })
-    } else {
-        sql_bail!("{} is not a table", table_name.full_name_str());
-    }
+    plan_show_create(scx, &table_name, CatalogItemType::Table)
 }
 
 pub fn describe_show_create_source(
@@ -152,23 +146,7 @@ pub fn plan_show_create_source(
     scx: &StatementContext,
     ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    let source = scx.get_item_by_resolved_name(&source_name)?;
-    if source.id().is_system() {
-        sql_bail!(
-            "cannot show create for system object {}",
-            source_name.full_name_str()
-        );
-    }
-    if let CatalogItemType::Source = source.item_type() {
-        let name = source_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, source.create_sql())?;
-        Ok(ShowCreatePlan {
-            id: source.id(),
-            row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
-        })
-    } else {
-        sql_bail!("{} is not a source", source_name.full_name_str());
-    }
+    plan_show_create(scx, &source_name, CatalogItemType::Source)
 }
 
 pub fn describe_show_create_sink(
@@ -186,17 +164,7 @@ pub fn plan_show_create_sink(
     scx: &StatementContext,
     ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    let sink = scx.get_item_by_resolved_name(&sink_name)?;
-    if let CatalogItemType::Sink = sink.item_type() {
-        let name = sink_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, sink.create_sql())?;
-        Ok(ShowCreatePlan {
-            id: sink.id(),
-            row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
-        })
-    } else {
-        sql_bail!("'{}' is not a sink", sink_name.full_name_str());
-    }
+    plan_show_create(scx, &sink_name, CatalogItemType::Sink)
 }
 
 pub fn describe_show_create_index(
@@ -214,17 +182,7 @@ pub fn plan_show_create_index(
     scx: &StatementContext,
     ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    let index = scx.get_item_by_resolved_name(&index_name)?;
-    if let CatalogItemType::Index = index.item_type() {
-        let name = index_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, index.create_sql())?;
-        Ok(ShowCreatePlan {
-            id: index.id(),
-            row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
-        })
-    } else {
-        sql_bail!("'{}' is not an index", index_name.full_name_str());
-    }
+    plan_show_create(scx, &index_name, CatalogItemType::Index)
 }
 
 pub fn describe_show_create_connection(
@@ -242,17 +200,7 @@ pub fn plan_show_create_connection(
     scx: &StatementContext,
     ShowCreateConnectionStatement { connection_name }: ShowCreateConnectionStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    let connection = scx.get_item_by_resolved_name(&connection_name)?;
-    if let CatalogItemType::Connection = connection.item_type() {
-        let name = connection_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, connection.create_sql())?;
-        Ok(ShowCreatePlan {
-            id: connection.id(),
-            row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
-        })
-    } else {
-        sql_bail!("'{}' is not a connection", connection_name.full_name_str());
-    }
+    plan_show_create(scx, &connection_name, CatalogItemType::Connection)
 }
 
 pub fn show_databases<'a>(
