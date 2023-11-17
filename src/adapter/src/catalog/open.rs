@@ -1155,13 +1155,13 @@ impl Catalog {
                     .map(|param| {
                         let name = param.name;
                         let value = param.value;
-                        tracing::debug!(name, value, "sync parameter");
+                        tracing::info!(name, value, initial = true, "sync parameter");
                         (name, OwnedVarInput::Flat(value))
                     })
                     .chain(std::iter::once({
                         let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
                         let value = true.to_string();
-                        tracing::debug!(name, value, "sync parameter");
+                        tracing::info!(name, value, initial = true, "sync parameter");
                         (name, OwnedVarInput::Flat(value))
                     }))
                     .collect::<Vec<_>>();
