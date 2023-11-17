@@ -220,7 +220,7 @@ where
         &part.desc,
     )
     .await
-    .unwrap_or_else(|err| {
+    .unwrap_or_else(|| {
         // Ideally, readers should never encounter a missing blob. They place a seqno
         // hold as they consume their snapshot/listen, preventing any blobs they need
         // from being deleted by garbage collection, and all blob implementations are
@@ -230,11 +230,11 @@ where
         // cannot be recovered, and our best option is to panic and retry the whole
         // process.
         panic!(
-            "{} could not fetch batch part: {}",
+            "{} could not fetch batch part {}",
             reader_id
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "batch fetcher".to_string()),
-            err
+            &part.key
         )
     });
     let fetched_part = FetchedPart {
@@ -262,7 +262,7 @@ pub(crate) async fn fetch_batch_part<T>(
     read_metrics: &ReadMetrics,
     key: &PartialBatchKey,
     registered_desc: &Description<T>,
-) -> Result<EncodedPart<T>, anyhow::Error>
+) -> Option<EncodedPart<T>>
 where
     T: Timestamp + Lattice + Codec64,
 {
@@ -277,13 +277,7 @@ where
 
     let value = match value {
         Some(v) => v,
-        None => {
-            return Err(anyhow!(
-                "unexpected missing blob: {} for shard: {}",
-                key,
-                shard_id
-            ))
-        }
+        None => return None,
     };
     drop(get_span);
 
@@ -313,7 +307,7 @@ where
 
     read_metrics.seconds.inc_by(now.elapsed().as_secs_f64());
 
-    Ok(part)
+    Some(part)
 }
 
 /// Propagates metadata from readers alongside a `HollowBatch` to apply the

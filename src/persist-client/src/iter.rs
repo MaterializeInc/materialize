@@ -9,7 +9,7 @@
 
 //! Code for iterating through one or more parts, including streaming consolidation.
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -101,7 +101,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         }
     }
 
-    async fn fetch(self) -> anyhow::Result<EncodedPart<T>> {
+    async fn fetch(self) -> Option<EncodedPart<T>> {
         match self {
             FetchData::Unleased {
                 shard_id,
@@ -146,9 +146,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                 lease_returner.return_leased_part(part);
                 fetched
             }
-            FetchData::AlreadyFetched => {
-                bail!("Fetched already-fetched part!")
-            }
+            FetchData::AlreadyFetched => None,
         }
     }
 }
@@ -159,7 +157,7 @@ pub(crate) enum ConsolidationPart<T, D> {
         data: FetchData<T>,
     },
     Prefetched {
-        handle: JoinHandle<anyhow::Result<EncodedPart<T>>>,
+        handle: JoinHandle<Option<EncodedPart<T>>>,
         maybe_unconsolidated: bool,
         key_lower: Vec<u8>,
     },
@@ -432,7 +430,10 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         self.metrics.consolidation.parts_fetched.inc();
                         let maybe_unconsolidated = data.maybe_unconsolidated();
                         *part = ConsolidationPart::from_encoded(
-                            data.take().fetch().await?,
+                            data.take()
+                                .fetch()
+                                .await
+                                .ok_or_else(anyhow!("unexpectedly missing part"))?,
                             &self.filter,
                             maybe_unconsolidated,
                         );
@@ -449,7 +450,9 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         }
                         self.metrics.consolidation.parts_fetched.inc();
                         *part = ConsolidationPart::from_encoded(
-                            handle.await??,
+                            handle
+                                .await?
+                                .ok_or_else(anyhow!("unexpectedly missing part"))?,
                             &self.filter,
                             *maybe_unconsolidated,
                         );
