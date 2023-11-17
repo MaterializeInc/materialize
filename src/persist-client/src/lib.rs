@@ -461,10 +461,6 @@ impl PersistClient {
     }
 
     /// Creates and returns a [BatchFetcher] for the given shard id.
-    ///
-    /// The `_schema` parameter is currently unused, but should be an object
-    /// that represents the schema of the data in the shard. This will be required
-    /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
     pub async fn create_batch_fetcher<K, V, T, D>(
         &self,
