@@ -221,14 +221,15 @@ where
     // upper. Render a dataflow operator that passes through the input and
     // translates the progress frontiers as necessary.
     let (stream, txns_token) = match metadata.txns_shard {
-        Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _>(
+        Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _, _>(
             stream,
             &source_id.to_string(),
-            async move {
-                persist_clients
-                    .open(metadata.persist_location)
-                    .await
-                    .expect("location is valid")
+            move || {
+                let (c, l) = (
+                    Arc::clone(&persist_clients),
+                    metadata.persist_location.clone(),
+                );
+                async move { c.open(l).await.expect("location is valid") }
             },
             txns_shard,
             metadata.data_shard,

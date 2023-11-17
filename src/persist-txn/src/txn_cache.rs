@@ -105,7 +105,8 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
 /// A self-updating [TxnsCacheState].
 #[derive(Debug)]
 pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
-    txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
+    pub(crate) txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
+    pub(crate) buf: Vec<(TxnsEntry, T, i64)>,
     state: TxnsCacheState<T>,
 }
 
@@ -223,7 +224,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             // Not registered, maybe it will be in the future? In the meantime,
             // treat it like a normal shard (i.e. pass through reads) and check
             // again later.
-            return ReadDataTo(self.progress_exclusive.clone());
+            if ts < self.progress_exclusive {
+                return ReadDataTo(self.progress_exclusive.clone());
+            } else {
+                return WaitForTxnsProgress;
+            }
         };
         // See if any txns writes are >= our timestamp, if so, we can read all
         // the way past the write.
@@ -238,7 +243,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         // normally.
         let last_reg = data_times.last_reg();
         if last_reg.forget_ts.is_some() {
-            return ReadDataTo(self.progress_exclusive.clone());
+            if ts < self.progress_exclusive {
+                return ReadDataTo(self.progress_exclusive.clone());
+            } else {
+                // TODO(txn): Make sure to add a regression test for this when
+                // we redo the data_listen_next unit test.
+                return WaitForTxnsProgress;
+            }
         }
 
         // If we're before the most recent registration, it's always safe to
@@ -325,6 +336,21 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             return;
         }
         self.compact_data_times()
+    }
+
+    pub(crate) fn push_entries(&mut self, mut entries: Vec<(TxnsEntry, T, i64)>, progress: T) {
+        // Persist emits the times sorted by little endian encoding,
+        // which is not what we want. If we ever expose an interface for
+        // registering and committing to a data shard at the same
+        // timestamp, this will also have to sort registrations first.
+        entries.sort_by(|(_, at, _), (_, bt, _)| at.cmp(bt));
+        for (e, t, d) in entries {
+            match e {
+                TxnsEntry::Register(data_id) => self.push_register(data_id, t, d),
+                TxnsEntry::Append(data_id, batch) => self.push_append(data_id, batch, t, d),
+            }
+        }
+        self.progress_exclusive = progress;
     }
 
     fn push_register(&mut self, data_id: ShardId, ts: T, diff: i64) {
@@ -621,6 +647,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         let state = TxnsCacheState::new(txns_id, since_ts, only_data_id);
         TxnsCache {
             txns_subscribe,
+            buf: Vec::new(),
             state,
         }
     }
@@ -636,7 +663,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
 
     /// Invariant: afterward, self.progress_exclusive will be >= ts
     #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
-    pub(crate) async fn update_ge(&mut self, ts: &T) {
+    pub async fn update_ge(&mut self, ts: &T) {
         self.update(|progress_exclusive| progress_exclusive >= ts)
             .await;
         debug_assert!(&self.progress_exclusive >= ts);
@@ -647,56 +674,24 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         while !done(&self.progress_exclusive) {
             let events = self.txns_subscribe.next(None).await;
             for event in events {
-                let parts = match event {
+                match event {
                     ListenEvent::Progress(frontier) => {
-                        self.progress_exclusive = frontier
+                        let progress = frontier
                             .into_option()
                             .expect("nothing should close the txns shard");
-                        continue;
+                        self.state
+                            .push_entries(std::mem::take(&mut self.buf), progress);
                     }
-                    ListenEvent::Updates(parts) => parts,
+                    ListenEvent::Updates(parts) => {
+                        Self::fetch_parts(
+                            self.only_data_id.clone(),
+                            &mut self.txns_subscribe,
+                            parts,
+                            &mut self.buf,
+                        )
+                        .await;
+                    }
                 };
-                let mut updates = Vec::new();
-                // We filter out unrelated data in two passes. The first is
-                // `should_fetch_part`, which allows us to skip entire fetches
-                // from s3/Blob. Then, if a part does need to be fetched, it
-                // still might contain info about unrelated data shards, and we
-                // filter those out before buffering in `updates`.
-                for part in parts {
-                    let should_fetch_part = self.should_fetch_part(&part);
-                    debug!(
-                        "should_fetch_part={} for {:?} {:?}",
-                        should_fetch_part,
-                        self.only_data_id,
-                        part.stats()
-                    );
-                    if !should_fetch_part {
-                        self.txns_subscribe.return_leased_part(part);
-                        continue;
-                    }
-                    let part_updates = self.txns_subscribe.fetch_batch_part(part).await;
-                    let part_updates = part_updates.map(|((k, v), t, d)| {
-                        let (k, v) = (k.expect("valid key"), v.expect("valid val"));
-                        (C::decode(k, v), t, d)
-                    });
-                    if let Some(only_data_id) = self.only_data_id.as_ref() {
-                        updates
-                            .extend(part_updates.filter(|(x, _, _)| x.data_id() == only_data_id));
-                    } else {
-                        updates.extend(part_updates);
-                    }
-                }
-                // Persist emits the times sorted by little endian encoding,
-                // which is not what we want. If we ever expose an interface for
-                // registering and committing to a data shard at the same
-                // timestamp, this will also have to sort registrations first.
-                updates.sort_by(|(_, at, _), (_, bt, _)| at.cmp(bt));
-                for (e, t, d) in updates {
-                    match e {
-                        TxnsEntry::Register(data_id) => self.push_register(data_id, t, d),
-                        TxnsEntry::Append(data_id, batch) => self.push_append(data_id, batch, t, d),
-                    }
-                }
             }
         }
         debug!(
@@ -709,8 +704,44 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         );
     }
 
-    fn should_fetch_part(&self, part: &LeasedBatchPart<T>) -> bool {
-        let Some(only_data_id) = self.only_data_id.as_ref() else {
+    pub(crate) async fn fetch_parts(
+        only_data_id: Option<ShardId>,
+        txns_subscribe: &mut Subscribe<C::Key, C::Val, T, i64>,
+        parts: Vec<LeasedBatchPart<T>>,
+        updates: &mut Vec<(TxnsEntry, T, i64)>,
+    ) {
+        // We filter out unrelated data in two passes. The first is
+        // `should_fetch_part`, which allows us to skip entire fetches
+        // from s3/Blob. Then, if a part does need to be fetched, it
+        // still might contain info about unrelated data shards, and we
+        // filter those out before buffering in `updates`.
+        for part in parts {
+            let should_fetch_part = Self::should_fetch_part(only_data_id.as_ref(), &part);
+            debug!(
+                "should_fetch_part={} for {:?} {:?}",
+                should_fetch_part,
+                only_data_id,
+                part.stats()
+            );
+            if !should_fetch_part {
+                txns_subscribe.return_leased_part(part);
+                continue;
+            }
+            let part_updates = txns_subscribe.fetch_batch_part(part).await;
+            let part_updates = part_updates.map(|((k, v), t, d)| {
+                let (k, v) = (k.expect("valid key"), v.expect("valid val"));
+                (C::decode(k, v), t, d)
+            });
+            if let Some(only_data_id) = only_data_id.as_ref() {
+                updates.extend(part_updates.filter(|(x, _, _)| x.data_id() == only_data_id));
+            } else {
+                updates.extend(part_updates);
+            }
+        }
+    }
+
+    fn should_fetch_part(only_data_id: Option<&ShardId>, part: &LeasedBatchPart<T>) -> bool {
+        let Some(only_data_id) = only_data_id else {
             return true;
         };
         // This `part.stats()` call involves decoding and the only_data_id=None
@@ -993,7 +1024,7 @@ mod tests {
         // We can answer exclusive queries at <= progress. The data shard is not
         // registered yet, so we read it as a normal shard.
         assert_eq!(cache.data_listen_next(&d0, 3), ReadDataTo(4));
-        assert_eq!(cache.data_listen_next(&d0, 4), ReadDataTo(4));
+        assert_eq!(cache.data_listen_next(&d0, 4), WaitForTxnsProgress);
 
         // Register a data shard. The paired snapshot would advance the physical
         // upper, so we're able to read at the register ts.

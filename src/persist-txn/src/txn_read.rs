@@ -263,13 +263,13 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
     }
 
     /// See [crate::txn_cache::TxnsCacheState::data_listen_next].
-    pub(crate) async fn data_listen_next(&self, data_id: ShardId, ts: T) -> DataListenNext<T> {
+    pub async fn data_listen_next(&self, data_id: ShardId, ts: T) -> DataListenNext<T> {
         self.send(|tx| TxnsReadCmd::DataListenNext { data_id, ts, tx })
             .await
     }
 
     /// See [TxnsCache::update_ge].
-    pub(crate) async fn update_ge(&self, ts: T) {
+    pub async fn update_ge(&self, ts: T) {
         let ts = WaitTs::GreaterEqual(ts);
         self.send(|tx| TxnsReadCmd::Wait { ts, tx }).await
     }

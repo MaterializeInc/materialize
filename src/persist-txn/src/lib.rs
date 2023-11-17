@@ -279,6 +279,7 @@ use mz_persist_client::{ShardId, ShardIdSchema};
 use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use prost::Message;
+use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error, instrument};
@@ -290,7 +291,7 @@ pub mod txn_write;
 pub mod txns;
 
 /// The in-mem representation of an update in the txns shard.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TxnsEntry {
     /// A data shard register operation.
     Register(ShardId),
