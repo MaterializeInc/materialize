@@ -14,8 +14,8 @@
 # limitations under the License.
 
 from dbt.tests.adapter.dbt_show.test_dbt_show import (
-    BaseShowSqlHeader,
     BaseShowLimit,
+    BaseShowSqlHeader,
 )
 
 
