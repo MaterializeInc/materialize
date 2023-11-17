@@ -567,19 +567,3 @@ impl<T: MaybeLength> MaybeLength for Option<T> {
         self.as_ref().and_then(|v| v.len())
     }
 }
-
-/*
-#[derive(Debug, thiserror::Error)]
-pub enum KafkaMessageConsumptionError {
-    #[error("{0}")]
-    KafkaError(#[from] KafkaError),
-    #[error("{0}")]
-    DecodeError(DecodeError),
-}
-
-impl From<DecodeError> for KafkaMessageConsumptionError {
-    fn from(err: DecodeError) -> Self {
-        KafkaMessageConsumptionError::DecodeError(err)
-    }
-}
-*/

@@ -1074,9 +1074,10 @@ fn construct_source_message(
                                         match str::from_utf8(v) {
                                             Ok(str) => Ok(Datum::String(str)),
                                             Err(_) => Err(DecodeError {
-                                                kind: DecodeErrorKind::Text(
-                                                    "Failed to decode UTF-8".to_string(),
-                                                ),
+                                                kind: DecodeErrorKind::Text(format!(
+                                                    "Found ill-formed byte sequence in header '{}' that cannot decoded as valid utf-8",
+                                                    key
+                                                )),
                                                 raw: v.to_vec(),
                                             }),
                                         }
@@ -1088,7 +1089,7 @@ fn construct_source_message(
                             .unwrap_or(Ok(Datum::Null));
                         match d {
                             Ok(d) => packer.push(d),
-                            //stop with a definite error if the header cannot be parsed correctly
+                            //abort with a definite error when the header cannot be parsed correctly
                             Err(err) => return Ok((Err(err), (pid, offset.into()))),
                         }
                     }
