@@ -96,7 +96,7 @@ use std::num::NonZeroI64;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, FutureExt};
 use futures::stream::{Peekable, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
@@ -394,6 +394,8 @@ where
             config.metrics_registry.clone(),
             enable_persist_txn_tables,
         )
+        // Note: the Future is intentionally boxed because it is very large.
+        .boxed()
         .await;
 
         let compute_controller = ComputeController::new(

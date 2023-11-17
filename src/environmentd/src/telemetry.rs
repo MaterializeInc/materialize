@@ -77,6 +77,7 @@
 // environment in real time:
 // https://app.segment.com/materializeinc/sources/cloud_dev/debugger.
 
+use futures::FutureExt;
 use mz_adapter::telemetry::SegmentClientExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
@@ -136,37 +137,41 @@ async fn report_loop(
                     .active_subscribes
                     .with_label_values(&["user"])
                     .get();
-                let rows = adapter_client.introspection_execute_one(&format!("
-                    SELECT jsonb_build_object(
-                        'active_aws_privatelink_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'aws-privatelink')::int4,
-                        'active_clusters', (SELECT count(*) FROM mz_clusters WHERE id LIKE 'u%')::int4,
-                        'active_cluster_replicas', (
-                            SELECT jsonb_object_agg(base.size, coalesce(count, 0))
-                            FROM mz_internal.mz_cluster_replica_sizes base
-                            LEFT JOIN (
-                                SELECT r.size, count(*)::int4
-                                FROM mz_cluster_replicas r
-                                JOIN mz_clusters c ON c.id = r.cluster_id
-                                WHERE c.id LIKE 'u%'
-                                GROUP BY r.size
-                            ) extant ON base.size = extant.size
-                        ),
-                        'active_confluent_schema_registry_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'confluent-schema-registry')::int4,
-                        'active_materialized_views', (SELECT count(*) FROM mz_materialized_views WHERE id LIKE 'u%')::int4,
-                        'active_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type <> 'subsource')::int4,
-                        'active_kafka_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'kafka')::int4,
-                        'active_kafka_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type = 'kafka')::int4,
-                        'active_load_generator_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type = 'load-generator')::int4,
-                        'active_postgres_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'postgres')::int4,
-                        'active_postgres_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type = 'postgres')::int4,
-                        'active_sinks', (SELECT count(*) FROM mz_sinks WHERE id LIKE 'u%')::int4,
-                        'active_ssh_tunnel_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'ssh-tunnel')::int4,
-                        'active_kafka_sinks', (SELECT count(*) FROM mz_sinks WHERE id LIKE 'u%' AND type = 'kafka')::int4,
-                        'active_tables', (SELECT count(*) FROM mz_tables WHERE id LIKE 'u%')::int4,
-                        'active_views', (SELECT count(*) FROM mz_views WHERE id LIKE 'u%')::int4,
-                        'active_subscribes', {active_subscribes}
-                    )",
-                )).await?;
+                let rows = adapter_client
+                    .introspection_execute_one(&format!("
+                        SELECT jsonb_build_object(
+                            'active_aws_privatelink_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'aws-privatelink')::int4,
+                            'active_clusters', (SELECT count(*) FROM mz_clusters WHERE id LIKE 'u%')::int4,
+                            'active_cluster_replicas', (
+                                SELECT jsonb_object_agg(base.size, coalesce(count, 0))
+                                FROM mz_internal.mz_cluster_replica_sizes base
+                                LEFT JOIN (
+                                    SELECT r.size, count(*)::int4
+                                    FROM mz_cluster_replicas r
+                                    JOIN mz_clusters c ON c.id = r.cluster_id
+                                    WHERE c.id LIKE 'u%'
+                                    GROUP BY r.size
+                                ) extant ON base.size = extant.size
+                            ),
+                            'active_confluent_schema_registry_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'confluent-schema-registry')::int4,
+                            'active_materialized_views', (SELECT count(*) FROM mz_materialized_views WHERE id LIKE 'u%')::int4,
+                            'active_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type <> 'subsource')::int4,
+                            'active_kafka_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'kafka')::int4,
+                            'active_kafka_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type = 'kafka')::int4,
+                            'active_load_generator_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type = 'load-generator')::int4,
+                            'active_postgres_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'postgres')::int4,
+                            'active_postgres_sources', (SELECT count(*) FROM mz_sources WHERE id LIKE 'u%' AND type = 'postgres')::int4,
+                            'active_sinks', (SELECT count(*) FROM mz_sinks WHERE id LIKE 'u%')::int4,
+                            'active_ssh_tunnel_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'ssh-tunnel')::int4,
+                            'active_kafka_sinks', (SELECT count(*) FROM mz_sinks WHERE id LIKE 'u%' AND type = 'kafka')::int4,
+                            'active_tables', (SELECT count(*) FROM mz_tables WHERE id LIKE 'u%')::int4,
+                            'active_views', (SELECT count(*) FROM mz_views WHERE id LIKE 'u%')::int4,
+                            'active_subscribes', {active_subscribes}
+                        )",
+                    ))
+                    // Note: the Future is intentionally boxed because it is very large.
+                    .boxed()
+                    .await?;
                 let row = rows.into_element();
                 let jsonb = Jsonb::from_row(row);
                 Ok::<_, anyhow::Error>(jsonb.as_ref().to_serde_json())

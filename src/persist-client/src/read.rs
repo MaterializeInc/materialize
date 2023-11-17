@@ -19,6 +19,7 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::Stream;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
@@ -689,17 +690,30 @@ where
     /// The `Since` error indicates that the requested `as_of` cannot be served
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
-        let () = self.machine.verify_listen(&as_of)?;
-        Ok(Listen::new(self, as_of).await)
+    ///
+    /// Note: the returned Future is intentionally boxed because it is very large.
+    pub fn listen(
+        self,
+        as_of: Antichain<T>,
+    ) -> BoxFuture<'static, Result<Listen<K, V, T, D>, Since<T>>> {
+        let shard = self.machine.shard_id();
+        async move {
+            let () = self.machine.verify_listen(&as_of)?;
+            Ok(Listen::new(self, as_of).await)
+        }
+        .instrument(tracing::debug_span!("listen", %shard))
+        .boxed()
     }
 
     /// Returns a [`BatchFetcher`], which does not hold since or seqno
     /// capabilities.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn batch_fetcher(self) -> BatchFetcher<K, V, T, D> {
-        BatchFetcher::new(self).await
+    ///
+    /// Note: the returned Future is intentionally boxed because it is very large.
+    pub fn batch_fetcher(self) -> LocalBoxFuture<'static, BatchFetcher<K, V, T, D>> {
+        let shard = self.machine.shard_id();
+        async move { BatchFetcher::new(self).await }
+            .instrument(tracing::debug_span!("batch_fetcher", %shard))
+            .boxed_local()
     }
 
     /// Returns all of the contents of the shard TVC at `as_of` broken up into
@@ -741,14 +755,22 @@ where
     ///
     /// For more details on this operation's semantics, see [Self::snapshot] and
     /// [Self::listen].
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn subscribe(
+    ///
+    /// Note: the returned Future is intentionally boxed because it is very large.
+    pub fn subscribe(
         mut self,
         as_of: Antichain<T>,
-    ) -> Result<Subscribe<K, V, T, D>, Since<T>> {
-        let snapshot_parts = self.snapshot(as_of.clone()).await?;
-        let listen = self.listen(as_of.clone()).await?;
-        Ok(Subscribe::new(snapshot_parts, listen))
+    ) -> BoxFuture<'static, Result<Subscribe<K, V, T, D>, Since<T>>> {
+        let shard = self.machine.shard_id();
+        async move {
+            let snapshot_parts = self.snapshot(as_of.clone()).await?;
+            let listen = self.listen(as_of.clone()).await?;
+            Ok(Subscribe::new(snapshot_parts, listen))
+        }
+        .instrument(tracing::debug_span!(
+            "subscribe", %shard
+        ))
+        .boxed()
     }
 
     fn lease_batch_part(

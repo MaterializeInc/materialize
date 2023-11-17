@@ -584,7 +584,7 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use differential_dataflow::Hashable;
-    use futures::future::BoxFuture;
+    use futures::future::{BoxFuture, FutureExt};
     use mz_ore::cast::CastFrom;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::{PersistParameters, RetryParameters};
@@ -602,11 +602,14 @@ mod tests {
     use super::*;
 
     impl TxnsHandle<String, (), u64, i64, u64, TxnsCodecDefault> {
-        pub(crate) async fn expect_open(client: PersistClient) -> Self {
-            Self::expect_open_id(client, ShardId::new()).await
+        pub(crate) fn expect_open(client: PersistClient) -> BoxFuture<'static, Self> {
+            Self::expect_open_id(client, ShardId::new()).boxed()
         }
 
-        pub(crate) async fn expect_open_id(client: PersistClient, txns_id: ShardId) -> Self {
+        pub(crate) fn expect_open_id(
+            client: PersistClient,
+            txns_id: ShardId,
+        ) -> BoxFuture<'static, Self> {
             Self::open(
                 0,
                 client,
@@ -614,7 +617,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
             )
-            .await
+            .boxed()
         }
 
         pub(crate) fn new_log(&self) -> CommitLog {
@@ -624,6 +627,7 @@ mod tests {
         pub(crate) async fn expect_register(&mut self, register_ts: u64) -> ShardId {
             let data_id = ShardId::new();
             self.register(register_ts, [writer(&self.datas.client, data_id).await])
+                .boxed()
                 .await
                 .unwrap();
             data_id
@@ -663,24 +667,34 @@ mod tests {
         txns.apply_le(&2).await;
 
         // Register a second time is a no-op (idempotent).
-        assert_eq!(txns.register(3, [writer(&client, d0).await]).await, Ok(()));
+        assert_eq!(
+            txns.register(3, [writer(&client, d0).await]).boxed().await,
+            Ok(())
+        );
         txns.apply_le(&3).await;
 
         // Cannot register a new data shard at an already closed off time. An
         // error is returned with the first time that a registration would
         // succeed.
         let d1 = ShardId::new();
-        assert_eq!(txns.register(2, [writer(&client, d1).await]).await, Err(4));
+        assert_eq!(
+            txns.register(2, [writer(&client, d1).await]).boxed().await,
+            Err(4)
+        );
 
         // Can still register after txns have been committed.
         txns.expect_commit_at(4, d0, &["foo"], &log).await;
-        assert_eq!(txns.register(5, [writer(&client, d1).await]).await, Ok(()));
+        assert_eq!(
+            txns.register(5, [writer(&client, d1).await]).boxed().await,
+            Ok(())
+        );
         txns.apply_le(&5).await;
 
         // We can also register some new and some already registered shards.
         let d2 = ShardId::new();
         assert_eq!(
             txns.register(6, [writer(&client, d0).await, writer(&client, d2).await])
+                .boxed()
                 .await,
             Ok(())
         );
@@ -760,7 +774,10 @@ mod tests {
         log.record((d0, "d0".into(), 6, 1));
 
         // Can register and forget an already registered and forgotten shard.
-        txns.register(7, [writer(&client, d0).await]).await.unwrap();
+        txns.register(7, [writer(&client, d0).await])
+            .boxed()
+            .await
+            .unwrap();
         txns.apply_le(&7).await;
         assert_eq!(txns.forget(8, d0).await, Ok(()));
         txns.apply_le(&8).await;
@@ -825,6 +842,7 @@ mod tests {
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
             txns.register(ts, [writer(&client, d0).await])
+                .boxed()
                 .await
                 .unwrap();
             step_some_past(&mut subs, ts).await;
@@ -878,7 +896,10 @@ mod tests {
         txn.write(&d0, "foo".into(), (), 1).await;
         let commit_apply = txn.commit_at(&mut txns, 2).await.unwrap();
 
-        txns.register(3, [writer(&client, d0).await]).await.unwrap();
+        txns.register(3, [writer(&client, d0).await])
+            .boxed()
+            .await
+            .unwrap();
 
         // Make sure that we can read empty at the register commit time even
         // before the txn commit apply.
@@ -1047,7 +1068,7 @@ mod tests {
                 debug!("stress register {:.9} at {}", data_id.to_string(), w.ts);
                 Box::pin(async move {
                     let data_write = writer(&w.txns.datas.client, data_id).await;
-                    let _ = w.txns.register(w.ts, [data_write]).await?;
+                    let _ = w.txns.register(w.ts, [data_write]).boxed().await?;
                     Ok(())
                 })
             })
@@ -1153,7 +1174,10 @@ mod tests {
             .collect::<Vec<_>>()
             .await;
         let register_ts = 1;
-        txns.register(register_ts, data_writes).await.unwrap();
+        txns.register(register_ts, data_writes)
+            .boxed()
+            .await
+            .unwrap();
 
         let mut workers = Vec::new();
         for idx in 0..NUM_WORKERS {

@@ -90,7 +90,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use once_cell::sync::Lazy;
 use tracing_subscriber::filter::EnvFilter;
 
@@ -170,7 +170,7 @@ async fn main() {
         env_prefix: Some("MZ_STASH_DEBUG_"),
         enable_version_flag: true,
     });
-    if let Err(err) = run(args).await {
+    if let Err(err) = run(args).boxed_local().await {
         eprintln!("stash: fatal: {}", err.display_with_causes());
         process::exit(1);
     }

@@ -19,7 +19,7 @@ use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
 use futures::future::BoxFuture;
-use futures::Future;
+use futures::{Future, FutureExt};
 use http::StatusCode;
 use itertools::izip;
 use mz_adapter::client::RecordFirstRowStream;
@@ -54,7 +54,11 @@ pub async fn handle_sql(
     };
     // Don't need to worry about timeouts or resetting cancel here because there is always exactly 1
     // request.
-    match execute_request(&mut client, request, &mut res).await {
+    match execute_request(&mut client, request, &mut res)
+        // Note: the Future is intentionally boxed because it is very large.
+        .boxed()
+        .await
+    {
         Ok(()) => Ok(Json(res)),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
     }
@@ -237,7 +241,8 @@ async fn run_ws_request(
     ws: &mut WebSocket,
 ) -> Result<(), anyhow::Error> {
     let req = req?;
-    execute_request(client, req, ws).await
+    // Note: the Future is intentionally boxed because it is very large.
+    execute_request(client, req, ws).boxed().await
 }
 
 /// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`].
@@ -865,7 +870,8 @@ async fn execute_request<S: ResultSender>(
     }
 
     for stmt_group in stmt_groups {
-        let executed = execute_stmt_group(client, sender, stmt_group).await;
+        // Note: the Future is intentionally boxed because it is very large.
+        let executed = execute_stmt_group(client, sender, stmt_group).boxed().await;
         // At the end of each group, commit implicit transactions. Do that here so that any `?`
         // early return can still be handled here.
         if client.session().transaction().is_implicit() {

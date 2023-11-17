@@ -76,6 +76,7 @@
 #![warn(clippy::large_futures)]
 // END LINT CONFIG
 
+use futures::FutureExt;
 use mz_catalog::durable::{
     persist_backed_catalog_state, shadow_catalog_state, stash_backed_catalog_state,
     test_bootstrap_args, test_stash_backed_catalog_state, CatalogError, Epoch,
@@ -94,7 +95,9 @@ async fn test_stash_is_initialized() {
     let (debug_factory, stash_config) = stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
     let openable_state2 = stash_backed_catalog_state(stash_config);
-    test_is_initialized(openable_state1, openable_state2).await;
+    test_is_initialized(openable_state1, openable_state2)
+        .boxed()
+        .await;
     debug_factory.drop().await;
 }
 
@@ -104,7 +107,9 @@ async fn test_debug_stash_is_initialized() {
     let debug_factory = DebugStashFactory::new().await;
     let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
     let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
-    test_is_initialized(debug_openable_state1, debug_openable_state2).await;
+    test_is_initialized(debug_openable_state1, debug_openable_state2)
+        .boxed()
+        .await;
     debug_factory.drop().await;
 }
 
@@ -117,7 +122,9 @@ async fn test_persist_is_initialized() {
         persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
         persist_backed_catalog_state(persist_client, organization_id).await;
-    test_is_initialized(persist_openable_state1, persist_openable_state2).await;
+    test_is_initialized(persist_openable_state1, persist_openable_state2)
+        .boxed()
+        .await;
 }
 
 async fn test_is_initialized(
@@ -152,7 +159,9 @@ async fn test_stash_get_deployment_generation() {
     let (debug_factory, stash_config) = stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
     let openable_state2 = stash_backed_catalog_state(stash_config);
-    test_get_deployment_generation(openable_state1, openable_state2).await;
+    test_get_deployment_generation(openable_state1, openable_state2)
+        .boxed()
+        .await;
     debug_factory.drop().await;
 }
 
@@ -162,7 +171,9 @@ async fn test_debug_stash_get_deployment_generation() {
     let debug_factory = DebugStashFactory::new().await;
     let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
     let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
-    test_get_deployment_generation(debug_openable_state1, debug_openable_state2).await;
+    test_get_deployment_generation(debug_openable_state1, debug_openable_state2)
+        .boxed()
+        .await;
     debug_factory.drop().await;
 }
 
@@ -175,7 +186,9 @@ async fn test_persist_get_deployment_generation() {
         persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
         persist_backed_catalog_state(persist_client, organization_id).await;
-    test_get_deployment_generation(persist_openable_state1, persist_openable_state2).await;
+    test_get_deployment_generation(persist_openable_state1, persist_openable_state2)
+        .boxed()
+        .await;
 }
 
 async fn test_get_deployment_generation(
@@ -221,6 +234,7 @@ async fn test_stash_open_savepoint() {
         openable_state3,
         openable_state4,
     )
+    .boxed()
     .await;
     debug_factory.drop().await;
 }
@@ -239,6 +253,7 @@ async fn test_debug_stash_open_savepoint() {
         debug_openable_state3,
         debug_openable_state4,
     )
+    .boxed()
     .await;
     debug_factory.drop().await;
 }
@@ -262,6 +277,7 @@ async fn test_persist_open_savepoint() {
         persist_openable_state3,
         persist_openable_state4,
     )
+    .boxed()
     .await;
 }
 
@@ -344,7 +360,9 @@ async fn test_stash_open_read_only() {
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
     let openable_state2 = stash_backed_catalog_state(stash_config.clone());
     let openable_state3 = stash_backed_catalog_state(stash_config);
-    test_open_read_only(openable_state1, openable_state2, openable_state3).await;
+    test_open_read_only(openable_state1, openable_state2, openable_state3)
+        .boxed()
+        .await;
     debug_factory.drop().await;
 }
 
@@ -360,6 +378,7 @@ async fn test_debug_stash_open_read_only() {
         debug_openable_state2,
         debug_openable_state3,
     )
+    .boxed()
     .await;
     debug_factory.drop().await;
 }
@@ -380,6 +399,7 @@ async fn test_persist_open_read_only() {
         persist_openable_state2,
         persist_openable_state3,
     )
+    .boxed()
     .await;
 }
 
@@ -487,7 +507,9 @@ async fn test_stash_open() {
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
     let openable_state2 = stash_backed_catalog_state(stash_config.clone());
     let openable_state3 = stash_backed_catalog_state(stash_config);
-    test_open(openable_state1, openable_state2, openable_state3).await;
+    test_open(openable_state1, openable_state2, openable_state3)
+        .boxed()
+        .await;
     debug_factory.drop().await;
 }
 
@@ -503,6 +525,7 @@ async fn test_debug_stash_open() {
         debug_openable_state2,
         debug_openable_state3,
     )
+    .boxed()
     .await;
     debug_factory.drop().await;
 }
@@ -523,6 +546,7 @@ async fn test_persist_open() {
         persist_openable_state2,
         persist_openable_state3,
     )
+    .boxed()
     .await;
 }
 
@@ -552,6 +576,7 @@ async fn test_shadow_open() {
         shadow_openable_state2,
         shadow_openable_state3,
     )
+    .boxed()
     .await;
     debug_factory.drop().await;
 }

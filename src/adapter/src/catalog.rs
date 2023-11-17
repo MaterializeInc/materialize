@@ -4272,6 +4272,7 @@ mod tests {
     use std::time::{Duration, Instant};
     use std::{env, iter};
 
+    use futures::future::FutureExt;
     use itertools::Itertools;
     use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
@@ -4384,6 +4385,7 @@ mod tests {
             }
             catalog.expire().await;
         })
+        .boxed()
         .await
     }
 
@@ -4582,6 +4584,7 @@ mod tests {
             );
             catalog.expire().await;
         })
+        .boxed()
         .await
     }
 
@@ -4608,6 +4611,7 @@ mod tests {
             );
             catalog.expire().await;
         })
+        .boxed()
         .await;
     }
 
@@ -4787,6 +4791,7 @@ mod tests {
             );
             catalog.expire().await;
         })
+        .boxed()
         .await;
     }
 
@@ -4810,6 +4815,7 @@ mod tests {
             );
             catalog.expire().await;
         })
+        .boxed()
         .await;
     }
 
@@ -5208,7 +5214,7 @@ mod tests {
             catalog.expire().await;
         }
 
-        Catalog::with_debug(NOW_ZERO.clone(), inner).await
+        Catalog::with_debug(NOW_ZERO.clone(), inner).boxed().await
     }
 
     // Execute all builtin functions with all combinations of arguments from interesting datums.
@@ -5358,8 +5364,9 @@ mod tests {
             handles
         }
 
-        let handles =
-            Catalog::with_debug(NOW_ZERO.clone(), |catalog| async { inner(catalog) }).await;
+        let handles = Catalog::with_debug(NOW_ZERO.clone(), |catalog| async { inner(catalog) })
+            .boxed()
+            .await;
         for handle in handles {
             handle.await.expect("must succeed");
         }
@@ -5578,6 +5585,7 @@ mod tests {
             }
             catalog.expire().await;
         })
+        .boxed()
         .await
     }
 }

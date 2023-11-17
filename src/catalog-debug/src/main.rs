@@ -90,6 +90,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context;
 use clap::clap_derive::ArgEnum;
 use clap::Parser;
+use futures::FutureExt;
 use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, StateConfig};
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::durable::debug::{
@@ -201,7 +202,7 @@ async fn main() {
         env_prefix: Some("MZ_CATALOG_DEBUG_"),
         enable_version_flag: true,
     });
-    if let Err(err) = run(args).await {
+    if let Err(err) = run(args).boxed_local().await {
         eprintln!("catalog: fatal: {}", err.display_with_causes());
         process::exit(1);
     }
@@ -243,7 +244,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             };
             let persist_client = persist_clients.open(persist_location).await?;
             let organization_id = args.organization_id.expect("required for persist");
-            Box::new(persist_backed_catalog_state(persist_client, organization_id).await)
+            let persist_catalog = persist_backed_catalog_state(persist_client, organization_id)
+                .boxed()
+                .await;
+            Box::new(persist_catalog)
         }
     };
 
@@ -254,14 +258,20 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             } else {
                 Box::new(io::stdout().lock())
             };
-            dump(openable_state, target).await
+            dump(openable_state, target).boxed_local().await
         }
         Action::Edit {
             collection,
             key,
             value,
-        } => edit(openable_state, collection, key, value).await,
-        Action::Delete { collection, key } => delete(openable_state, collection, key).await,
+        } => {
+            edit(openable_state, collection, key, value)
+                .boxed_local()
+                .await
+        }
+        Action::Delete { collection, key } => {
+            delete(openable_state, collection, key).boxed_local().await
+        }
         Action::UpgradeCheck {
             cluster_replica_sizes,
         } => {
@@ -269,7 +279,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 None => Default::default(),
                 Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
             };
-            upgrade_check(openable_state, cluster_replica_sizes).await
+            upgrade_check(openable_state, cluster_replica_sizes)
+                .boxed_local()
+                .await
         }
     }
 }

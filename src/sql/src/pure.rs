@@ -17,6 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use futures::future::{BoxFuture, FutureExt};
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
 use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
 use mz_ore::error::ErrorExt;
@@ -139,31 +140,39 @@ fn subsource_name_gen(
 ///
 /// See the section on [purification](crate#purification) in the crate
 /// documentation for details.
-pub async fn purify_statement(
-    catalog: impl SessionCatalog,
+///
+/// Note: the returned Future is intentionally boxed because it is very large.
+pub fn purify_statement<'a>(
+    catalog: impl SessionCatalog + 'a,
     now: u64,
     stmt: Statement<Aug>,
     connection_context: ConnectionContext,
-) -> Result<
-    (
-        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-        Statement<Aug>,
-    ),
-    PlanError,
+) -> BoxFuture<
+    'a,
+    Result<
+        (
+            Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+            Statement<Aug>,
+        ),
+        PlanError,
+    >,
 > {
-    match stmt {
-        Statement::CreateSource(stmt) => {
-            purify_create_source(catalog, now, stmt, connection_context).await
+    async move {
+        match stmt {
+            Statement::CreateSource(stmt) => {
+                purify_create_source(catalog, now, stmt, connection_context).await
+            }
+            Statement::AlterSource(stmt) => {
+                purify_alter_source(catalog, stmt, connection_context).await
+            }
+            Statement::CreateSink(stmt) => {
+                let r = purify_create_sink(catalog, stmt, connection_context).await?;
+                Ok((vec![], r))
+            }
+            o => unreachable!("{:?} does not need to be purified", o),
         }
-        Statement::AlterSource(stmt) => {
-            purify_alter_source(catalog, stmt, connection_context).await
-        }
-        Statement::CreateSink(stmt) => {
-            let r = purify_create_sink(catalog, stmt, connection_context).await?;
-            Ok((vec![], r))
-        }
-        o => unreachable!("{:?} does not need to be purified", o),
     }
+    .boxed()
 }
 
 /// Updates the CREATE SINK statement with materialize comments

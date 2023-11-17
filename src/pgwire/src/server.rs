@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use futures::FutureExt;
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
@@ -137,6 +138,8 @@ impl Server {
                                     internal,
                                     active_connection_count,
                                 })
+                                // Note: the Future is intentionally boxed because it is very large.
+                                .boxed()
                                 .await?;
                                 conn.flush().await?;
                                 return Ok(());

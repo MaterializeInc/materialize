@@ -1854,6 +1854,7 @@ fn default_logging_config() -> ReplicaLogging {
 mod builtin_migration_tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use futures::FutureExt;
     use itertools::Itertools;
     use mz_catalog::memory::objects::Table;
 
@@ -2152,6 +2153,7 @@ mod builtin_migration_tests {
             );
             catalog.expire().await;
         })
+        .boxed()
         .await
     }
 

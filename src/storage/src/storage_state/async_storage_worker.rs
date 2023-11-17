@@ -18,6 +18,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
+use futures::future::FutureExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::Diagnostics;
@@ -345,6 +346,8 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                     as_of.clone(),
                                     &resume_uppers,
                                 )
+                                // Note: We intentionally box the Future because it is very large.
+                                .boxed()
                                 .await;
                                 to_vec_row(uppers)
                             }
@@ -356,6 +359,8 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                     as_of.clone(),
                                     &resume_uppers,
                                 )
+                                // Note: We intentionally box the Future because it is very large.
+                                .boxed()
                                 .await;
                                 to_vec_row(uppers)
                             }
@@ -368,6 +373,8 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                         as_of.clone(),
                                         &resume_uppers,
                                     )
+                                    // Note: We intentionally box the Future because it is very large.
+                                    .boxed()
                                     .await;
                                 to_vec_row(uppers)
                             }
@@ -380,6 +387,8 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                         as_of.clone(),
                                         &resume_uppers,
                                     )
+                                    // Note: We intentionally box the Future because it is very large.
+                                    .boxed()
                                     .await;
                                 to_vec_row(uppers)
                             }

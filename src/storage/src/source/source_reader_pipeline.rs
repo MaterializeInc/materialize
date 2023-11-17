@@ -41,6 +41,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
+use futures::FutureExt;
 use itertools::Itertools;
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
@@ -467,6 +468,8 @@ where
             remap_relation_desc,
             remap_collection_id,
         )
+        // The Future is intentionally boxed because it is very large.
+        .boxed_local()
         .await
         .unwrap_or_else(|e| panic!("Failed to create remap handle for source {}: {}", name, e.display_with_causes()));
         let clock = RemapClock::new(now.clone(), timestamp_interval);

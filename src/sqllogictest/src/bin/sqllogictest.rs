@@ -84,6 +84,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use chrono::Utc;
+use futures::FutureExt;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
@@ -224,7 +225,7 @@ async fn main() -> ExitCode {
     }
 
     if args.rewrite_results {
-        return rewrite(&config, args).await;
+        return rewrite(&config, args).boxed_local().await;
     }
 
     let mut junit = match args.junit_report {

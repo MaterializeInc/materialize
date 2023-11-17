@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use futures::stream::FuturesUnordered;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
@@ -70,6 +70,8 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         Arc::new(StringSchema),
         Arc::new(UnitSchema),
     )
+    // Note: the Future is intentionally boxed because it is very large.
+    .boxed()
     .await;
 
     let data_ids = (0..args.num_datas)

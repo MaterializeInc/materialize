@@ -87,6 +87,7 @@ use std::time::Duration;
 use std::{env, fs, iter, thread};
 
 use anyhow::anyhow;
+use futures::future::FutureExt;
 use headers::{Header, HeaderMapExt};
 use hyper::http::header::HeaderMap;
 use hyper::service::{make_service_fn, service_fn};
@@ -521,6 +522,7 @@ impl Listeners {
                     // TODO(txn): Get this flipped to true before turning anything on in prod.
                     enable_persist_txn_tables_cli: None,
                 })
+                .boxed()
                 .await
         })?;
         let server = Server {

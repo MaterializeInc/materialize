@@ -92,6 +92,7 @@ use std::{cmp, env, iter, process, thread};
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
 use fail::FailScenario;
+use futures::FutureExt;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
@@ -998,6 +999,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 internal_console_redirect_url: args.internal_console_redirect_url,
                 enable_persist_txn_tables_cli: args.enable_persist_txn_tables,
             })
+            // Note: the Future is intentionally boxed because it is very large.
+            .boxed()
             .await
     })?;
 

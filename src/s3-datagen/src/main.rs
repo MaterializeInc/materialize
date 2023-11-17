@@ -82,6 +82,7 @@ use aws_sdk_s3::operation::create_bucket::CreateBucketError;
 use aws_sdk_s3::types::{BucketLocationConstraint, CreateBucketConfiguration};
 use clap::Parser;
 use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::FutureExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
@@ -132,7 +133,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = run().await {
+    // Note: the Future is intentionally boxed because it is very large.
+    if let Err(e) = run().boxed().await {
         error!("{}", e.display_with_causes());
         std::process::exit(1);
     }

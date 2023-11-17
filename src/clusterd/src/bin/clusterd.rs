@@ -84,7 +84,7 @@ use anyhow::Context;
 use axum::http::StatusCode;
 use axum::routing;
 use fail::FailScenario;
-use futures::future;
+use futures::{future, FutureExt};
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute::server::ComputeInstanceContext;
@@ -200,7 +200,8 @@ async fn main() {
         env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,
     });
-    if let Err(err) = run(args).await {
+    // Note: the Future is intentionally boxed because it is very large.
+    if let Err(err) = run(args).boxed_local().await {
         eprintln!("clusterd: fatal: {}", err.display_with_causes());
         process::exit(1);
     }

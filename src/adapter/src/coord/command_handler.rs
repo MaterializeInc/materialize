@@ -106,6 +106,8 @@ impl Coordinator {
 
                     self.handle_execute(portal_name, session, tx, outer_ctx_extra)
                         .instrument(span)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
                         .await;
                 }
 
@@ -445,7 +447,10 @@ impl Coordinator {
             _ => {}
         }
 
-        self.handle_execute_inner(stmt, params, ctx).await
+        self.handle_execute_inner(stmt, params, ctx)
+            // Note: the Future is intentionally boxed because it is very large.
+            .boxed_local()
+            .await
     }
 
     #[tracing::instrument(level = "debug", skip(self, ctx))]

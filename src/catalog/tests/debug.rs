@@ -76,6 +76,7 @@
 #![warn(clippy::large_futures)]
 // END LINT CONFIG
 
+use futures::FutureExt;
 use mz_catalog::durable::debug::SettingCollection;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
@@ -101,6 +102,7 @@ async fn test_stash_debug() {
         debug_openable_state2,
         debug_openable_state3,
     )
+    .boxed()
     .await;
     debug_factory.drop().await;
 }
@@ -123,6 +125,7 @@ async fn test_persist_debug() {
         persist_openable_state2,
         persist_openable_state3,
     )
+    .boxed()
     .await;
 }
 

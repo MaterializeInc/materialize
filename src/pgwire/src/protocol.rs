@@ -466,8 +466,9 @@ where
             loop {
                 self.send_pending_notices().await?;
                 state = match state {
-                    State::Ready => self.advance_ready().await?,
-                    State::Drain => self.advance_drain().await?,
+                    // Note: the Futures are intentionally boxed because they are very large.
+                    State::Ready => self.advance_ready().boxed().await?,
+                    State::Drain => self.advance_drain().boxed().await?,
                     State::Done => return Ok(()),
                 };
                 self.adapter_client
@@ -729,7 +730,8 @@ where
             // statement.
             self.start_transaction(Some(num_stmts));
 
-            match self.one_query(stmt, sql.to_string()).await? {
+            // Note: the Future is intentionally boxed because it is very large.
+            match self.one_query(stmt, sql.to_string()).boxed().await? {
                 State::Ready => (),
                 State::Drain => break,
                 State::Done => return Ok(State::Done),

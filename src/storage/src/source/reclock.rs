@@ -716,6 +716,7 @@ mod tests {
             PROGRESS_DESC.clone(),
             GlobalId::Explain,
         )
+        .boxed_local()
         .await
         .unwrap();
 
@@ -762,7 +763,9 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_basic_usage() {
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()))
+                .boxed_local()
+                .await;
 
         // Reclock offsets 1 and 3 to timestamp 1000
         let batch = vec![
@@ -837,7 +840,9 @@ mod tests {
             .expect("error opening persist shard");
 
         let (mut operator, mut follower) =
-            make_test_operator(remap_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(0.into()))
+                .boxed_local()
+                .await;
 
         let query = Antichain::from_elem(Partitioned::minimum());
         // This is the initial source frontier so we should get the initial ts upper
@@ -985,7 +990,9 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock() {
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()))
+                .boxed_local()
+                .await;
 
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
@@ -1074,7 +1081,9 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_reclock_gh16318() {
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()))
+                .boxed_local()
+                .await;
 
         // First mint bindings for 0 at timestamp 1000
         let source_upper = partitioned_frontier([(0, MzOffset::from(50))]);
@@ -1125,7 +1134,9 @@ mod tests {
             .expect("error opening persist shard");
 
         let (mut operator, mut follower) =
-            make_test_operator(remap_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(0.into()))
+                .boxed_local()
+                .await;
 
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
@@ -1185,7 +1196,9 @@ mod tests {
 
         // Starting a new operator with an `as_of` is the same as having compacted
         let (_operator, follower) =
-            make_test_operator(remap_shard, Antichain::from_elem(1000.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(1000.into()))
+                .boxed_local()
+                .await;
 
         // Reclocking offsets 3 and 4 should succeed
         let batch = vec![
@@ -1213,7 +1226,9 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_sharing() {
         let (mut operator, mut follower) =
-            make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
+            make_test_operator(ShardId::new(), Antichain::from_elem(0.into()))
+                .boxed_local()
+                .await;
 
         // Install a since hold
         let shared_follower = follower.share();
@@ -1246,9 +1261,13 @@ mod tests {
         // Create two operators pointing to the same shard
         let shared_shard = ShardId::new();
         let (mut op_a, mut follower_a) =
-            make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(shared_shard, Antichain::from_elem(0.into()))
+                .boxed_local()
+                .await;
         let (mut op_b, mut follower_b) =
-            make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(shared_shard, Antichain::from_elem(0.into()))
+                .boxed_local()
+                .await;
 
         // Reclock a batch from one of the operators
         // Reclock offsets 1 and 2 to timestamp 1000 from operator A
@@ -1322,7 +1341,9 @@ mod tests {
             .expect("error opening persist shard");
 
         let (mut operator, mut follower) =
-            make_test_operator(remap_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(remap_shard, Antichain::from_elem(0.into()))
+                .boxed_local()
+                .await;
 
         // SETUP
         // Reclock offsets 1 and 2 to timestamp 1000
@@ -1463,7 +1484,9 @@ mod tests {
         let binding_shard = ShardId::new();
 
         let (mut operator, _follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(binding_shard, Antichain::from_elem(0.into()))
+                .boxed_local()
+                .await;
 
         // We do multiple rounds of minting. This will downgrade the since of
         // the internal listen. If we didn't make sure to also heartbeat the
@@ -1490,7 +1513,9 @@ mod tests {
         // Starting a new operator with an `as_of` of `0`, to verify that
         // holding back the `since` of the remap shard works as expected.
         let (_operator, _follower) =
-            make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
+            make_test_operator(binding_shard, Antichain::from_elem(0.into()))
+                .boxed_local()
+                .await;
 
         // Also manually assert the since of the remap shard.
         let persist_location = PersistLocation {

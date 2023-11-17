@@ -42,9 +42,7 @@ use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
-    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
-    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    /// Note: the returned Future is intentionally boxed because it is very large.
     pub(crate) fn handle_message<'a>(&'a mut self, msg: Message) -> LocalBoxFuture<'a, ()> {
         async move {
             match msg {
@@ -60,13 +58,22 @@ impl Coordinator {
                     }
                 }
                 Message::PurifiedStatementReady(ready) => {
-                    self.message_purified_statement_ready(ready).await
+                    self.message_purified_statement_ready(ready)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
+                        .await
                 }
                 Message::CreateConnectionValidationReady(ready) => {
-                    self.message_create_connection_validation_ready(ready).await
+                    self.message_create_connection_validation_ready(ready)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
+                        .await
                 }
                 Message::WriteLockGrant(write_lock_guard) => {
-                    self.message_write_lock_grant(write_lock_guard).await;
+                    self.message_write_lock_grant(write_lock_guard)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
+                        .await;
                 }
                 Message::GroupCommitInitiate(span, permit) => {
                     // Add an OpenTelemetry link to our current span.
@@ -118,6 +125,8 @@ impl Coordinator {
                         real_time_recency_ts,
                         validity,
                     )
+                    // Note: the Future is intentionally boxed because it is very large.
+                    .boxed_local()
                     .await;
                 }
                 Message::RetireExecute { data, reason } => {
@@ -125,19 +134,26 @@ impl Coordinator {
                 }
                 Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
                     self.sequence_execute_single_statement_transaction(ctx, stmt, params)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
                         .await;
                 }
                 Message::PeekStageReady { ctx, stage } => {
-                    self.sequence_peek_stage(ctx, stage).await;
+                    // Note: the Future is intentionally boxed because it is very large.
+                    self.sequence_peek_stage(ctx, stage).boxed_local().await;
                 }
                 Message::PeekStageDeprecatedReady { ctx, stage } => {
                     // Allow while the introduction of the new optimizer API in
                     // #20569 is in progress.
                     #[allow(deprecated)]
-                    self.sequence_peek_stage_deprecated(ctx, stage).await;
+                    self.sequence_peek_stage_deprecated(ctx, stage)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
+                        .await;
                 }
                 Message::DrainStatementLog => {
-                    self.drain_statement_log().await;
+                    // Note: the Future is intentionally boxed because it is very large.
+                    self.drain_statement_log().boxed_local().await;
                 }
             }
         }
@@ -362,7 +378,10 @@ impl Coordinator {
             .iter()
             .all(|id| self.catalog().try_get_entry(id).is_some())
         {
-            self.handle_execute_inner(original_stmt, params, ctx).await;
+            self.handle_execute_inner(original_stmt, params, ctx)
+                // Note: the Future is intentionally boxed because it is very large.
+                .boxed_local()
+                .await;
             return;
         }
 
@@ -711,6 +730,8 @@ impl Coordinator {
                         global_mir_plan,
                     }),
                 )
+                // Note: the Future is intentionally boxed because it is very large.
+                .boxed_local()
                 .await;
             }
             RealTimeRecencyContext::PeekDeprecated {
@@ -754,6 +775,8 @@ impl Coordinator {
                         dataflow_metainfo,
                     }),
                 )
+                // Note: the Future is intentionally boxed because it is very large.
+                .boxed_local()
                 .await;
             }
         }

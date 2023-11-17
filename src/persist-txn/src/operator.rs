@@ -420,6 +420,8 @@ impl DataSubscribe {
 
 #[cfg(test)]
 mod tests {
+    use futures::FutureExt;
+
     use crate::tests::writer;
     use crate::txns::TxnsHandle;
 
@@ -447,7 +449,10 @@ mod tests {
 
         // Now register the shard. Also start a new subscription and step the
         // previous one (plus repeat this for ever later step).
-        txns.register(1, [writer(&client, d0).await]).await.unwrap();
+        txns.register(1, [writer(&client, d0).await])
+            .boxed()
+            .await
+            .unwrap();
         subs.push(txns.read_cache().expect_subscribe(&client, d0, 5));
         step(&mut subs);
 

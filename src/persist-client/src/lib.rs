@@ -92,6 +92,7 @@ use std::sync::Arc;
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use futures::future::{BoxFuture, FutureExt};
 use mz_build_info::{build_info, BuildInfo};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
@@ -337,12 +338,17 @@ impl PersistClient {
     }
 
     /// Returns a new in-mem [PersistClient] for tests and examples.
-    pub async fn new_for_tests() -> Self {
-        let cache = PersistClientCache::new_no_metrics();
-        cache
-            .open(PersistLocation::new_in_mem())
-            .await
-            .expect("in-mem location is valid")
+    ///
+    /// Note: the returned Future is intentionally boxed because it is very large.
+    pub fn new_for_tests() -> BoxFuture<'static, Self> {
+        async move {
+            let cache = PersistClientCache::new_no_metrics();
+            cache
+                .open(PersistLocation::new_in_mem())
+                .await
+                .expect("in-mem location is valid")
+        }
+        .boxed()
     }
 
     /// Provides capabilities for the durable TVC identified by `shard_id` at
@@ -779,6 +785,7 @@ mod tests {
     use differential_dataflow::lattice::Lattice;
     use futures_task::noop_waker;
 
+    use futures::future::{BoxFuture, FutureExt};
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
@@ -872,12 +879,16 @@ mod tests {
         cache
     }
 
-    pub async fn new_test_client() -> PersistClient {
-        let cache = new_test_client_cache();
-        cache
-            .open(PersistLocation::new_in_mem())
-            .await
-            .expect("client construction failed")
+    /// Note: the returned Future is intentionally boxed because it is very large.
+    pub fn new_test_client() -> BoxFuture<'static, PersistClient> {
+        async move {
+            let cache = new_test_client_cache();
+            cache
+                .open(PersistLocation::new_in_mem())
+                .await
+                .expect("client construction failed")
+        }
+        .boxed()
     }
 
     pub fn all_ok<'a, K, V, T, D, I>(

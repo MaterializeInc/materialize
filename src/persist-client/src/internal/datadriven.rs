@@ -143,6 +143,8 @@ impl<'a> DirectiveArgs<'a> {
 }
 
 mod tests {
+    use futures::future::FutureExt;
+
     use super::*;
 
     #[mz_ore::test]
@@ -180,7 +182,8 @@ mod tests {
         use crate::internal::machine::datadriven as machine_dd;
 
         ::datadriven::walk_async("tests/machine", |mut f| {
-            let initial_state_fut = machine_dd::MachineState::new();
+            // Note: the Future is intentionally boxed because it is very large.
+            let initial_state_fut = machine_dd::MachineState::new().boxed_local();
             async move {
                 let state = Arc::new(Mutex::new(initial_state_fut.await));
                 f.run_async(move |tc| {
@@ -262,10 +265,14 @@ mod tests {
                         }
                     }
                 })
+                // Note: the Future is intentionally boxed because it is very large.
+                .boxed_local()
                 .await;
                 f
             }
         })
+        // Note: the Future is intentionally boxed because it is very large.
+        .boxed_local()
         .await;
     }
 }

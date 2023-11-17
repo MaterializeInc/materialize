@@ -156,6 +156,8 @@ impl Coordinator {
                 }
                 Plan::CreateConnection(plan) => {
                     self.sequence_create_connection(ctx, plan, resolved_ids)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
                         .await;
                 }
                 Plan::CreateDatabase(plan) => {
@@ -196,7 +198,10 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CreateSink(plan) => {
-                    self.sequence_create_sink(ctx, plan, resolved_ids).await;
+                    self.sequence_create_sink(ctx, plan, resolved_ids)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
+                        .await;
                 }
                 Plan::CreateView(plan) => {
                     let result = self
@@ -207,6 +212,8 @@ impl Coordinator {
                 Plan::CreateMaterializedView(plan) => {
                     let result = self
                         .sequence_create_materialized_view(ctx.session_mut(), plan, resolved_ids)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
                         .await;
                     ctx.retire(result);
                 }
@@ -298,10 +305,16 @@ impl Coordinator {
                             AdapterNotice::ExplicitTransactionControlInImplicitTransaction,
                         );
                     }
-                    self.sequence_end_transaction(ctx, action).await;
+                    self.sequence_end_transaction(ctx, action)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
+                        .await;
                 }
                 Plan::Select(plan) => {
-                    self.sequence_peek(ctx, plan, target_cluster).await;
+                    self.sequence_peek(ctx, plan, target_cluster)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
+                        .await;
                 }
                 Plan::Subscribe(plan) => {
                     if enable_unified_optimizer_api {
@@ -327,6 +340,8 @@ impl Coordinator {
                 }
                 Plan::ShowColumns(show_columns_plan) => {
                     self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
                         .await;
                 }
                 Plan::CopyFrom(plan) => {
@@ -353,10 +368,12 @@ impl Coordinator {
                         .await;
                 }
                 Plan::Insert(plan) => {
-                    self.sequence_insert(ctx, plan).await;
+                    // Note: the Future is intentionally boxed because it is very large.
+                    self.sequence_insert(ctx, plan).boxed_local().await;
                 }
                 Plan::ReadThenWrite(plan) => {
-                    self.sequence_read_then_write(ctx, plan).await;
+                    // Note: the Future is intentionally boxed because it is very large.
+                    self.sequence_read_then_write(ctx, plan).boxed_local().await;
                 }
                 Plan::AlterNoop(plan) => {
                     ctx.retire(Ok(ExecuteResponse::AlteredObject(plan.object_type)));
@@ -439,6 +456,8 @@ impl Coordinator {
                 } => {
                     let result = self
                         .sequence_alter_source(ctx.session_mut(), alter_source, subsources)
+                        // Note: the Future is intentionally boxed because it is very large.
+                        .boxed_local()
                         .await;
                     ctx.retire(result);
                 }
@@ -627,7 +646,10 @@ impl Coordinator {
         let (sub_tx, sub_rx) = oneshot::channel();
         let sub_ct = ClientTransmitter::new(sub_tx, self.internal_cmd_tx.clone());
         let sub_ctx = ExecuteContext::from_parts(sub_ct, internal_cmd_tx, session, extra);
-        self.handle_execute_inner(stmt, params, sub_ctx).await;
+        self.handle_execute_inner(stmt, params, sub_ctx)
+            // Note: the Future is intentionally boxed because it is very large.
+            .boxed_local()
+            .await;
 
         // The response can need off-thread processing. Wait for it elsewhere so the coordinator can
         // continue processing.

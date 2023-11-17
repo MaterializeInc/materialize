@@ -90,6 +90,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use futures::FutureExt;
 use mz_adapter::catalog::{Catalog, CatalogItem, Op, Table};
 use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_catalog::SYSTEM_CONN_ID;
@@ -205,7 +206,9 @@ async fn datadriven() {
             }
             f
         })
+        .boxed()
         .await
     })
+    .boxed()
     .await;
 }

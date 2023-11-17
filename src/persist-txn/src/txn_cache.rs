@@ -857,6 +857,8 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
 
 #[cfg(test)]
 mod tests {
+    use futures::future::BoxFuture;
+    use futures::FutureExt;
     use mz_persist_client::PersistClient;
     use DataListenNext::*;
 
@@ -877,27 +879,31 @@ mod tests {
             ret
         }
 
-        pub(crate) async fn expect_snapshot(
-            &mut self,
-            client: &PersistClient,
+        pub(crate) fn expect_snapshot<'a>(
+            &'a mut self,
+            client: &'a PersistClient,
             data_id: ShardId,
             as_of: u64,
-        ) -> Vec<String> {
-            let mut data_read = reader(client, data_id).await;
-            self.update_gt(&as_of).await;
-            let mut snapshot = self
-                .data_snapshot(data_read.shard_id(), as_of)
-                .snapshot_and_fetch(&mut data_read)
-                .await
-                .unwrap();
-            snapshot.sort();
-            snapshot
-                .into_iter()
-                .flat_map(|((k, v), _t, d)| {
-                    let (k, ()) = (k.unwrap(), v.unwrap());
-                    std::iter::repeat(k).take(usize::try_from(d).unwrap())
-                })
-                .collect()
+        ) -> BoxFuture<'a, Vec<String>> {
+            async move {
+                let mut data_read = reader(client, data_id).await;
+                self.update_gt(&as_of).await;
+                let mut snapshot = self
+                    .data_snapshot(data_read.shard_id(), as_of)
+                    .snapshot_and_fetch(&mut data_read)
+                    .boxed()
+                    .await
+                    .unwrap();
+                snapshot.sort();
+                snapshot
+                    .into_iter()
+                    .flat_map(|((k, v), _t, d)| {
+                        let (k, ()) = (k.unwrap(), v.unwrap());
+                        std::iter::repeat(k).take(usize::try_from(d).unwrap())
+                    })
+                    .collect()
+            }
+            .boxed()
         }
 
         pub(crate) fn expect_subscribe(
@@ -1064,7 +1070,11 @@ mod tests {
         let snap = txns.txns_cache.data_snapshot(d0, 4);
         let mut data_read = reader(&client, d0).await;
         // This shouldn't deadlock.
-        let contents = snap.snapshot_and_fetch(&mut data_read).await.unwrap();
+        let contents = snap
+            .snapshot_and_fetch(&mut data_read)
+            .boxed()
+            .await
+            .unwrap();
         assert_eq!(contents.len(), 1);
 
         // Sanity check that the scenario played out like we said above.

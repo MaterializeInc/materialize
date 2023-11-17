@@ -283,7 +283,7 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use futures::stream::FuturesUnordered;
-    use futures::StreamExt;
+    use futures::{FutureExt, StreamExt};
     use mz_persist_client::PersistClient;
 
     use crate::tests::writer;
@@ -432,7 +432,7 @@ mod tests {
                 let mut register_ts = 1;
                 loop {
                     let data_write = writer(&client, d0).await;
-                    match txns.register(register_ts, [data_write]).await {
+                    match txns.register(register_ts, [data_write]).boxed().await {
                         Ok(()) => {
                             debug!("{} registered at {}", idx, register_ts);
                             break;

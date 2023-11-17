@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use futures::FutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
@@ -682,7 +683,10 @@ impl Service for TransactorService {
             shared_states,
             pubsub_sender,
         )?;
-        let transactor = Transactor::new(&client, handle.node_id(), shard_id).await?;
+        let transactor = Transactor::new(&client, handle.node_id(), shard_id)
+            // Note: the Future is intentionally boxed because it is very large.
+            .boxed()
+            .await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)
     }

@@ -76,6 +76,7 @@
 #![warn(clippy::large_futures)]
 // END LINT CONFIG
 
+use futures::FutureExt;
 use mz_adapter::catalog::Catalog;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
@@ -187,5 +188,6 @@ async fn test_parameter_type_inference() {
         }
         catalog.expire().await;
     })
+    .boxed()
     .await
 }

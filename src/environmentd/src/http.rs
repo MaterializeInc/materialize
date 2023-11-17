@@ -29,7 +29,7 @@ use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, State};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{routing, Extension, Json, Router};
-use futures::future::{FutureExt, Shared, TryFutureExt};
+use futures::future::{BoxFuture, FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -529,36 +529,40 @@ pub struct AuthedClient {
 }
 
 impl AuthedClient {
-    async fn new(
-        adapter_client: &Client,
+    /// Note: the returned Future is intentionally boxed because it is very large.
+    fn new<'a>(
+        adapter_client: &'a Client,
         user: AuthedUser,
         active_connection_count: SharedConnectionCounter,
         options: BTreeMap<String, String>,
-    ) -> Result<Self, AdapterError> {
-        let AuthedUser(user) = user;
-        let drop_connection = DropConnection::new_connection(&user, active_connection_count)?;
-        let conn_id = adapter_client.new_conn_id()?;
-        let mut session = adapter_client.new_session(conn_id, user);
-        let mut set_setting_keys = Vec::new();
-        for (key, val) in options {
-            const LOCAL: bool = false;
-            if let Err(err) = session
-                .vars_mut()
-                .set(None, &key, VarInput::Flat(&val), LOCAL)
-            {
-                session.add_notice(AdapterNotice::BadStartupSetting {
-                    name: key.to_string(),
-                    reason: err.to_string(),
-                })
-            } else {
-                set_setting_keys.push(key);
+    ) -> BoxFuture<'a, Result<Self, AdapterError>> {
+        async move {
+            let AuthedUser(user) = user;
+            let drop_connection = DropConnection::new_connection(&user, active_connection_count)?;
+            let conn_id = adapter_client.new_conn_id()?;
+            let mut session = adapter_client.new_session(conn_id, user);
+            let mut set_setting_keys = Vec::new();
+            for (key, val) in options {
+                const LOCAL: bool = false;
+                if let Err(err) = session
+                    .vars_mut()
+                    .set(None, &key, VarInput::Flat(&val), LOCAL)
+                {
+                    session.add_notice(AdapterNotice::BadStartupSetting {
+                        name: key.to_string(),
+                        reason: err.to_string(),
+                    })
+                } else {
+                    set_setting_keys.push(key);
+                }
             }
+            let adapter_client = adapter_client.startup(session, set_setting_keys).await?;
+            Ok(AuthedClient {
+                client: adapter_client,
+                drop_connection,
+            })
         }
-        let adapter_client = adapter_client.startup(session, set_setting_keys).await?;
-        Ok(AuthedClient {
-            client: adapter_client,
-            drop_connection,
-        })
+        .boxed()
     }
 }
 

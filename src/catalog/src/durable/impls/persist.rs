@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::now::EpochMillis;
@@ -349,6 +349,8 @@ impl OpenableDurableCatalogState for PersistHandle {
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Savepoint, boot_ts, bootstrap_args, deploy_generation)
+            // Note: the Future is intentionally boxed because it is very large.
+            .boxed()
             .await
     }
 
@@ -359,6 +361,8 @@ impl OpenableDurableCatalogState for PersistHandle {
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Readonly, boot_ts, bootstrap_args, None)
+            // Note: the Future is intentionally boxed because it is very large.
+            .boxed()
             .await
     }
 
@@ -370,6 +374,8 @@ impl OpenableDurableCatalogState for PersistHandle {
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Writable, boot_ts, bootstrap_args, deploy_generation)
+            // Note: the Future is intentionally boxed because it is very large.
+            .boxed()
             .await
     }
 

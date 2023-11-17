@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
+use futures::FutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
@@ -62,6 +63,8 @@ impl Transactor {
             Arc::new(StringSchema),
             Arc::new(UnitSchema),
         )
+        // Note: the Future is intentionally boxed because it is very large.
+        .boxed()
         .await;
         Ok(Transactor {
             txns_id,
@@ -93,7 +96,8 @@ impl Transactor {
 
         // First create and register any data shards as necessary.
         for data_id in writes.keys().chain(read_ids.iter()) {
-            let init_ts = self.ensure_registered(data_id).await;
+            // Note: the Future is intentionally boxed because it is very large.
+            let init_ts = self.ensure_registered(data_id).boxed().await;
             self.oracle.read_ts = std::cmp::max(self.oracle.read_ts, init_ts)
         }
 
@@ -233,7 +237,8 @@ impl Transactor {
                 )
                 .await
                 .expect("data schema shouldn't change");
-            let res = self.txns.register(init_ts, [data_write]).await;
+            // Note: the Future is intentionally boxed because it is very large.
+            let res = self.txns.register(init_ts, [data_write]).boxed().await;
             match res {
                 Ok(_) => {
                     self.data_reads.insert(*data_id, (init_ts, data_read));

@@ -10,6 +10,8 @@
 //! This crate is responsible for durably storing and modifying the catalog contents.
 
 use async_trait::async_trait;
+use futures::future::{BoxFuture, FutureExt};
+
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::time::Duration;
@@ -268,11 +270,11 @@ pub fn test_stash_backed_catalog_state(
 }
 
 /// Creates an openable durable catalog state implemented using persist.
-pub async fn persist_backed_catalog_state(
+pub fn persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
-) -> PersistHandle {
-    PersistHandle::new(persist_client, organization_id).await
+) -> BoxFuture<'static, PersistHandle> {
+    PersistHandle::new(persist_client, organization_id).boxed()
 }
 
 /// Creates an openable durable catalog state implemented using both the stash and persist, that

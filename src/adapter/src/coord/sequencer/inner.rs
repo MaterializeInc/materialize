@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, FutureExt};
 use itertools::Itertools;
 use maplit::{btreemap, btreeset};
 use mz_cloud_resources::VpcEndpointConfig;
@@ -2171,6 +2171,8 @@ impl Coordinator {
                     target_cluster,
                 }),
             )
+            // Note: the Future is intentionally boxed because it is very large.
+            .boxed_local()
             .await;
         } else {
             // Allow while the introduction of the new optimizer API in
@@ -2183,6 +2185,8 @@ impl Coordinator {
                     target_cluster,
                 }),
             )
+            // Note: the Future is intentionally boxed because it is very large.
+            .boxed_local()
             .await;
         }
     }
@@ -4060,6 +4064,8 @@ impl Coordinator {
                 };
 
                 self.sequence_read_then_write(ctx, read_then_write_plan)
+                    // Note: the Future is intentionally boxed because it is very large.
+                    .boxed_local()
                     .await;
             }
         }
@@ -4178,6 +4184,8 @@ impl Coordinator {
             },
             TargetCluster::Active,
         )
+        // Note: the Future is intentionally boxed because it is very large.
+        .boxed_local()
         .await;
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();

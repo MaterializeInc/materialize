@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use futures::FutureExt;
 use tokio::time;
 
 use crate::config::{
@@ -32,7 +33,9 @@ pub async fn system_parameter_sync(
 
     // Ensure the frontend client is initialized.
     let mut frontend = Option::<SystemParameterFrontend>::None; // lazy initialize the frontend below
-    let mut backend = SystemParameterBackend::new(adapter_client).await?;
+
+    // Note: the Future is intentionally boxed because it is very large.
+    let mut backend = SystemParameterBackend::new(adapter_client).boxed().await?;
 
     // Tick every `tick_duration` ms, skipping missed ticks.
     let mut interval = time::interval(tick_interval);

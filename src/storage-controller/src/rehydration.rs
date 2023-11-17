@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
+use futures::future::{BoxFuture, FutureExt};
 use futures::{Stream, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
@@ -205,162 +206,177 @@ where
         }
     }
 
-    async fn step_await_address(&mut self) -> RehydrationTaskState<T> {
-        loop {
-            match self.command_rx.recv().await {
-                None => break RehydrationTaskState::Done,
-                Some(RehydrationCommand::Connect { location }) => {
-                    break RehydrationTaskState::Rehydrate { location }
-                }
-                Some(RehydrationCommand::Send(command)) => {
-                    self.absorb_command(&command);
-                }
-                Some(RehydrationCommand::Reset) => {}
-            }
-        }
-    }
-
-    async fn step_rehydrate(
-        &mut self,
-        location: ClusterReplicaLocation,
-    ) -> RehydrationTaskState<T> {
-        // Reconnect to the storage replica.
-        let stream = Retry::default()
-            .clamp_backoff(Duration::from_secs(1))
-            .into_retry_stream();
-        tokio::pin!(stream);
-
-        // TODO(guswynn): cluster-unification: share this code with compute, by consolidating
-        // on use of `ReplicaTask`.
-        let (client, timely_command) = loop {
-            let state = stream.next().await.expect("infinite stream");
-            // Drain any pending commands, in case we've been told to connect
-            // to a new storage replica.
+    /// Note: the returned Future is intentionally boxed because it is very large.
+    fn step_await_address<'a>(&'a mut self) -> BoxFuture<'a, RehydrationTaskState<T>> {
+        async move {
             loop {
-                match self.command_rx.try_recv() {
-                    Ok(RehydrationCommand::Connect { location }) => {
-                        return RehydrationTaskState::Rehydrate { location };
+                match self.command_rx.recv().await {
+                    None => break RehydrationTaskState::Done,
+                    Some(RehydrationCommand::Connect { location }) => {
+                        break RehydrationTaskState::Rehydrate { location }
                     }
-                    Ok(RehydrationCommand::Send(command)) => {
+                    Some(RehydrationCommand::Send(command)) => {
                         self.absorb_command(&command);
                     }
-                    Ok(RehydrationCommand::Reset) => return RehydrationTaskState::AwaitAddress,
-                    Err(TryRecvError::Disconnected) => return RehydrationTaskState::Done,
-                    Err(TryRecvError::Empty) => break,
+                    Some(RehydrationCommand::Reset) => {}
                 }
             }
-
-            let timely_config = TimelyConfig {
-                workers: location.workers,
-                // Overridden by the storage `PartitionedState` implementation.
-                process: 0,
-                addresses: location.dataflow_addrs.clone(),
-                // These values are not currently used by storage, so we just choose
-                // some identifiable value.
-                //
-                // TODO(guswynn): cluster-unification: ensure this is cleaned up when
-                // the compute and storage command streams are merged.
-                idle_arrangement_merge_effort: 1337,
-                arrangement_exert_proportionality: 1337,
-            };
-            let dests = location
-                .ctl_addrs
-                .clone()
-                .into_iter()
-                .map(|addr| (addr, self.metrics.clone()))
-                .collect();
-            let version = self.build_info.semver_version();
-            let client =
-                StorageGrpcClient::connect_partitioned(dests, version, &self.grpc_client_params)
-                    .await;
-
-            let client = match client {
-                Ok(client) => client,
-                Err(e) => {
-                    if state.i >= mz_service::retry::INFO_MIN_RETRIES {
-                        tracing::info!(
-                            "error connecting to {:?} for storage, retrying in {:?}: {e}",
-                            location,
-                            state.next_backoff.unwrap()
-                        );
-                    } else {
-                        tracing::debug!(
-                            "error connecting to {:?} for storage, retrying in {:?}: {e}",
-                            location,
-                            state.next_backoff.unwrap()
-                        );
-                    }
-                    continue;
-                }
-            };
-
-            // The first epoch we actually send to the cluster will be `1`, just like compute.
-            let new_epoch = ClusterStartupEpoch::new(
-                self.current_epoch.envd(),
-                self.current_epoch.replica() + 1,
-            );
-            self.current_epoch = new_epoch;
-            let timely_command = StorageCommand::CreateTimely {
-                config: timely_config,
-                epoch: new_epoch,
-            };
-
-            break (client, timely_command);
-        };
-
-        // Rehydrate all commands.
-        let mut commands = vec![
-            timely_command,
-            StorageCommand::UpdateConfiguration(self.config.clone()),
-            StorageCommand::RunIngestions(self.sources.values().cloned().collect()),
-            StorageCommand::CreateSinks(self.sinks.values().cloned().collect()),
-            StorageCommand::AllowCompaction(
-                self.sinces
-                    .iter()
-                    .map(|(id, since)| (*id, since.clone()))
-                    .collect(),
-            ),
-        ];
-        if self.initialized {
-            commands.push(StorageCommand::InitializationComplete)
         }
-        self.send_commands(location, client, commands).await
+        .boxed()
     }
 
-    async fn step_pump(
-        &mut self,
+    /// Note: the returned Future is intentionally boxed because it is very large.
+    fn step_rehydrate<'a>(
+        &'a mut self,
         location: ClusterReplicaLocation,
-        mut client: PartitionedClient<T>,
-    ) -> RehydrationTaskState<T> {
-        select! {
-            // Command from controller to forward to storage cluster.
-            command = self.command_rx.recv() => match command {
-                None => RehydrationTaskState::Done,
-                Some(RehydrationCommand::Connect { location }) => RehydrationTaskState::Rehydrate { location },
-                Some(RehydrationCommand::Send(command)) => {
-                    self.absorb_command(&command);
-                    self.send_commands(location, client, vec![command]).await
-                }
-                Some(RehydrationCommand::Reset) => {
-                    RehydrationTaskState::AwaitAddress
-                }
-            },
-            // Response from storage cluster to forward to controller.
-            response = client.recv() => {
-                let response = match response.transpose() {
-                    None => {
-                        // In the future, if a storage cluster politely hangs
-                        // up, we might want to take it as a signal that a new
-                        // controller has taken over. For now we just try to
-                        // reconnect.
-                        Err(anyhow!("storage cluster unexpectedly gracefully terminated connection"))
+    ) -> BoxFuture<'a, RehydrationTaskState<T>> {
+        async move {
+            // Reconnect to the storage replica.
+            let stream = Retry::default()
+                .clamp_backoff(Duration::from_secs(1))
+                .into_retry_stream();
+            tokio::pin!(stream);
+
+            // TODO(guswynn): cluster-unification: share this code with compute, by consolidating
+            // on use of `ReplicaTask`.
+            let (client, timely_command) = loop {
+                let state = stream.next().await.expect("infinite stream");
+                // Drain any pending commands, in case we've been told to connect
+                // to a new storage replica.
+                loop {
+                    match self.command_rx.try_recv() {
+                        Ok(RehydrationCommand::Connect { location }) => {
+                            return RehydrationTaskState::Rehydrate { location };
+                        }
+                        Ok(RehydrationCommand::Send(command)) => {
+                            self.absorb_command(&command);
+                        }
+                        Ok(RehydrationCommand::Reset) => return RehydrationTaskState::AwaitAddress,
+                        Err(TryRecvError::Disconnected) => return RehydrationTaskState::Done,
+                        Err(TryRecvError::Empty) => break,
                     }
-                    Some(response) => response,
+                }
+
+                let timely_config = TimelyConfig {
+                    workers: location.workers,
+                    // Overridden by the storage `PartitionedState` implementation.
+                    process: 0,
+                    addresses: location.dataflow_addrs.clone(),
+                    // These values are not currently used by storage, so we just choose
+                    // some identifiable value.
+                    //
+                    // TODO(guswynn): cluster-unification: ensure this is cleaned up when
+                    // the compute and storage command streams are merged.
+                    idle_arrangement_merge_effort: 1337,
+                    arrangement_exert_proportionality: 1337,
+                };
+                let dests = location
+                    .ctl_addrs
+                    .clone()
+                    .into_iter()
+                    .map(|addr| (addr, self.metrics.clone()))
+                    .collect();
+                let version = self.build_info.semver_version();
+                let client = StorageGrpcClient::connect_partitioned(
+                    dests,
+                    version,
+                    &self.grpc_client_params,
+                )
+                .await;
+
+                let client = match client {
+                    Ok(client) => client,
+                    Err(e) => {
+                        if state.i >= mz_service::retry::INFO_MIN_RETRIES {
+                            tracing::info!(
+                                "error connecting to {:?} for storage, retrying in {:?}: {e}",
+                                location,
+                                state.next_backoff.unwrap()
+                            );
+                        } else {
+                            tracing::debug!(
+                                "error connecting to {:?} for storage, retrying in {:?}: {e}",
+                                location,
+                                state.next_backoff.unwrap()
+                            );
+                        }
+                        continue;
+                    }
                 };
 
-                self.send_response(location, client, response)
+                // The first epoch we actually send to the cluster will be `1`, just like compute.
+                let new_epoch = ClusterStartupEpoch::new(
+                    self.current_epoch.envd(),
+                    self.current_epoch.replica() + 1,
+                );
+                self.current_epoch = new_epoch;
+                let timely_command = StorageCommand::CreateTimely {
+                    config: timely_config,
+                    epoch: new_epoch,
+                };
+
+                break (client, timely_command);
+            };
+
+            // Rehydrate all commands.
+            let mut commands = vec![
+                timely_command,
+                StorageCommand::UpdateConfiguration(self.config.clone()),
+                StorageCommand::RunIngestions(self.sources.values().cloned().collect()),
+                StorageCommand::CreateSinks(self.sinks.values().cloned().collect()),
+                StorageCommand::AllowCompaction(
+                    self.sinces
+                        .iter()
+                        .map(|(id, since)| (*id, since.clone()))
+                        .collect(),
+                ),
+            ];
+            if self.initialized {
+                commands.push(StorageCommand::InitializationComplete)
+            }
+            self.send_commands(location, client, commands).await
+        }
+        .boxed()
+    }
+
+    /// Note: the returned Future is intentionally boxed because it is very large.
+    fn step_pump<'a>(
+        &'a mut self,
+        location: ClusterReplicaLocation,
+        mut client: PartitionedClient<T>,
+    ) -> BoxFuture<'a, RehydrationTaskState<T>> {
+        async move {
+            select! {
+                // Command from controller to forward to storage cluster.
+                command = self.command_rx.recv() => match command {
+                    None => RehydrationTaskState::Done,
+                    Some(RehydrationCommand::Connect { location }) => RehydrationTaskState::Rehydrate { location },
+                    Some(RehydrationCommand::Send(command)) => {
+                        self.absorb_command(&command);
+                        self.send_commands(location, client, vec![command]).await
+                    }
+                    Some(RehydrationCommand::Reset) => {
+                        RehydrationTaskState::AwaitAddress
+                    }
+                },
+                // Response from storage cluster to forward to controller.
+                response = client.recv() => {
+                    let response = match response.transpose() {
+                        None => {
+                            // In the future, if a storage cluster politely hangs
+                            // up, we might want to take it as a signal that a new
+                            // controller has taken over. For now we just try to
+                            // reconnect.
+                            Err(anyhow!("storage cluster unexpectedly gracefully terminated connection"))
+                        }
+                        Some(response) => response,
+                    };
+
+                    self.send_response(location, client, response)
+                }
             }
         }
+        .boxed()
     }
 
     async fn send_commands(

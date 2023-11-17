@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
+use futures::FutureExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -150,6 +151,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
                 args.num_writers,
                 args.num_readers,
             )
+            .boxed()
             .await?
         }
         BenchmarkType::MzSourceModel => panic!("source model"),
