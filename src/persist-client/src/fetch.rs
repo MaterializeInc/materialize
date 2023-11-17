@@ -33,7 +33,7 @@ use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::PartialBatchKey;
-use crate::read::{LeasedReaderId, ReadHandle};
+use crate::read::LeasedReaderId;
 use crate::stats::PartStats;
 use crate::ShardId;
 
@@ -65,19 +65,6 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    pub(crate) async fn new(handle: ReadHandle<K, V, T, D>) -> Self {
-        let b = BatchFetcher {
-            blob: Arc::clone(&handle.blob),
-            metrics: Arc::clone(&handle.metrics),
-            shard_metrics: Arc::clone(&handle.machine.applier.shard_metrics),
-            shard_id: handle.machine.shard_id(),
-            schemas: handle.schemas.clone(),
-            _phantom: PhantomData,
-        };
-        handle.expire().await;
-        b
-    }
-
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
     pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
         LeasedBatchPart::from(x, Arc::clone(&self.metrics))
