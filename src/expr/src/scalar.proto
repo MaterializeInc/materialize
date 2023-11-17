@@ -636,6 +636,7 @@ message ProtoBinaryFunc {
         google.protobuf.Empty constant_time_eq_string = 188;
         google.protobuf.Empty constant_time_eq_bytes = 189;
         google.protobuf.Empty timezone_offset = 190;
+        google.protobuf.Empty pretty_sql = 191;
     }
 }
 
@@ -826,5 +827,6 @@ message ProtoEvalError {
         google.protobuf.Empty acl_array_null_element = 75;
         google.protobuf.Empty mz_acl_array_null_element = 76;
         string invalid_iana_timezone_id = 77;
+        string pretty_error = 78;
     }
 }

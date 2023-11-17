@@ -49,6 +49,7 @@ use mz_repr::adt::regex::{any_regex, Regex};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
+use mz_sql_pretty::pretty_str;
 use num::traits::CheckedNeg;
 use proptest::prelude::*;
 use proptest::strategy::*;
@@ -2136,6 +2137,20 @@ fn regexp_replace<'a>(
     Ok(Datum::String(replaced))
 }
 
+fn pretty_sql<'a>(
+    sql: Datum<'a>,
+    width: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let sql = sql.unwrap_str();
+    let width = width.unwrap_int32();
+    let width =
+        usize::try_from(width).map_err(|_| EvalError::PrettyError("invalid width".to_string()))?;
+    let pretty = pretty_str(sql, width).map_err(|e| EvalError::PrettyError(e.to_string()))?;
+    let pretty = temp_storage.push_string(pretty);
+    Ok(Datum::String(pretty))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
     AddInt16,
@@ -2323,6 +2338,7 @@ pub enum BinaryFunc {
     UuidGenerateV5,
     MzAclItemContainsPrivilege,
     ParseIdent,
+    PrettySql,
 }
 
 impl BinaryFunc {
@@ -2587,6 +2603,7 @@ impl BinaryFunc {
             BinaryFunc::UuidGenerateV5 => Ok(uuid_generate_v5(a, b)),
             BinaryFunc::MzAclItemContainsPrivilege => mz_acl_item_contains_privilege(a, b),
             BinaryFunc::ParseIdent => parse_ident(a, b, temp_storage),
+            BinaryFunc::PrettySql => pretty_sql(a, b, temp_storage),
         }
     }
 
@@ -2774,6 +2791,7 @@ impl BinaryFunc {
             MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable),
 
             ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable),
+            PrettySql => ScalarType::String.nullable(in_nullable),
         }
     }
 
@@ -2973,7 +2991,8 @@ impl BinaryFunc {
             | RangeDifference
             | UuidGenerateV5
             | MzAclItemContainsPrivilege
-            | ParseIdent => false,
+            | ParseIdent
+            | PrettySql => false,
 
             JsonbGetInt64 { .. }
             | JsonbGetString { .. }
@@ -3176,7 +3195,8 @@ impl BinaryFunc {
             | MzAclItemContainsPrivilege
             | ConstantTimeEqBytes
             | ConstantTimeEqString
-            | ParseIdent => false,
+            | ParseIdent
+            | PrettySql => false,
         }
     }
 
@@ -3399,6 +3419,7 @@ impl BinaryFunc {
             BinaryFunc::MzAclItemContainsPrivilege => (false, false),
             BinaryFunc::ParseIdent => (false, false),
             BinaryFunc::ConstantTimeEqBytes | BinaryFunc::ConstantTimeEqString => (false, false),
+            BinaryFunc::PrettySql => (false, false),
         }
     }
 }
@@ -3605,6 +3626,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::UuidGenerateV5 => f.write_str("uuid_generate_v5"),
             BinaryFunc::MzAclItemContainsPrivilege => f.write_str("mz_aclitem_contains_privilege"),
             BinaryFunc::ParseIdent => f.write_str("parse_ident"),
+            BinaryFunc::PrettySql => f.write_str("pretty_sql"),
         }
     }
 }
@@ -4016,6 +4038,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::ParseIdent => ParseIdent(()),
             BinaryFunc::ConstantTimeEqBytes => ConstantTimeEqBytes(()),
             BinaryFunc::ConstantTimeEqString => ConstantTimeEqString(()),
+            BinaryFunc::PrettySql => PrettySql(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -4218,6 +4241,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 ParseIdent(()) => Ok(BinaryFunc::ParseIdent),
                 ConstantTimeEqBytes(()) => Ok(BinaryFunc::ConstantTimeEqBytes),
                 ConstantTimeEqString(()) => Ok(BinaryFunc::ConstantTimeEqString),
+                PrettySql(()) => Ok(BinaryFunc::PrettySql),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
