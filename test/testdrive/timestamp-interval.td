@@ -44,3 +44,6 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=1
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
   WITH (TIMESTAMP INTERVAL '500ms')
+
+> DROP SOURCE quick_counter CASCADE
+> DROP SOURCE slow_counter CASCADE

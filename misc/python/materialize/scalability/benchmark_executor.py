@@ -206,7 +206,7 @@ class BenchmarkExecutor:
                         local,
                         cursor_pool,
                         operations[i % len(operations)],
-                        i,
+                        int(i / len(operations)),
                     )
                     for i in range(count)
                 ],

@@ -77,3 +77,5 @@ contains:Cannot specify both FROM and ON
 > CREATE TABLE t (a int)
 ! SHOW SUBSOURCES ON t
 contains:cannot show subsources on materialize.other.t because it is a table
+
+> DROP SOURCE other.lgo CASCADE

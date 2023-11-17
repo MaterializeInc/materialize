@@ -103,3 +103,8 @@ $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\
   FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
   FOR ALL TABLES;
 contains: FOR ALL TABLES is only valid for multi-output sources
+
+> DROP SOURCE auction_house CASCADE
+> DROP SOURCE another.auction_house CASCADE
+> DROP SOURCE counter CASCADE
+> DROP SOURCE counter3 CASCADE

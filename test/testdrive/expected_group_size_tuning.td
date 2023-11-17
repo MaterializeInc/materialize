@@ -147,3 +147,5 @@
 > SELECT COUNT(savings > 0)
   FROM mz_internal.mz_expected_group_size_advice;
 6
+
+> DROP SOURCE lgtpch CASCADE

@@ -1497,3 +1497,5 @@ true
   ORDER BY
       cntrycode;
 7 values hashing to 3782c67124c71b5bcb3460934dec46de
+
+> DROP SOURCE gen CASCADE
