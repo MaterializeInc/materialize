@@ -141,6 +141,17 @@ steps:
           queue: linux-x86_64
         coverage: skip
 
+      - id: vet-check
+        label: Cargo vet Check
+        command: bin/ci-builder run stable cargo vet check --locked
+        inputs:
+          - Cargo.lock
+          - misc/cargo-vet/config.toml
+        timeout_in_minutes: 5
+        agents:
+          queue: linux-x86_64
+        coverage: skip
+
       - id: lint-docs
         label: Lint docs
         command: bin/ci-builder run stable ci/test/lint-docs.sh
