@@ -254,10 +254,11 @@ async fn publish_kafka_schemas(
 /// # Errors
 /// - If the [`KafkaSinkConnection`]'s consistency collateral exists and
 ///   contains data for this sink, but the sink's data topic does not exist.
-pub async fn build_kafka(
+pub(super) async fn build_kafka(
     sink_id: mz_repr::GlobalId,
     connection: &mut KafkaSinkConnection,
     connection_cx: &ConnectionContext,
+    producer: KafkaTxProducer,
 ) -> Result<(), ContextCreationError> {
     let client: AdminClient<_> = connection
         .connection
@@ -302,10 +303,10 @@ pub async fn build_kafka(
 
         let progress_client = Arc::new(progress_client);
         let latest_ts = determine_latest_progress_record(
-            format!("build_kafka_{}", sink_id),
             progress_topic.name().to_string(),
             ProgressKey::new(sink_id),
             Arc::clone(&progress_client),
+            &Box::new(&producer),
         )
         .await
         .check_ssh_status(progress_client.client().context())?;
@@ -389,11 +390,11 @@ pub struct ProgressRecord {
 
 /// Determines the latest progress record from the specified topic for the given
 /// key (e.g. akin to a sink's GlobalId).
-pub async fn determine_latest_progress_record(
-    name: String,
+pub(super) async fn determine_latest_progress_record(
     progress_topic: String,
     progress_key: String,
     progress_client: Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>,
+    producer: &Box<&KafkaTxProducer>,
 ) -> Result<Option<Timestamp>, anyhow::Error> {
     // Polls a message from a Kafka Source.  Blocking so should always be called on background
     // thread.
@@ -424,10 +425,11 @@ pub async fn determine_latest_progress_record(
 
     // Retrieves the latest committed timestamp from the progress topic.  Blocking so should
     // always be called on background thread
-    fn get_latest_ts<C>(
+    async fn get_latest_ts<C>(
         progress_topic: &str,
         progress_key: &str,
         progress_client: &BaseConsumer<C>,
+        producer: &KafkaTxProducer,
         timeout: Duration,
     ) -> Result<Option<Timestamp>, anyhow::Error>
     where
@@ -488,39 +490,76 @@ pub async fn determine_latest_progress_record(
             return Ok(None);
         }
 
+        let progress_value = uuid::Uuid::new_v4();
+        tracing::info!("progress_value sentinel {}", progress_value);
+        let sentinel_value =
+            serde_json::to_vec(&progress_value).expect("serialization to vec cannot fail");
+
+        let sentinel = "sentinel".to_string();
+
+        let record = BaseRecord::to(progress_topic)
+            .payload(&sentinel_value)
+            .key(&sentinel);
+
+        producer.begin_transaction().await?;
+        producer.send(record).map_err(|(e, _record)| e)?;
+        producer.commit_transaction().await?;
+
         let mut latest_ts = None;
         let mut latest_offset = None;
+        let mut found_sentinel = false;
 
         let progress_key_bytes = progress_key.as_bytes();
-        while let Some((key, message, offset)) = get_next_message(progress_client, timeout)? {
-            debug_assert!(offset >= latest_offset.unwrap_or(0));
-            latest_offset = Some(offset);
+        let now = std::time::Instant::now();
 
-            let timestamp_opt = if &key == progress_key_bytes {
-                let progress: ProgressRecord = serde_json::from_slice(&message)?;
-                Some(progress.timestamp)
-            } else {
-                None
-            };
+        // Because we're waiting on the sentinel value we produced, we have to
+        // be aggressive about waiting for it to show up.
+        'outer: while now.elapsed() < timeout {
+            while let Some((key, message, offset)) = get_next_message(progress_client, timeout)? {
+                debug_assert!(offset >= latest_offset.unwrap_or(0));
+                latest_offset = Some(offset);
 
-            if let Some(ts) = timestamp_opt {
-                if ts >= latest_ts.unwrap_or_else(timely::progress::Timestamp::minimum) {
-                    latest_ts = Some(ts);
+                let timestamp_opt = if &key == progress_key_bytes {
+                    let progress: ProgressRecord = serde_json::from_slice(&message)?;
+                    Some(progress.timestamp)
+                } else if &key == "sentinel".as_bytes() {
+                    tracing::info!(
+                        "found sentinel value {}",
+                        String::from_utf8(message.clone()).unwrap()
+                    );
+                    if message == sentinel_value {
+                        found_sentinel = true;
+                        break 'outer;
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(ts) = timestamp_opt {
+                    if ts >= latest_ts.unwrap_or_else(timely::progress::Timestamp::minimum) {
+                        latest_ts = Some(ts);
+                    }
+                }
+
+                // If the next possible offset for the client is past the high watermark, we've seen
+                // everything we expect to see.
+                let position = progress_client
+                    .position()?
+                    .find_partition(progress_topic, partition)
+                    .ok_or_else(|| anyhow!("No progress info for known partition"))?
+                    .offset();
+                if let Offset::Offset(i) = position {
+                    if i >= hi {
+                        break 'outer;
+                    }
                 }
             }
+        }
 
-            // If the next possible offset for the client is past the high watermark, we've seen
-            // everything we expect to see.
-            let position = progress_client
-                .position()?
-                .find_partition(progress_topic, partition)
-                .ok_or_else(|| anyhow!("No progress info for known partition"))?
-                .offset();
-            if let Offset::Offset(i) = position {
-                if i >= hi {
-                    break;
-                }
-            }
+        if !found_sentinel {
+            bail!("failed to find sentinel value when determining latest progress value for {progress_key}");
         }
 
         // Topic not empty but we couldn't read any messages.  We don't expect this to happen but we
@@ -542,19 +581,14 @@ pub async fn determine_latest_progress_record(
             let progress_topic = progress_topic.clone();
             let progress_key = progress_key.clone();
             let progress_client = Arc::clone(&progress_client);
-            task::spawn_blocking(
-                || format!("get_latest_ts:{name}"),
-                move || {
-                    get_latest_ts(
-                        &progress_topic,
-                        &progress_key,
-                        &progress_client,
-                        DEFAULT_FETCH_METADATA_TIMEOUT,
-                    )
-                },
+            get_latest_ts(
+                &progress_topic,
+                &progress_key,
+                &progress_client,
+                &producer,
+                DEFAULT_FETCH_METADATA_TIMEOUT,
             )
             .await
-            .unwrap_or_else(|e| bail!(e))
         })
         .await
 }
@@ -604,6 +638,7 @@ pub(super) struct KafkaTxProducerConfig<'a> {
     pub producer_context: SinkProducerContext,
     pub sink_id: GlobalId,
     pub worker_id: String,
+    pub id: usize,
 }
 
 #[derive(Clone)]
@@ -622,6 +657,7 @@ impl KafkaTxProducer {
             producer_context,
             sink_id,
             worker_id,
+            id,
         }: KafkaTxProducerConfig<'a>,
     ) -> Result<KafkaTxProducer, ContextCreationError> {
         let producer = connection
@@ -653,16 +689,20 @@ impl KafkaTxProducer {
                     // different settings for this value to see if it makes a
                     // big difference.
                     "queue.buffering.max.ms" => format!("{}", 10),
-                    "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
+                    "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}-{id}"),
                 },
             )
             .await?;
 
-        Ok(KafkaTxProducer {
+        let p = KafkaTxProducer {
             name,
             inner: Arc::new(producer),
             timeout: Duration::from_secs(5),
-        })
+        };
+
+        p.retry_on_txn_error(|p| p.init_transactions()).await?;
+
+        Ok(p)
     }
 
     pub fn init_transactions(&self) -> impl Future<Output = KafkaResult<()>> {
@@ -793,10 +833,10 @@ impl KafkaSinkSendRetryManager {
     }
     pub fn record_error(&mut self, msg: OwnedMessage) {
         self.q.push_back(msg);
-        self.outstanding_send_count -= 1;
+        self.outstanding_send_count = self.outstanding_send_count.saturating_sub(1);
     }
     pub fn record_success(&mut self) {
-        self.outstanding_send_count -= 1;
+        self.outstanding_send_count = self.outstanding_send_count.saturating_sub(1);
     }
     pub fn sends_flushed(&mut self) -> bool {
         self.outstanding_send_count == 0 && self.q.is_empty()

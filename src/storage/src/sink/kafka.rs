@@ -187,7 +187,7 @@ struct KafkaSinkState {
     name: String,
     topic: String,
     metrics: Arc<SinkMetrics>,
-    producer: util::KafkaTxProducer,
+    producer: Arc<util::KafkaTxProducer>,
     pending_rows: BTreeMap<Timestamp, Vec<EncodedRow>>,
     ready_rows: VecDeque<(Timestamp, Vec<EncodedRow>)>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
@@ -222,6 +222,7 @@ impl KafkaSinkState {
         worker_id: String,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
         metrics: &KafkaBaseMetrics,
+        retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
         healthchecker: HealthOutputHandle,
@@ -232,8 +233,6 @@ impl KafkaSinkState {
             &sink_id.to_string(),
             &worker_id,
         ));
-
-        let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
 
         let producer_context = util::SinkProducerContext {
             metrics: Arc::clone(&metrics),
@@ -256,6 +255,7 @@ impl KafkaSinkState {
                     producer_context,
                     sink_id,
                     worker_id,
+                    id: 0,
                 })
                 .await
             })()
@@ -288,7 +288,7 @@ impl KafkaSinkState {
             name: sink_name,
             topic: connection.topic,
             metrics,
-            producer,
+            producer: Arc::new(producer),
             pending_rows: BTreeMap::new(),
             ready_rows: VecDeque::new(),
             retry_manager,
@@ -628,6 +628,7 @@ where
     let stream = &collection.inner;
 
     let shared_gate_ts = Rc::new(Cell::new(None));
+    let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
 
     let (encoded_stream, encode_health_stream, encode_token) = encode_stream(
         stream,
@@ -635,6 +636,8 @@ where
         as_of.clone(),
         Rc::clone(&shared_gate_ts),
         &name,
+        &metrics,
+        Arc::clone(&retry_manager),
         connection.clone(),
         connection_context.clone(),
         envelope,
@@ -649,6 +652,7 @@ where
         shared_gate_ts,
         write_frontier,
         metrics,
+        retry_manager,
         sink_statistics,
         connection_context,
     );
@@ -679,6 +683,7 @@ fn produce_to_kafka<G>(
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: KafkaBaseMetrics,
+    retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
 ) -> (Stream<G, HealthStatusMessage>, Rc<dyn Any>)
@@ -720,6 +725,7 @@ where
             worker_id.to_string(),
             write_frontier,
             &metrics,
+            retry_manager,
             &connection_context,
             Rc::clone(&shared_gate_ts),
             HealthOutputHandle {
@@ -729,20 +735,13 @@ where
         )
         .await;
 
-        s.halt_on_err(
-            s.producer
-                .retry_on_txn_error(|p| p.init_transactions())
-                .await,
-        )
-        .await;
-
         let latest_ts = util::determine_latest_progress_record(
-            s.name.clone(),
             s.progress_topic.clone(),
             s.progress_key.clone(),
             s.progress_client
                 .take()
                 .expect("Claiming just-created progress client"),
+            &Box::new(&s.producer),
         )
         .await;
 
@@ -965,6 +964,8 @@ fn encode_stream<G>(
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     name_prefix: &str,
+    metrics: &KafkaBaseMetrics,
+    retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
     mut connection: KafkaSinkConnection,
     connection_context: ConnectionContext,
     envelope: SinkEnvelope,
@@ -995,6 +996,13 @@ where
     // even if its frontier is connected to the input.
     let (health_output, health_stream) = builder.new_output();
 
+    let metrics = Arc::new(SinkMetrics::new(
+        metrics,
+        &connection.topic,
+        &sink_id.to_string(),
+        &worker_id.to_string(),
+    ));
+
     let button = builder.build(move |caps| async move {
         let [output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
         drop(output_cap);
@@ -1002,6 +1010,12 @@ where
         if !is_active_worker {
             return;
         }
+
+        let producer_context = util::SinkProducerContext {
+            metrics: Arc::clone(&metrics),
+            retry_manager: Arc::clone(&retry_manager),
+            inner: MzClientContext::default(),
+        };
 
         // Ensure that Kafka collateral exists. While this looks somewhat
         // innocuous, this step is why this must be an async operator.
@@ -1015,13 +1029,31 @@ where
             handle: Mutex::new(health_output),
         };
 
-        let _ = halt_on_err(
+        halt_on_err(
             &healthchecker,
-            util::build_kafka(sink_id, &mut connection, &connection_context).await,
+            #[allow(clippy::redundant_closure_call)]
+            (|| async {
+                fail::fail_point!("kafka_sink_creation_error", |_| Err(
+                    ContextCreationError::Other(anyhow::anyhow!("synthetic error"))
+                ));
+
+                let producer = util::KafkaTxProducer::new(util::KafkaTxProducerConfig {
+                    name: name.to_string(),
+                    connection: &connection.connection,
+                    connection_context: &connection_context,
+                    producer_context,
+                    sink_id,
+                    worker_id: worker_id.to_string(),
+                    id: 1,
+                })
+                .await?;
+
+                util::build_kafka(sink_id, &mut connection, &connection_context, producer).await
+            })()
+            .await,
             None,
         )
         .await;
-
         let key_desc = connection
             .key_desc_and_indices
             .as_ref()
