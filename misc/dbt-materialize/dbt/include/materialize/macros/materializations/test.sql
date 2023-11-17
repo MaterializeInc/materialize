@@ -25,7 +25,7 @@
     {% set old_relation = adapter.get_relation(database=database, schema=schema, identifier=identifier) %}
 
     {% set store_failures_as = config.get('store_failures_as') %}
-    {% if store_failures_as == none %}{% set store_failures_as = 'materialized_view' %}{% endif %}
+    {% if store_failures_as == none %}{% set store_failures_as = 'table' %}{% endif %}
     {% if store_failures_as not in ['table', 'view', 'materialized_view'] %}
         {{ exceptions.raise_compiler_error(
             "'" ~ store_failures_as ~ "' is not a valid value for `store_failures_as`. "

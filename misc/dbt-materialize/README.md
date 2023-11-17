@@ -110,10 +110,14 @@ as well as [`--persist-docs`](https://docs.getdbt.com/reference/resource-configs
 
 [`dbt test`](https://docs.getdbt.com/reference/commands/test) is supported.
 
-If you set the optional flags `--store-failures` or `--store-failures-as` (or config [`store_failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures) or [`store_failures_as` config](https://docs.getdbt.com/reference/resource-configs/store_failures_as)),
-By default dbt will save the results of a test query to a `materialized_view`. These will
-be created in a schema suffixed or named `dbt_test__audit` by default. Change
-this value by setting a `schema` config.
+If you set the optional [`--store-failures` flag or `store-failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures),
+dbt will save the results of a test query to a `materialized_view`. To use a
+`view` instead, use the [`store_failures_as` config](https://docs.getdbt.com/reference/resource-configs/store_failures_as).
+
+These objects will be created in a schema suffixed or named `dbt_test__audit` by
+default. Change this value by setting a `schema` config. If both
+[`store_failures`](https://docs.getdbt.com/reference/resource-configs/store_failures) and
+`store_failures_as` are specified, `store_failures_as` takes precedence.
 
 ### Snapshots
 
