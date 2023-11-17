@@ -165,7 +165,7 @@ pub enum HirRelationExpr {
         /// Column indices used to order rows within groups.
         order_key: Vec<ColumnOrder>,
         /// Number of records to retain
-        limit: Option<usize>,
+        limit: Option<HirScalarExpr>,
         /// Number of records to skip
         offset: usize,
         /// User-supplied hint: how many rows will have the same group key.
@@ -1355,7 +1355,7 @@ impl HirRelationExpr {
         self,
         group_key: Vec<usize>,
         order_key: Vec<ColumnOrder>,
-        limit: Option<usize>,
+        limit: Option<HirScalarExpr>,
         offset: usize,
         expected_group_size: Option<u64>,
     ) -> Self {
@@ -1804,7 +1804,9 @@ impl HirRelationExpr {
                 )),
                 group_key: vec![],
                 order_key: old_finishing.order_by,
-                limit: old_finishing.limit,
+                limit: old_finishing.limit.map(|l| {
+                    HirScalarExpr::literal(Datum::UInt64(l.try_into().unwrap()), ScalarType::UInt64)
+                }),
                 offset: old_finishing.offset,
                 expected_group_size: group_size_hints.limit_input_group_size,
             }
@@ -2284,15 +2286,19 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                     f(aggregate.expr.as_ref());
                 }
             }
-            Distinct { input: _ }
-            | TopK {
+            TopK {
                 input: _,
                 group_key: _,
                 order_key: _,
-                limit: _,
+                limit,
                 offset: _,
                 expected_group_size: _,
+            } => {
+                if let Some(limit) = limit {
+                    f(limit)
+                }
             }
+            Distinct { input: _ }
             | Negate { input: _ }
             | Threshold { input: _ }
             | Union { base: _, inputs: _ } => (),

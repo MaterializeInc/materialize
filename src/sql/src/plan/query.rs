@@ -1506,7 +1506,9 @@ pub fn plan_nested_query(
             input: Box::new(expr),
             group_key: vec![],
             order_key: finishing.order_by,
-            limit: finishing.limit,
+            limit: finishing.limit.map(|l| {
+                HirScalarExpr::literal(Datum::UInt64(l.try_into().unwrap()), ScalarType::UInt64)
+            }),
             offset: finishing.offset,
             expected_group_size: group_size_hints.limit_input_group_size,
         };
@@ -2378,7 +2380,7 @@ fn plan_view_select(
                     input: Box::new(relation_expr.map(map_exprs)),
                     order_key: order_by.iter().skip(distinct_key.len()).cloned().collect(),
                     group_key: distinct_key,
-                    limit: Some(1),
+                    limit: Some(HirScalarExpr::literal(Datum::UInt64(1), ScalarType::UInt64)),
                     offset: 0,
                     expected_group_size: group_size_hints.distinct_on_input_group_size,
                 }
@@ -4222,7 +4224,9 @@ where
             input: Box::new(expr),
             group_key: vec![],
             order_key: finishing.order_by.clone(),
-            limit: finishing.limit,
+            limit: finishing.limit.map(|l| {
+                HirScalarExpr::literal(Datum::UInt64(l.try_into().unwrap()), ScalarType::UInt64)
+            }),
             offset: finishing.offset,
             expected_group_size: group_size_hints.limit_input_group_size,
         };

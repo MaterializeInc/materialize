@@ -638,6 +638,15 @@ impl MirScalarExpr {
         Some(Ok(Datum::Null)) == self.as_literal()
     }
 
+    /// Returns true when `self` is a literal, and equals the supplied `usize` argument.
+    pub fn as_literal_usize(&self) -> Option<usize> {
+        if let Some(Ok(datum)) = self.as_literal() {
+            datum.as_usize()
+        } else {
+            None
+        }
+    }
+
     pub fn is_literal_ok(&self) -> bool {
         matches!(self, MirScalarExpr::Literal(Ok(_), _typ))
     }

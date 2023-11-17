@@ -480,7 +480,7 @@ mod relation {
 
         let limit = if input.eat(kw::limit) {
             input.parse::<syn::Token![=]>()?;
-            Some(input.parse::<syn::LitInt>()?.base10_parse::<usize>()?)
+            Some(scalar::parse_expr(input)?)
         } else {
             None
         };

@@ -75,16 +75,29 @@ impl TopK {
                     //
                     // offset = inner_offset + outer_offset
                     // limit = min(max(inner_limit - outer_offset, 0), outer_limit)
-                    if let Some(inner_limit) = inner_limit {
+                    let inner_limit_usize = inner_limit.as_ref().map(|l| l.as_literal_usize());
+                    let outer_limit_usize = limit.as_ref().map(|l| l.as_literal_usize());
+                    // If either limit is an expression rather than a literal, bail out.
+                    if inner_limit_usize == Some(None) || outer_limit_usize == Some(None) {
+                        break;
+                    }
+                    let inner_limit_usize = inner_limit_usize.and_then(|l| l);
+                    let outer_limit_usize = outer_limit_usize.and_then(|l| l);
+
+                    if let Some(inner_limit) = inner_limit_usize {
                         let inner_limit_minus_outer_offset = inner_limit.saturating_sub(*offset);
-                        if let Some(limit) = limit {
-                            *limit = std::cmp::min(*limit, inner_limit_minus_outer_offset);
+                        let new_limit = if let Some(outer_limit) = outer_limit_usize {
+                            std::cmp::min(outer_limit, inner_limit_minus_outer_offset)
                         } else {
-                            *limit = Some(inner_limit_minus_outer_offset);
-                        }
+                            inner_limit_minus_outer_offset
+                        };
+                        *limit = Some(mz_expr::MirScalarExpr::literal_ok(
+                            mz_repr::Datum::UInt64(new_limit.try_into().unwrap()),
+                            mz_repr::ScalarType::UInt64,
+                        ));
                     }
 
-                    if let Some(0) = limit {
+                    if let Some(0) = limit.as_ref().and_then(|l| l.as_literal_usize()) {
                         relation.take_safely();
                         break;
                     }

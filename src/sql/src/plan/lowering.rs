@@ -789,7 +789,7 @@ impl HirRelationExpr {
                     expected_group_size,
                 } => {
                     // TopK is uncomplicated, except that we must group by the columns of `get_outer` as well.
-                    let input =
+                    let mut input =
                         input.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
                     let applied_group_key = (0..get_outer.arity())
                         .chain(group_key.iter().map(|i| get_outer.arity() + i))
@@ -802,13 +802,34 @@ impl HirRelationExpr {
                             nulls_last: column_order.nulls_last,
                         })
                         .collect();
-                    input.top_k(
+
+                    let old_arity = input.arity();
+
+                    // Lower `limit`, which may introduce new columns if is a correlated subquery.
+                    let mut limit_mir = None;
+                    if let Some(limit) = limit {
+                        limit_mir = Some(
+                            limit
+                                .applied_to(id_gen, col_map, cte_map, config, &mut input, &None)?,
+                        );
+                    }
+
+                    let new_arity = input.arity();
+
+                    let mut result = input.top_k(
                         applied_group_key,
                         applied_order_key,
-                        limit,
+                        limit_mir,
                         offset,
                         expected_group_size,
-                    )
+                    );
+
+                    // If new columns were added for `limit` we must remove them.
+                    if old_arity != new_arity {
+                        result = result.project((0..old_arity).collect());
+                    }
+
+                    result
                 }
                 Negate { input } => {
                     // Negate is uncomplicated.

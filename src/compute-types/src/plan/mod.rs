@@ -1567,7 +1567,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     group_key.clone(),
                     order_key.clone(),
                     *offset,
-                    *limit,
+                    limit.clone(),
                     arity,
                     *monotonic,
                     *expected_group_size,

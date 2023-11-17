@@ -104,7 +104,7 @@ pub trait Factorizer {
     fn topk(
         &self,
         group_key: &Vec<usize>,
-        limit: &Option<usize>,
+        limit: &Option<MirScalarExpr>,
         expected_group_size: &Option<u64>,
         input: &SymExp,
     ) -> SymExp;
@@ -350,11 +350,15 @@ impl Factorizer for WorstCaseFactorizer {
     fn topk(
         &self,
         group_key: &Vec<usize>,
-        limit: &Option<usize>,
+        limit: &Option<MirScalarExpr>,
         expected_group_size: &Option<u64>,
         input: &SymExp,
     ) -> SymExp {
-        let k = limit.unwrap_or(1);
+        // TODO: support simple arithmetic expressions
+        let k = limit
+            .as_ref()
+            .and_then(|l| l.as_literal_usize())
+            .unwrap_or(1);
 
         if let Some(group_size) = expected_group_size {
             input * (f64::cast_lossy(k) / f64::cast_lossy(*group_size))

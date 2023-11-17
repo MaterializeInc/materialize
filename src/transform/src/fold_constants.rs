@@ -137,11 +137,20 @@ impl FoldConstants {
                 offset,
                 ..
             } => {
-                if let Some((rows, ..)) = (**input).as_const_mut() {
-                    if let Ok(rows) = rows {
-                        Self::fold_topk_constant(group_key, order_key, limit, offset, rows);
+                // Only fold constants with literal keys.
+                // We can improve this to arbitrary expressions, but it requires more typing.
+                if limit
+                    .as_ref()
+                    .map(|l| l.as_literal_usize().is_some())
+                    .unwrap_or(true)
+                {
+                    let limit = limit.as_ref().and_then(|l| l.as_literal_usize());
+                    if let Some((rows, ..)) = (**input).as_const_mut() {
+                        if let Ok(rows) = rows {
+                            Self::fold_topk_constant(group_key, order_key, &limit, offset, rows);
+                        }
+                        *relation = input.take_dangerous();
                     }
-                    *relation = input.take_dangerous();
                 }
             }
             MirRelationExpr::Negate { input } => {

@@ -251,7 +251,7 @@ pub enum MirRelationExpr {
         order_key: Vec<ColumnOrder>,
         /// Number of records to retain
         #[serde(default)]
-        limit: Option<usize>,
+        limit: Option<MirScalarExpr>,
         /// Number of records to skip
         #[serde(default)]
         offset: usize,
@@ -808,7 +808,7 @@ impl MirRelationExpr {
                 // If `limit` is `Some(1)` then the group key will become
                 // a unique key, as there will be only one record with that key.
                 let mut result = input_keys.next().unwrap().clone();
-                if limit == &Some(1) {
+                if limit.as_ref().and_then(|x| x.as_literal_usize()) == Some(1) {
                     result.push(group_key.clone())
                 }
                 result
@@ -1272,7 +1272,7 @@ impl MirRelationExpr {
         self,
         group_key: Vec<usize>,
         order_key: Vec<ColumnOrder>,
-        limit: Option<usize>,
+        limit: Option<MirScalarExpr>,
         offset: usize,
         expected_group_size: Option<u64>,
     ) -> Self {
@@ -1666,12 +1666,16 @@ impl MirRelationExpr {
                     f(&mut agg.expr)?;
                 }
             }
+            TopK { limit, .. } => {
+                if let Some(s) = limit {
+                    f(s)?;
+                }
+            }
             Constant { .. }
             | Get { .. }
             | Let { .. }
             | LetRec { .. }
             | Project { .. }
-            | TopK { .. }
             | Negate { .. }
             | Threshold { .. }
             | Union { .. } => (),
@@ -1754,12 +1758,16 @@ impl MirRelationExpr {
                     f(&agg.expr)?;
                 }
             }
+            TopK { limit, .. } => {
+                if let Some(s) = limit {
+                    f(s)?;
+                }
+            }
             Constant { .. }
             | Get { .. }
             | Let { .. }
             | LetRec { .. }
             | Project { .. }
-            | TopK { .. }
             | Negate { .. }
             | Threshold { .. }
             | Union { .. } => (),

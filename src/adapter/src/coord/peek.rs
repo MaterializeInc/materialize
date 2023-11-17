@@ -284,7 +284,11 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             (None, _) => true,
                             (Some(..), None) => false,
                             (Some(topk_limit), Some(finishing_limit)) => {
-                                *topk_limit >= finishing_limit
+                                if let Some(l) = topk_limit.as_literal_usize() {
+                                    l >= finishing_limit
+                                } else {
+                                    false
+                                }
                             }
                         };
                         if finishing_limits_at_least_as_topk {

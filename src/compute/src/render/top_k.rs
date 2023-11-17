@@ -113,7 +113,7 @@ where
                     //    being computed in a streaming fashion, even for the initial snapshot.
                     // 2. Then, we can do inter-timestamp thinning by feeding back negations for
                     //    any records that have been invalidated.
-                    let collection = if let Some(limit) = limit {
+                    let collection = if let Some(limit) = limit.clone() {
                         render_intra_ts_thinning(collection, order_key.clone(), limit)
                     } else {
                         collection
@@ -184,7 +184,7 @@ where
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         offset: usize,
-        limit: Option<usize>,
+        limit: Option<mz_expr::MirScalarExpr>,
         arity: usize,
         buckets: Vec<u64>,
     ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
@@ -210,7 +210,29 @@ where
         let mut validating = true;
         let mut err_collection: Option<Collection<S, _, _>> = None;
 
-        if let Some(limit) = limit {
+        if let Some(mut limit) = limit.clone() {
+            // We may need a new `limit` that reflects the addition of `offset`.
+            // Ideally we compile it down to a literal if at all possible.
+            if offset > 0 {
+                use mz_expr::{BinaryFunc, MirScalarExpr};
+                use mz_repr::{Datum, ScalarType};
+
+                if let Some(literal) = limit.as_literal_usize() {
+                    limit = MirScalarExpr::literal_ok(
+                        Datum::UInt64((literal + offset).try_into().unwrap()),
+                        ScalarType::UInt64,
+                    );
+                } else {
+                    limit = limit.call_binary(
+                        MirScalarExpr::literal_ok(
+                            Datum::UInt64(offset.try_into().unwrap()),
+                            ScalarType::UInt64,
+                        ),
+                        BinaryFunc::AddUInt64,
+                    );
+                }
+            }
+
             // These bucket values define the shifts that happen to the 64 bit hash of the
             // record, and should have the properties that 1. there are not too many of them,
             // and 2. each has a modest difference to the next.
@@ -223,7 +245,7 @@ where
                     order_key.clone(),
                     bucket,
                     0,
-                    Some(offset + limit),
+                    Some(limit.clone()),
                     arity,
                     validating,
                 );
@@ -265,7 +287,7 @@ where
         order_key: Vec<mz_expr::ColumnOrder>,
         modulus: u64,
         offset: usize,
-        limit: Option<usize>,
+        limit: Option<mz_expr::MirScalarExpr>,
         arity: usize,
         validating: bool,
     ) -> (
@@ -379,7 +401,7 @@ fn build_topk_negated_stage<G, R>(
     input: &Collection<G, ((Row, u64), Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
-    limit: Option<usize>,
+    limit: Option<mz_expr::MirScalarExpr>,
     arity: usize,
 ) -> Collection<G, ((Row, u64), R), Diff>
 where
@@ -387,6 +409,8 @@ where
     G::Timestamp: Lattice + Columnation,
     R: MaybeValidatingRow<Row, Row>,
 {
+    let mut datum_vec = mz_repr::DatumVec::new();
+
     // We only want to arrange parts of the input that are not part of the actual output
     // such that `input.concat(&negated_output.negate())` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
@@ -394,7 +418,22 @@ where
     input
         .mz_arrange::<KeyValSpine<(Row, u64), _, _, _>>("Arranged TopK input")
         .mz_reduce_abelian::<_, KeyValSpine<_, _, _, _>>("Reduced TopK input", {
-            move |_key, source, target: &mut Vec<(R, Diff)>| {
+            move |key, source, target: &mut Vec<(R, Diff)>| {
+                // Unpack the limit, either into an integer literal or an expression to evaluate.
+                let limit: Option<usize> = limit.as_ref().map(|l| {
+                    if let Some(l) = l.as_literal_usize() {
+                        l
+                    } else {
+                        let temp_storage = mz_repr::RowArena::new();
+                        let key_datums = datum_vec.borrow_with(&key.0);
+                        // Unpack `key` and determine the limit.
+                        l.eval(&key_datums, &temp_storage)
+                            .expect("key function must not error")
+                            .as_usize()
+                            .expect("Key function must evaluate to integer literal")
+                    }
+                });
+
                 if let Some(err) = R::into_error() {
                     for (row, diff) in source.iter() {
                         if diff.is_positive() {
@@ -479,12 +518,14 @@ where
 fn render_intra_ts_thinning<S>(
     collection: Collection<S, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
-    limit: usize,
+    limit: mz_expr::MirScalarExpr,
 ) -> Collection<S, (Row, Row), Diff>
 where
     S: Scope,
     S::Timestamp: Lattice,
 {
+    let mut datum_vec = mz_repr::DatumVec::new();
+
     let mut aggregates = BTreeMap::new();
     let mut vector = Vec::new();
     let shared = Rc::new(RefCell::new(monoids::Top1MonoidShared {
@@ -509,6 +550,21 @@ where
                             row,
                             shared: Rc::clone(&shared),
                         };
+
+                        // Evalute the limit, first as a constant and then against the key if needed.
+                        let limit = if let Some(l) = limit.as_literal_usize() {
+                            l
+                        } else {
+                            let temp_storage = mz_repr::RowArena::new();
+                            let key_datums = datum_vec.borrow_with(&grp_row);
+                            // Unpack `key` and determine the limit.
+                            limit
+                                .eval(&key_datums, &temp_storage)
+                                .expect("key function must not error")
+                                .as_usize()
+                                .expect("Key function must evaluate to integer literal")
+                        };
+
                         let topk =
                             agg_time
                                 .entry((grp_row, record_time))
