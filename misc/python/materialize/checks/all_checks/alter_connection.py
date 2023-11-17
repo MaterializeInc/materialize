@@ -67,7 +67,7 @@ class AlterConnectionSshChangeBase(Check):
                 one
 
                 > CREATE CONNECTION kafka_conn_alter_connection_{i}a
-                  TO KAFKA (SECURITY PROTOCOL = \\"plaintext\\", BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX if self.ssh_change in {SshChange.DROP_SSH, SshChange.CHANGE_SSH_HOST} else ''});
+                  TO KAFKA (SECURITY PROTOCOL = "plaintext", BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX if self.ssh_change in {SshChange.DROP_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
                 > CREATE SOURCE alter_connection_source_{i}a
                   FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-{i}a-${{testdrive.seed}}')
@@ -116,7 +116,7 @@ class AlterConnectionSshChangeBase(Check):
                 ten
 
                 > CREATE CONNECTION kafka_conn_alter_connection_{i}b
-                  TO KAFKA (SECURITY PROTOCOL = \\"plaintext\\", BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.DROP_SSH, SshChange.CHANGE_SSH_HOST} else ''});
+                  TO KAFKA (SECURITY PROTOCOL = "plaintext", BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.DROP_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
                 > CREATE SOURCE alter_connection_source_{i}b
                   FROM KAFKA CONNECTION kafka_conn_alter_connection_{i}b (TOPIC 'testdrive-alter-connection-{i}b-${{testdrive.seed}}')
