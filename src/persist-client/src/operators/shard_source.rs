@@ -573,10 +573,11 @@ where
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 for (_idx, part) in data.drain(..) {
-                    let (leased_part, fetched) = fetcher
-                        .fetch_leased_part(fetcher.leased_part_from_exchangeable(part))
-                        .await;
-                    let fetched = fetched.expect("shard_id should match across all workers");
+                    let leased_part = fetcher.leased_part_from_exchangeable(part);
+                    let fetched = fetcher
+                        .fetch_leased_part(&leased_part)
+                        .await
+                        .expect("shard_id should match across all workers");
                     {
                         // Do very fine-grained output activation/session
                         // creation to ensure that we don't hold activated
