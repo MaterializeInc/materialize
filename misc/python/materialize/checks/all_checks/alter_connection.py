@@ -29,10 +29,10 @@ class SshChange(Enum):
 
 
 # {i} will be replaced later
-SHOW_CONNECTION_WITHOUT_SSH = """materialize.public.kafka_conn_alter_connection_{i}a "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn_alter_connection_{i}a\\" TO KAFKA (SECURITY PROTOCOL = \\"plaintext\\", BROKER = 'kafka:9092')" """
-SHOW_CONNECTION_WITH_SSH = """materialize.public.kafka_conn_alter_connection_{i}a "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn_alter_connection_{i}a\\" TO KAFKA (SECURITY PROTOCOL = \\"plaintext\\", BROKER = 'kafka:9092'USING SSH TUNNEL \\"materialize\\".\\"public\\".\\"thancred\\")" """
-SHOW_CONNECTION_THANCRED = """materialize.public.thancred "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"thancred\\" TO SSH TUNNEL (HOST = 'ssh-bastion-host', USER = 'mz', PORT = 22)" """
-SHOW_CONNECTION_THANCRED_OTHER = """materialize.public.thancred "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"thancred\\" TO SSH TUNNEL (USER = 'mz', PORT = 22, HOST = 'other_ssh_bastion')" """
+SHOW_CONNECTION_WITHOUT_SSH = """materialize.public.kafka_conn_alter_connection_{i}a "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn_alter_connection_{i}a\\" TO KAFKA (BROKER = 'kafka:9092', SECURITY PROTOCOL = \\"plaintext\\")" """
+SHOW_CONNECTION_WITH_SSH = """materialize.public.kafka_conn_alter_connection_{i}a "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn_alter_connection_{i}a\\" TO KAFKA (BROKER = 'kafka:9092'USING SSH TUNNEL \\"materialize\\".\\"public\\".\\"thancred\\", SECURITY PROTOCOL = \\"plaintext\\")" """
+SHOW_CONNECTION_THANCRED = """materialize.public.thancred "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"thancred\\" TO SSH TUNNEL (HOST = 'ssh-bastion-host', PORT = 22, USER = 'mz')" """
+SHOW_CONNECTION_THANCRED_OTHER = """materialize.public.thancred "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"thancred\\" TO SSH TUNNEL (HOST = 'other_ssh_bastion', PORT = 22, USER = 'mz')" """
 WITH_SSH_SUFFIX = "USING SSH TUNNEL thancred"
 
 
