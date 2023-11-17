@@ -42,6 +42,7 @@ use mz_timely_util::order::Partitioned;
 use rdkafka::client::Client;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::error::KafkaError;
 use rdkafka::message::{BorrowedMessage, Headers};
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
@@ -57,8 +58,6 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespac
 use crate::source::kafka::metrics::KafkaPartitionMetrics;
 use crate::source::types::{SourceReaderMetrics, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
-
-use super::types::KafkaMessageConsumptionError;
 
 mod metrics;
 
@@ -493,7 +492,7 @@ impl SourceRender for KafkaSourceConnection {
                     if !PartialOrder::less_equal(data_cap.time(), &future_ts) {
                         let prev_pid_count = prev_pid_info.map(|info| info.len()).unwrap_or(0);
                         let pid_count = partitions.len();
-                        let err = SourceReaderError::other_definite(anyhow!(
+                        let err: SourceReaderError = SourceReaderError::other_definite(anyhow!(
                             "topic was recreated: partition \
                                      count regressed from {prev_pid_count} to {pid_count}"
                         ));
@@ -566,6 +565,50 @@ impl SourceRender for KafkaSourceConnection {
                 // the consumer directly.
                 while let Some(result) = reader.consumer.poll(Duration::from_secs(0)) {
                     match result {
+                        Ok(message) => {
+                            match construct_source_message(&message, &reader.metadata_columns) {
+                                Ok((message, ts)) => {
+                                    if let Some((msg, time, diff)) =
+                                        reader.handle_message(message, ts)
+                                    {
+                                        let pid = time.partition().unwrap();
+                                        let part_cap = &reader.partition_capabilities[pid].data;
+                                        match msg {
+                                            Ok(msg) => {
+                                                data_output
+                                                    .give(part_cap, ((0, Ok(msg)), time, diff))
+                                                    .await
+                                            }
+                                            Err(err) => {
+                                                let err: SourceReaderError =
+                                                    SourceReaderError::other_definite(anyhow!(err));
+
+                                                data_output
+                                                    .give(part_cap, ((0, Err(err)), time, diff))
+                                                    .await
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let error = format!(
+                                        "kafka error when polling consumer for source: {} topic: {} : {}",
+                                        reader.source_name, reader.topic_name, e
+                                    );
+                                    let status = HealthStatusUpdate::stalled(error, None);
+                                    health_output
+                                        .give(
+                                            &health_cap,
+                                            HealthStatusMessage {
+                                                index: 0,
+                                                namespace: Self::STATUS_NAMESPACE.clone(),
+                                                update: status,
+                                            },
+                                        )
+                                        .await;
+                                }
+                            }
+                        }
                         Err(e) => {
                             let error = format!(
                                 "kafka error when polling consumer for source: {} topic: {} : {}",
@@ -583,22 +626,6 @@ impl SourceRender for KafkaSourceConnection {
                                 )
                                 .await;
                         }
-                        Ok(message) => {
-                            match construct_source_message(&message, &reader.metadata_columns) {
-                                Ok((message, ts)) => {
-                                    if let Some((msg, time, diff)) =
-                                        reader.handle_message(message, ts)
-                                    {
-                                        let pid = time.partition().unwrap();
-                                        let part_cap = &reader.partition_capabilities[pid].data;
-                                        data_output
-                                            .give(part_cap, ((0, Ok(msg)), time, diff))
-                                            .await;
-                                    }
-                                }
-                                Err(_) => error!("now what?!?"), //FIXME(steffen)
-                            }
-                        }
                     }
                 }
 
@@ -613,10 +640,19 @@ impl SourceRender for KafkaSourceConnection {
                             Err(err) => Err(err),
                         };
                         match message {
-                            Ok(Some((msg, time, diff))) => {
+                            Ok(Some((Ok(msg), time, diff))) => {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid].data;
                                 data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
+                            }
+                            Ok(Some((Err(err), time, diff))) => {
+                                let err: SourceReaderError =
+                                    SourceReaderError::other_definite(anyhow!(err));
+                                let pid = time.partition().unwrap();
+                                let part_cap = &reader.partition_capabilities[pid].data;
+                                data_output
+                                    .give(part_cap, ((0, Err(err)), time, diff))
+                                    .await;
                             }
                             Ok(None) => continue,
                             Err(err) => {
@@ -929,10 +965,10 @@ impl KafkaSourceReader {
     /// past the expected offset and seeks the consumer if it is not.
     fn handle_message(
         &mut self,
-        message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+        message: Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, DecodeError>,
         (partition, offset): (PartitionId, MzOffset),
     ) -> Option<(
-        SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+        Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, DecodeError>,
         Partitioned<PartitionId, MzOffset>,
         Diff,
     )> {
@@ -990,10 +1026,10 @@ fn construct_source_message(
     metadata_columns: &[KafkaMetadataKind],
 ) -> Result<
     (
-        SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+        Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, DecodeError>,
         (PartitionId, MzOffset),
     ),
-    KafkaMessageConsumptionError,
+    KafkaError,
 > {
     let pid = msg.partition();
     let Ok(offset) = u64::try_from(msg.offset()) else {
@@ -1049,8 +1085,12 @@ fn construct_source_message(
                                 None => Ok(Datum::Null),
                             })
                             //if header is not found, default to null
-                            .unwrap_or(Ok(Datum::Null))?;
-                        packer.push(d);
+                            .unwrap_or(Ok(Datum::Null));
+                        match d {
+                            Ok(d) => packer.push(d),
+                            //stop with a definite error if the header cannot be parsed correctly
+                            Err(err) => return Ok((Err(err), (pid, offset.into()))),
+                        }
                     }
                     None => packer.push(Datum::Null),
                 }
@@ -1081,7 +1121,7 @@ fn construct_source_message(
         value: msg.payload().map(|p| p.to_vec()),
         metadata,
     };
-    Ok((msg, (pid, offset.into())))
+    Ok((Ok(msg), (pid, offset.into())))
 }
 
 /// Wrapper around a partition containing the underlying consumer
@@ -1118,10 +1158,10 @@ impl PartitionConsumer {
         &mut self,
     ) -> Result<
         Option<(
-            SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+            Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, DecodeError>,
             (PartitionId, MzOffset),
         )>,
-        KafkaMessageConsumptionError,
+        KafkaError,
     > {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => match construct_source_message(&msg, &self.metadata_columns) {
@@ -1131,7 +1171,7 @@ impl PartitionConsumer {
                 }
                 Err(e) => Err(e),
             },
-            Some(Err(err)) => Err(KafkaMessageConsumptionError::KafkaError(err)),
+            Some(Err(err)) => Err(err),
             _ => Ok(None),
         }
     }
