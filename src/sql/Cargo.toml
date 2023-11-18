@@ -42,6 +42,7 @@ mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-sql-pretty = { path = "../sql-pretty" }
 mz-sql-lexer = { path = "../sql-lexer" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-storage-types = { path = "../storage-types" }

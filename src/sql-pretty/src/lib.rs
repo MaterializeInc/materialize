@@ -87,6 +87,8 @@ use crate::doc::{
     doc_create_materialized_view, doc_create_view, doc_display, doc_insert, doc_select_statement,
 };
 
+pub const DEFAULT_WIDTH: usize = 100;
+
 const TAB: isize = 4;
 
 fn to_doc<T: AstInfo>(v: &Statement<T>) -> RcDoc {
