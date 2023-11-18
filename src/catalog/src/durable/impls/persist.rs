@@ -531,7 +531,7 @@ impl PersistCatalogState {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn sync_to_recent_upper(&mut self) -> Result<(), CatalogError> {
+    async fn sync_to_current_upper(&mut self) -> Result<(), CatalogError> {
         let upper = self.current_upper().await;
         if upper != self.upper {
             if self.is_read_only() {
@@ -678,7 +678,7 @@ impl PersistCatalogState {
         &mut self,
         f: impl FnOnce(&Snapshot) -> Result<T, CatalogError>,
     ) -> Result<T, CatalogError> {
-        self.sync_to_recent_upper().await?;
+        self.sync_to_current_upper().await?;
         f(&self.snapshot)
     }
 
@@ -724,7 +724,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
-        self.sync_to_recent_upper().await?;
+        self.sync_to_current_upper().await?;
         // This is only called during bootstrapping and we don't want to cache all
         // audit logs in memory because they can grow quite large. Therefore, we
         // go back to persist and grab everything again.
