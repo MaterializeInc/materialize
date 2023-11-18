@@ -102,7 +102,13 @@ fn plan_show_create(
 ) -> Result<ShowCreatePlan, PlanError> {
     let item = scx.get_item_by_resolved_name(name)?;
     let name = name.full_name_str();
-    let create_sql = simplify_names(scx.catalog, item.create_sql())?;
+    if item.item_type() == CatalogItemType::MaterializedView && expect_type == CatalogItemType::View
+    {
+        return Err(PlanError::ShowCreateViewOnMaterializedView(name));
+    }
+    if item.item_type() != expect_type {
+        sql_bail!("{name} is not a {expect_type}");
+    }
     if item.id().is_system()
         && matches!(
             expect_type,
@@ -111,13 +117,7 @@ fn plan_show_create(
     {
         sql_bail!("cannot show create for system object {name}");
     }
-    if item.item_type() == CatalogItemType::MaterializedView && expect_type == CatalogItemType::View
-    {
-        return Err(PlanError::ShowCreateViewOnMaterializedView(name));
-    }
-    if item.item_type() != expect_type {
-        sql_bail!("{name} is not a {expect_type}");
-    }
+    let create_sql = simplify_names(scx.catalog, item.create_sql())?;
     Ok(ShowCreatePlan {
         id: item.id(),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
