@@ -31,6 +31,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::RustType;
 use mz_repr::Diff;
 use mz_storage_types::sources::Timeline;
+use once_cell::sync::Lazy;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::debug;
@@ -51,6 +52,9 @@ use crate::durable::{
 
 /// New-type used to represent timestamps in persist.
 type Timestamp = mz_repr::Timestamp;
+
+/// The upper to use for writing the initial catalog contents.
+static SENTINEL_UNINITIALIZED: Lazy<Timestamp> = Lazy::new(|| Timestamp::minimum().step_forward());
 
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug)]
@@ -119,30 +123,30 @@ impl PersistHandle {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        let mut initialized_status = self.is_initialized_inner().await;
+        let (is_initialized, upper) = self.is_initialized_inner().await;
 
-        if !matches!(mode, Mode::Writable) && !initialized_status.is_initialized() {
+        if !matches!(mode, Mode::Writable) && !is_initialized {
             return Err(CatalogError::Durable(DurableCatalogError::NotWritable(
                 format!("catalog tables do not exist; will not create in {mode:?} mode"),
             )));
         }
 
         // Listen cannot read any writes that happen at `Timestamp::minimum()`. So we initialize
-        // the shard with an empty write at `Timestamp::minimum()`.
-        if matches!(initialized_status, InitializedStatus::ShardUninitialized) {
-            let upper = initialized_status.upper();
-            let next_upper = upper.step_forward();
-            self.compare_and_append(Vec::new(), upper, next_upper)
-                .await?;
-            initialized_status = InitializedStatus::CatalogUninitialized;
-            soft_assert_eq!(next_upper, initialized_status.clone().upper());
-        }
+        // the shard with an empty write at `Timestamp::minimum()`. The append has no effect if the
+        // upper is already past `Timestamp::minimum()`.
+        let empty_updates: &[((StateUpdateKind, ()), Timestamp, Diff)] = &[];
+        let () = self
+            .write_handle
+            .append(
+                empty_updates,
+                Antichain::from_elem(Timestamp::minimum()),
+                Antichain::from_elem(*SENTINEL_UNINITIALIZED),
+            )
+            .await
+            .expect("invalid usage")
+            .expect("invalid usage");
 
-        let (is_initialized, upper) = (
-            initialized_status.is_initialized(),
-            initialized_status.upper(),
-        );
-
+        let upper = std::cmp::max(upper, *SENTINEL_UNINITIALIZED);
         let read_only = matches!(mode, Mode::Readonly);
 
         // Grab the current catalog contents from persist.
@@ -269,16 +273,10 @@ impl PersistHandle {
         as_of(&self.read_handle, upper)
     }
 
-    /// Reports the status of catalog initialization.
-    async fn is_initialized_inner(&mut self) -> InitializedStatus {
+    /// Reports if the catalog state has been initialized, and the current upper.
+    async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
         let upper = self.current_upper().await;
-        if upper == InitializedStatus::ShardUninitialized.upper() {
-            InitializedStatus::ShardUninitialized
-        } else if upper == InitializedStatus::CatalogUninitialized.upper() {
-            InitializedStatus::CatalogUninitialized
-        } else {
-            InitializedStatus::Initialized(upper)
-        }
+        (upper > *SENTINEL_UNINITIALIZED, upper)
     }
 
     /// Generates a [`Vec<StateUpdate>`] that contain all updates to the catalog
@@ -287,14 +285,13 @@ impl PersistHandle {
     /// The output is consolidated and sorted by timestamp in ascending order and the current upper.
     #[tracing::instrument(level = "debug", skip(self))]
     async fn current_snapshot(&mut self) -> (Vec<StateUpdate>, Timestamp) {
-        let initialization_status = self.is_initialized_inner().await;
-        if initialization_status.is_initialized() {
-            let current_upper = initialization_status.upper();
+        let (is_initialized, current_upper) = self.is_initialized_inner().await;
+        if is_initialized {
             let as_of = self.as_of(current_upper);
             let snapshot = self.snapshot(as_of).await.collect();
             (snapshot, current_upper)
         } else {
-            (Vec::new(), initialization_status.upper())
+            (Vec::new(), current_upper)
         }
     }
 
@@ -339,9 +336,8 @@ impl PersistHandle {
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
     async fn get_current_config(&mut self, key: &str) -> Option<u64> {
-        let initialization_status = self.is_initialized_inner().await;
-        if initialization_status.is_initialized() {
-            let current_upper = initialization_status.upper();
+        let (is_initialized, current_upper) = self.is_initialized_inner().await;
+        if is_initialized {
             let as_of = self.as_of(current_upper);
             self.get_config(key, as_of).await
         } else {
@@ -440,7 +436,7 @@ impl OpenableDurableCatalogState for PersistHandle {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
-        Ok(self.is_initialized_inner().await.is_initialized())
+        Ok(self.is_initialized_inner().await.0)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -456,10 +452,9 @@ impl OpenableDurableCatalogState for PersistHandle {
 
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
-        let initialized_status = self.is_initialized_inner().await;
-        if initialized_status.is_initialized() {
-            let upper = initialized_status.upper();
-            let as_of = self.as_of(upper);
+        let (is_initialized, current_upper) = self.is_initialized_inner().await;
+        if is_initialized {
+            let as_of = self.as_of(current_upper);
             let snapshot = self.snapshot_unconsolidated(as_of).await;
             Ok(Trace::from_snapshot(snapshot))
         } else {
@@ -929,39 +924,6 @@ impl DurableCatalogState for PersistCatalogState {
 struct Fence {
     /// Previous epoch, if one existed.
     prev_epoch: Option<Epoch>,
-}
-
-/// Initialization status of the catalog.
-#[derive(Debug, Clone)]
-enum InitializedStatus {
-    /// Persist shard is uninitialized. This implies the upper is [`Timestamp::minimum()`].
-    ShardUninitialized,
-    /// Persist shard is initialized, but the catalog is not initialized. This implies the upper is
-    /// [`Timestamp::minimum().step_forward()`]
-    CatalogUninitialized,
-    /// Catalog is initialized with the provided upper.
-    Initialized(Timestamp),
-}
-
-impl InitializedStatus {
-    /// Returns the upper of the catalog shard corresponding to this initialized status.
-    fn upper(self) -> Timestamp {
-        match self {
-            InitializedStatus::ShardUninitialized => Timestamp::minimum(),
-            InitializedStatus::CatalogUninitialized => Timestamp::minimum().step_forward(),
-            InitializedStatus::Initialized(upper) => upper,
-        }
-    }
-
-    /// Returns true if the catalog is fully initialized, false otherwise.
-    fn is_initialized(&self) -> bool {
-        match self {
-            InitializedStatus::ShardUninitialized | InitializedStatus::CatalogUninitialized => {
-                false
-            }
-            InitializedStatus::Initialized(_) => true,
-        }
-    }
 }
 
 /// Generate a diagnostic to use when connecting to persist.
