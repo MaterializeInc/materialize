@@ -127,6 +127,7 @@ Field        | Type                 | Meaning
 `type`       | [`text`]             | The type of the connection: `confluent-schema-registry`, `kafka`, `postgres`, or `ssh-tunnel`.
 `owner_id`   | [`text`]             | The role ID of the owner of the connection. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges` | [`mz_aclitem array`] | The privileges belonging to the connection.
+`create_sql` | [`text`]             | The `CREATE` SQL statement for the connection.
 
 ### `mz_databases`
 
@@ -196,6 +197,7 @@ Field        | Type        | Meaning
 `on_id`      | [`text`]    | The ID of the relation on which the index is built.
 `cluster_id` | [`text`]    | The ID of the cluster in which the index is built.
 `owner_id`   | [`text`]    | The role ID of the owner of the index. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`create_sql` | [`text`]    | The `CREATE` SQL statement for the index.
 
 ### `mz_index_columns`
 
@@ -276,6 +278,7 @@ Field          | Type                 | Meaning
 `definition`   | [`text`]             | The materialized view definition (a `SELECT` query).
 `owner_id`     | [`text`]             | The role ID of the owner of the materialized view. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`   | [`mz_aclitem array`] | The privileges belonging to the materialized view.
+`create_sql`   | [`text`]             | The `CREATE` SQL statement for the materialized view.
 
 ### `mz_objects`
 
@@ -402,6 +405,7 @@ Field            | Type     | Meaning
 `envelope_type`  | [`text`] | The [envelope](/sql/create-sink/kafka/#envelopes) of the sink: `upsert`, or `debezium`.
 `cluster_id`     | [`text`] | The ID of the cluster maintaining the sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `owner_id`       | [`text`] | The role ID of the owner of the sink. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`create_sql`     | [`text`] | The `CREATE` SQL statement for the sink.
 
 ### `mz_sources`
 
@@ -421,6 +425,7 @@ Field            | Type                 | Meaning
 `cluster_id`     | [`text`]             | The ID of the cluster maintaining the source. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `owner_id`       | [`text`]             | The role ID of the owner of the source. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`     | [`mz_aclitem array`] | The privileges belonging to the source.
+`create_sql`     | [`text`]            | The `CREATE` SQL statement for the source.
 
 ### `mz_storage_usage`
 
@@ -457,6 +462,7 @@ Field        | Type                 | Meaning
 `name`       | [`text`]             | The name of the table.
 `owner_id`   | [`text`]             | The role ID of the owner of the table. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges` | [`mz_aclitem array`] | The privileges belonging to the table.
+`create_sql` | [`text`]             | The `CREATE` SQL statement for the table.
 
 ### `mz_timezone_abbreviations`
 
@@ -498,6 +504,7 @@ Field          | Type                 | Meaning
 `category`     | [`text`]             | The category of the type.
 `owner_id`     | [`text`]             | The role ID of the owner of the type. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`   | [`mz_aclitem array`] | The privileges belonging to the type.
+`create_sql`   | [`text`]             | The `CREATE` SQL statement for the type.
 
 ### `mz_views`
 
@@ -513,6 +520,7 @@ Field          | Type                 | Meaning
 `definition`   | [`text`]             | The view definition (a `SELECT` query).
 `owner_id`     | [`text`]             | The role ID of the owner of the view. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`   | [`mz_aclitem array`] | The privileges belonging to the view.
+`create_sql`    | [`text`]            | The `CREATE` SQL statement for the view.
 
 [`bigint`]: /sql/types/bigint
 [`boolean`]: /sql/types/boolean
