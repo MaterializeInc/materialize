@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, Context};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -556,37 +556,54 @@ where
 /// Id of a partition in a topic.
 pub type PartitionId = i32;
 
+/// The error returned by [`get_partitions`].
+#[derive(Debug, thiserror::Error)]
+pub enum GetPartitionsError {
+    /// The specified topic does not exist.
+    #[error("Topic does not exist")]
+    TopicDoesNotExist,
+    /// A Kafka error.
+    #[error(transparent)]
+    Kafka(#[from] KafkaError),
+    /// An unstructured error.
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 /// Retrieve number of partitions for a given `topic` using the given `client`
 pub fn get_partitions<C: ClientContext>(
     client: &Client<C>,
     topic: &str,
     timeout: Duration,
-) -> Result<Vec<PartitionId>, anyhow::Error> {
+) -> Result<Vec<PartitionId>, GetPartitionsError> {
     let meta = client.fetch_metadata(Some(topic), timeout)?;
     if meta.topics().len() != 1 {
-        bail!(
+        Err(anyhow!(
             "topic {} has {} metadata entries; expected 1",
             topic,
             meta.topics().len()
-        );
+        ))?;
     }
 
-    fn check_err(err: Option<RDKafkaRespErr>) -> anyhow::Result<()> {
-        if let Some(err) = err {
-            Err(RDKafkaErrorCode::from(err))?
+    fn check_err(err: Option<RDKafkaRespErr>) -> Result<(), GetPartitionsError> {
+        match err.map(RDKafkaErrorCode::from) {
+            Some(RDKafkaErrorCode::UnknownTopic | RDKafkaErrorCode::UnknownTopicOrPartition) => {
+                Err(GetPartitionsError::TopicDoesNotExist)
+            }
+            Some(code) => Err(anyhow!(code))?,
+            None => Ok(()),
         }
-        Ok(())
     }
 
     let meta_topic = meta.topics().into_element();
     check_err(meta_topic.error())?;
 
     if meta_topic.name() != topic {
-        bail!(
+        Err(anyhow!(
             "got results for wrong topic {} (expected {})",
             meta_topic.name(),
             topic
-        );
+        ))?;
     }
 
     let mut partition_ids = Vec::with_capacity(meta_topic.partitions().len());
@@ -597,7 +614,7 @@ pub fn get_partitions<C: ClientContext>(
     }
 
     if partition_ids.len() == 0 {
-        bail!("topic {} does not exist", topic);
+        Err(GetPartitionsError::TopicDoesNotExist)?;
     }
 
     Ok(partition_ids)
