@@ -823,8 +823,6 @@ fn diagnostics() -> Diagnostics {
 }
 
 /// Fetch the current upper of the catalog state.
-// TODO(jkosh44) This isn't actually guaranteed to be linearizable. Before enabling this in
-//  production we need a new linearizable solution.
 async fn current_upper(
     write_handle: &mut WriteHandle<StateUpdateKind, (), Timestamp, Diff>,
 ) -> Timestamp {
