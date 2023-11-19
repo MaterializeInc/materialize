@@ -102,13 +102,18 @@ where
                 .iter()
                 .find(|t| t.name() == new_topic.name)
                 .ok_or(CreateTopicError::MissingMetadata)?;
-            let num_partitions = i32::try_from(topic.partitions().len())
-                .map_err(|_| CreateTopicError::TooManyPartitions)?;
-            if num_partitions != new_topic.num_partitions {
-                return Err(CreateTopicError::PartitionCountMismatch {
-                    expected: new_topic.num_partitions,
-                    actual: num_partitions,
-                });
+            // If the desired number of partitions is not "use the broker
+            // default", wait for the topic to have the correct number of
+            // partitions.
+            if new_topic.num_partitions != -1 {
+                let num_partitions = i32::try_from(topic.partitions().len())
+                    .map_err(|_| CreateTopicError::TooManyPartitions)?;
+                if num_partitions != new_topic.num_partitions {
+                    return Err(CreateTopicError::PartitionCountMismatch {
+                        expected: new_topic.num_partitions,
+                        actual: num_partitions,
+                    });
+                }
             }
             Ok(())
         })
