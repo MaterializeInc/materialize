@@ -148,7 +148,9 @@ impl From<(&SystemVars, &ExplainConfig)> for Config {
         // Construct base config from vars.
         let mut config = Self::from(vars);
         // Override feature flags that can be enabled in the EXPLAIN config.
-        config.enable_new_outer_join_lowering |= explain_config.enable_new_outer_join_lowering;
+        if let Some(explain_flag) = explain_config.enable_new_outer_join_lowering {
+            config.enable_new_outer_join_lowering = explain_flag;
+        }
         // Return final result.
         config
     }

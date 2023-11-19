@@ -194,6 +194,65 @@ With
 
 EOF
 
+# ON predicates with non-trivial equi-join conjuncts were previously planned using
+# the fallback lowering strategy.
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(disable_new_outer_join_lowering, humanized_exprs, arity) FOR
+SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
+  SELECT
+    facts.facts_k01,
+    facts.facts_d01,
+    facts.dim01_k01,
+    dim01.dim01_d01
+  FROM
+    left_joins_raw.facts LEFT JOIN
+    left_joins_raw.dim01 ON(facts.dim01_k01 + x = dim01.dim01_k01 + y)
+);
+----
+Return // { arity: 6 }
+  Filter true // { arity: 6 }
+    Project (#0, #1, #4..=#7) // { arity: 6 }
+      Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
+        Get l0 // { arity: 2 }
+        Project (#0..=#2, #6, #3, #12) // { arity: 6 }
+          Union // { arity: 17 }
+            Get l3 // { arity: 17 }
+            CrossJoin // { arity: 17 }
+              Project (#0..=#10) // { arity: 11 }
+                Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND #2{facts_k01} = #13{facts_k01} AND #3{dim01_k01} = #14{dim01_k01} AND #4{dim02_k01} = #15{dim02_k01} AND #5{dim03_k01} = #16{dim03_k01} AND #6{facts_d01} = #17{facts_d01} AND #7{facts_d02} = #18{facts_d02} AND #8{facts_d03} = #19{facts_d03} AND #9{facts_d04} = #20{facts_d04} AND #10{facts_d05} = #21{facts_d05}) // { arity: 22 }
+                  Union // { arity: 11 }
+                    Negate // { arity: 11 }
+                      Distinct project=[#0{x}, #1{y}, #2{facts_k01}, #3{dim01_k01}, #4{dim02_k01}, #5{dim03_k01}, #6{facts_d01}, #7{facts_d02}, #8{facts_d03}, #9{facts_d04}, #10{facts_d05}] // { arity: 11 }
+                        Get l3 // { arity: 17 }
+                    Distinct project=[#0{x}, #1{y}, #2{facts_k01}, #3{dim01_k01}, #4{dim02_k01}, #5{dim03_k01}, #6{facts_d01}, #7{facts_d02}, #8{facts_d03}, #9{facts_d04}, #10{facts_d05}] // { arity: 11 }
+                      Get l2 // { arity: 11 }
+                  Get l2 // { arity: 11 }
+              Constant // { arity: 6 }
+                - (null, null, null, null, null, null)
+With
+  cte l3 =
+    Filter ((#3{dim01_k01} + #0{x}) = (#11{dim01_k01} + #1{y})) // { arity: 17 }
+      Project (#0..=#10, #13..=#18) // { arity: 17 }
+        Join on=(#0{x} = #11{x} AND #1{y} = #12{y}) // { arity: 19 }
+          Get l2 // { arity: 11 }
+          CrossJoin // { arity: 8 }
+            Get l1 // { arity: 2 }
+            Get materialize.left_joins_raw.dim01 // { arity: 6 }
+  cte l2 =
+    CrossJoin // { arity: 11 }
+      Get l1 // { arity: 2 }
+      Get materialize.left_joins_raw.facts // { arity: 9 }
+  cte l1 =
+    Distinct project=[#0{x}, #1{y}] // { arity: 2 }
+      Get l0 // { arity: 2 }
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.left_joins.outer // { arity: 2 }
+
+EOF
+
 # ON predicates with non-trivial equi-join conjuncts are planned using the
 # optimized lowering strategy.
 query T multiline
@@ -296,6 +355,69 @@ With
             Get l1 // { arity: 2 }
             Get materialize.left_joins_raw.dim01 // { arity: 6 }
           Get l2 // { arity: 11 }
+  cte l2 =
+    CrossJoin // { arity: 11 }
+      Get l1 // { arity: 2 }
+      Get materialize.left_joins_raw.facts // { arity: 9 }
+  cte l1 =
+    Distinct project=[#0{x}, #1{y}] // { arity: 2 }
+      Get l0 // { arity: 2 }
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.left_joins.outer // { arity: 2 }
+
+EOF
+
+# ON predicates with at least one equi-join conjunct were previouisly planned
+# using the fallback lowering strategy.
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(disable_new_outer_join_lowering, humanized_exprs, arity) FOR
+SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
+  SELECT
+    facts.facts_k01,
+    facts.facts_d01,
+    facts.dim01_k01,
+    dim01.dim01_d01
+  FROM
+    left_joins_raw.facts LEFT JOIN
+    left_joins_raw.dim01 ON(
+      facts.dim01_k01 + x = dim01.dim01_k01 + y AND
+      facts_d02 = 42 AND
+      dim01_d02 = 24
+    )
+);
+----
+Return // { arity: 6 }
+  Filter true // { arity: 6 }
+    Project (#0, #1, #4..=#7) // { arity: 6 }
+      Join on=(#0{x} = #2{x} AND #1{y} = #3{y}) // { arity: 8 }
+        Get l0 // { arity: 2 }
+        Project (#0..=#2, #6, #3, #12) // { arity: 6 }
+          Union // { arity: 17 }
+            Get l3 // { arity: 17 }
+            CrossJoin // { arity: 17 }
+              Project (#0..=#10) // { arity: 11 }
+                Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND #2{facts_k01} = #13{facts_k01} AND #3{dim01_k01} = #14{dim01_k01} AND #4{dim02_k01} = #15{dim02_k01} AND #5{dim03_k01} = #16{dim03_k01} AND #6{facts_d01} = #17{facts_d01} AND #7{facts_d02} = #18{facts_d02} AND #8{facts_d03} = #19{facts_d03} AND #9{facts_d04} = #20{facts_d04} AND #10{facts_d05} = #21{facts_d05}) // { arity: 22 }
+                  Union // { arity: 11 }
+                    Negate // { arity: 11 }
+                      Distinct project=[#0{x}, #1{y}, #2{facts_k01}, #3{dim01_k01}, #4{dim02_k01}, #5{dim03_k01}, #6{facts_d01}, #7{facts_d02}, #8{facts_d03}, #9{facts_d04}, #10{facts_d05}] // { arity: 11 }
+                        Get l3 // { arity: 17 }
+                    Distinct project=[#0{x}, #1{y}, #2{facts_k01}, #3{dim01_k01}, #4{dim02_k01}, #5{dim03_k01}, #6{facts_d01}, #7{facts_d02}, #8{facts_d03}, #9{facts_d04}, #10{facts_d05}] // { arity: 11 }
+                      Get l2 // { arity: 11 }
+                  Get l2 // { arity: 11 }
+              Constant // { arity: 6 }
+                - (null, null, null, null, null, null)
+With
+  cte l3 =
+    Filter ((((#3{dim01_k01} + #0{x}) = (#11{dim01_k01} + #1{y})) AND (#7{facts_d02} = 42)) AND (#13{dim01_d02} = 24)) // { arity: 17 }
+      Project (#0..=#10, #13..=#18) // { arity: 17 }
+        Join on=(#0{x} = #11{x} AND #1{y} = #12{y}) // { arity: 19 }
+          Get l2 // { arity: 11 }
+          CrossJoin // { arity: 8 }
+            Get l1 // { arity: 2 }
+            Get materialize.left_joins_raw.dim01 // { arity: 6 }
   cte l2 =
     CrossJoin // { arity: 11 }
       Get l1 // { arity: 2 }

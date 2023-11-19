@@ -184,8 +184,8 @@ pub struct ExplainConfig {
     pub column_names: bool,
     /// Use inferred column names when rendering scalar and aggregate expressions.
     pub humanized_exprs: bool,
-    /// Enable outer join lowering implemented in #22343.
-    pub enable_new_outer_join_lowering: bool,
+    /// Enable outer join lowering implemented in #22347 and #22348.
+    pub enable_new_outer_join_lowering: Option<bool>,
 }
 
 impl Default for ExplainConfig {
@@ -206,7 +206,7 @@ impl Default for ExplainConfig {
             cardinality: false,
             column_names: false,
             humanized_exprs: false,
-            enable_new_outer_join_lowering: false,
+            enable_new_outer_join_lowering: None,
         }
     }
 }
@@ -248,13 +248,38 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             cardinality: flags.remove("cardinality"),
             column_names: flags.remove("column_names"),
             humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
-            enable_new_outer_join_lowering: flags.remove("enable_new_outer_join_lowering"),
+            enable_new_outer_join_lowering: parse_flag(&mut flags, "new_outer_join_lowering")?,
         };
         if flags.is_empty() {
             Ok(result)
         } else {
-            anyhow::bail!("unsupported 'EXPLAIN ... WITH' flags: {:?}", flags)
+            anyhow::bail!("unsupported 'EXPLAIN ... WITH' unknown flags: {flags:?}")
         }
+    }
+}
+
+/// Parses a `feature` flag that can be overriden in [`ExplainConfig`].
+///
+/// Either `enable_$feature` or `disable_$feature` can be given, but not both at
+/// the same time. Returns `Some(true)` / `Some(false)` if the corresponding
+/// `ExplainConfig` flag is set and `None` if neither are present. If both flags
+/// are set at the same time bails with an error.
+fn parse_flag(
+    flags: &mut BTreeSet<String>,
+    feature: &'static str,
+) -> Result<Option<bool>, anyhow::Error> {
+    let enabled = flags.remove(&format!("enable_{feature}"));
+    let disabled = flags.remove(&format!("disable_{feature}"));
+
+    if enabled ^ disabled {
+        Ok(Some(enabled && !disabled))
+    } else if !(enabled && disabled) {
+        Ok(None)
+    } else {
+        let mut flags = BTreeSet::<String>::new();
+        flags.insert(format!("enable_{feature}"));
+        flags.insert(format!("disable_{feature}"));
+        anyhow::bail!("unsupported 'EXPLAIN ... WITH' conflicting flags: {flags:?}")
     }
 }
 
@@ -899,7 +924,7 @@ mod tests {
             cardinality: false,
             column_names: false,
             humanized_exprs: false,
-            enable_new_outer_join_lowering: false,
+            enable_new_outer_join_lowering: None,
         };
         let context = ExplainContext {
             env,
