@@ -570,13 +570,13 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 c.testdrive(
                     dedent(
                         f"""
-                > select sum(envelope_state_count)
+                > select sum(envelope_state_records)
                   from mz_internal.mz_source_statistics st
                   join mz_sources s on s.id = st.id
                   where name = 's1';
                 {repeat + 2}
 
-                > select bool_and(rehydration_latency_ms IS NOT NULL)
+                > select bool_and(rehydration_latency IS NOT NULL)
                   from mz_internal.mz_source_statistics st
                   join mz_sources s on s.id = st.id
                   where name = 's1';
@@ -585,10 +585,10 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
                 )
 
-                rehydration_latency_ms = c.sql_query(
-                    """select max(rehydration_latency_ms)
+                rehydration_latency = c.sql_query(
+                    """select max(rehydration_latency)
                     from mz_internal.mz_source_statistics st
                     join mz_sources s on s.id = st.id
                     where name = 's1';"""
                 )[0]
-                print(f"Scenario {scenario_name} took {rehydration_latency_ms} ms")
+                print(f"Scenario {scenario_name} took {rehydration_latency} ms")
