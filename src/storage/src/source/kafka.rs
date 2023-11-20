@@ -11,6 +11,7 @@ use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::fmt::Display;
 use std::rc::Rc;
 use std::str::{self};
 use std::sync::{Arc, Mutex};
@@ -565,17 +566,6 @@ impl SourceRender for KafkaSourceConnection {
                 // the consumer directly.
                 while let Some(result) = reader.consumer.poll(Duration::from_secs(0)) {
                     match result {
-                        Ok(message) => {
-                            let (message, ts) =
-                                construct_source_message(&message, &reader.metadata_columns);
-                            if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
-                                let pid = time.partition().unwrap();
-                                let part_cap = &reader.partition_capabilities[pid].data;
-                                let msg =
-                                    msg.map_err(|e| SourceReaderError::other_definite(anyhow!(e)));
-                                data_output.give(part_cap, ((0, msg), time, diff)).await;
-                            }
-                        }
                         Err(e) => {
                             let error = format!(
                                 "kafka error when polling consumer for source: {} topic: {} : {}",
@@ -592,6 +582,17 @@ impl SourceRender for KafkaSourceConnection {
                                     },
                                 )
                                 .await;
+                        }
+                        Ok(message) => {
+                            let (message, ts) =
+                                construct_source_message(&message, &reader.metadata_columns);
+                            if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
+                                let pid = time.partition().unwrap();
+                                let part_cap = &reader.partition_capabilities[pid].data;
+                                let msg =
+                                    msg.map_err(|e| SourceReaderError::other_definite(e.into()));
+                                data_output.give(part_cap, ((0, msg), time, diff)).await;
+                            }
                         }
                     }
                 }
@@ -611,7 +612,7 @@ impl SourceRender for KafkaSourceConnection {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid].data;
                                 let msg =
-                                    msg.map_err(|e| SourceReaderError::other_definite(anyhow!(e)));
+                                    msg.map_err(|e| SourceReaderError::other_definite(e.into()));
                                 data_output.give(part_cap, ((0, msg), time, diff)).await;
                             }
                             Ok(None) => continue,
@@ -925,10 +926,10 @@ impl KafkaSourceReader {
     /// past the expected offset and seeks the consumer if it is not.
     fn handle_message(
         &mut self,
-        message: Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, DecodeError>,
+        message: Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
         (partition, offset): (PartitionId, MzOffset),
     ) -> Option<(
-        Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, DecodeError>,
+        Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
         Partitioned<PartitionId, MzOffset>,
         Diff,
     )> {
@@ -985,7 +986,7 @@ fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     metadata_columns: &[KafkaMetadataKind],
 ) -> (
-    Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, DecodeError>,
+    Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
     (PartitionId, MzOffset),
 ) {
     let pid = msg.partition();
@@ -1030,11 +1031,8 @@ fn construct_source_message(
                                     } else {
                                         match str::from_utf8(v) {
                                             Ok(str) => Ok(Datum::String(str)),
-                                            Err(_) => Err(DecodeError {
-                                                kind: DecodeErrorKind::Text(format!(
-                                                    "Found ill-formed byte sequence in header '{}' that cannot be decoded as valid utf-8",
-                                                    key
-                                                )),
+                                            Err(_) => Err(KafkaHeaderParseError::Utf8Error {
+                                                key: key.clone(),
                                                 raw: v.to_vec(),
                                             }),
                                         }
@@ -1116,7 +1114,7 @@ impl PartitionConsumer {
         &mut self,
     ) -> Result<
         Option<(
-            Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, DecodeError>,
+            Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
             (PartitionId, MzOffset),
         )>,
         KafkaError,
@@ -1290,4 +1288,21 @@ fn fetch_partition_info<C: ClientContext>(
         result.insert(pid, watermarks);
     }
     Ok(result)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KafkaHeaderParseError {
+    HeaderKeyNotPresent { key: String },
+    Utf8Error { key: String, raw: Vec<u8> },
+}
+
+impl Display for KafkaHeaderParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HeaderKeyNotPresent { key } => {
+                write!(f, "The header '{key}' is not present in the message")
+            }
+            Self::Utf8Error { key, raw } => write!(f, "Found ill-formed byte sequence in header '{}' that cannot be decoded as valid utf-8: (original bytes: {:x?})", key, raw),
+        }
+    }
 }
