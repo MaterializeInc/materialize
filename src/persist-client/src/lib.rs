@@ -659,6 +659,52 @@ impl PersistClient {
         Ok(writer)
     }
 
+    /// If a shard is guaranteed to never be used again, finalize it to delete
+    /// the associated data and release (almost) all associated resources.
+    ///
+    /// The caller should ensure that both the `since` and `upper` of the shard
+    /// have been advanced to `[]`: ie. the shard is no longer writable or readable.
+    ///
+    /// Once `finalize_shard` has been called, the result of future operations on
+    /// the shard are not defined. They may return errors or succeed as a noop.
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    pub async fn finalize_shard<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<(), InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
+        let mut machine = Machine::<K, V, T, D>::new(
+            self.cfg.clone(),
+            shard_id,
+            Arc::clone(&self.metrics),
+            Arc::new(state_versions),
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
+        )
+        .await?;
+
+        let maintenance = machine.become_tombstone().await?;
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+
+        let () = maintenance.perform(&machine, &gc).await;
+
+        Ok(())
+    }
+
     /// Returns the internal state of the shard for debugging and QA.
     ///
     /// We'll be thoughtful about making unnecessary changes, but the **output

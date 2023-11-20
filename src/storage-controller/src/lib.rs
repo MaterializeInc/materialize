@@ -84,7 +84,6 @@ use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::BufMut;
@@ -144,7 +143,7 @@ use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio_stream::StreamMap;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::command_wals::ProtoShardId;
 use crate::rehydration::RehydratingStorageClient;
@@ -2981,7 +2980,7 @@ where
                 // If global since is empty, we can close shard because no one has an outstanding
                 // read hold.
                 if read_handle.since().is_empty() {
-                    let mut write_handle: WriteHandle<SourceData, (), T, Diff> = persist_client
+                    let write_handle: WriteHandle<SourceData, (), T, Diff> = persist_client
                         .open_writer(
                             shard_id,
                             Arc::new(RelationDesc::empty()),
@@ -3000,35 +2999,18 @@ where
                         // from the finalization register, unfortunately... but the next run
                         // of `finalize_shards` should notice the upper has advanced and tidy
                         // up.
+                        let persist_client = persist_client.clone();
                         mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
-                            let result =
-                                tokio::time::timeout(
-                                    Duration::from_secs(15 * 60),
+                            let result = persist_client
+                                .finalize_shard::<SourceData, (), T, Diff>(
+                                    shard_id,
+                                    Diagnostics::from_purpose("finalizing shards"),
+                                )
+                                .await;
 
-                                    write_handle.append(
-                                        Vec::<(
-                                            (mz_storage_types::sources::SourceData, ()),
-                                            T,
-                                            Diff,
-                                        )>::new(),
-                                        write_handle.upper().clone(),
-                                        Antichain::new(),
-                                    )
-                                ).await;
-
-                            // Rather than error, just leave this shard as one to finalize later.
-                            match result {
-                                Err(_) => {
-                                    warn!("timed out while trying to finalize shard {shard_id}");
-                                }
-                                Ok(Err(usage)) => {
-                                    error!("invalid usage while finalizing shard {shard_id}: {usage:?}")
-                                }
-                                Ok(Ok(Err(mismatch))) => {
-                                    warn!("unable to advance the upper of shard {shard_id} to the empty antichain: {mismatch:?}")
-                                }
-                                Ok(Ok(Ok(()))) => {}
-                            };
+                            if let Err(e) = result {
+                                warn!("error during background finalization: {e:?}");
+                            }
                         });
                         None
                     }
