@@ -146,7 +146,7 @@ impl Coordinator {
 
     /// Call into the compute controller to install a finalized dataflow, and
     /// initialize the read policies for its exported objects.
-    pub(crate) async fn ship_dataflow_new(
+    pub(crate) async fn ship_dataflow(
         &mut self,
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
@@ -735,6 +735,6 @@ impl Coordinator {
         // this only works because this function will never run.
         let compute_instance = ComputeInstanceId::User(1);
 
-        let _: () = self.ship_dataflow_new(dataflow, compute_instance).await;
+        let _: () = self.ship_dataflow(dataflow, compute_instance).await;
     }
 }
