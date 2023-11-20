@@ -33,7 +33,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::connections::{ConnectionContext, StringOrSecret};
-use mz_storage_types::errors::{ContextCreationError, DecodeError, DecodeErrorKind};
+use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::{
     KafkaMetadataKind, KafkaSourceConnection, MzOffset, SourceTimestamp,
 };
@@ -1040,11 +1040,12 @@ fn construct_source_message(
                                 }
                                 None => Ok(Datum::Null),
                             })
-                            //if header is not found, default to null
-                            .unwrap_or(Ok(Datum::Null));
+                            .unwrap_or(Err(KafkaHeaderParseError::HeaderKeyNotPresent {
+                                key: key.clone(),
+                            }));
                         match d {
                             Ok(d) => packer.push(d),
-                            //abort with a definite error when the header cannot be parsed correctly
+                            //abort with a definite error when the header is not found or cannot be parsed correctly
                             Err(err) => return (Err(err), (pid, offset.into())),
                         }
                     }
@@ -1300,9 +1301,9 @@ impl Display for KafkaHeaderParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::HeaderKeyNotPresent { key } => {
-                write!(f, "The header '{key}' is not present in the message")
+                write!(f, "The header '{key}' is not present in the message headers")
             }
-            Self::Utf8Error { key, raw } => write!(f, "Found ill-formed byte sequence in header '{}' that cannot be decoded as valid utf-8: (original bytes: {:x?})", key, raw),
+            Self::Utf8Error { key, raw } => write!(f, "Found ill-formed byte sequence in header '{}' that cannot be decoded as valid utf-8 (original bytes: {:x?})", key, raw),
         }
     }
 }

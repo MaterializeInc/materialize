@@ -169,9 +169,6 @@ fish    value    gusfive
 # test extracting individual headers with INCLUDE HEADER
 $ kafka-create-topic topic=individual_headers
 
-$ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=${keyschema} schema=${schema}
-{"key": "message_0"} {"f1": "fishval", "f2": 1000}
-
 $ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=${keyschema} schema=${schema} headers={"header1": "message_1_header_1"}
 {"key": "message_1"} {"f1": "fishval", "f2": 1000}
 
@@ -183,15 +180,14 @@ $ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=$
   'testdrive-individual_headers-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE HEADER 'header1' AS header1, HEADER 'header2' AS header2
+  INCLUDE HEADER 'header1' AS header1
   ENVELOPE UPSERT
 
-> SELECT key, header1, header2 from individual_headers
-key          header1               header2
-----------------------------------------------
-message_0    <null>                <null>
-message_1    message_1_header_1    <null>
-message_2    message_2_header_1    message_2_header_2
+> SELECT key, header1 from individual_headers
+key          header1
+-------------------------------
+message_1    message_1_header_1
+message_2    message_2_header_1
 
 
 # test exposing header as byte array
@@ -200,15 +196,14 @@ message_2    message_2_header_1    message_2_header_2
   'testdrive-individual_headers-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE HEADER 'header1' AS header1 BYTES, HEADER 'header2' AS header2
+  INCLUDE HEADER 'header1' AS header1 BYTES
   ENVELOPE UPSERT
 
-> SELECT key, header1::text, header2 from individual_headers_bytes
-key          header1                                   header2
-------------------------------------------------------------------------
-message_0    <null>                                    <null>
-message_1    \x6d6573736167655f315f6865616465725f31    <null>
-message_2    \x6d6573736167655f325f6865616465725f31    message_2_header_2
+> SELECT key, header1::text from individual_headers_bytes
+key          header1
+---------------------------------------------------
+message_1    \x6d6573736167655f315f6865616465725f31
+message_2    \x6d6573736167655f325f6865616465725f31
 
 
 # When there are multiple headers with identical keys, verify that the last header is exposed in the row
@@ -258,3 +253,17 @@ $ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${
 
 ! SELECT key, header1 from ill_formed_header
 contains:Found ill-formed byte sequence in header 'header1' that cannot be decoded as valid utf-8 (original bytes: [c3, 28])
+
+
+# Verify that the source is bricked when messages have missing headers 
+
+> CREATE SOURCE missing_headers
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-individual_headers-${testdrive.seed}')
+  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE HEADER 'header2' AS header2
+  ENVELOPE UPSERT
+
+! SELECT key, header2 from missing_headers
+contains:The header 'header2' is not present in the message headers
