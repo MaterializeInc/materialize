@@ -16,7 +16,7 @@ from materialize.mzcompose.services.minio import MINIO_BLOB_URI
 class Backup(Action):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
-        c.exec("mc", "mc", "mb", "persist/crdb-backup")
+        c.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
         c.exec(
             "cockroach",
             "cockroach",
@@ -26,6 +26,7 @@ class Backup(Action):
             """
            CREATE EXTERNAL CONNECTION backup_bucket AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
            BACKUP INTO 'external://backup_bucket';
+           DROP EXTERNAL CONNECTION backup_bucket;
         """,
         )
 
@@ -45,9 +46,9 @@ class Restore(Action):
             "-e",
             """
             DROP DATABASE defaultdb;
+            CREATE EXTERNAL CONNECTION backup_bucket AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
             RESTORE DATABASE defaultdb FROM LATEST IN 'external://backup_bucket';
-            SELECT shard, min(sequence_number), max(sequence_number)
-            FROM consensus.consensus GROUP BY 1 ORDER BY 2 DESC, 3 DESC, 1 ASC LIMIT 32;
+            DROP EXTERNAL CONNECTION backup_bucket;
         """,
         )
         c.run(

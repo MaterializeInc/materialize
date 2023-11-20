@@ -20,6 +20,7 @@ class Check:
     # Has to be set for the class already, not just in the constructor, so that
     # we can change the value for the entire class in the decorator
     enabled: bool = True
+    externally_idempotent: bool = True
 
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         self.base_version = base_version
@@ -80,6 +81,14 @@ class Check:
 def disabled(ignore_reason: str):
     def decorator(cls):
         cls.enabled = False
+        return cls
+
+    return decorator
+
+
+def externally_idempotent(externally_idempotent: bool = True):
+    def decorator(cls):
+        cls.externally_idempotent = externally_idempotent
         return cls
 
     return decorator

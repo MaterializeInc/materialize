@@ -9,9 +9,10 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 
 
+@externally_idempotent(False)
 class RenameSource(Check):
     def _source_schema(self) -> str:
         return dedent(
