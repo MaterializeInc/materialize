@@ -65,7 +65,7 @@ pub enum AdapterNotice {
         time: DateTime<Utc>,
     },
     CascadeDroppedObject {
-        objects: Vec<(String, String)>,
+        objects: Vec<String>,
     },
     DroppedActiveDatabase {
         name: String,
@@ -195,9 +195,7 @@ impl AdapterNotice {
             AdapterNotice::CascadeDroppedObject { objects } => Some(
                 objects
                     .iter()
-                    .map(|(obj_type, obj_name)| {
-                        format!("drop cascades to {} {}", obj_type, obj_name)
-                    })
+                    .map(|obj_info| format!("drop cascades to {}", obj_info))
                     .join("\n"),
             ),
             _ => None,
