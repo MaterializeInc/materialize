@@ -428,9 +428,12 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::Secret(_)
             | WithOptionValue::DataType(_)
             | WithOptionValue::ClusterReplicas(_)
-            | WithOptionValue::ConnectionKafkaBroker(_) => sql_bail!(
+            | WithOptionValue::ConnectionKafkaBroker(_)
+            | WithOptionValue::Refresh(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
+                    WithOptionValue::Value(_) => unreachable!(),
+                    WithOptionValue::Ident(_) => unreachable!(),
                     WithOptionValue::Sequence(_) => "sequences",
                     WithOptionValue::Item(_) => "object references",
                     WithOptionValue::UnresolvedItemName(_) => "object names",
@@ -438,7 +441,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::DataType(_) => "data types",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",
                     WithOptionValue::ConnectionKafkaBroker(_) => "connection kafka brokers",
-                    _ => unreachable!(),
+                    WithOptionValue::Refresh(_) => "refresh option values",
                 },
                 V::name()
             ),

@@ -3125,6 +3125,7 @@ pub enum WithOptionValue<T: AstInfo> {
     // Special cases.
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
     ConnectionKafkaBroker(KafkaBroker<T>),
+    Refresh(RefreshOptionValue<T>),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -3152,10 +3153,51 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             WithOptionValue::ConnectionKafkaBroker(broker) => {
                 f.write_node(broker);
             }
+            WithOptionValue::Refresh(RefreshOptionValue::OnCommit) => {
+                f.write_str("ON COMMIT");
+            }
+            WithOptionValue::Refresh(RefreshOptionValue::At(RefreshAtOptionValue{time})) => {
+                f.write_str("AT ");
+                f.write_node(time);
+            }
+            WithOptionValue::Refresh(RefreshOptionValue::Every(RefreshEveryOptionValue {
+                interval,
+                starting_at,
+            })) => {
+                f.write_str("EVERY ");
+                f.write_str(interval);
+                if let Some(starting_at) = starting_at {
+                    f.write_str(" ");
+                    f.write_node(starting_at)
+                }
+            }
         }
     }
 }
 impl_display_t!(WithOptionValue);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RefreshOptionValue<T: AstInfo> {
+    OnCommit,
+    At(RefreshAtOptionValue<T>),
+    Every(RefreshEveryOptionValue<T>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RefreshAtOptionValue<T: AstInfo> {
+    // We need an Expr because we want to support `mz_now()`.
+    pub time: Expr<T>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RefreshEveryOptionValue<T: AstInfo> {
+    // The following is a String and not an IntervalValue, because that starts with the keyword
+    // INTERVAL, but that is not needed here, since the only thing that can come here is an
+    // interval, so no need to indicate this with an extra keyword.
+    pub interval: String,
+    // We need an Expr because we want to support `mz_now()`.
+    pub starting_at: Option<Expr<T>>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TransactionMode {

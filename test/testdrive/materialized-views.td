@@ -126,7 +126,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 
 # Check that I can query it together with other objects, even between refreshes, and that data added later than the last
 # refresh in other objects is reflected in the result.
-> CREATE MATERIALIZED VIEW mv2 WITH (REFRESH EVERY '10000sec') AS SELECT x+x as x2 FROM t1;
+> CREATE MATERIALIZED VIEW mv2 WITH (REFRESH EVERY = '10000sec') AS SELECT x+x as x2 FROM t1;
 
 > CREATE TABLE t2(y int);
 

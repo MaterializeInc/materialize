@@ -37,6 +37,7 @@ use IsLateral::*;
 use IsOptional::*;
 
 use crate::ast::*;
+use crate::ast::RefreshOptionValue::OnCommit;
 use crate::ident;
 
 // NOTE(benesch): this recursion limit was chosen based on the maximum amount of
@@ -4094,6 +4095,34 @@ impl<'a> Parser<'a> {
                 Ok(WithOptionValue::Secret(secret))
             } else {
                 Ok(WithOptionValue::Ident(ident!("secret")))
+            }
+        } else if self.parse_keyword(ON) {
+            if self.parse_keyword(COMMIT) {
+                Ok(WithOptionValue::Refresh(OnCommit))
+            } else {
+                Ok(WithOptionValue::Ident(ident!("on")))
+            }
+        } else if self.parse_keyword(AT) {
+            if let Some(expr) = self.maybe_parse(Parser::parse_expr) {
+                Ok(WithOptionValue::Refresh(RefreshOptionValue::At(RefreshAtOptionValue {
+                    time: expr,
+                })))
+            } else {
+                Ok(WithOptionValue::Ident(ident!("at")))
+            }
+        } else if self.parse_keyword(EVERY) {
+            if let Some(Value::String(interval)) = self.maybe_parse(Parser::parse_value) {
+                let starting_at = if self.parse_keywords(&[STARTING, AT]) {
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
+                Ok(WithOptionValue::Refresh(RefreshOptionValue::Every(RefreshEveryOptionValue {
+                    interval,
+                    starting_at,
+                })))
+            } else {
+                Ok(WithOptionValue::Ident(ident!("every")))
             }
         } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))

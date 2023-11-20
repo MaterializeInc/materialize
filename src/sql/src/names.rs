@@ -21,7 +21,7 @@ use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::ColumnName;
 use mz_repr::GlobalId;
-use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
+use mz_sql_parser::ast::{MutRecBlock, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, UnresolvedObjectName};
 use mz_sql_parser::ident;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -1734,6 +1734,23 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     .collect(),
             ),
             ConnectionKafkaBroker(broker) => ConnectionKafkaBroker(self.fold_kafka_broker(broker)),
+            Refresh(refresh) => {
+                match refresh {
+                    RefreshOptionValue::OnCommit => Refresh(RefreshOptionValue::OnCommit),
+                    RefreshOptionValue::At(RefreshAtOptionValue{time}) => {
+                        Refresh(RefreshOptionValue::At(RefreshAtOptionValue{time: self.fold_expr(time)}))
+                    },
+                    RefreshOptionValue::Every(RefreshEveryOptionValue{
+                        interval,
+                        starting_at,
+                    }) => {
+                        Refresh(RefreshOptionValue::Every(RefreshEveryOptionValue{
+                            interval,
+                            starting_at: starting_at.map(|e| self.fold_expr(e)),
+                        }))
+                    }
+                }
+            }
         }
     }
 
