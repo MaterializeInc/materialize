@@ -30,7 +30,7 @@ terraform {
   required_providers {
     materialize = {
       source = "MaterializeInc/materialize"
-      version = ">= 0.1.0"
+      version = ">= 0.2.0"
     }
   }
 }
@@ -50,19 +50,19 @@ Materialize recommends saving sensitive input variables as environment variables
 to avoid checking secrets into source control. In Terraform, you can export your Materialize app password as a [Terraform environment variable](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name) with the `TF_VAR_<name>` format.
 
 ```shell
-export TF_VAR_MZ_PW=<app_password>
+export TF_VAR_MZ_PASSWORD=<app_password>
 ```
 
 In the `main.tf` file, add the provider configuration and any variable
 references:
 
 ```hcl
-variable "MZ_PW" {}
+variable "MZ_PASSWORD" {}
 
 provider "materialize" {
   host     = <hostname>
-  username = <username>
-  password = var.MZ_PW
+  user     = <user>
+  password = var.MZ_PASSWORD
   port     = 6875
   database = <database>
 }
@@ -149,6 +149,8 @@ resources and then use the Materialize provider to build Materialize-specific
 objects. A few use cases are captured in the sections below:
 
 ### AWS PrivateLink
+
+{{< public-preview />}}
 
 To get data into Materialize, you need a connection to allow your data source to
 communicate with Materialize. One option to connect securely to Materialize is

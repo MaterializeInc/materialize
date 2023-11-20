@@ -140,14 +140,14 @@ def main() -> int:
         del args.args[0]
 
     if args.program in KNOWN_PROGRAMS:
-        build_retcode = _build(args, extra_programs=[args.program])
+        (build_retcode, built_programs) = _build(args, extra_programs=[args.program])
         if args.build_only:
             return build_retcode
 
         if args.release:
-            path = MZ_ROOT / "target" / "release" / args.program
+            artifact_path = MZ_ROOT / "target" / "release"
         else:
-            path = MZ_ROOT / "target" / "debug" / args.program
+            artifact_path = MZ_ROOT / "target" / "debug"
 
         if args.disable_mac_codesigning:
             if sys.platform != "darwin":
@@ -155,13 +155,15 @@ def main() -> int:
             else:
                 print("Disabled macOS Codesigning")
         elif sys.platform == "darwin":
-            _macos_codesign(path)
+            for program in built_programs:
+                path = artifact_path / program
+                _macos_codesign(str(path))
 
         if args.wrapper:
             command = shlex.split(args.wrapper)
         else:
             command = []
-        command.append(str(path))
+        command.append(str(artifact_path / args.program))
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
@@ -230,7 +232,7 @@ def main() -> int:
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
             command += [f"--postgres-url={args.postgres}", *args.args]
     elif args.program == "test":
-        build_retcode = _build(args)
+        (build_retcode, _) = _build(args)
         if args.build_only:
             return build_retcode
 
@@ -245,19 +247,6 @@ def main() -> int:
     else:
         raise UIError(f"unknown program {args.program}")
 
-    # NB[btv] - Hack to ensure that test results are sorted the same
-    # way as in CI.
-    #
-    # For most system parameters, we don't need to do this, as we can just
-    # use `ALTER SYSTEM` to set them to whatever we want within the SLT (or other)
-    # test itself. However, that doesn't work for `variable_length_row_encoding`,
-    # as it's only read once on startup and doesn't take effect until restart.
-    if os.environ.get("MZ_SYSTEM_PARAMETER_DEFAULT"):
-        os.environ[
-            "MZ_SYSTEM_PARAMETER_DEFAULT"
-        ] += ";variable_length_row_encoding=true"
-    else:
-        os.environ["MZ_SYSTEM_PARAMETER_DEFAULT"] = "variable_length_row_encoding=true"
     print(f"$ {' '.join(command)}")
     # We go through a dance here familiar to shell authors where both
     # the parent and child try to put the child into its own process
@@ -301,13 +290,13 @@ def _set_foreground_process(pid: int) -> None:
         os.tcsetpgrp(tty.fileno(), os.getpgrp())
 
 
-def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
+def _build(
+    args: argparse.Namespace, extra_programs: list[str] = []
+) -> tuple[int, list[str]]:
     env = dict(os.environ)
     command = _cargo_command(args, "build")
     features = []
-    if args.tokio_console:
-        features += ["tokio-console"]
-        env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " --cfg=tokio_unstable"
+
     if args.coverage:
         env["RUSTFLAGS"] = (
             env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.coverage)
@@ -316,10 +305,13 @@ def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
         features.extend(args.features.split(","))
     if features:
         command += [f"--features={','.join(features)}"]
-    for program in [*REQUIRED_SERVICES, *extra_programs]:
+
+    programs = [*REQUIRED_SERVICES, *extra_programs]
+    for program in programs:
         command += ["--bin", program]
     completed_proc = spawn.runv(command, env=env)
-    return completed_proc.returncode
+
+    return (completed_proc.returncode, programs)
 
 
 def _macos_codesign(path: str) -> None:

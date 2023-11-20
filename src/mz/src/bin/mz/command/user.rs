@@ -19,12 +19,8 @@ use mz::command::user::{CreateArgs, RemoveArgs};
 use mz::context::Context;
 use mz::error::Error;
 
-use crate::mixin::ProfileArg;
-
 #[derive(Debug, clap::Args)]
 pub struct UserCommand {
-    #[clap(flatten)]
-    profile: ProfileArg,
     #[clap(subcommand)]
     subcommand: UserSubcommand,
 }
@@ -50,14 +46,14 @@ pub enum UserSubcommand {
 }
 
 pub async fn run(cx: Context, cmd: UserCommand) -> Result<(), Error> {
-    let mut cx = cx.activate_profile(cmd.profile.profile)?;
+    let cx = cx.activate_profile()?;
     match &cmd.subcommand {
         UserSubcommand::Create { email, name } => {
-            mz::command::user::create(&mut cx, CreateArgs { email, name }).await
+            mz::command::user::create(&cx, CreateArgs { email, name }).await
         }
-        UserSubcommand::List => mz::command::user::list(&mut cx).await,
+        UserSubcommand::List => mz::command::user::list(&cx).await,
         UserSubcommand::Remove { email } => {
-            mz::command::user::remove(&mut cx, RemoveArgs { email }).await
+            mz::command::user::remove(&cx, RemoveArgs { email }).await
         }
     }
 }

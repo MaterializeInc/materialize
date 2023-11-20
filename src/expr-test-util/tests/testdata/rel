@@ -158,7 +158,7 @@ build
 (reduce (get y) [#2] [])
 ----
 ----
-Distinct group_by=[#2]
+Distinct project=[#2]
   Get u1
 
 ----

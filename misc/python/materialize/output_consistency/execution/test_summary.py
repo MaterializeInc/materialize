@@ -48,8 +48,13 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
             self.count_successful_query_templates
             + self.count_ignored_error_query_templates
         )
+
+        count_ok = count_accepted_queries
+        count_all = self.count_executed_query_templates
+        percentage = 100 * count_ok / count_all if count_all > 0 else 0
+
         output_rows = [
-            f"{count_accepted_queries}/{self.count_executed_query_templates} queries passed"
+            f"{count_ok}/{count_all} ({round(percentage, 2)}%) queries passed"
             f" in mode '{self.mode}'.",
             f"{self.count_ignored_error_query_templates} queries were ignored after execution.",
             f"{self.count_with_warning_query_templates} queries had warnings.",

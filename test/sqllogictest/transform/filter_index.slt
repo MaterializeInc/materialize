@@ -33,7 +33,7 @@ explain with(arity, join_impls) select b, c from foo where a = 5
 Explained Query:
   Project (#1, #2) // { arity: 2 }
     Filter (#0 = 5) // { arity: 3 }
-      Get materialize.public.foo // { arity: 3 }
+      ReadStorage materialize.public.foo // { arity: 3 }
 
 Source materialize.public.foo
   filter=((#0 = 5))
@@ -54,7 +54,7 @@ explain with(arity, join_impls) select b, c from foo, (select 5 as a) const wher
 Explained Query:
   Project (#1, #2) // { arity: 2 }
     Filter (#0 = 5) // { arity: 3 }
-      Get materialize.public.foo // { arity: 3 }
+      ReadStorage materialize.public.foo // { arity: 3 }
 
 Source materialize.public.foo
   filter=((#0 = 5))
@@ -78,10 +78,10 @@ Explained Query:
       %0:foo[×]ef » %1:bar[×]ef
     ArrangeBy keys=[[]] // { arity: 3 }
       Filter (#0 = 3) // { arity: 3 }
-        Get materialize.public.foo // { arity: 3 }
+        ReadStorage materialize.public.foo // { arity: 3 }
     ArrangeBy keys=[[]] // { arity: 3 }
       Filter (3 = abs(#0)) // { arity: 3 }
-        Get materialize.public.bar // { arity: 3 }
+        ReadStorage materialize.public.bar // { arity: 3 }
 
 Source materialize.public.foo
   filter=((#0 = 3))
@@ -103,19 +103,17 @@ is
 statement ok
 create index foo_idx on foo(a);
 
-#TODO (wangandi) (materialize#616): uncomment these tests when FilterEqualLiteral is enabled
+query T multiline
+explain with(arity, join_impls) select b, c from foo where a = 5
+----
+Explained Query (fast path):
+  Project (#1, #2)
+    ReadIndex on=materialize.public.foo foo_idx=[lookup value=(5)]
 
-#query T multiline
-#explain with(arity, join_impls) select b, c from foo where a = 5
-#----
-#Project {
-#  outputs: [1, 2],
-#  Join {
-#    variables: [[(0, 0), (1, 0)]],
-#    ArrangeBy { keys: [[#0]], Get { foo (u1) } },
-#    Constant [[5]]
-#  }
-#}
+Used Indexes:
+  - materialize.public.foo_idx (lookup)
+
+EOF
 
 query TR
 select b, c from foo where a = 5
@@ -123,20 +121,18 @@ select b, c from foo where a = 5
 this
 -4.4
 
-#query T multiline
-#explain with(arity, join_impls) select b, c from foo where a = 5 and b = 'this'
-#----
-#Project {
-#  outputs: [1, 2],
-#  Filter {
-#    predicates: [#1 = "this"],
-#    Join {
-#      variables: [[(0, 0), (1, 0)]],
-#      ArrangeBy { keys: [[#0]], Get { foo (u1) } },
-#      Constant [[5]],
-#    }
-#  }
-#}
+query T multiline
+explain with(arity, join_impls) select b, c from foo where a = 5 and b = 'this'
+----
+Explained Query (fast path):
+  Project (#1, #2)
+    Filter ("this" = varchar_to_text(#1))
+      ReadIndex on=materialize.public.foo foo_idx=[lookup value=(5)]
+
+Used Indexes:
+  - materialize.public.foo_idx (lookup)
+
+EOF
 
 query TR
 select b, c from foo where a = 5
@@ -150,26 +146,39 @@ create index foo_idx2 on foo(b, a);
 statement ok
 create index foo_idx3 on foo(b);
 
-#query T multiline
-#explain with(arity, join_impls) select b, c from foo where a = 5 and b = 'this'
-#----
-#Project {
-#  outputs: [1, 2],
-#  Join {
-#    variables: [[(0, 1), (1, 0)], [(0, 0), (1, 1)]],
-#    ArrangeBy { keys: [[#1, #0]], Get { foo (u1) } },
-#    Constant [["this", 5]],
-#  }
-#}
+query T multiline
+explain with(arity, join_impls) select b, c from foo where a = 5 and b = 'this'
+----
+Explained Query (fast path):
+  Project (#0, #2)
+    ReadIndex on=materialize.public.foo foo_idx2=[lookup value=("this", 5)]
 
-#TODO (wangandi) (materialize#616): uncomment these tests when FilterEqualLiteral is enabled
-#think about what the desired plan is when
-#statement ok
-#create index bar_idx on bar(a)
-#
-#query T multiline
-#explain with(arity, join_impls) select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
-#----
+Used Indexes:
+  - materialize.public.foo_idx2 (lookup)
+
+EOF
+
+statement ok
+create index bar_idx on bar(a)
+
+query T multiline
+explain with(arity, join_impls) select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'
+----
+Explained Query:
+  Project (#0..=#2, #5, #6) // { arity: 5 }
+    Join on=(#0 = #4) type=differential // { arity: 7 }
+      implementation
+        %0:foo[#0]KAe » %1:bar[#0]KAe
+      ArrangeBy keys=[[#0]] // { arity: 4 }
+        ReadIndex on=materialize.public.foo foo_idx3=[lookup value=("this")] // { arity: 4 }
+      ArrangeBy keys=[[#0]] // { arity: 3 }
+        ReadIndex on=bar bar_idx=[differential join] // { arity: 3 }
+
+Used Indexes:
+  - materialize.public.foo_idx3 (lookup)
+  - materialize.public.bar_idx (differential join)
+
+EOF
 
 query ITRTR
 select foo.a, b, c, d, e from foo, bar where foo.a = bar.a and b = 'this'

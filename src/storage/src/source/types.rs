@@ -24,16 +24,16 @@ use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_rocksdb::RocksDBInstanceMetrics;
-use mz_storage_client::metrics::BackpressureMetrics;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
-use mz_storage_client::types::sources::{MzOffset, SourceTimestamp};
+use mz_storage_operators::metrics::BackpressureMetrics;
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::errors::{DecodeError, SourceErrorDetails};
+use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use prometheus::core::{AtomicF64, AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use crate::render::sources::OutputIndex;
+use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::metrics::{SourceBaseMetrics, UpsertSharedMetrics};
 use crate::source::RawSourceCreationConfig;
 
@@ -42,6 +42,7 @@ pub trait SourceRender {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
     type Time: SourceTimestamp;
+    const STATUS_NAMESPACE: StatusNamespace;
 
     /// Renders the source in the provided timely scope.
     ///
@@ -85,76 +86,21 @@ pub trait SourceRender {
             Diff,
         >,
         Option<Stream<G, Infallible>>,
-        Stream<G, (OutputIndex, HealthStatusUpdate)>,
+        Stream<G, HealthStatusMessage>,
         Rc<dyn Any>,
     );
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct HealthStatusUpdate {
-    pub update: HealthStatus,
-    pub should_halt: bool,
-}
-
-/// NB: we derive Ord here, so the enum order matters. Generally, statuses later in the list
-/// take precedence over earlier ones: so if one worker is stalled, we'll consider the entire
-/// source to be stalled.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum HealthStatus {
-    Starting,
-    Running,
-    StalledWithError { error: String, hint: Option<String> },
-}
-
-impl HealthStatus {
-    pub fn name(&self) -> &'static str {
-        match self {
-            HealthStatus::Starting => "starting",
-            HealthStatus::Running => "running",
-            HealthStatus::StalledWithError { .. } => "stalled",
-        }
-    }
-
-    pub fn error(&self) -> Option<&str> {
-        match self {
-            HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError { error, .. } => Some(error),
-        }
-    }
-
-    pub fn hint(&self) -> Option<&str> {
-        match self {
-            HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError { error: _, hint } => hint.as_deref(),
-        }
-    }
-}
-
-impl HealthStatusUpdate {
-    /// Generates a non-halting [`HealthStatusUpdate`] with `update`.
-    pub(crate) fn status(update: HealthStatus) -> Self {
-        HealthStatusUpdate {
-            update,
-            should_halt: false,
-        }
-    }
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
 #[derive(Debug, Clone)]
 pub struct SourceMessage<Key, Value> {
-    /// The time that an external system first observed the message
-    ///
-    /// Milliseconds since the unix epoch
-    pub upstream_time_millis: Option<i64>,
     /// The message key
     pub key: Key,
     /// The message value
     pub value: Value,
-    /// Headers, if the source is configured to pass them along. If it is, but there are none, it
-    /// passes `Some([])`
-    pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+    /// Additional metadata columns requested by the user
+    pub metadata: Row,
 }
 
 /// A record produced by a source
@@ -164,17 +110,12 @@ pub struct SourceOutput<K, V> {
     pub key: K,
     /// The record's value
     pub value: V,
-    /// The position in the partition described by the `partition` in the source
-    /// (e.g., Kafka offset, file line number, monotonic increasing
-    /// number, etc.)
-    pub position: MzOffset,
-    /// The time the record was created in the upstream system, as milliseconds since the epoch
-    pub upstream_time_millis: Option<i64>,
-    /// The partition of this message, present iff the partition comes from Kafka
-    pub partition: PartitionId,
-    /// Headers, if the source is configured to pass them along. If it is, but there are none, it
-    /// passes `Some([])`
-    pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+    /// Additional metadata columns requested by the user
+    pub metadata: Row,
+    /// The offset position in the partition of a kafka source. This is field is on its way out and
+    /// its only valid use is in the upsert operator. Do NOT use it in any new place!
+    // TODO(petrosagg): remove this field
+    pub position_for_upsert: MzOffset,
 }
 
 impl<K, V> SourceOutput<K, V> {
@@ -182,18 +123,14 @@ impl<K, V> SourceOutput<K, V> {
     pub fn new(
         key: K,
         value: V,
-        position: MzOffset,
-        upstream_time_millis: Option<i64>,
-        partition: PartitionId,
-        headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+        metadata: Row,
+        position_for_upsert: MzOffset,
     ) -> SourceOutput<K, V> {
         SourceOutput {
             key,
             value,
-            position,
-            upstream_time_millis,
-            partition,
-            headers,
+            metadata,
+            position_for_upsert,
         }
     }
 }
@@ -207,16 +144,12 @@ pub struct DecodeResult {
     /// differential `diff` value for this value, if the value
     /// is present and not and error.
     pub value: Option<Result<Row, DecodeError>>,
-    /// The index of the decoded value in the stream
-    pub position: MzOffset,
-    /// The time the record was created in the upstream system, as milliseconds since the epoch
-    pub upstream_time_millis: Option<i64>,
-    /// The partition this record came from
-    pub partition: PartitionId,
-    /// If this is a Kafka stream, the appropriate metadata
-    // TODO(bwm): This should probably be statically different for different streams, or we should
-    // propagate whether metadata is requested into the decoder
+    /// Additional metadata requested by the user
     pub metadata: Row,
+    /// The offset position in the partition of a kafka source. This is field is on its way out and
+    /// its only valid use is in the upsert operator. Do NOT use it in any new place!
+    // TODO(petrosagg): remove this field
+    pub position_for_upsert: MzOffset,
 }
 
 /// A structured error for `SourceReader::get_next_message` implementors.
@@ -321,6 +254,8 @@ pub struct SourceMetrics {
     pub(crate) resume_upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// Per-partition Prometheus metrics.
     pub(crate) partition_metrics: BTreeMap<PartitionId, PartitionMetrics>,
+    /// The number of in-memory remap bindings that reclocking a time needs to iterate over.
+    pub(crate) inmemory_remap_bindings: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     source_name: String,
     source_id: GlobalId,
     base_metrics: SourceBaseMetrics,
@@ -348,6 +283,10 @@ impl SourceMetrics {
                 .source_specific
                 .resume_upper
                 .get_delete_on_drop_gauge(vec![source_id.to_string()]),
+            inmemory_remap_bindings: base
+                .source_specific
+                .inmemory_remap_bindings
+                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
             partition_metrics: Default::default(),
             source_name: source_name.to_string(),
             source_id,
@@ -503,6 +442,8 @@ pub struct UpsertMetrics {
     pub(crate) multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 
+    pub(crate) legacy_value_errors: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
     pub(crate) rocksdb_instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
@@ -565,6 +506,10 @@ impl UpsertMetrics {
             multi_put_size: base
                 .multi_put_size
                 .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+
+            legacy_value_errors: base
+                .legacy_value_errors
+                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
 
             shared: base.shared(&source_id),
             rocksdb_shared: base.rocksdb_shared(&source_id),

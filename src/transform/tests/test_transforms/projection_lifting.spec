@@ -13,17 +13,17 @@
 # Define t0 source
 define
 DefSource name=t0 keys=[[#0]]
-  - bigint
-  - bigint?
+  - c0: bigint
+  - c1: bigint?
 ----
 Source defined as t0
 
 # Define t1 source
 define
 DefSource name=t1 keys=[[#0]]
-  - text
-  - bigint
-  - boolean
+  - c0: text
+  - c1: bigint
+  - c2: boolean
 ----
 Source defined as t1
 
@@ -153,7 +153,7 @@ With Mutually Recursive
       Project (#1, #1)
         Get t1
   cte l1 = // { types: "(bigint, bigint?)" }
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Union
         Get t0
         Get l0
@@ -173,7 +173,7 @@ With Mutually Recursive
     Filter (#1) IS NOT NULL
       Get t1
   cte l1 =
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Union
         Get t0
         Project (#1, #1)

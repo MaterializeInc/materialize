@@ -33,7 +33,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
-use crate::error::{Determinacy, InvalidUsage};
+use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyPartStats};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
@@ -769,7 +769,7 @@ where
 
         let existed = self.leased_readers.remove(reader_id).is_some();
         if existed {
-            // TODO: Re-enable this once we have #15511.
+            // TODO(#22789): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -802,7 +802,7 @@ where
 
         let existed = self.critical_readers.remove(reader_id).is_some();
         if existed {
-            // TODO: Re-enable this once we have #15511.
+            // TODO(#22789): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -981,8 +981,8 @@ pub struct TypedState<K, V, T, D> {
     pub(crate) _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
-#[cfg(any(test, debug_assertions))]
 impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn clone(&self, applier_version: Version, hostname: String) -> Self {
         TypedState {
             state: State {
@@ -991,6 +991,20 @@ impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
                 seqno: self.seqno.clone(),
                 walltime_ms: self.walltime_ms,
                 hostname,
+                collections: self.collections.clone(),
+            },
+            _phantom: PhantomData,
+        }
+    }
+
+    pub(crate) fn clone_for_rollup(&self) -> Self {
+        TypedState {
+            state: State {
+                applier_version: self.applier_version.clone(),
+                shard_id: self.shard_id.clone(),
+                seqno: self.seqno.clone(),
+                walltime_ms: self.walltime_ms,
+                hostname: self.hostname.clone(),
                 collections: self.collections.clone(),
             },
             _phantom: PhantomData,
@@ -1414,19 +1428,9 @@ pub struct ExpiryMetrics {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Since<T>(pub Antichain<T>);
 
-// When used as an error, Since is determinate.
-impl<T> Determinacy for Since<T> {
-    const DETERMINANT: bool = true;
-}
-
 /// Wrapper for Antichain that represents an Upper
 #[derive(Debug, PartialEq)]
 pub struct Upper<T>(pub Antichain<T>);
-
-// When used as an error, Upper is determinate.
-impl<T> Determinacy for Upper<T> {
-    const DETERMINANT: bool = true;
-}
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -1756,7 +1760,7 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader2),
             Continue(true)
         );
-        // TODO: expiry temporarily doesn't advance since until we have #15511.
+        // TODO(#22789): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
@@ -1767,7 +1771,7 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader3),
             Continue(true)
         );
-        // TODO: expiry temporarily doesn't advance since until we have #15511.
+        // TODO(#22789): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));

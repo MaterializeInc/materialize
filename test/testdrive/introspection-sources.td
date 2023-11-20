@@ -264,7 +264,9 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > CREATE DEFAULT INDEX ii_arr ON vv_arr
 
-> SELECT records >= 300, size >= 300*96, capacity >= 300*96 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_arr' OR name='mv_arr'
+# Under arrangement specialization of only empty values, a single-column relation
+# should demand 48 bytes per tuple instead of 96.
+> SELECT records >= 300, size >= 300*48, capacity >= 300*48 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
 true true true
 true true true
 
@@ -274,7 +276,7 @@ true true true
 
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_empty'
+> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
 0 32 true true true
 
 # Tests that arrangement sizes are approximate
@@ -283,31 +285,159 @@ true true true
 
 > CREATE INDEX ii_t4 ON t4(c)
 
-> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 0 32 true true true
 
 > INSERT INTO t4 SELECT 1
 
-> SELECT records, batches, size < 1024, capacity > 96, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+> SELECT records, batches, size < 1024, capacity > 96, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 1 32 true true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)
 
-> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 96*1000 AND size < 2*96*1000, capacity > 96*1000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 48*1000 AND size < 2*48*1000, capacity > 48*1000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 true true true true true
 
 > DROP INDEX ii_t4
 
-> SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+> SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 
-# Test arrangement size logging disabled works
+# Test arrangement size logging for error dataflows
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_arrangement_size_logging = false
+> CREATE TABLE t5(a int)
 
-> CREATE INDEX ii_t4 ON t4(c)
+> INSERT INTO t5 SELECT -a FROM generate_series(1, 10000) g(a)
 
-> SELECT records >= 1000 AND records <= 1001, batches > 0, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
-true true 0 0 0
+> CREATE VIEW vt5 AS SELECT a::uint2 FROM t5
 
-> DROP INDEX ii_t4
+> CREATE INDEX vt5_idx ON vt5(a)
+
+> SELECT records, (size/1024/1024)::int FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%vt5_idx'
+10000 1
+
+> DROP TABLE t5 CASCADE
+
+# Test that `mz_dataflow_arrangement_sizes` shows dataflows not contained in the catalog.
+
+> CREATE TABLE t6 (a int)
+> INSERT INTO t6 SELECT generate_series(1, 1000)
+> CREATE INDEX ii_t6 ON t6 (a)
+> CREATE VIEW t6_plus_1 AS SELECT a + 1 AS b FROM t6
+> CREATE INDEX ii_t6_plus_1 ON t6_plus_1 (b)
+> DROP INDEX ii_t6
+
+> SELECT name, records > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t6%'
+"Dataflow: materialize.public.ii_t6"        true
+"Dataflow: materialize.public.ii_t6_plus_1" true
+
+# Test dataflow error introspection.
+
+> CREATE TABLE zeros (a int)
+> CREATE VIEW v_div_by_zero AS SELECT 1 / a AS x FROM zeros
+> CREATE INDEX idx1_div_by_zero ON v_div_by_zero (x)
+> CREATE MATERIALIZED VIEW mv_div_by_zero AS SELECT 1 / a AS x FROM zeros
+> CREATE INDEX idx2_div_by_zero ON mv_div_by_zero (x)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+
+> INSERT INTO zeros VALUES (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 1
+idx2_div_by_zero 1
+mv_div_by_zero   1
+
+> INSERT INTO zeros VALUES (0), (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 3
+idx2_div_by_zero 3
+mv_div_by_zero   3
+
+> DELETE FROM zeros
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+
+# Test that error logging is retracted when objects are dropped.
+
+> INSERT INTO zeros VALUES (0), (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 2
+idx2_div_by_zero 2
+mv_div_by_zero   2
+
+> DROP INDEX idx1_div_by_zero
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx2_div_by_zero 2
+mv_div_by_zero   2
+
+> DROP MATERIALIZED VIEW mv_div_by_zero
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+
+# Test logging of errors in things that advance to the empty frontier.
+
+> CREATE MATERIALIZED VIEW mv_zero AS SELECT 0 AS x
+> CREATE MATERIALIZED VIEW mv2_div_by_zero AS SELECT 1 / x FROM mv_zero
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+mv2_div_by_zero 1
+
+> DROP MATERIALIZED VIEW mv_zero CASCADE
+
+# Test logging of errors in reused indexes.
+
+> CREATE INDEX idx1_div_by_zero ON v_div_by_zero (x)
+> CREATE INDEX idx2_div_by_zero ON v_div_by_zero (x)
+> CREATE INDEX idx3_div_by_zero ON v_div_by_zero (x)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 2
+idx2_div_by_zero 2
+idx3_div_by_zero 2
+
+> INSERT INTO zeros VALUES (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 3
+idx2_div_by_zero 3
+idx3_div_by_zero 3
+
+> DROP TABLE zeros CASCADE
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name

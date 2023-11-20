@@ -17,14 +17,14 @@ import pytest
 from dbt.tests.util import check_relations_equal, run_dbt
 
 models__override_cluster_sql = """
-{{ config(cluster='not_default', materialized='materializedview') }}
+{{ config(cluster='not_default', materialized='materialized_view') }}
 select 1 as col_1
 """
 
 models__override_cluster_and_index_sql = """
 {{ config(
     cluster='not_default',
-    materialized='materializedview',
+    materialized='materialized_view',
     indexes=[{'columns': ['col_1'], 'name':'c_i_col_1_idx'}]
 ) }}
 select 1 as col_1
@@ -32,19 +32,19 @@ select 1 as col_1
 
 models__override_index_cluster_sql = """
 {{ config(
-    materialized='materializedview',
+    materialized='materialized_view',
     indexes=[{'columns': ['col_1'], 'cluster': 'not_default', 'name':'i_col_1_idx'}]
 ) }}
 select 1 as col_1
 """
 
 models__invalid_cluster_sql = """
-{{ config(cluster='not_exist', materialized='materializedview') }}
+{{ config(cluster='not_exist', materialized='materialized_view') }}
 select 1 as col_1
 """
 
 project_override_cluster_sql = """
-{{ config(materialized='materializedview') }}
+{{ config(materialized='materialized_view') }}
 select 1 as col_1
 """
 
@@ -63,7 +63,6 @@ where mv.id like 'u%'
 
 models_expected_clusters = """
 materialized_view_name,cluster_name,index_name,index_cluster_name
-expected_clusters,default,,
 override_cluster,not_default,,
 override_index_cluster,default,i_col_1_idx,not_default
 override_cluster_and_index,not_default,c_i_col_1_idx,not_default
@@ -100,7 +99,7 @@ class TestModelCluster:
         results = run_dbt(["seed"])
         assert len(results) == 1
 
-        project.run_sql("CREATE CLUSTER not_default REPLICAS (r1 (SIZE '1'))")
+        project.run_sql("CREATE CLUSTER not_default SIZE = '1'")
         run_dbt(["run", "--exclude", "invalid_cluster", "default_cluster"])
 
         check_relations_equal(project.adapter, ["actual_clusters", "expected_clusters"])
@@ -118,7 +117,7 @@ class TestModelCluster:
         run_dbt(["run", "--models", "override_cluster"], expect_pass=True)
         run_dbt(["run", "--models", "default_cluster"], expect_pass=False)
 
-        project.run_sql("CREATE CLUSTER default REPLICAS (r1 (SIZE '1'))")
+        project.run_sql("CREATE CLUSTER default SIZE = '1'")
 
 
 class TestProjectConfigCluster:

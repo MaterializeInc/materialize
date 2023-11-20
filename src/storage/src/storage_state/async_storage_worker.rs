@@ -25,8 +25,8 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::local::Activatable;
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::sources::{
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, PostgresSourceConnection, SourceConnection, SourceData,
     SourceEnvelope, SourceTimestamp, TestScriptSourceConnection,
@@ -235,7 +235,13 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 // The status shard only contains non-definite status updates
                                 status_shard: _,
                                 relation_desc,
+                                txns_shard,
                             } = &export.storage_metadata;
+                            assert_eq!(
+                                txns_shard, &None,
+                                "source {} unexpectedly using persist-txn",
+                                id
+                            );
                             let client = persist_clients
                                 .open(persist_location.clone())
                                 .await

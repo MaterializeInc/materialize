@@ -10,7 +10,8 @@
 import random
 from textwrap import dedent
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.debezium_capabilities import DebeziumSourceExists
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
@@ -27,10 +28,10 @@ class CreateViewParameterized(ActionFactory):
     @classmethod
     def requires(cls) -> list[set[type[Capability]]]:
         return [
-            {MzIsRunning, SourceExists},
-            {MzIsRunning, TableExists},
-            {MzIsRunning, DebeziumSourceExists},
-            {MzIsRunning, PostgresCdcTableExists},
+            {BalancerdIsRunning, MzIsRunning, SourceExists},
+            {BalancerdIsRunning, MzIsRunning, TableExists},
+            {BalancerdIsRunning, MzIsRunning, DebeziumSourceExists},
+            {BalancerdIsRunning, MzIsRunning, PostgresCdcTableExists},
         ]
 
     def __init__(
@@ -126,10 +127,12 @@ class ValidateView(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, StoragedRunning, ViewExists}
+        return {BalancerdIsRunning, MzIsRunning, StoragedRunning, ViewExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.view = random.choice(capabilities.get(ViewExists))
+        # Trigger the PeekPersist optimization
+        self.select_limit = random.choice(["", "LIMIT 1"])
         super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
@@ -141,14 +144,14 @@ class ValidateView(Action):
             c.testdrive(
                 dedent(
                     f"""
-                    > SELECT count_all, count_distinct, min_value, max_value FROM {self.view.name} /* expecting count_all = {(view_max-view_min)+1} count_distinct = {(view_max-view_min)+1} min_value = {view_min} max_value = {view_max} */ ;
+                    > SELECT count_all, count_distinct, min_value, max_value FROM {self.view.name} {self.select_limit} /* expecting count_all = {(view_max-view_min)+1} count_distinct = {(view_max-view_min)+1} min_value = {view_min} max_value = {view_max} */ ;
                     {(view_max-view_min)+1} {(view_max-view_min)+1} {view_min} {view_max}
                 """
                 )
                 if self.view.expensive_aggregates
                 else dedent(
                     f"""
-                    > SELECT count_all FROM {self.view.name} /* expecting count_all = {(view_max-view_min)+1} */ ;
+                    > SELECT count_all FROM {self.view.name} {self.select_limit} /* expecting count_all = {(view_max-view_min)+1} */ ;
                     {(view_max-view_min)+1}
                 """
                 )

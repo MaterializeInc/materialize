@@ -31,8 +31,8 @@ use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::Client as S3Client;
 use aws_types::region::Region;
 use bytes::Bytes;
-use futures_util::future::join_all;
-use futures_util::{FutureExt, TryFutureExt};
+use futures_util::stream::FuturesOrdered;
+use futures_util::{FutureExt, StreamExt};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
@@ -43,7 +43,7 @@ use uuid::Uuid;
 
 use crate::cfg::BlobKnobs;
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, BlobMetadata, ExternalError};
+use crate::location::{Atomicity, Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
 
 /// Configuration for opening an [S3Blob].
@@ -397,87 +397,67 @@ impl Blob for S3Blob {
             start_overall.elapsed(),
         );
 
-        // Get handle to our runtime so we can concurrently fetch the remaining parts.
-        let async_runtime = AsyncHandle::try_current().map_err(anyhow::Error::msg)?;
+        let mut body_futures = FuturesOrdered::new();
+        let mut first_part = Some(first_part);
 
-        // Fetch the first part's body while we fetch the other parts.
-        let min_body_elapsed_ = Arc::clone(&min_body_elapsed);
-        let first_body_fut = async move {
-            let body_start = Instant::now();
-            let result = first_part
-                .body
-                .collect()
-                .map_err(|err| Error::from(format!("s3 get first body err: {}", err)))
-                .await;
-            let elapsed = body_start.elapsed();
-            min_body_elapsed_.observe(elapsed, "s3 download first part body");
-
-            result
-        };
-
-        let mut body_handles = Vec::new();
-        // TODO: Add the key and part number once this can be annotated with metadata.
-        body_handles.push(async_runtime.spawn_named(|| "persist_s3blob_get_body", first_body_fut));
-
-        if num_parts > 1 {
-            // Fetch the headers of the rest of the parts. (Starting at part 2 because we already
-            // did part 1.)
-            for part_num in 2..=num_parts {
-                let header_future = self
-                    .client
-                    .get_object()
-                    .bucket(&self.bucket)
-                    .key(&path)
-                    .part_number(part_num)
-                    .send();
-
-                // Clone a handle to our MinElapsed trackers so we can give one to
-                // each download task.
-                let min_header_elapsed_ = Arc::clone(&min_header_elapsed);
-                let min_body_elapsed_ = Arc::clone(&min_body_elapsed);
-
-                let request_future = async move {
-                    // Request our headers.
-                    let header_start = Instant::now();
-                    let object = header_future
-                        .await
-                        .map_err(|err| ExternalError::from(anyhow!("s3 get meta err: {}", err)))?;
-                    let header_elapsed = header_start.elapsed();
-                    min_header_elapsed_.observe(header_elapsed, "s3 download part header");
-
-                    // Request the body.
-                    let body_start = Instant::now();
-                    let body = object
-                        .body
-                        .collect()
-                        .await
-                        .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
-                    let body_elapsed = body_start.elapsed();
-                    min_body_elapsed_.observe(body_elapsed, "s3 download part body");
-
-                    Ok(body)
+        // Fetch the headers of the rest of the parts. (Starting at part 2 because we already
+        // did part 1.)
+        for part_num in 1..=num_parts {
+            // Clone a handle to our MinElapsed trackers so we can give one to
+            // each download task.
+            let min_header_elapsed = Arc::clone(&min_header_elapsed);
+            let min_body_elapsed = Arc::clone(&min_body_elapsed);
+            let first_part = first_part.take();
+            let path = &path;
+            let request_future = async move {
+                // Fetch the headers of the rest of the parts. (Using the existing headers
+                // for part 1.
+                let object = match first_part {
+                    Some(first_part) => {
+                        assert_eq!(part_num, 1, "only the first part should be prefetched");
+                        first_part
+                    }
+                    None => {
+                        assert_ne!(part_num, 1, "first part should be prefetched");
+                        // Request our headers.
+                        let header_start = Instant::now();
+                        let object = self
+                            .client
+                            .get_object()
+                            .bucket(&self.bucket)
+                            .key(path)
+                            .part_number(part_num)
+                            .send()
+                            .await
+                            .map_err(|err| {
+                                ExternalError::from(anyhow!("s3 get meta err: {}", err))
+                            })?;
+                        min_header_elapsed
+                            .observe(header_start.elapsed(), "s3 download part header");
+                        object
+                    }
                 };
 
-                // TODO: Add the key and part number once this can be annotated
-                // with metadata.
-                //
-                // Spawn all of these futures on the runtime so they run concurrently.
-                let request_handle = async_runtime.spawn_named(|| "persist_s3blob_get_header", {
-                    self.metrics.get_part.inc();
-                    request_future
-                });
+                // Request the body.
+                let body_start = Instant::now();
+                let body = object
+                    .body
+                    .collect()
+                    .await
+                    .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
+                let body_elapsed = body_start.elapsed();
+                min_body_elapsed.observe(body_elapsed, "s3 download part body");
 
-                body_handles.push(request_handle);
-            }
+                Ok::<_, Error>(body)
+            };
+
+            body_futures.push_back(request_future);
         }
 
         // Await on all of our parts requests.
-        let part_bodies = join_all(body_handles).await;
         let mut segments = vec![];
-        for result in part_bodies {
+        while let Some(result) = body_futures.next().await {
             let part_body = result
-                // Tokio failure, we failed to spawn a task.
-                .map_err(|err| Error::from(format!("s3 spawn err: {}", err)))?
                 // Download failure, we failed to fetch the body from S3.
                 .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
 
@@ -593,6 +573,68 @@ impl Blob for S3Blob {
             .await
             .map_err(|err| Error::from(err.to_string()))?;
         Ok(Some(usize::cast_from(size_bytes)))
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        let path = self.get_path(key);
+        // Fetch the latest version of the object. If it's a normal version, return true;
+        // if it's a delete marker, delete it and loop; if there is no such version,
+        // return false.
+        // TODO: limit the number of delete markers we'll peel back?
+        loop {
+            // S3 only lets us fetch the versions of an object with a list requests.
+            // Seems a bit wasteful to just fetch one at a time, but otherwise we can only
+            // guess the order of versions via the timestamp, and that feels brittle.
+            let list_res = self
+                .client
+                .list_object_versions()
+                .bucket(&self.bucket)
+                .prefix(&path)
+                .max_keys(1)
+                .send()
+                .await
+                .map_err(|err| Error::from(err.to_string()))?;
+
+            let current_delete = list_res
+                .delete_markers()
+                .unwrap_or(&[])
+                .into_iter()
+                .filter(|d| {
+                    // We need to check that any versions we're looking at have the right key,
+                    // not just a key with our key as a prefix.
+                    d.key() == Some(path.as_str())
+                })
+                .find(|d| d.is_latest())
+                .and_then(|d| d.version_id());
+
+            if let Some(version) = current_delete {
+                let deleted = self
+                    .client
+                    .delete_object()
+                    .bucket(&self.bucket)
+                    .key(&path)
+                    .version_id(version)
+                    .send()
+                    .await
+                    .map_err(|err| Error::from(err.to_string()))?;
+                assert!(deleted.delete_marker(), "deleting a delete marker");
+            } else {
+                let has_current_version = list_res
+                    .versions()
+                    .unwrap_or(&[])
+                    .into_iter()
+                    .filter(|d| d.key() == Some(path.as_str()))
+                    .any(|v| v.is_latest());
+
+                if !has_current_version {
+                    return Err(Determinate::new(anyhow!(
+                        "unable to restore {key} in s3: no valid version exists"
+                    ))
+                    .into());
+                }
+                return Ok(());
+            }
+        }
     }
 }
 

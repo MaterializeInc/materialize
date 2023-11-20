@@ -27,6 +27,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Sequence
 from functools import cache
@@ -36,7 +37,7 @@ from typing import IO, Any, cast
 
 import boto3
 import yaml
-from botocore.exceptions import NoCredentialsError
+from botocore.exceptions import ClientError, NoCredentialsError
 
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.elf import get_build_id
@@ -211,6 +212,69 @@ class Copy(PreImage):
         return set(git.expand_globs(self.rd.root, f"{self.source}/{self.matching}"))
 
 
+class PSUploadSources(PreImage):
+    """A `PreImage` action which uploads a source tarball to S3."""
+
+    def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
+        super().__init__(rd, path)
+
+        bin = config.pop("bin", None)
+        if bin is None:
+            raise ValueError("mzbuild config is missing 'bin' argument")
+        self.bin_path = path / bin
+        self.out_path = path / "sources.tar.zstd"
+
+    def run(self) -> None:
+        super().run()
+        polar_signals_api_token = os.getenv("POLAR_SIGNALS_API_TOKEN")
+        if polar_signals_api_token is None or not self.rd.stable:
+            print(
+                "This is not a stable build or we don't have a PolarSignals token; not uploading sources"
+            )
+            return
+        with open(self.bin_path, "rb") as bin:
+            build_id = get_build_id(bin)
+
+        cmd1 = ["/usr/bin/llvm-dwarfdump", "--show-sources", self.bin_path]
+        cmd2 = [
+            "/usr/bin/tar",
+            "-cf",
+            self.out_path,
+            "--zstd",
+            "-T",
+            "-",
+            "--ignore-failed-read",
+        ]
+
+        p1 = subprocess.Popen(cmd1, stdout=subprocess.PIPE)
+        p2 = subprocess.Popen(cmd2, stdin=p1.stdout, stdout=subprocess.PIPE)
+
+        # This causes p1 to receive SIGPIPE if p2 exits early,
+        # like in the shell
+        p1.stdout.close()
+
+        for p in [p1, p2]:
+            if p.returncode:
+                raise subprocess.CalledProcessError(p.returncode, p.args)
+
+        print("Attempting to upload sources to polar signals")
+        spawn.runv(
+            [
+                "/usr/local/bin/parca-debuginfo",
+                "upload",
+                "--store-address=grpc.polarsignals.com:443",
+                "--type=sources",
+                f"--build-id={build_id}",
+                self.out_path,
+            ],
+            cwd=self.rd.root,
+            env={"PARCA_DEBUGINFO_BEARER_TOKEN": polar_signals_api_token},
+        )
+
+    def inputs(self) -> set[str]:
+        return {self.bin_path}
+
+
 class S3UploadDebuginfo(PreImage):
     """A `PreImage` action which uploads an executable and its debuginfo to S3.
 
@@ -271,6 +335,13 @@ class S3UploadDebuginfo(PreImage):
             except NoCredentialsError:
                 print("Failed to find S3 credentials; not uploading build.")
                 return
+            except ClientError as err:
+                if err.response["Error"]["Code"] == "AccessDenied":
+                    print("Incorrect S3 credentials; not uploading build.")
+                    return
+                else:
+                    raise err
+
             print(
                 f"Attempting to upload debug info to s3://{self.bucket}/{dbg_object_name}"
             )
@@ -350,7 +421,7 @@ class CargoBuild(CargoPreImage):
         bins: list[str],
         examples: list[str],
     ) -> list[str]:
-        rustflags = rustc_flags.coverage if rd.coverage else []
+        rustflags = rustc_flags.coverage if rd.coverage else ["--cfg=tokio_unstable"]
 
         cargo_build = [*rd.cargo("build", channel=None, rustflags=rustflags)]
 
@@ -536,6 +607,10 @@ class Image:
                     self.pre_images.append(
                         S3UploadDebuginfo(self.rd, self.path, pre_image)
                     )
+                elif typ == "ps-upload-sources":
+                    self.pre_images.append(
+                        PSUploadSources(self.rd, self.path, pre_image)
+                    )
                 else:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"
@@ -556,7 +631,7 @@ class Image:
 
     def sync_description(self) -> None:
         """Sync the description to Docker Hub if the image is publishable
-        and either a description or a README.md file exists."""
+        and a README.md file exists."""
 
         if not self.publish:
             ui.say(f"{self.name} is not publishable")
@@ -564,7 +639,7 @@ class Image:
 
         readme_path = self.path / "README.md"
         has_readme = readme_path.exists()
-        if not (self.description or has_readme):
+        if not has_readme:
             ui.say(f"{self.name} has no README.md or description")
             return
 
@@ -671,18 +746,28 @@ class ResolvedImage:
         ]
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
-    def try_pull(self) -> bool:
+    def try_pull(self, max_retries: int) -> bool:
         """Download the image if it does not exist locally. Returns whether it was found."""
         ui.header(f"Acquiring {self.spec()}")
         if not self.acquired:
-            try:
-                spawn.runv(
-                    ["docker", "pull", self.spec()],
-                    stdout=sys.stderr.buffer,
-                )
-                self.acquired = True
-            except subprocess.CalledProcessError:
-                pass
+            for retry in range(1, max_retries + 1):
+                try:
+                    spawn.runv(
+                        ["docker", "pull", self.spec()],
+                        stdout=sys.stderr.buffer,
+                    )
+                    self.acquired = True
+                except subprocess.CalledProcessError:
+                    if retry < max_retries:
+                        # There seems to be no good way to tell what error
+                        # happened based on error code
+                        # (https://github.com/docker/cli/issues/538) and we
+                        # want to print output directly to terminal.
+                        print("Retrying ...")
+                        time.sleep(1)
+                        continue
+                    else:
+                        break
         return self.acquired
 
     def is_published_if_necessary(self) -> bool:
@@ -825,11 +910,20 @@ class DependencySet:
         for cls, instances in pre_images.items():
             cast(PreImage, cls).prepare_batch(instances)
 
-    def acquire(self) -> None:
+    def acquire(self, max_retries: int | None = None) -> None:
         """Download or build all of the images in the dependency set that do not
         already exist locally.
+
+        Args:
+            max_retries: Number of retries on failure.
         """
-        deps_to_build = [dep for dep in self if not dep.try_pull()]
+
+        # Only retry in CI runs since we struggle with flaky docker pulls there
+        if not max_retries:
+            max_retries = 3 if ui.env_is_truthy("CI") else 1
+        assert max_retries > 0
+
+        deps_to_build = [dep for dep in self if not dep.try_pull(max_retries)]
         self._prepare_batch(deps_to_build)
         for dep in deps_to_build:
             dep.build()

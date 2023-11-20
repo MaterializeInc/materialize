@@ -10,6 +10,7 @@
 {{ config(materialized='source') }}
 
 CREATE SOURCE {{ this }}
+IN CLUSTER qa_canary_environment_storage
 FROM POSTGRES
 CONNECTION pg (PUBLICATION 'mz_source')
 FOR TABLES (people, relationships)

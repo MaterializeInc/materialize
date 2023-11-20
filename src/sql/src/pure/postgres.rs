@@ -22,11 +22,14 @@ use mz_sql_parser::ast::{
     DeferredItemName, Ident, Value, WithOptionValue,
 };
 use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
+use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
 use crate::catalog::ErsatzCatalog;
 use crate::names::{Aug, PartialItemName};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
+
+use super::error::PgSourcePurificationError;
 
 pub(super) fn derive_catalog_from_publication_tables<'a>(
     database: &'a str,
@@ -50,6 +53,7 @@ pub(super) fn derive_catalog_from_publication_tables<'a>(
 pub(super) async fn validate_requested_subsources(
     config: &Config,
     requested_subsources: &[(UnresolvedItemName, UnresolvedItemName, &PostgresTableDesc)],
+    ssh_tunnel_manager: &SshTunnelManager,
 ) -> Result<(), PlanError> {
     // This condition would get caught during the catalog transaction, but produces a
     // vague, non-contextual error. Instead, error here so we can suggest to the user
@@ -68,10 +72,10 @@ pub(super) async fn validate_requested_subsources(
 
         upstream_references.sort();
 
-        return Err(PlanError::SubsourceNameConflict {
+        Err(PgSourcePurificationError::SubsourceNameConflict {
             name,
             upstream_references,
-        });
+        })?;
     }
 
     // We technically could allow multiple subsources to ingest the same upstream table, but
@@ -90,7 +94,7 @@ pub(super) async fn validate_requested_subsources(
 
         target_names.sort();
 
-        return Err(PlanError::SubsourceDuplicateReference { name, target_names });
+        Err(PgSourcePurificationError::SubsourceDuplicateReference { name, target_names })?;
     }
 
     // Ensure that we have select permissions on all tables; we have to do this before we
@@ -101,7 +105,15 @@ pub(super) async fn validate_requested_subsources(
         .map(|(UnresolvedItemName(inner), _, _)| [inner[1].as_str(), inner[2].as_str()])
         .collect();
 
-    mz_postgres_util::check_table_privileges(config, tables_to_check_permissions).await?;
+    privileges::check_table_privileges(config, tables_to_check_permissions, ssh_tunnel_manager)
+        .await?;
+
+    let oids: Vec<_> = requested_subsources
+        .iter()
+        .map(|(_, _, table_desc)| table_desc.oid)
+        .collect();
+
+    replica_identity::check_replica_identity_full(config, oids, ssh_tunnel_manager).await?;
 
     Ok(())
 }
@@ -137,6 +149,15 @@ pub(super) fn generate_text_columns(
                 })?;
 
         if !desc.columns.iter().any(|column| column.name == col) {
+            let column = mz_repr::ColumnName::from(col);
+            let similar = desc
+                .columns
+                .iter()
+                .filter_map(|c| {
+                    let c_name = mz_repr::ColumnName::from(c.name.clone());
+                    c_name.is_similar(&column).then_some(c_name)
+                })
+                .collect();
             return Err(PlanError::InvalidOptionValue {
                 option_name: option_name.to_string(),
                 err: Box::new(PlanError::UnknownColumn {
@@ -144,13 +165,15 @@ pub(super) fn generate_text_columns(
                         normalize::unresolved_item_name(fully_qualified_name)
                             .expect("known to be of valid len"),
                     ),
-                    column: mz_repr::ColumnName::from(col),
+                    column,
+                    similar,
                 }),
             });
         }
 
         // Rewrite fully qualified name.
-        fully_qualified_name.0.push(col.as_str().to_string().into());
+        let col_ident = Ident::new(col.as_str().to_string())?;
+        fully_qualified_name.0.push(col_ident);
         *name = fully_qualified_name;
 
         let new = text_cols_dict
@@ -201,7 +224,7 @@ where
         let mut columns = vec![];
         let text_cols_dict = text_cols_dict.remove(&table.oid);
         for c in table.columns.iter() {
-            let name = Ident::new(c.name.clone());
+            let name = Ident::new(c.name.clone())?;
             let ty = match &text_cols_dict {
                 Some(names) if names.contains(&c.name) => mz_pgrepr::Type::Text,
                 _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
@@ -241,7 +264,7 @@ where
             let mut key_columns = vec![];
 
             for col_num in key.cols {
-                key_columns.push(Ident::new(
+                let ident = Ident::new(
                     table
                         .columns
                         .iter()
@@ -249,11 +272,12 @@ where
                         .expect("key exists as column")
                         .name
                         .clone(),
-                ))
+                )?;
+                key_columns.push(ident);
             }
 
             let constraint = mz_sql_parser::ast::TableConstraint::Unique {
-                name: Some(Ident::new(key.name)),
+                name: Some(Ident::new(key.name)?),
                 columns: key_columns,
                 is_primary: key.is_primary,
                 nulls_not_distinct: key.nulls_not_distinct,
@@ -300,9 +324,10 @@ where
     }
 
     if !unsupported_cols.is_empty() {
-        return Err(PlanError::UnrecognizedTypeInPostgresSource {
+        unsupported_cols.sort();
+        Err(PgSourcePurificationError::UnrecognizedTypes {
             cols: unsupported_cols,
-        });
+        })?;
     }
 
     // If any any item was not removed from the text_cols dict, it wasn't being
@@ -323,12 +348,226 @@ where
     }
 
     if !dangling_text_column_refs.is_empty() {
-        return Err(PlanError::DanglingTextColumns {
+        dangling_text_column_refs.sort();
+        Err(PgSourcePurificationError::DanglingTextColumns {
             items: dangling_text_column_refs,
-        });
+        })?;
     }
 
     targeted_subsources.sort();
 
     Ok((targeted_subsources, subsources))
+}
+
+mod privileges {
+    use postgres_array::{Array, Dimension};
+
+    use mz_postgres_util::{Config, PostgresError};
+
+    use super::SshTunnelManager;
+    use crate::plan::PlanError;
+    use crate::pure::PgSourcePurificationError;
+
+    async fn check_schema_privileges(
+        config: &Config,
+        schemas: Vec<&str>,
+        ssh_tunnel_manager: &SshTunnelManager,
+    ) -> Result<(), PlanError> {
+        let client = config
+            .connect("check_schema_privileges", ssh_tunnel_manager)
+            .await?;
+
+        let schemas_len = schemas.len();
+
+        let schemas = Array::from_parts(
+            schemas,
+            vec![Dimension {
+                len: i32::try_from(schemas_len).expect("fewer than i32::MAX schemas"),
+                lower_bound: 0,
+            }],
+        );
+
+        let invalid_schema_privileges = client
+            .query(
+                "
+            SELECT
+                s, has_schema_privilege($2::text, s, 'usage') AS p
+            FROM
+                (SELECT unnest($1::text[])) AS o (s);",
+                &[
+                    &schemas,
+                    &config.get_user().expect("connection specifies user"),
+                ],
+            )
+            .await
+            .map_err(PostgresError::from)?
+            .into_iter()
+            .filter_map(|row| {
+                // Only get rows that do not have sufficient privileges.
+                let privileges: bool = row.get("p");
+                if !privileges {
+                    Some(row.get("s"))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<String>>();
+
+        if invalid_schema_privileges.is_empty() {
+            Ok(())
+        } else {
+            Err(PgSourcePurificationError::UserLacksUsageOnSchemas {
+                user: config
+                    .get_user()
+                    .expect("connection specifies user")
+                    .to_string(),
+                schemas: invalid_schema_privileges,
+            })?
+        }
+    }
+
+    /// Ensure that the user specified in `config` has:
+    ///
+    /// -`SELECT` privileges for the identified `tables`.
+    ///
+    ///  `tables`'s elements should be of the structure `[<schema name>, <table name>]`.
+    ///
+    /// - `USAGE` privileges on the schemas references in `tables`.
+    ///
+    /// # Panics
+    /// If `config` does not specify a user.
+    pub async fn check_table_privileges(
+        config: &Config,
+        tables: Vec<[&str; 2]>,
+        ssh_tunnel_manager: &SshTunnelManager,
+    ) -> Result<(), PlanError> {
+        let schemas = tables.iter().map(|t| t[0]).collect();
+        check_schema_privileges(config, schemas, ssh_tunnel_manager).await?;
+
+        let client = config
+            .connect("check_table_privileges", ssh_tunnel_manager)
+            .await?;
+
+        let tables_len = tables.len();
+
+        let tables = Array::from_parts(
+            tables.into_iter().map(|i| i.to_vec()).flatten().collect(),
+            vec![
+                Dimension {
+                    len: i32::try_from(tables_len).expect("fewer than i32::MAX tables"),
+                    lower_bound: 1,
+                },
+                Dimension {
+                    len: 2,
+                    lower_bound: 1,
+                },
+            ],
+        );
+
+        let mut invalid_table_privileges = client
+            .query(
+                "
+            WITH
+                data AS (SELECT $1::text[] AS arr)
+            SELECT
+                t, has_table_privilege($2::text, t, 'select') AS p
+            FROM
+                (
+                    SELECT
+                        format('%I.%I', arr[i][1], arr[i][2]) AS t
+                    FROM
+                        data, ROWS FROM (generate_subscripts((SELECT arr FROM data), 1)) AS i
+                )
+                    AS o (t);",
+                &[
+                    &tables,
+                    &config.get_user().expect("connection specifies user"),
+                ],
+            )
+            .await
+            .map_err(PostgresError::from)?
+            .into_iter()
+            .filter_map(|row| {
+                // Only get rows that do not have sufficient privileges.
+                let privileges: bool = row.get("p");
+                if !privileges {
+                    Some(row.get("t"))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<String>>();
+
+        if invalid_table_privileges.is_empty() {
+            Ok(())
+        } else {
+            invalid_table_privileges.sort();
+            Err(PgSourcePurificationError::UserLacksSelectOnTables {
+                user: config
+                    .get_user()
+                    .expect("connection specifies user")
+                    .to_string(),
+                tables: invalid_table_privileges,
+            })?
+        }
+    }
+}
+
+mod replica_identity {
+    use postgres_array::{Array, Dimension};
+    use tokio_postgres::types::Oid;
+
+    use mz_postgres_util::{Config, PostgresError};
+
+    use super::SshTunnelManager;
+    use crate::plan::PlanError;
+    use crate::pure::PgSourcePurificationError;
+
+    /// Ensures that all provided OIDs are tables with `REPLICA IDENTITY FULL`.
+    pub async fn check_replica_identity_full(
+        config: &Config,
+        oids: Vec<Oid>,
+        ssh_tunnel_manager: &SshTunnelManager,
+    ) -> Result<(), PlanError> {
+        let client = config
+            .connect("check_replica_identity_full", ssh_tunnel_manager)
+            .await?;
+
+        let oids_len = oids.len();
+
+        let oids = Array::from_parts(
+            oids,
+            vec![Dimension {
+                len: i32::try_from(oids_len).expect("fewer than i32::MAX schemas"),
+                lower_bound: 0,
+            }],
+        );
+
+        let mut invalid_replica_identity = client
+            .query(
+                "
+            SELECT
+                input.oid::REGCLASS::TEXT AS name
+            FROM
+                (SELECT unnest($1::OID[]) AS oid) AS input
+                LEFT JOIN pg_class ON input.oid = pg_class.oid
+            WHERE
+                relreplident != 'f' OR relreplident IS NULL;",
+                &[&oids],
+            )
+            .await
+            .map_err(PostgresError::from)?
+            .into_iter()
+            .map(|row| row.get("name"))
+            .collect::<Vec<String>>();
+
+        if invalid_replica_identity.is_empty() {
+            Ok(())
+        } else {
+            invalid_replica_identity.sort();
+            Err(PgSourcePurificationError::NotTablesWReplicaIdentityFull {
+                items: invalid_replica_identity,
+            })?
+        }
+    }
 }

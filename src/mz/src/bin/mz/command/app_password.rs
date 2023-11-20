@@ -18,13 +18,10 @@
 use mz::context::Context;
 use mz_frontegg_client::client::app_password::CreateAppPasswordRequest;
 
-use crate::mixin::ProfileArg;
 use mz::error::Error;
 
 #[derive(Debug, clap::Args)]
 pub struct AppPasswordCommand {
-    #[clap(flatten)]
-    profile: ProfileArg,
     #[clap(subcommand)]
     subcommand: AppPasswordSubcommand,
 }
@@ -36,6 +33,7 @@ pub enum AppPasswordSubcommand {
         /// Set the name of the app password.
         ///
         /// If unspecified, `mz` automatically generates a name.
+        #[clap(default_value = "Materialize CLI (mz)")]
         name: String,
     },
     /// List all app passwords.
@@ -44,17 +42,14 @@ pub enum AppPasswordSubcommand {
 }
 
 pub async fn run(cx: Context, cmd: AppPasswordCommand) -> Result<(), Error> {
-    let mut cx = cx.activate_profile(cmd.profile.profile)?;
+    let cx = cx.activate_profile()?;
     match &cmd.subcommand {
         AppPasswordSubcommand::Create { name } => {
-            mz::command::app_password::create(
-                &mut cx,
-                CreateAppPasswordRequest { description: name },
-            )
-            .await?;
+            mz::command::app_password::create(&cx, CreateAppPasswordRequest { description: name })
+                .await?;
         }
         AppPasswordSubcommand::List => {
-            mz::command::app_password::list(&mut cx).await?;
+            mz::command::app_password::list(&cx).await?;
         }
     }
 

@@ -12,7 +12,7 @@ use std::fmt::Debug;
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
 };
-use mz_controller::clusters::ClusterId;
+use mz_controller_types::ClusterId;
 use mz_ore::{halt, soft_assert};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql::names::FullItemName;
@@ -22,8 +22,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawItemName, Statement,
 };
-use mz_stash::StashError;
-use mz_storage_client::controller::StorageError;
+use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -190,13 +189,13 @@ pub fn index_sql(
     use mz_sql::ast::{Expr, Value};
 
     CreateIndexStatement::<Raw> {
-        name: Some(Ident::new(index_name)),
+        name: Some(Ident::new_unchecked(index_name)),
         on_name: RawItemName::Name(mz_sql::normalize::unresolve(view_name)),
         in_cluster: Some(RawClusterName::Resolved(cluster_id.to_string())),
         key_parts: Some(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
+                    Some(n) => Expr::Identifier(vec![Ident::new_unchecked(n.to_string())]),
                     _ => Expr::Value(Value::Number((i + 1).to_string())),
                 })
                 .collect(),
@@ -295,13 +294,22 @@ impl ShouldHalt for AdapterError {
 impl ShouldHalt for crate::catalog::Error {
     fn should_halt(&self) -> bool {
         match &self.kind {
-            crate::catalog::ErrorKind::Stash(e) => e.should_halt(),
+            crate::catalog::ErrorKind::Durable(e) => e.should_halt(),
             _ => false,
         }
     }
 }
 
-impl ShouldHalt for StashError {
+impl ShouldHalt for mz_catalog::durable::CatalogError {
+    fn should_halt(&self) -> bool {
+        match &self {
+            Self::Durable(e) => e.should_halt(),
+            _ => false,
+        }
+    }
+}
+
+impl ShouldHalt for mz_catalog::durable::DurableCatalogError {
     fn should_halt(&self) -> bool {
         self.is_unrecoverable()
     }
@@ -323,9 +331,9 @@ impl ShouldHalt for StorageError {
             | StorageError::ExportInstanceMissing { .. }
             | StorageError::Generic(_)
             | StorageError::DataflowError(_)
-            | StorageError::InvalidAlterSource { .. }
+            | StorageError::InvalidAlter { .. }
             | StorageError::ShuttingDown(_) => false,
-            StorageError::IOError(e) => e.should_halt(),
+            StorageError::IOError(e) => e.is_unrecoverable(),
         }
     }
 }

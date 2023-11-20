@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use crate::{context::RegionContext, error::Error};
 
-use mz_cloud_api::client::cloud_provider::CloudProvider;
+use mz_cloud_api::client::{cloud_provider::CloudProvider, region::RegionState};
 use mz_ore::retry::Retry;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
@@ -31,16 +31,38 @@ use tabled::Tabled;
 /// In cases where the organization has already enabled the region
 /// the command will try to run a version update. Resulting
 /// in a downtime for a short period.
-pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Error> {
+pub async fn enable(
+    cx: RegionContext,
+    version: Option<String>,
+    environmentd_extra_arg: Option<Vec<String>>,
+) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()
         .loading_spinner("Retrieving information...");
     let cloud_provider = cx.get_cloud_provider().await?;
 
     loading_spinner.set_message("Enabling the region...");
-    cx.cloud_client()
-        .create_region(version, vec![], cloud_provider.clone())
-        .await?;
+
+    let environmentd_extra_arg: Vec<String> = environmentd_extra_arg.unwrap_or_else(Vec::new);
+
+    // Loop region creation.
+    // After 6 minutes it will timeout.
+    let _ = Retry::default()
+        .max_duration(Duration::from_secs(720))
+        .clamp_backoff(Duration::from_secs(1))
+        .retry_async(|_| async {
+            let _ = cx
+                .cloud_client()
+                .create_region(
+                    version.clone(),
+                    environmentd_extra_arg.clone(),
+                    cloud_provider.clone(),
+                )
+                .await?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| Error::TimeoutError(Box::new(e)))?;
 
     loading_spinner.set_message("Waiting for the region to be online...");
 
@@ -50,24 +72,36 @@ pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Er
         .max_duration(Duration::from_secs(720))
         .clamp_backoff(Duration::from_secs(1))
         .retry_async(|_| async {
-            let region_info = cx.get_region().await?.region_info;
+            let region = cx.get_region().await?;
 
-            match region_info {
-                Some(region_info) => {
+            match region.region_state {
+                RegionState::EnablementPending => {
                     loading_spinner.set_message("Waiting for the region to be ready...");
-                    if region_info.resolvable {
-                        if cx
-                            .sql_client()
-                            .is_ready(&region_info, cx.admin_client().claims().await?.email)?
-                        {
-                            return Ok(());
-                        }
-                        Err(Error::NotPgReadyError)
-                    } else {
-                        Err(Error::NotResolvableRegion)
-                    }
+                    Err(Error::NotReadyRegion)
                 }
-                None => Err(Error::NotReadyRegion),
+                RegionState::DeletionPending => Err(Error::CommandExecutionError(
+                    "This region is pending deletion!".to_string(),
+                )),
+                RegionState::SoftDeleted => Err(Error::CommandExecutionError(
+                    "This region has been marked soft-deleted!".to_string(),
+                )),
+                RegionState::Enabled => match region.region_info {
+                    Some(region_info) => {
+                        loading_spinner.set_message("Waiting for the region to be resolvable...");
+                        if region_info.resolvable {
+                            if cx
+                                .sql_client()
+                                .is_ready(&region_info, cx.admin_client().claims().await?.email)?
+                            {
+                                return Ok(());
+                            }
+                            Err(Error::NotPgReadyError)
+                        } else {
+                            Err(Error::NotResolvableRegion)
+                        }
+                    }
+                    None => Err(Error::NotReadyRegion),
+                },
             }
         })
         .await

@@ -6,11 +6,15 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from materialize.output_consistency.input_data.scenarios.evaluation_scenario import (
+    EvaluationScenario,
+)
 
 
 class ConsistencyTestConfiguration:
     def __init__(
         self,
+        scenario: EvaluationScenario,
         queries_per_tx: int,
         use_autocommit: bool,
         max_cols_per_query: int,
@@ -24,8 +28,9 @@ class ConsistencyTestConfiguration:
         max_runtime_in_sec: int,
         max_iterations: int,
         avoid_expressions_expecting_db_error: bool,
-        skip_postgres_incompatible_types: bool,
+        postgres_compatible_mode: bool,
     ):
+        self.scenario = scenario
         self.queries_per_tx = queries_per_tx
         self.use_autocommit = use_autocommit
         self.max_cols_per_query = max_cols_per_query
@@ -39,7 +44,7 @@ class ConsistencyTestConfiguration:
         self.max_runtime_in_sec = max_runtime_in_sec
         self.max_iterations = max_iterations
         self.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
-        self.skip_postgres_incompatible_types = skip_postgres_incompatible_types
+        self.postgres_compatible_mode = postgres_compatible_mode
 
     def validate(self) -> None:
         if self.max_runtime_in_sec == 0 and self.max_iterations == 0:

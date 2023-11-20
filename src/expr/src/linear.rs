@@ -34,7 +34,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.linear.rs"));
 /// expressions in `self.expressions`, even though this is not something
 /// we can directly evaluate. The plan creation methods will defensively
 /// ensure that the right thing happens.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Ord, PartialOrd)]
 pub struct MapFilterProject {
     /// A sequence of expressions that should be appended to the row.
     ///
@@ -1441,7 +1441,7 @@ pub mod plan {
     };
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
-    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
     pub struct SafeMfpPlan {
         pub(crate) mfp: MapFilterProject,
     }
@@ -1480,11 +1480,11 @@ pub mod plan {
         /// The `row` is not cleared first, but emptied if the function
         /// returns `Ok(Some(row)).
         #[inline(always)]
-        pub fn evaluate_into<'a>(
+        pub fn evaluate_into<'a, 'row>(
             &'a self,
             datums: &mut Vec<Datum<'a>>,
             arena: &'a RowArena,
-            row_buf: &'a mut Row,
+            row_buf: &'row mut Row,
         ) -> Result<Option<Row>, EvalError> {
             let passed_predicates = self.evaluate_inner(datums, arena)?;
             if !passed_predicates {

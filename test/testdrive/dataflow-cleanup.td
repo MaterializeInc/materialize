@@ -103,3 +103,4 @@ true
 
 # Clean up.
 > DROP CLUSTER test CASCADE
+> DROP SOURCE lgtpch CASCADE

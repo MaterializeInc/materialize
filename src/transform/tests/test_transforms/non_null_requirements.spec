@@ -13,8 +13,8 @@
 # Define t0 source
 define
 DefSource name=t0
-  - bigint
-  - bigint
+  - c0: bigint
+  - c1: bigint
 ----
 Source defined as t0
 
@@ -137,7 +137,7 @@ With Mutually Recursive
       Threshold
         Get l0
   cte l1 = // { types: "(bigint, bigint, bigint?)" }
-    Distinct group_by=[#0, #1, #2]
+    Distinct project=[#0, #1, #2]
       Union
         Get l1
         Filter #2 > 0
@@ -157,7 +157,7 @@ With Mutually Recursive
       Threshold
         Get l0
   cte l1 =
-    Distinct group_by=[#0..=#2]
+    Distinct project=[#0..=#2]
       Union
         Get l1
         Filter (#2 > 0)

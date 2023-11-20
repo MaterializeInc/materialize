@@ -14,6 +14,7 @@ use std::{io, str};
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use mz_ore::cast::ReinterpretCast;
+use mz_pgwire_common::Format;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::date::Date;
@@ -28,7 +29,7 @@ use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
 use crate::types::{UINT2, UINT4, UINT8};
-use crate::{Format, Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};
+use crate::{Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};
 
 pub mod interval;
 pub mod jsonb;
@@ -146,8 +147,10 @@ impl Value {
             (Datum::AclItem(ai), ScalarType::AclItem) => Some(Value::AclItem(ai)),
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
-            (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
-            (Datum::TimestampTz(ts), ScalarType::TimestampTz) => Some(Value::TimestampTz(ts)),
+            (Datum::Timestamp(ts), ScalarType::Timestamp { .. }) => Some(Value::Timestamp(ts)),
+            (Datum::TimestampTz(ts), ScalarType::TimestampTz { .. }) => {
+                Some(Value::TimestampTz(ts))
+            }
             (Datum::Interval(iv), ScalarType::Interval) => Some(Value::Interval(Interval(iv))),
             (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
             (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
@@ -596,7 +599,11 @@ impl Value {
             Type::Map { value_type } => Value::Map(strconv::parse_map(
                 s,
                 matches!(**value_type, Type::Map { .. }),
-                |elem_text| Value::decode_text(value_type, elem_text.as_bytes()).map(Some),
+                |elem_text| {
+                    elem_text
+                        .map(|t| Value::decode_text(value_type, t.as_bytes()))
+                        .transpose()
+                },
             )?),
             Type::Name => Value::Name(strconv::parse_pg_legacy_name(s)),
             Type::Numeric { .. } => Value::Numeric(Numeric(strconv::parse_numeric(s)?)),

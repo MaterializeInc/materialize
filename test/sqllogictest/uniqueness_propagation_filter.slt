@@ -36,7 +36,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 = f3;
 Explained Query (fast path):
   Project (#0, #1)
     Filter (#0 = #2)
-      ReadExistingIndex materialize.public.v1_primary_idx
+      ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -49,7 +49,7 @@ EXPLAIN WITH(arity, join_impls) SELECT f1, f2 FROM v1 WHERE f1 = f3 GROUP BY f1,
 Explained Query (fast path):
   Project (#0, #1)
     Filter (#0 = #2)
-      ReadExistingIndex materialize.public.v1_primary_idx
+      ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -62,7 +62,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2;
 Explained Query (fast path):
   Project (#0, #2)
     Filter (#0 = #1)
-      ReadExistingIndex materialize.public.v1_primary_idx
+      ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -75,7 +75,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2;
 Explained Query (fast path):
   Project (#1, #2)
     Filter (#0 = #1)
-      ReadExistingIndex materialize.public.v1_primary_idx
+      ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -88,7 +88,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 FROM v1 WHERE f1 = f2 AND f1 
 Explained Query (fast path):
   Project (#0)
     Filter (#0 = #1) AND (#0 = #2)
-      ReadExistingIndex materialize.public.v1_primary_idx
+      ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -101,7 +101,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2 AND
 Explained Query (fast path):
   Project (#0, #2)
     Filter (#0 = #1) AND (#0 = #2)
-      ReadExistingIndex materialize.public.v1_primary_idx
+      ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -114,7 +114,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND
 Explained Query (fast path):
   Project (#1, #2)
     Filter (#0 = #1) AND (#0 = #2)
-      ReadExistingIndex materialize.public.v1_primary_idx
+      ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -127,7 +127,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND
 Explained Query (fast path):
   Project (#1, #2)
     Filter (#0 = #1) AND (#1 = #2)
-      ReadExistingIndex materialize.public.v1_primary_idx
+      ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -142,10 +142,10 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
 ----
 Explained Query:
-  Distinct group_by=[#0] // { arity: 1 }
+  Distinct project=[#0] // { arity: 1 }
     Project (#0) // { arity: 1 }
       Filter (#0 = #2) // { arity: 3 }
-        Get materialize.public.v1 // { arity: 3 }
+        ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -156,10 +156,10 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 + 1 = f3;
 ----
 Explained Query:
-  Distinct group_by=[#0, #1] // { arity: 2 }
+  Distinct project=[#0, #1] // { arity: 2 }
     Project (#0, #1) // { arity: 2 }
       Filter (#2 = (#0 + 1)) // { arity: 3 }
-        Get materialize.public.v1 // { arity: 3 }
+        ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -170,10 +170,10 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 > f3;
 ----
 Explained Query:
-  Distinct group_by=[#0, #1] // { arity: 2 }
+  Distinct project=[#0, #1] // { arity: 2 }
     Project (#0, #1) // { arity: 2 }
       Filter (#0 > #2) // { arity: 3 }
-        Get materialize.public.v1 // { arity: 3 }
+        ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -184,10 +184,10 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 + 1, f2 FROM v1 WHERE f1 = f3;
 ----
 Explained Query:
-  Distinct group_by=[(#0 + 1), #1] // { arity: 2 }
+  Distinct project=[(#0 + 1), #1] // { arity: 2 }
     Project (#0, #1) // { arity: 2 }
       Filter (#0 = #2) // { arity: 3 }
-        Get materialize.public.v1 // { arity: 3 }
+        ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -198,10 +198,10 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 OR f1 = f3;
 ----
 Explained Query:
-  Distinct group_by=[#0, #1] // { arity: 2 }
+  Distinct project=[#0, #1] // { arity: 2 }
     Project (#1, #2) // { arity: 2 }
       Filter ((#0 = #1) OR (#0 = #2)) // { arity: 3 }
-        Get materialize.public.v1 // { arity: 3 }
+        ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -212,10 +212,10 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 + 1 , f2 FROM v1 WHERE f1 + 1 = f3;
 ----
 Explained Query:
-  Distinct group_by=[(#0 + 1), #1] // { arity: 2 }
+  Distinct project=[(#0 + 1), #1] // { arity: 2 }
     Project (#0, #1) // { arity: 2 }
       Filter (#2 = (#0 + 1)) // { arity: 3 }
-        Get materialize.public.v1 // { arity: 3 }
+        ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -226,10 +226,10 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
 ----
 Explained Query:
-  Distinct group_by=[#0] // { arity: 1 }
+  Distinct project=[#0] // { arity: 1 }
     Project (#0) // { arity: 1 }
       Filter (#0 = #2) // { arity: 3 }
-        Get materialize.public.v1 // { arity: 3 }
+        ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -249,7 +249,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f3 FROM t2 WHERE f2 = f3;
 Explained Query:
   Project (#0, #2) // { arity: 2 }
     Filter (#1 = #2) // { arity: 4 }
-      Get materialize.public.t2 // { arity: 4 }
+      ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
   filter=((#1 = #2))
@@ -262,7 +262,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3 FROM t2 WHERE f1 = f2 AND f2 
 Explained Query:
   Project (#2) // { arity: 1 }
     Filter (#0 = #1) AND (#1 = #2) // { arity: 4 }
-      Get materialize.public.t2 // { arity: 4 }
+      ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
   filter=((#0 = #1) AND (#1 = #2))
@@ -275,7 +275,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2 FROM t2 WHERE f1 = f3 AND f3 
 Explained Query:
   Project (#1) // { arity: 1 }
     Filter (#0 = #2) AND (#1 = #2) // { arity: 4 }
-      Get materialize.public.t2 // { arity: 4 }
+      ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
   filter=((#0 = #2) AND (#1 = #2))
@@ -287,7 +287,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2, f3, f4 FROM t2 WHERE f1 
 ----
 Explained Query:
   Filter (#0 = #2) AND (#1 = #3) // { arity: 4 }
-    Get materialize.public.t2 // { arity: 4 }
+    ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
   filter=((#0 = #2) AND (#1 = #3))
@@ -301,7 +301,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3 AND
 Explained Query:
   Project (#2, #3) // { arity: 2 }
     Filter (#0 = #2) AND (#1 = #3) // { arity: 4 }
-      Get materialize.public.t2 // { arity: 4 }
+      ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
   filter=((#0 = #2) AND (#1 = #3))
@@ -316,10 +316,10 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM t2 WHERE f3 = f4;
 ----
 Explained Query:
-  Distinct group_by=[#0, #1] // { arity: 2 }
+  Distinct project=[#0, #1] // { arity: 2 }
     Project (#1, #2) // { arity: 2 }
       Filter (#2 = #3) // { arity: 4 }
-        Get materialize.public.t2 // { arity: 4 }
+        ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
   filter=((#2 = #3))
@@ -330,10 +330,10 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2 FROM t2 WHERE f1 = f3;
 ----
 Explained Query:
-  Distinct group_by=[#0] // { arity: 1 }
+  Distinct project=[#0] // { arity: 1 }
     Project (#1) // { arity: 1 }
       Filter (#0 = #2) // { arity: 4 }
-        Get materialize.public.t2 // { arity: 4 }
+        ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
   filter=((#0 = #2))
@@ -344,10 +344,10 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3;
 ----
 Explained Query:
-  Distinct group_by=[#0, #1] // { arity: 2 }
+  Distinct project=[#0, #1] // { arity: 2 }
     Project (#2, #3) // { arity: 2 }
       Filter (#0 = #2) // { arity: 4 }
-        Get materialize.public.t2 // { arity: 4 }
+        ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
   filter=((#0 = #2))
@@ -358,10 +358,10 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3 FROM t2 WHERE f1 = f2;
 ----
 Explained Query:
-  Distinct group_by=[#0] // { arity: 1 }
+  Distinct project=[#0] // { arity: 1 }
     Project (#2) // { arity: 1 }
       Filter (#0 = #1) // { arity: 4 }
-        Get materialize.public.t2 // { arity: 4 }
+        ReadStorage materialize.public.t2 // { arity: 4 }
 
 Source materialize.public.t2
   filter=((#0 = #1))

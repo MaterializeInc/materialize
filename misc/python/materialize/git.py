@@ -14,12 +14,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+from materialize.mz_version import MzVersion
+from materialize.util import YesNoOnce
+from materialize.version_list import INVALID_VERSIONS
+
 try:
     from semver.version import Version
 except ImportError:
     from semver import VersionInfo as Version  # type: ignore
 
 from materialize import spawn
+
+fetched_tags_in_remotes: set[str | None] = set()
 
 
 def rev_count(rev: str) -> int:
@@ -95,7 +101,9 @@ def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> list[Version]:
             tag as a version.
     """
     if fetch:
-        _fetch()
+        _fetch(
+            all_remotes=True, include_tags=YesNoOnce.ONCE, force=True, only_tags=True
+        )
     tags = []
     for t in spawn.capture(["git", "tag"]).splitlines():
         if not t.startswith(prefix):
@@ -106,6 +114,27 @@ def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> list[Version]:
             print(f"WARN: {e}", file=sys.stderr)
 
     return sorted(tags, reverse=True)
+
+
+def get_latest_version(excluded_versions: set[Version] | None = None) -> Version:
+    all_version_tags: list[Version] = get_version_tags(fetch=True)
+
+    if excluded_versions is not None:
+        all_version_tags = [v for v in all_version_tags if v not in excluded_versions]
+
+    return max(all_version_tags)
+
+
+def get_tags_of_current_commit(include_tags: YesNoOnce = YesNoOnce.ONCE) -> list[str]:
+    if include_tags:
+        fetch(include_tags=include_tags, only_tags=True)
+
+    result = spawn.capture(["git", "tag", "--points-at", "HEAD"])
+
+    if len(result) == 0:
+        return []
+
+    return result.splitlines()
 
 
 def is_ancestor(earlier: str, later: str) -> bool:
@@ -139,12 +168,185 @@ def describe() -> str:
     return spawn.capture(["git", "describe"]).strip()
 
 
-def fetch() -> str:
-    """Fetch from all configured default fetch remotes"""
-    return spawn.capture(["git", "fetch", "--all", "--tags", "--force"]).strip()
+def fetch(
+    remote: str | None = None,
+    all_remotes: bool = False,
+    include_tags: YesNoOnce = YesNoOnce.NO,
+    force: bool = False,
+    branch: str | None = None,
+    only_tags: bool = False,
+) -> str:
+    """Fetch from remotes"""
+
+    if remote is not None and all_remotes:
+        raise RuntimeError("all_remotes must be false when a remote is specified")
+
+    if branch is not None and remote is None:
+        raise RuntimeError("remote must be specified when a branch is specified")
+
+    if branch is not None and only_tags:
+        raise RuntimeError("branch must not be specified if only_tags is set")
+
+    command = ["git", "fetch"]
+
+    if remote:
+        command.append(remote)
+
+    if branch:
+        command.append(branch)
+
+    if all_remotes:
+        command.append("--all")
+
+    fetch_tags = (
+        include_tags == YesNoOnce.YES
+        # fetch tags again if used with force (tags might have changed)
+        or (include_tags == YesNoOnce.ONCE and force)
+        or (
+            include_tags == YesNoOnce.ONCE
+            and remote not in fetched_tags_in_remotes
+            and "*" not in fetched_tags_in_remotes
+        )
+    )
+
+    if fetch_tags:
+        command.append("--tags")
+
+    if force:
+        command.append("--force")
+
+    if not fetch_tags and only_tags:
+        return ""
+
+    output = spawn.capture(command).strip()
+
+    if fetch_tags:
+        fetched_tags_in_remotes.add(remote)
+
+        if all_remotes:
+            fetched_tags_in_remotes.add("*")
+
+    return output
 
 
 _fetch = fetch  # renamed because an argument shadows the fetch name in get_tags
+
+
+def try_get_remote_name_by_url(url: str) -> str | None:
+    result = spawn.capture(["git", "remote", "--verbose"])
+    for line in result.splitlines():
+        remote, desc = line.split("\t")
+        if desc.lower() == f"{url} (fetch)".lower():
+            return remote
+        if f"{desc.lower()}.git" == f"{url} (fetch)".lower():
+            return remote
+    return None
+
+
+def get_remote(
+    url: str = "https://github.com/MaterializeInc/materialize",
+    default_remote_name: str = "origin",
+) -> str:
+    # Alternative syntax
+    remote = try_get_remote_name_by_url(url) or try_get_remote_name_by_url(
+        url.replace("https://github.com/", "git@github.com:")
+    )
+    if not remote:
+        remote = default_remote_name
+        print(f"Remote for URL {url} not found, using {remote}")
+
+    return remote
+
+
+def get_common_ancestor_commit(remote: str, branch: str, fetch_branch: bool) -> str:
+    if fetch_branch:
+        fetch(remote=remote, branch=branch)
+
+    command = ["git", "merge-base", "HEAD", f"{remote}/{branch}"]
+    return spawn.capture(command).strip()
+
+
+def is_on_release_version() -> bool:
+    git_tags = get_tags_of_current_commit()
+    return any(MzVersion.is_mz_version_string(git_tag) for git_tag in git_tags)
+
+
+def is_on_main_branch() -> bool:
+    return get_branch_name() == "main"
+
+
+def get_tagged_release_version() -> MzVersion | None:
+    """
+    This returns the release version if exactly this commit is tagged.
+    If multiple release versions are present, the highest one will be returned.
+    None will be returned if the commit is not tagged.
+    """
+    git_tags = get_tags_of_current_commit()
+
+    versions: list[MzVersion] = []
+
+    for git_tag in git_tags:
+        version = MzVersion.try_parse_mz(git_tag)
+
+        if version is not None:
+            versions.append(version)
+
+    if len(versions) == 0:
+        return None
+
+    if len(versions) > 1:
+        print(
+            "Warning! Commit is tagged with multiple release versions! Returning the highest."
+        )
+
+    return max(versions)
+
+
+def get_commit_message(commit_sha: str) -> str | None:
+    try:
+        command = ["git", "log", "-1", "--pretty=format:%s", commit_sha]
+        return spawn.capture(command, stderr=subprocess.DEVNULL).strip()
+    except subprocess.CalledProcessError:
+        # Sometimes mz_version() will report a Git SHA that is not available
+        # in the current repository
+        return None
+
+
+def get_branch_name() -> str:
+    command = ["git", "branch", "--show-current"]
+    return spawn.capture(command).strip()
+
+
+def get_previous_version(
+    version: MzVersion, excluded_versions: set[Version] | None = None
+) -> Version:
+    if excluded_versions is None:
+        excluded_versions = set()
+
+    if version.prerelease is not None and len(version.prerelease) > 0:
+        # simply drop the prerelease, do not try to find a decremented version
+        found_version = MzVersion.create_mz(version.major, version.minor, version.patch)
+
+        if found_version not in excluded_versions:
+            return found_version
+        else:
+            # start searching with this version
+            version = found_version
+
+    # type must match for comparison
+    version_as_semver_version = version.to_semver()
+
+    all_versions: list[Version] = get_version_tags()
+    all_suitable_previous_versions = [
+        v
+        for v in all_versions
+        if v < version_as_semver_version
+        and (v.prerelease is None or len(v.prerelease) == 0)
+        and MzVersion.from_semver(v) not in INVALID_VERSIONS
+        and v not in excluded_versions
+    ]
+    return max(all_suitable_previous_versions)
+
 
 # Work tree mutation
 

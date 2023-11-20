@@ -7,15 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import sys
+import logging
 from collections.abc import Generator
 from contextlib import contextmanager
+from textwrap import dedent
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter, Retry
 
 from materialize.cloudtest.util.authentication import AuthConfig
-from materialize.cloudtest.util.common import eprint
+
+LOGGER = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -23,11 +26,14 @@ def verbose_http_errors() -> Generator[None, None, None]:
     try:
         yield
     except requests.HTTPError as e:
-        print(
-            e.response.status_code,
-            e.response.reason,
-            e.response.content,
-            file=sys.stderr,
+        LOGGER.error(
+            dedent(
+                f"""
+                response status: {e.response.status_code}
+                response reason: {e.response.reason}
+                response content: {e.response.content}
+                """
+            )
         )
         raise
 
@@ -38,25 +44,31 @@ class WebRequests:
         auth: AuthConfig | None,
         base_url: str,
         client_cert: tuple[str, str] | None = None,
+        additional_headers: dict[str, str] | None = None,
+        default_timeout_in_sec: int = 15,
     ):
         self.auth = auth
         self.base_url = base_url
         self.client_cert = client_cert
+        self.additional_headers = additional_headers
+        self.default_timeout_in_sec = default_timeout_in_sec
 
     def get(
         self,
         path: str,
-        timeout: int = 15,
+        timeout_in_sec: int | None = None,
     ) -> requests.Response:
-        eprint(f"GET {self.base_url}{path}")
+        LOGGER.info(f"GET {self.base_url}{path}")
 
         def try_get() -> requests.Response:
             with verbose_http_errors():
                 headers = self._create_headers(self.auth)
-                response = requests.get(
+                s = requests.Session()
+                s.mount(self.base_url, HTTPAdapter(max_retries=Retry(3)))
+                response = s.get(
                     f"{self.base_url}{path}",
                     headers=headers,
-                    timeout=timeout,
+                    timeout=self._timeout_or_default(timeout_in_sec),
                     cert=self.client_cert,
                 )
                 response.raise_for_status()
@@ -77,9 +89,9 @@ class WebRequests:
         self,
         path: str,
         json: Any,
-        timeout: int = 15,
+        timeout_in_sec: int | None = None,
     ) -> requests.Response:
-        eprint(f"POST {self.base_url}{path}")
+        LOGGER.info(f"POST {self.base_url}{path}")
 
         def try_post() -> requests.Response:
             with verbose_http_errors():
@@ -88,7 +100,7 @@ class WebRequests:
                     f"{self.base_url}{path}",
                     headers=headers,
                     json=json,
-                    timeout=timeout,
+                    timeout=self._timeout_or_default(timeout_in_sec),
                     cert=self.client_cert,
                 )
                 response.raise_for_status()
@@ -109,9 +121,9 @@ class WebRequests:
         self,
         path: str,
         json: Any,
-        timeout: int = 15,
+        timeout_in_sec: int | None = None,
     ) -> requests.Response:
-        eprint(f"PATCH {self.base_url}{path}")
+        LOGGER.info(f"PATCH {self.base_url}{path}")
 
         def try_patch() -> requests.Response:
             with verbose_http_errors():
@@ -120,7 +132,7 @@ class WebRequests:
                     f"{self.base_url}{path}",
                     headers=headers,
                     json=json,
-                    timeout=timeout,
+                    timeout=self._timeout_or_default(timeout_in_sec),
                     cert=self.client_cert,
                 )
                 response.raise_for_status()
@@ -141,9 +153,9 @@ class WebRequests:
         self,
         path: str,
         params: Any = None,
-        timeout: int = 15,
+        timeout_in_sec: int | None = None,
     ) -> requests.Response:
-        eprint(f"DELETE {self.base_url}{path}")
+        LOGGER.info(f"DELETE {self.base_url}{path}")
 
         def try_delete() -> requests.Response:
             with verbose_http_errors():
@@ -151,7 +163,7 @@ class WebRequests:
                 response = requests.delete(
                     f"{self.base_url}{path}",
                     headers=headers,
-                    timeout=timeout,
+                    timeout=self._timeout_or_default(timeout_in_sec),
                     cert=self.client_cert,
                     **(
                         {
@@ -176,8 +188,11 @@ class WebRequests:
         return response
 
     def _create_headers(self, auth: AuthConfig | None) -> dict[str, Any]:
-        headers = {}
+        headers = self.additional_headers.copy() if self.additional_headers else {}
         if auth:
             headers["Authorization"] = f"Bearer {auth.token}"
 
         return headers
+
+    def _timeout_or_default(self, timeout_in_sec: int | None) -> int:
+        return timeout_in_sec or self.default_timeout_in_sec

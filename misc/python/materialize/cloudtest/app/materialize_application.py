@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
 import os
 import time
 from datetime import datetime, timedelta
@@ -33,6 +34,8 @@ from materialize.cloudtest.k8s.ssh import ssh_resources
 from materialize.cloudtest.k8s.testdrive import TestdrivePod
 from materialize.cloudtest.k8s.vpc_endpoints_cluster_role import VpcEndpointsClusterRole
 from materialize.cloudtest.util.wait import wait
+
+LOGGER = logging.getLogger(__name__)
 
 
 class MaterializeApplication(CloudtestApplicationBase):
@@ -135,7 +138,7 @@ class MaterializeApplication(CloudtestApplicationBase):
                 break
             except InterfaceError as e:
                 # Since we crash environmentd, we expect some errors that we swallow.
-                print(f"SQL interface not ready, {e} while SELECT 1. Waiting...")
+                LOGGER.info(f"SQL interface not ready, {e} while SELECT 1. Waiting...")
                 time.sleep(2)
 
     def set_environmentd_failpoints(self, failpoints: str) -> None:

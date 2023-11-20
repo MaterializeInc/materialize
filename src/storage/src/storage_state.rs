@@ -15,9 +15,9 @@
 //!
 //! A worker receives _external_ [`StorageCommands`](StorageCommand) from the
 //! storage controller, via a channel. Storage workers also share an _internal_
-//! control/command fabric ([`internal_control`](crate::internal_control)).
-//! Internal commands go through a `Sequencer` dataflow that ensures that all
-//! workers receive all commands in the same consistent order.
+//! control/command fabric ([`internal_control`]). Internal commands go through
+//! a `Sequencer` dataflow that ensures that all workers receive all commands in
+//! the same consistent order.
 //!
 //! We need to make sure that commands that cause dataflows to be rendered are
 //! processed in the same consistent order across all workers because timely
@@ -98,10 +98,11 @@ use mz_storage_client::client::{
     RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand,
     StorageResponse,
 };
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_client::types::sources::{IngestionDescription, SourceData};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::sources::{IngestionDescription, SourceData};
+use mz_storage_types::AlterCompatible;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -110,7 +111,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{
@@ -642,6 +643,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
     }
 
+    // False positive for async_worker
+    #[allow(clippy::needless_pass_by_ref_mut)]
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(
         &mut self,
@@ -716,18 +719,20 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     return;
                 }
 
-                // Suspensions might come in for source exports; they are suspended and
-                // restarted alongside their primary sources.
-                if self
+                if !self
                     .storage_state
                     .ingestions
                     .values()
                     .any(|v| v.source_exports.contains_key(&id))
                 {
-                    return;
+                    // Our current approach to dropping a source results in a race between shard
+                    // finalization (which happens in the controller) and dataflow shutdown (which
+                    // happens in clusterd). If a source is created and dropped fast enough -or the
+                    // two commands get sufficiently delayed- then it's possible to receive a
+                    // SuspendAndRestart command for an unknown source. We cannot assert that this
+                    // never happens but we log an error here to track how often this happens.
+                    warn!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
                 }
-
-                panic!("got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}");
             }
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
@@ -778,6 +783,25 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
 
+                // If all subsources of the source are finished, we can skip rendering entirely.
+                // Also, if `as_of` is empty, the dataflow has been finalized, so we can skip it as
+                // well.
+                //
+                // TODO(guswynn|petrosagg): this is a bit hacky, and is a consequence of storage state
+                // management being a bit of a mess. we should clean this up and remove weird if
+                // statements like this.
+                if resume_uppers.values().all(|frontier| frontier.is_empty()) || as_of.is_empty() {
+                    tracing::info!(
+                        ?resume_uppers,
+                        ?as_of,
+                        "worker {}/{} skipping building ingestion dataflow \
+                        for {ingestion_id} because the ingestion is finished",
+                        self.timely_worker.index(),
+                        self.timely_worker.peers(),
+                    );
+                    return;
+                }
+
                 crate::render::build_ingestion_dataflow(
                     self.timely_worker,
                     &mut self.storage_state,
@@ -824,23 +848,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     sink_description,
                 );
             }
-            InternalStorageCommand::DropDataflow(id) => {
-                let ids: BTreeSet<GlobalId> = match self.storage_state.ingestions.get(&id) {
-                    // Without the source dataflow running, all source exports
-                    // should also be considered dropped. n.b. `source_exports`
-                    // includes `id`
-                    Some(IngestionDescription { source_exports, .. }) => {
-                        source_exports.keys().cloned().collect()
-                    }
-                    None => {
-                        let mut ids = BTreeSet::new();
-                        ids.insert(id);
-                        ids
-                    }
-                };
-
-                mz_ore::soft_assert!(ids.contains(&id));
-
+            InternalStorageCommand::DropDataflow(ids) => {
                 for id in &ids {
                     // Clean up per-source / per-sink state.
                     self.storage_state.source_uppers.remove(id);
@@ -848,33 +856,33 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.storage_state.source_statistics.remove(id);
 
                     self.storage_state.sink_tokens.remove(id);
+
+                    // The actual prometheus metrics and other state will be dropped
+                    // when the dataflow shuts down and drop's its `Rc`'s to the stats
+                    // objects. Also, these are always cloned during rendering,
+                    // but not inside dataflows, so we don't have TOCTOU issue here!
+                    self.storage_state.source_statistics.remove(id);
+                    self.storage_state.sink_statistics.remove(id);
                 }
-
-                // The actual prometheus metrics and other state will be dropped
-                // when the dataflow shuts down and drop's its `Rc`'s to the stats
-                // objects. Also, these are always cloned during rendering,
-                // but not inside dataflows, so we don't have TOCTOU issue here!
-                self.storage_state.source_statistics.remove(&id);
-                self.storage_state.sink_statistics.remove(&id);
-
-                // Report the dataflow as dropped once we went through the whole
-                // control flow from external command to this internal command.
-                self.storage_state.dropped_ids.extend(ids);
             }
             InternalStorageCommand::UpdateConfiguration {
-                pg,
+                pg_source_tcp_timeouts,
+                pg_source_snapshot_statement_timeout,
                 rocksdb,
                 storage_dataflow_max_inflight_bytes_config,
                 auto_spill_config,
                 delay_sources_past_rehydration,
                 shrink_upsert_unused_buffers_by_ratio,
+                record_namespaced_errors,
             } => self.storage_state.dataflow_parameters.update(
-                pg,
+                pg_source_tcp_timeouts,
+                pg_source_snapshot_statement_timeout,
                 rocksdb,
                 auto_spill_config,
                 storage_dataflow_max_inflight_bytes_config,
                 delay_sources_past_rehydration,
                 shrink_upsert_unused_buffers_by_ratio,
+                record_namespaced_errors,
             ),
         }
     }
@@ -994,14 +1002,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
         }
 
-        // Elide any ingestions we're already aware of while determining what
-        // ingestions no longer exist.
-        let mut stale_ingestions = self
-            .storage_state
-            .ingestions
-            .keys()
-            .collect::<BTreeSet<_>>();
-        let mut stale_exports = self.storage_state.exports.keys().collect::<BTreeSet<_>>();
+        // Track which frontiers this envd expects; we will also set their
+        // initial timestamp to the minimum timestamp to reset them as we don't
+        // know what frontiers the new envd expects.
+        let mut expected_objects = BTreeSet::new();
 
         let mut drop_commands = BTreeSet::new();
         let mut running_ingestion_descriptions = self.storage_state.ingestions.clone();
@@ -1063,7 +1067,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                             false
                         } else {
-                            stale_ingestions.remove(&ingestion.id);
+                            expected_objects.insert(ingestion.id);
 
                             let running_ingestion =
                                 self.storage_state.ingestions.get(&ingestion.id);
@@ -1091,15 +1095,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                             false
                         } else if let Some(existing) = self.storage_state.exports.get(&export.id) {
-                            stale_exports.remove(&export.id);
+                            expected_objects.insert(export.id);
                             // If we've been asked to create an export that is
-                            // already installed, the descriptions must match
-                            // exactly.
-                            assert_eq!(
-                                *existing, export.description,
-                                "New export with same ID {:?}",
-                                export.id,
-                            );
+                            // already installed, the descriptions must be
+                            // compatible.
+                            //
+                            // TODO(ALTER CONNECTION): we will need to update
+                            // the stored connection description if it's
+                            // changed.
+                            existing
+                                .alter_compatible(export.id, &export.description)
+                                .expect("reconciled sinks must have compatible descriptions");
                             false
                         } else {
                             true
@@ -1121,22 +1127,41 @@ impl<'w, A: Allocate> Worker<'w, A> {
             drop_commands
         );
 
+        // Determine the ID of all objects we did _not_ see; these are
+        // considered stale.
+        let stale_objects = self
+            .storage_state
+            .ingestions
+            .keys()
+            .chain(self.storage_state.exports.keys())
+            // Objects are considered stale if we did not see them re-created.
+            .filter(|id| !expected_objects.contains(id))
+            // Synthesize the drop command
+            .map(|id| (*id, Antichain::new()))
+            .collect::<Vec<_>>();
+
         trace!(
-            worker_id = self.timely_worker.index(),
-            "reconciliation, stale ingestions: {:?}",
-            stale_ingestions
+            "reconciliation expected objects\n{:?}\ndropping stale objects\n{:?}",
+            expected_objects,
+            stale_objects.iter().map(|(id, _)| id).collect::<Vec<_>>(),
         );
 
-        // Synthesize a drop command to remove stale ingestions and exports
-        commands.push(StorageCommand::AllowCompaction(
-            stale_ingestions
-                .into_iter()
-                .chain(stale_exports)
-                .map(|id| (*id, Antichain::new()))
-                .collect(),
-        ));
+        commands.push(StorageCommand::AllowCompaction(stale_objects));
 
-        // Reset the reported frontiers.
+        // Do not report dropping any objects that do not belong to expected
+        // objects.
+        self.storage_state
+            .dropped_ids
+            .retain(|id| expected_objects.contains(id));
+
+        // Do not report any frontiers that do not belong to expected objects.
+        // Note that this set of objects can differ from th set of sources and
+        // sinks.
+        self.storage_state
+            .reported_frontiers
+            .retain(|id, _| expected_objects.contains(id));
+
+        // Reset the reported frontiers for the remaining objects.
         for (_, frontier) in &mut self.storage_state.reported_frontiers {
             *frontier = Antichain::from_elem(<_>::minimum());
         }
@@ -1154,6 +1179,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
 }
 
 impl StorageState {
+    // False positive for async_worker
+    #[allow(clippy::needless_pass_by_ref_mut)]
     /// Entry point for applying a storage command.
     ///
     /// NOTE: This does not have access to the timely worker and therefore
@@ -1185,7 +1212,9 @@ impl StorageState {
                 // ordering of dataflow rendering across all workers.
                 if worker_index == 0 {
                     internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
-                        pg: params.pg_replication_timeouts,
+                        pg_source_tcp_timeouts: params.pg_source_tcp_timeouts,
+                        pg_source_snapshot_statement_timeout: params
+                            .pg_source_snapshot_statement_timeout,
                         rocksdb: params.upsert_rocksdb_tuning_config,
                         storage_dataflow_max_inflight_bytes_config: params
                             .storage_dataflow_max_inflight_bytes_config,
@@ -1193,6 +1222,7 @@ impl StorageState {
                         delay_sources_past_rehydration: params.delay_sources_past_rehydration,
                         shrink_upsert_unused_buffers_by_ratio: params
                             .shrink_upsert_unused_buffers_by_ratio,
+                        record_namespaced_errors: params.record_namespaced_errors,
                     })
                 }
             }
@@ -1273,6 +1303,7 @@ impl StorageState {
                 }
             }
             StorageCommand::AllowCompaction(list) => {
+                let mut drop_ids = vec![];
                 for (id, frontier) in list {
                     match self.exports.get_mut(&id) {
                         Some(export_description) => {
@@ -1301,31 +1332,45 @@ impl StorageState {
 
                     if frontier.is_empty() {
                         fail_point!("crash_on_drop");
-                        // Indicates that we may drop `id`, as there are no more valid times to read.
-                        //
-                        // This handler removes state that is put in place by
-                        // the handler for `RunIngestions`/`CreateSinks`, while
-                        // the handler for the internal command does the same
-                        // for the state put in place by its corresponding
-                        // creation command.
 
-                        // Cleanup exports and ingestions immediately to ensure
-                        // they are not re-rendered in the case of
-                        // reconciliation.
-                        self.exports.remove(&id);
+                        // Indicates that we may drop `id`, as there are no more valid times to read.
                         self.ingestions.remove(&id);
+                        self.exports.remove(&id);
+                        self.sink_handles.remove(&id);
+                        drop_ids.push(id);
 
                         // This will stop reporting of frontiers.
-                        self.reported_frontiers.remove(&id);
-
-                        self.sink_handles.remove(&id);
-
-                        // Broadcast from one worker to make sure its sequences
-                        // with the other internal commands.
-                        if worker_index == 0 {
-                            internal_cmd_tx.broadcast(InternalStorageCommand::DropDataflow(id));
+                        //
+                        // If this object still has its frontiers reported,
+                        // we will notify the client envd of the drop.
+                        if self.reported_frontiers.remove(&id).is_some() {
+                            // The only actions left are internal cleanup, so we can
+                            // commit to the client that these objects have been
+                            // dropped.
+                            //
+                            // This must be done now rather than in response to
+                            // DropDataflow, otherwise we introduce the possibility
+                            // of a timing issue where:
+                            // - We remove all tracking state from the storage state
+                            //   and send `DropDataflow` (i.e. this block)
+                            // - While waiting to process that command, we reconcile
+                            //   with a new envd. That envd has already committed to
+                            //   its catalog that this object no longer exists.
+                            // - We process the DropDataflow command, and identify
+                            //   that this object has been dropped.
+                            // - The next time `dropped_ids` is processed, we send a
+                            //   response that this ID has been dropped, but the
+                            //   upstream state has no record of that object having
+                            //   ever existed.
+                            self.dropped_ids.insert(id);
                         }
                     }
+                }
+
+                // Broadcast from one worker to make sure its sequences
+                // with the other internal commands.
+                if worker_index == 0 && !drop_ids.is_empty() {
+                    internal_cmd_tx.broadcast(InternalStorageCommand::DropDataflow(drop_ids));
                 }
             }
         }

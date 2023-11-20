@@ -221,6 +221,9 @@ Restrictions:
     growing unboundedly and also means that, at any given time, the txns shard
     contains the set of txns that need to be applied (as well as the set of
     registered data shards).
+- A data shard may be _forgotten_ at some `forget_ts` to reclaim it from the
+  txns system. This allows us to delete it (e.g. when a table is dropped). Like
+  registration, forget is idempotent.
 
 ### Usage
 
@@ -321,19 +324,21 @@ Reads of data shards are almost as straightforward as writes. A data shard may
 be read normally, using snapshots, subscriptions, shard_source, etc, through the
 most recent non-empty write. However, the upper of the txns shard (and thus the
 logical upper of the data shard) may be arbitrarily far ahead of the physical
-upper of the data shard. As a result, we have to "translate" timestamps by
-synthesizing ranges of empty time that have not yet been committed (but are
-guaranteed to remain empty):
+upper of the data shard. As a result, we do the following:
 
 - To take a snapshot of a data shard, the `as_of` is passed through unchanged if
-  the timestamp of that shard's latest non-empty write is past it. Otherwise,
-  the timestamp of the latest non-empty write is used. Concretely, to read a
-  snapshot as of `T`:
+  the timestamp of that shard's latest non-empty write is past it. Otherwise, we
+  know the times between them have no writes and can fill them with empty
+  updates. Concretely, to read a snapshot as of `T`:
   - We read the txns shard contents up through and including `T`, blocking until
     the upper passes `T` if necessary.
   - We then find, for the requested data shard, the latest non-empty write at a
     timestamp `T' <= T`.
-  - We then take a normal snapshot on the data shard at `T'`.
+  - We wait for `T'` to be applied by watching the data shard upper.
+  - We `compare_and_append` empty updates for `(T', T]`, which is known by the
+    txn system to not have writes for this shard (otherwise we'd have picked a
+    different `T'`).
+  - We read the snapshot at `T` as normal.
 - To iterate a listen on a data shard, when writes haven't been read yet they
   are passed through unchanged, otherwise if the txns shard indicates that there
   are ranges of empty time progress is returned, otherwise progress to the txns
@@ -347,6 +352,56 @@ Also note that the above is structured such that it is possible to write a
 timely operator with the data shard as an input, passing on all payloads
 unchanged and simply manipulating capabilities in response to data and txns
 shard progress.
+
+Initially, an alternative was considered where we'd "translate" the as_of and
+read the snapshot at `T'`, but this had an important defect: we'd forever have
+to consider this when reasoning about later persist changes, such as a future
+consolidated shard_source operator. It's quite counter-intuitive for reads to
+involve writes, but I think this is fine. In particular, because writing empty
+updates to a persist shard is a metadata-only operation (we'll need to document
+a new guarantee that a CaA of empty updates never results in compaction work,
+but this seems like a reasonable guarantee). It might result in things like GC
+maintenance or a CRDB write, but this is also true for registering a reader. On
+the balance, I think this is a _much_ better set of tradeoffs than the original
+plan.
+
+### Compaction
+
+Compaction of data shards is initially delegated to the txns user (the storage
+controller). Because txn writes intentionally never read data shards and in no
+way depend on the sinces, the since of a data shard is free to be arbitrarily
+far ahead of or behind the txns upper. Data shard reads, when run through the
+above process, then follow the usual rules (can read at times beyond the since
+but not beyond the upper).
+
+Compaction of the txns shard relies on the following invariant that is carefully
+maintained: every write less than the since of the txns shard has been applied.
+Mechanically, this is accomplished by a critical since capability held
+internally by the txns system. Any txn writer is free to advance it to a time
+once it has proven that all writes before that time have been applied.
+
+It is advantageous to compact the txns shard aggressively so that applied writes
+are promptly consolidated out, minimizing the size. For a snapshot read at
+`as_of`, we need to be able to distinguish when the latest write `<= as_of` has
+been applied. The above invariant enables this as follows:
+
+- If `as_of <= txns_shard.since()`, then the invariant guarantees that all
+  writes `<= as_of` have been applied, so we're free to read as described in the
+  section above.
+- Otherwise, we haven't compacted `as_of` in the txns shard yet, and still have
+  perfect information about which writes happened when. We can look at the data shard upper to determine which have been applied.
+
+### Forget
+
+A data shard is removed from the txns set using a `forget` operation that writes
+a retraction of the registration update at some `forget_ts`. After this, the
+shard may be used through normal means, such as direct `compare_and_append`
+writes or tombstone-ing it. To prevent accidental misuse, the forget operation
+ensures that all writes to the data shard have been applied before writing the
+retraction.
+
+The code will support repeatedly registering and forgetting the same data shard,
+but this is not expected to be used in normal operation.
 
 ## Alternatives
 

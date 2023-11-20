@@ -95,6 +95,7 @@ pub mod dyn_struct;
 pub mod parquet;
 pub mod part;
 pub mod stats;
+pub mod timestamp;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.
@@ -136,7 +137,7 @@ pub trait Codec: Sized + 'static {
 
 /// Encoding and decoding operations for a type usable as a persisted timestamp
 /// or diff.
-pub trait Codec64: Sized + 'static {
+pub trait Codec64: Sized + Clone + 'static {
     /// Name of the codec.
     ///
     /// This name is stored for the timestamp and diff when a stream is first
@@ -165,4 +166,22 @@ pub trait Opaque: PartialEq + Clone + Sized + 'static {
     /// The value of the opaque token when no compare_and_downgrade_since calls
     /// have yet been successful.
     fn initial() -> Self;
+}
+
+/// Advance a timestamp by the least amount possible such that
+/// `ts.less_than(ts.step_forward())` is true.
+///
+/// TODO(txn): Unify this with repr's TimestampManipulation. Or, ideally, get
+/// rid of it entirely by making persist-txn methods take an `advance_to`
+/// argument.
+pub trait StepForward {
+    /// Advance a timestamp by the least amount possible such that
+    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
+    fn step_forward(&self) -> Self;
+}
+
+impl StepForward for u64 {
+    fn step_forward(&self) -> Self {
+        self.checked_add(1).unwrap()
+    }
 }

@@ -117,14 +117,15 @@ CTEs have the following limitations, which we are working to improve:
 
 ### Query hints
 
-Users can specify any query hints to help Materialize optimize
-query planning more efficiently.
+Users can specify query hints to help Materialize optimize queries.
 
 The following query hints are valid within the `OPTION` clause.
 
 Hint | Value type | Description
 ------|------------|------------
-`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions, and some [Top K patterns](/guides/top-k), more efficiently with this information.
+`AGGREGATE INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in an aggregation. Materialize can render `min` and `max` expressions more efficiently with this information.
+`DISTINCT ON INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in a `DISTINCT ON` expression. Materialize can render [Top K patterns](/guides/top-k) based on `DISTINCT ON` more efficiently with this information.
+`LIMIT INPUT GROUP SIZE` | `uint8` | How many rows will be given as a group to a `LIMIT` restriction. Materialize can render [Top K patterns](/guides/top-k) based on `LIMIT` more efficiently with this information.
 
 For examples, see the [Optimization](/transform-data/optimization/#query-hints) page.
 
@@ -231,11 +232,11 @@ above: Materialize tears down the created dataflow after returning the results.
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `USAGE` privileges on the schemas that all relations in the query are contained in.
 - `SELECT` privileges on all relations in the query.
  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
-   execute the view definition.
-- `USAGE` privileges on all types used in the query.
+   execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
+   granted the necessary privileges.
 - `USAGE` privileges on the active cluster.
 
 ## Related pages

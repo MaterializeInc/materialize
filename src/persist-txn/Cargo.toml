@@ -8,16 +8,20 @@ publish = false
 
 [dependencies]
 differential-dataflow = "0.12.0"
+futures = "0.3.25"
 mz-ore = { path = "../ore" }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
-serde_json = "1.0.89"
+mz-timely-util = { path = "../timely-util" }
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
+tokio = { version = "1.32.0", default-features = false, features = ["rt", "rt-multi-thread"] }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
-tokio = { version = "1.24.2", default-features = false, features = ["rt", "rt-multi-thread"] }
+crossbeam-channel = "0.5.8"
+rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

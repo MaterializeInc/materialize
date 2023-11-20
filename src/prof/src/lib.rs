@@ -77,17 +77,24 @@
 
 use std::collections::BTreeMap;
 use std::ffi::c_void;
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-pub mod http;
-#[cfg(feature = "jemalloc")]
-pub mod jemalloc;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use mz_ore::cast::{CastFrom, TryCastFrom};
+use mz_proc::BuildId;
+use prost::Message;
+
+mod pprof_types;
 pub mod time;
 
+#[cfg(feature = "jemalloc")]
+pub mod jemalloc;
+
 #[derive(Copy, Clone, Debug)]
-// These constructors are dead on macOS
-#[allow(dead_code)]
 pub enum ProfStartTime {
     Instant(Instant),
     TimeImmemorial,
@@ -99,16 +106,27 @@ pub struct WeightedStack {
     pub weight: f64,
 }
 
+#[derive(Clone, Debug)]
+pub struct Mapping {
+    pub memory_start: usize,
+    pub memory_end: usize,
+    pub memory_offset: usize,
+    pub file_offset: u64,
+    pub pathname: PathBuf,
+    pub build_id: Option<BuildId>,
+}
+
 #[derive(Default)]
 pub struct StackProfile {
     annotations: Vec<String>,
     // The second element is the index in `annotations`, if one exists.
     stacks: Vec<(WeightedStack, Option<usize>)>,
+    mappings: Vec<Mapping>,
 }
 
 impl StackProfile {
     /// Writes out the `.mzfg` format, which is fully described in flamegraph.js.
-    pub fn to_mzfg(&self, symbolicate: bool, header_extra: &[(&str, &str)]) -> String {
+    pub fn to_mzfg(&self, symbolize: bool, header_extra: &[(&str, &str)]) -> String {
         // All the unwraps in this function are justified by the fact that
         // String's fmt::Write impl is infallible.
         use std::fmt::Write;
@@ -134,8 +152,8 @@ mz_fg_version: 1
             writeln!(&mut builder, "").unwrap();
         }
 
-        if symbolicate {
-            let symbols = crate::symbolicate(self);
+        if symbolize {
+            let symbols = crate::symbolize(self);
             writeln!(&mut builder, "").unwrap();
 
             for (addr, names) in symbols {
@@ -154,6 +172,170 @@ mz_fg_version: 1
         }
 
         builder
+    }
+
+    /// Converts the profile into the pprof format.
+    ///
+    /// pprof encodes profiles as gzipped protobuf messages of the Profile message type
+    /// (see `pprof/profile.proto`).
+    pub fn to_pprof(
+        &self,
+        sample_type: (&str, &str),
+        period_type: (&str, &str),
+        anno_key: Option<String>,
+    ) -> Vec<u8> {
+        use crate::pprof_types as proto;
+
+        let mut profile = proto::Profile::default();
+        let mut strings = StringTable::new();
+
+        let anno_key = anno_key.unwrap_or_else(|| "annotation".into());
+
+        profile.sample_type = vec![proto::ValueType {
+            r#type: strings.insert(sample_type.0),
+            unit: strings.insert(sample_type.1),
+        }];
+        profile.period_type = Some(proto::ValueType {
+            r#type: strings.insert(period_type.0),
+            unit: strings.insert(period_type.1),
+        });
+
+        profile.time_nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("now is later than UNIX epoch")
+            .as_nanos()
+            .try_into()
+            .expect("the year 2554 is far away");
+
+        for (mapping, mapping_id) in self.mappings.iter().zip(1..) {
+            let pathname = mapping.pathname.to_string_lossy();
+            let filename_idx = strings.insert(&pathname);
+
+            let build_id_idx = match &mapping.build_id {
+                Some(build_id) => strings.insert(&build_id.to_string()),
+                None => 0,
+            };
+
+            profile.mapping.push(proto::Mapping {
+                id: mapping_id,
+                memory_start: u64::cast_from(mapping.memory_start),
+                memory_limit: u64::cast_from(mapping.memory_end),
+                file_offset: mapping.file_offset,
+                filename: filename_idx,
+                build_id: build_id_idx,
+                ..Default::default()
+            });
+
+            // This is a is a Polar Signals-specific extension: For correct offline symbolization
+            // they need access to the memory offset of mappings, but the pprof format only has a
+            // field for the file offset. So we instead encode additional information about
+            // mappings in magic comments. There must be exactly one comment for each mapping.
+
+            // Take a shortcut and assume the ELF type is always `ET_DYN`. This is true for shared
+            // libraries and for position-independent executable, so it should always be true for
+            // any mappings we have.
+            // Getting the actual information is annoying. It's in the ELF header (the `e_type`
+            // field), but there is no guarantee that the full ELF header gets mapped, so we might
+            // not be able to find it in memory. We could try to load it from disk instead, but
+            // then we'd have to worry about blocking disk I/O.
+            let elf_type = 3;
+
+            let comment = format!(
+                "executableInfo={:x};{:x};{:x}",
+                elf_type, mapping.file_offset, mapping.memory_offset
+            );
+            profile.comment.push(strings.insert(&comment));
+        }
+
+        let mut location_ids = BTreeMap::new();
+        for (stack, anno) in self.iter() {
+            let mut sample = proto::Sample::default();
+
+            let value = stack.weight.trunc();
+            let value = i64::try_cast_from(value).expect("no exabyte heap sizes");
+            sample.value.push(value);
+
+            for addr in stack.addrs.iter().rev() {
+                // See the comment
+                // [here](https://github.com/rust-lang/backtrace-rs/blob/036d4909e1fb9c08c2bb0f59ac81994e39489b2f/src/symbolize/mod.rs#L123-L147)
+                // for why we need to subtract one. tl;dr addresses
+                // in stack traces are actually the return address of
+                // the called function, which is one past the call
+                // itself.
+                //
+                // Of course, the `call` instruction can be more than one byte, so after subtracting
+                // one, we might point somewhere in the middle of it, rather
+                // than to the beginning of the instruction. That's fine; symbolization
+                // tools don't seem to get confused by this.
+                let addr = u64::cast_from(*addr) - 1;
+
+                let loc_id = *location_ids.entry(addr).or_insert_with(|| {
+                    // pprof_types.proto says the location id may be the address, but Polar Signals
+                    // insists that location ids are sequential, starting with 1.
+                    let id = u64::cast_from(profile.location.len()) + 1;
+                    let mapping_id = profile
+                        .mapping
+                        .iter()
+                        .find(|m| m.memory_start <= addr && m.memory_limit > addr)
+                        .map_or(0, |m| m.id);
+                    profile.location.push(proto::Location {
+                        id,
+                        mapping_id,
+                        address: addr,
+                        ..Default::default()
+                    });
+                    id
+                });
+
+                sample.location_id.push(loc_id);
+
+                if let Some(anno) = anno {
+                    sample.label.push(proto::Label {
+                        key: strings.insert(&anno_key),
+                        str: strings.insert(anno),
+                        ..Default::default()
+                    })
+                }
+            }
+
+            profile.sample.push(sample);
+        }
+
+        profile.string_table = strings.finish();
+
+        let encoded = profile.encode_to_vec();
+
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        gz.write_all(&encoded).unwrap();
+        gz.finish().unwrap()
+    }
+}
+
+/// Helper struct to simplify building a `string_table` for the pprof format.
+#[derive(Default)]
+struct StringTable(BTreeMap<String, i64>);
+
+impl StringTable {
+    fn new() -> Self {
+        // Element 0 must always be the emtpy string.
+        let inner = [("".into(), 0)].into();
+        Self(inner)
+    }
+
+    fn insert(&mut self, s: &str) -> i64 {
+        if let Some(idx) = self.0.get(s) {
+            *idx
+        } else {
+            let idx = i64::try_from(self.0.len()).expect("must fit");
+            self.0.insert(s.into(), idx);
+            idx
+        }
+    }
+
+    fn finish(self) -> Vec<String> {
+        let mut vec: Vec<_> = self.0.into_iter().collect();
+        vec.sort_by_key(|(_, idx)| *idx);
+        vec.into_iter().map(|(s, _)| s).collect()
     }
 }
 
@@ -174,7 +356,7 @@ impl<'a> Iterator for StackProfileIter<'a> {
 }
 
 impl StackProfile {
-    pub fn push(&mut self, stack: WeightedStack, annotation: Option<&str>) {
+    pub fn push_stack(&mut self, stack: WeightedStack, annotation: Option<&str>) {
         let anno_idx = if let Some(annotation) = annotation {
             Some(
                 self.annotations
@@ -190,6 +372,11 @@ impl StackProfile {
         };
         self.stacks.push((stack, anno_idx))
     }
+
+    pub fn push_mapping(&mut self, mapping: Mapping) {
+        self.mappings.push(mapping);
+    }
+
     pub fn iter(&self) -> StackProfileIter<'_> {
         StackProfileIter {
             inner: self,
@@ -198,14 +385,14 @@ impl StackProfile {
     }
 }
 
-static EVER_SYMBOLICATED: AtomicBool = AtomicBool::new(false);
+static EVER_SYMBOLIZED: AtomicBool = AtomicBool::new(false);
 
-/// Check whether symbolication has ever been run in this process.
+/// Check whether symbolization has ever been run in this process.
 /// This controls whether we display a warning about increasing RAM usage
 /// due to the backtrace cache on the
 /// profiler page. (Because the RAM hit is one-time, we don't need to warn if it's already happened).
-pub fn ever_symbolicated() -> bool {
-    EVER_SYMBOLICATED.load(std::sync::atomic::Ordering::SeqCst)
+pub fn ever_symbolized() -> bool {
+    EVER_SYMBOLIZED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Given some stack traces, generate a map of addresses to their
@@ -213,8 +400,8 @@ pub fn ever_symbolicated() -> bool {
 ///
 /// Each address could correspond to more than one symbol, because
 /// of inlining. (E.g. if 0x1234 comes from "g", which is inlined in "f", the corresponding vec of symbols will be ["f", "g"].)
-pub fn symbolicate(profile: &StackProfile) -> BTreeMap<usize, Vec<String>> {
-    EVER_SYMBOLICATED.store(true, std::sync::atomic::Ordering::SeqCst);
+pub fn symbolize(profile: &StackProfile) -> BTreeMap<usize, Vec<String>> {
+    EVER_SYMBOLIZED.store(true, std::sync::atomic::Ordering::SeqCst);
     let mut all_addrs = vec![];
     for (stack, _annotation) in profile.stacks.iter() {
         all_addrs.extend(stack.addrs.iter().cloned());
@@ -243,3 +430,46 @@ pub fn symbolicate(profile: &StackProfile) -> BTreeMap<usize, Vec<String>> {
         })
         .collect()
 }
+
+#[cfg(feature = "jemalloc")]
+pub async fn activate_jemalloc_profiling() {
+    let Some(ctl) = jemalloc::PROF_CTL.as_ref() else {
+        tracing::warn!("jemalloc profiling is disabled and cannot be activated");
+        return;
+    };
+
+    let mut ctl = ctl.lock().await;
+    if ctl.activated() {
+        return;
+    }
+
+    match ctl.activate() {
+        Ok(()) => tracing::info!("jemalloc profiling activated"),
+        Err(err) => tracing::warn!("could not activate jemalloc profiling: {err}"),
+    }
+}
+
+#[cfg(feature = "jemalloc")]
+pub async fn deactivate_jemalloc_profiling() {
+    let Some(ctl) = jemalloc::PROF_CTL.as_ref() else {
+        return; // jemalloc not enabled
+    };
+
+    let mut ctl = ctl.lock().await;
+    if !ctl.activated() {
+        return;
+    }
+
+    match ctl.deactivate() {
+        Ok(()) => tracing::info!("jemalloc profiling deactivated"),
+        Err(err) => tracing::warn!("could not deactivate jemalloc profiling: {err}"),
+    }
+}
+
+#[cfg(not(feature = "jemalloc"))]
+#[allow(clippy::unused_async)]
+pub async fn activate_jemalloc_profiling() {}
+
+#[cfg(not(feature = "jemalloc"))]
+#[allow(clippy::unused_async)]
+pub async fn deactivate_jemalloc_profiling() {}

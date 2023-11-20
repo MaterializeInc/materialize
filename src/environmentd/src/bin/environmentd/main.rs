@@ -93,16 +93,13 @@ use clap::{ArgEnum, Parser};
 use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
-use jsonwebtoken::DecodingKey;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
-use mz_environmentd::{Listeners, ListenersConfig, TlsConfig, BUILD_INFO};
-use mz_frontegg_auth::{
-    Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
-};
+use mz_environmentd::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
+use mz_frontegg_auth::{Authentication, FronteggCliArgs};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
@@ -113,10 +110,10 @@ use mz_orchestrator_process::{
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
+use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
-use mz_ore::{halt, metric};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
@@ -124,18 +121,18 @@ use mz_persist_client::rpc::{
 };
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
+use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
 use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
-use mz_stash::StashFactory;
-use mz_storage_client::types::connections::ConnectionContext;
+use mz_stash_types::metrics::Metrics as StashMetrics;
+use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
 use tracing::{error, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
-use uuid::Uuid;
 
 mod sys;
 
@@ -228,6 +225,30 @@ pub struct Args {
         default_value = "127.0.0.1:6879"
     )]
     internal_persist_pubsub_listen_addr: SocketAddr,
+    /// The address on which to listen for SQL connections from the balancers.
+    ///
+    /// Connections to this address are not subject to encryption.
+    /// Care should be taken to not expose this address to the public internet
+    /// or other unauthorized parties.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "BALANCER_SQL_LISTEN_ADDR",
+        default_value = "127.0.0.1:6880"
+    )]
+    balancer_sql_listen_addr: SocketAddr,
+    /// The address on which to listen for trusted HTTP connections.
+    ///
+    /// Connections to this address are not subject to encryption.
+    /// Care should be taken to not expose this address to the public internet
+    /// or other unauthorized parties.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "BALANCER_HTTP_LISTEN_ADDR",
+        default_value = "127.0.0.1:6881"
+    )]
+    balancer_http_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     ///
@@ -238,60 +259,10 @@ pub struct Args {
     /// Wildcards in other positions (e.g., "https://*.foo.com" or "https://foo.*.com") have no effect.
     #[structopt(long, env = "CORS_ALLOWED_ORIGIN")]
     cors_allowed_origin: Vec<HeaderValue>,
-    /// How stringently to demand TLS authentication and encryption.
-    ///
-    /// If set to "disable", then environmentd rejects HTTP and PostgreSQL
-    /// connections that negotiate TLS.
-    ///
-    /// If set to "require", then environmentd requires that all HTTP and
-    /// PostgreSQL connections negotiate TLS. Unencrypted connections will be
-    /// rejected.
-    #[clap(
-        long, env = "TLS_MODE",
-        possible_values = &["disable", "require"],
-        default_value = "disable",
-        default_value_ifs = &[
-            ("frontegg-tenant", None, Some("require")),
-        ],
-        value_name = "MODE",
-    )]
-    tls_mode: String,
-    /// Certificate file for TLS connections.
-    #[clap(
-        long,
-        env = "TLS_CERT",
-        requires = "tls-key",
-        required_if_eq_any(&[("tls-mode", "require")]),
-        value_name = "PATH"
-    )]
-    tls_cert: Option<PathBuf>,
-    /// Private key file for TLS connections.
-    #[clap(
-        long,
-        env = "TLS_KEY",
-        requires = "tls-cert",
-        required_if_eq_any(&[("tls-mode", "require")]),
-        value_name = "PATH"
-    )]
-    tls_key: Option<PathBuf>,
-    /// Enables Frontegg authentication for the specified tenant ID.
-    #[clap(
-        long,
-        env = "FRONTEGG_TENANT",
-        requires_all = &["frontegg-jwk", "frontegg-api-token-url", "frontegg-admin-role"],
-        value_name = "UUID",
-    )]
-    frontegg_tenant: Option<Uuid>,
-    /// JWK used to validate JWTs during Frontegg authentication as a PEM public
-    /// key. Can optionally be base64 encoded with the URL-safe alphabet.
-    #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-tenant")]
-    frontegg_jwk: Option<String>,
-    /// The full URL (including path) to the Frontegg api-token endpoint.
-    #[clap(long, env = "FRONTEGG_API_TOKEN_URL", requires = "frontegg-tenant")]
-    frontegg_api_token_url: Option<String>,
-    /// The name of the admin role in Frontegg.
-    #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg-tenant")]
-    frontegg_admin_role: Option<String>,
+    #[clap(flatten)]
+    tls: TlsCliArgs,
+    #[clap(flatten)]
+    frontegg: FronteggCliArgs,
 
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
@@ -447,11 +418,31 @@ pub struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
+    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// one.
+    ///
+    /// Only takes effect on restart. Any changes will also cause clusterd
+    /// processes to restart.
+    ///
+    /// This value is also configurable via a Launch Darkly parameter of the
+    /// same name, but we keep the flag to make testing easier. If specified,
+    /// the flag takes precedence over the Launch Darkly param.
+    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", action = clap::ArgAction::Set)]
+    enable_persist_txn_tables: Option<bool>,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
-    #[clap(long, env = "ADAPTER_STASH_URL", value_name = "POSTGRES_URL")]
-    adapter_stash_url: String,
+    #[clap(
+        long,
+        env = "ADAPTER_STASH_URL",
+        value_name = "POSTGRES_URL",
+        required_if_eq("catalog-store", "stash"),
+        required_if_eq("catalog-store", "shadow")
+    )]
+    adapter_stash_url: Option<String>,
+    /// The backing durable store of the catalog.
+    #[clap(long, arg_enum, env = "CATALOG_STORE", default_value("stash"))]
+    catalog_store: CatalogKind,
 
     // === Bootstrap options. ===
     #[clap(
@@ -590,6 +581,10 @@ pub struct Args {
     #[clap(long, env = "HTTP_HOST_NAME")]
     http_host_name: Option<String>,
 
+    /// URL of the Web Console to proxy from the /internal-console endpoint on the InternalHTTPServer
+    #[clap(long, env = "INTERNAL_CONSOLE_REDIRECT_URL")]
+    internal_console_redirect_url: Option<String>,
+
     #[clap(long, env = "DEPLOY_GENERATION")]
     deploy_generation: Option<u64>,
 
@@ -602,6 +597,13 @@ pub struct Args {
 enum OrchestratorKind {
     Kubernetes,
     Process,
+}
+
+#[derive(ArgEnum, Debug, Clone)]
+enum CatalogKind {
+    Stash,
+    Persist,
+    Shadow,
 }
 
 // TODO [Alex Hunt] move this to a shared function that can be imported by the
@@ -670,67 +672,19 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         metrics_registry.clone(),
     ))?;
 
-    if args.tracing.log_filter.is_some() {
-        halt!(
-            "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
-             `log_filter` system variable. In the rare case the filter is needed before the \
-             process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
-        )
-    }
-    if args.tracing.opentelemetry_filter.is_some() {
-        halt!(
-            "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
-            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
-            is needed before the process has access to the system variable, use \
-            `MZ_STARTUP_OPENTELEMETRY_LOG_FILTER` / `--startup-opentelemetry-filter`."
-        )
-    }
-
     let span = tracing::info_span!("environmentd::run").entered();
 
     let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 
     runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
+    runtime.block_on(mz_metrics::rusage::register_metrics_into(&metrics_registry));
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
 
     // Configure connections.
-    let tls = if args.tls_mode == "disable" {
-        if args.tls_cert.is_some() {
-            bail!("cannot specify --tls-mode=disable and --tls-cert simultaneously");
-        }
-        if args.tls_key.is_some() {
-            bail!("cannot specify --tls-mode=disable and --tls-key simultaneously");
-        }
-        None
-    } else {
-        let cert = args.tls_cert.unwrap();
-        let key = args.tls_key.unwrap();
-        Some(TlsConfig { cert, key })
-    };
-    let frontegg = match (
-        args.frontegg_tenant,
-        args.frontegg_api_token_url,
-        args.frontegg_jwk,
-        args.frontegg_admin_role,
-    ) {
-        (None, None, None, None) => None,
-        (Some(tenant_id), Some(admin_api_token_url), Some(jwk), Some(admin_role)) => {
-            Some(FronteggAuthentication::new(
-                FronteggConfig {
-                    admin_api_token_url,
-                    decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
-                    tenant_id,
-                    now: mz_ore::now::SYSTEM_TIME.clone(),
-                    refresh_before_secs: 60,
-                    admin_role,
-                },
-                mz_frontegg_auth::Client::environmentd_default(),
-            ))
-        }
-        _ => unreachable!("clap enforced"),
-    };
+    let tls = args.tls.into_config()?;
+    let frontegg = Authentication::from_args(args.frontegg, &metrics_registry)?;
 
     // Configure CORS.
     let allowed_origins = if !args.cors_allowed_origin.is_empty() {
@@ -934,12 +888,12 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             blob_uri: args.persist_blob_url.to_string(),
             consensus_uri: args.persist_consensus_url.to_string(),
         },
-        persist_clients,
+        persist_clients: Arc::clone(&persist_clients),
         storage_stash_url: args.storage_stash_url,
         clusterd_image: args.clusterd_image.expect("clap enforced"),
         init_container_image: args.orchestrator_kubernetes_init_container_image,
         now: SYSTEM_TIME.clone(),
-        postgres_factory: StashFactory::new(&metrics_registry),
+        stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
         metrics_registry: metrics_registry.clone(),
         persist_pubsub_url: args.persist_pubsub_url,
         // When serialized to args in the controller, only the relevant flags will be passed
@@ -977,17 +931,28 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         let listeners = Listeners::bind(ListenersConfig {
             sql_listen_addr: args.sql_listen_addr,
             http_listen_addr: args.http_listen_addr,
+            balancer_sql_listen_addr: args.balancer_sql_listen_addr,
+            balancer_http_listen_addr: args.balancer_http_listen_addr,
             internal_sql_listen_addr: args.internal_sql_listen_addr,
             internal_http_listen_addr: args.internal_http_listen_addr,
         })
         .await?;
+        let catalog_config = match args.catalog_store {
+            CatalogKind::Stash => CatalogConfig::Stash {
+                url: args.adapter_stash_url.expect("required for stash catalog"),
+            },
+            CatalogKind::Persist => CatalogConfig::Persist { persist_clients },
+            CatalogKind::Shadow => CatalogConfig::Shadow {
+                url: args.adapter_stash_url.expect("required for shadow catalog"),
+                persist_clients,
+            },
+        };
         listeners
             .serve(mz_environmentd::Config {
                 tls,
                 frontegg,
                 cors_allowed_origin,
-                concurrent_webhook_req_count: None,
-                adapter_stash_url: args.adapter_stash_url,
+                catalog_config,
                 controller,
                 secrets_controller,
                 cloud_resource_controller,
@@ -1029,6 +994,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 bootstrap_role: args.bootstrap_role,
                 deploy_generation: args.deploy_generation,
                 http_host_name: args.http_host_name,
+                internal_console_redirect_url: args.internal_console_redirect_url,
+                enable_persist_txn_tables_cli: args.enable_persist_txn_tables,
             })
             .await
     })?;

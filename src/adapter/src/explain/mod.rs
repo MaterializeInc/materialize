@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_expr::explain::ExplainContext;
 use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
@@ -59,13 +59,8 @@ where
     let used_indexes = UsedIndexes::new(
         plan.index_imports
             .iter()
-            .map(|(id, index_import)| {
-                (
-                    *id,
-                    index_import.usage_types.clone().expect(
-                        "prune_and_annotate_dataflow_index_imports should have been called already",
-                    ),
-                )
+            .map(|(id, _index_import)| {
+                (*id, dataflow_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
             })
             .collect(),
     );

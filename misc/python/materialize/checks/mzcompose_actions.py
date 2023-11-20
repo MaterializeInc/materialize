@@ -12,8 +12,9 @@ from typing import TYPE_CHECKING, Any
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
-from materialize.mzcompose.services import Clusterd, Materialized
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.materialized import Materialized
 
 if TYPE_CHECKING:
     from materialize.checks.scenarios import Scenario
@@ -28,6 +29,7 @@ class MzcomposeAction(Action):
 class StartMz(MzcomposeAction):
     def __init__(
         self,
+        scenario: "Scenario",
         tag: MzVersion | None = None,
         environment_extra: list[str] = [],
         system_parameter_defaults: dict[str, str] | None = None,
@@ -35,23 +37,67 @@ class StartMz(MzcomposeAction):
         self.tag = tag
         self.environment_extra = environment_extra
         self.system_parameter_defaults = system_parameter_defaults
+        self.catalog_store = (
+            "shadow"
+            if scenario.base_version() >= MzVersion.parse("0.78.0-dev")
+            else "stash"
+        )
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
         image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
         print(f"Starting Mz using image {image}")
+
+        # Before #22790, this parameter needs to be set to False to avoid a panic
+        # Importantly, the environmentd must boot with the flag set to False, so we have to set it here
+        # By the time ConfigureMz() arrives to run ALTER SYSTEM SET, it is already too late
+        # to disable it, as problematic introspection dataflows have been created already
+        additional_system_parameter_defaults = (
+            {"enable_specialized_arrangements": "false"} if self.tag else None
+        )
+
         mz = Materialized(
             image=image,
             external_cockroach=True,
+            external_minio=True,
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
+            sanity_restart=False,
+            catalog_store=self.catalog_store,
         )
 
         with c.override(mz):
             c.up("materialized")
 
-        mz_version = MzVersion.parse_sql(c)
+        # This should live in all_checks/ssh.py, but accessing the ssh bastion
+        # host from inside a check is not possible.
+        c.sql(
+            """
+            CREATE CONNECTION IF NOT EXISTS thancred TO SSH TUNNEL (
+            HOST 'ssh-bastion-host',
+            USER 'mz',
+            PORT 22
+            )"""
+        )
+
+        public_key = c.sql_query(
+            """
+                select public_key_1 from mz_ssh_tunnel_connections ssh \
+                join mz_connections c on c.id = ssh.id
+                where c.name = 'thancred';
+                """
+        )[0][0]
+
+        c.exec(
+            "ssh-bastion-host",
+            "bash",
+            "-c",
+            f"echo '{public_key}' > /etc/authorized_keys/mz",
+        )
+
+        mz_version = MzVersion.parse_mz(c.query_mz_version())
         if self.tag:
             assert (
                 self.tag == mz_version
@@ -101,7 +147,9 @@ class ConfigureMz(MzcomposeAction):
         if e.current_mz_version >= MzVersion(0, 47, 0):
             system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO true;")
 
-        if e.current_mz_version >= MzVersion.parse("0.51.0-dev"):
+        if e.current_mz_version >= MzVersion.parse(
+            "0.51.0-dev"
+        ) and e.current_mz_version < MzVersion.parse("0.76.0-dev"):
             system_settings.add("ALTER SYSTEM SET enable_ld_rbac_checks TO true;")
 
         if e.current_mz_version >= MzVersion.parse("0.52.0-dev"):
@@ -120,6 +168,14 @@ class ConfigureMz(MzcomposeAction):
         ):
             system_settings.add("ALTER SYSTEM SET enable_managed_clusters = on;")
 
+        # Before #22790, enable_specialized_arrangements=on would cause a panic on upgrade
+        # This flag must be disabled by default in StartMz() and then conditionally enabled
+        # here for the versions where it is expected to work.
+        if e.current_mz_version >= MzVersion.parse("0.75.0"):
+            system_settings.add(
+                "ALTER SYSTEM SET enable_specialized_arrangements = on;"
+            )
+
         system_settings = system_settings - e.system_settings
 
         if system_settings:
@@ -127,6 +183,18 @@ class ConfigureMz(MzcomposeAction):
                 "$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}\n"
                 + "\n".join(system_settings)
             )
+
+        kafka_broker = "BROKER '${testdrive.kafka-addr}'"
+        print(e.current_mz_version)
+        if e.current_mz_version >= MzVersion.parse("0.78.0-dev"):
+            kafka_broker += ", SECURITY PROTOCOL PLAINTEXT"
+        input += dedent(
+            f"""
+            > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA {kafka_broker}
+
+            > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
+            """
+        )
 
         self.handle = e.testdrive(input=input)
         e.system_settings.update(system_settings)
@@ -164,7 +232,7 @@ class UseClusterdCompute(MzcomposeAction):
 
         c.sql(
             f"""
-
+            ALTER CLUSTER default SET (MANAGED = false);
             DROP CLUSTER REPLICA default.r1;
             CREATE CLUSTER REPLICA default.r1
                 {storage_addresses},
@@ -244,8 +312,9 @@ class DropCreateDefaultReplica(MzcomposeAction):
 
         c.sql(
             """
-           DROP CLUSTER REPLICA default.r1;
-           CREATE CLUSTER REPLICA default.r1 SIZE '1';
+            ALTER CLUSTER default SET (MANAGED = false);
+            DROP CLUSTER REPLICA default.r1;
+            CREATE CLUSTER REPLICA default.r1 SIZE '1';
             """,
             port=6877,
             user="mz_system",

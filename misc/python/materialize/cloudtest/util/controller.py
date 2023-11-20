@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # pyright: reportMissingImports=false
+import logging
 import socket
 import subprocess
 import urllib.parse
@@ -15,8 +16,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from materialize.cloudtest.util.authentication import AuthConfig
-from materialize.cloudtest.util.common import eprint, retry
+from materialize.cloudtest.util.common import log_subprocess_error, retry
 from materialize.cloudtest.util.web_request import WebRequests
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -58,9 +61,17 @@ class ControllerDefinition:
         return self.endpoint.base_url
 
     def requests(
-        self, auth: AuthConfig | None, client_cert: tuple[str, str] | None = None
+        self,
+        auth: AuthConfig | None,
+        client_cert: tuple[str, str] | None = None,
+        additional_headers: dict[str, str] | None = None,
     ) -> WebRequests:
-        return WebRequests(auth, self.configured_base_url(), client_cert)
+        return WebRequests(
+            auth,
+            self.configured_base_url(),
+            client_cert=client_cert,
+            additional_headers=additional_headers,
+        )
 
 
 def wait_for_connectable(
@@ -122,13 +133,13 @@ def launch_controllers(controller_names: list[str], docker_env: dict[str, str]) 
             env=docker_env,
         )
     except subprocess.CalledProcessError as e:
-        eprint(e.returncode, e.stdout, e.stderr)
+        log_subprocess_error(e)
         raise
 
 
 def wait_for_controllers(*endpoints: Endpoint) -> None:
     for endpoint in endpoints:
-        eprint(f"Waiting for {endpoint.host_port} to be connectable...")
+        LOGGER.info(f"Waiting for {endpoint.host_port} to be connectable...")
         wait_for_connectable(endpoint.host_port)
 
 
@@ -141,5 +152,5 @@ def cleanup_controllers(docker_env: dict[str, str]) -> None:
             env=docker_env,
         )
     except subprocess.CalledProcessError as e:
-        eprint(e.returncode, e.stdout, e.stderr)
+        log_subprocess_error(e)
         raise

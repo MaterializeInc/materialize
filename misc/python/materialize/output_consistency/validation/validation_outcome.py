@@ -10,7 +10,9 @@ from collections.abc import Sequence
 from enum import Enum
 
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
-    InconsistencyIgnoreFilter,
+    GenericInconsistencyIgnoreFilter,
+)
+from materialize.output_consistency.ignore_filter.internal_output_inconsistency_ignore_filter import (
     YesIgnore,
 )
 from materialize.output_consistency.output.format_constants import LI_PREFIX
@@ -53,14 +55,14 @@ class ValidationOutcome:
         self.remarks: list[ValidationRemark] = []
 
     def add_error(
-        self, ignore_filter: InconsistencyIgnoreFilter, error: ValidationError
+        self, ignore_filter: GenericInconsistencyIgnoreFilter, error: ValidationError
     ) -> None:
         ignore_verdict = ignore_filter.shall_ignore_error(error)
         if isinstance(ignore_verdict, YesIgnore):
             self.count_ignored_errors += 1
             self.add_warning(
                 ValidationWarning(
-                    f"Ignoring {error.error_type.name} ({error.message}) because of {ignore_verdict.reason}",
+                    f"Ignoring {error.error_type.name} ({error.message}) because of: {ignore_verdict.reason}",
                     f"SQL is {error.query_execution.generic_sql}",
                 )
             )

@@ -269,6 +269,10 @@ impl Scope {
         Ok(items)
     }
 
+    /// Returns a matching [`ColumnRef`], if one exists.
+    ///
+    /// Filters all visible items against the provided `matches` closure, and then matches this
+    /// filtered set against the provided `column_name`.
     fn resolve_internal<'a, M>(
         &'a self,
         outer_scopes: &[Scope],
@@ -281,12 +285,26 @@ impl Scope {
     {
         let mut results = self
             .all_items(outer_scopes)
-            .filter(|(column, lat_level, item)| (matches)(*column, *lat_level, item));
+            .filter(|(column, lat_level, item)| {
+                (matches)(*column, *lat_level, item) && item.column_name == *column_name
+            });
         match results.next() {
-            None => Err(PlanError::UnknownColumn {
-                table: table_name.cloned(),
-                column: column_name.clone(),
-            }),
+            None => {
+                let similar = self
+                    .all_items(outer_scopes)
+                    .filter(|(column, lat_level, item)| (matches)(*column, *lat_level, item))
+                    .filter_map(|(_col, _lat, item)| {
+                        item.column_name
+                            .is_similar(column_name)
+                            .then(|| item.column_name.clone())
+                    })
+                    .collect();
+                Err(PlanError::UnknownColumn {
+                    table: table_name.cloned(),
+                    column: column_name.clone(),
+                    similar,
+                })
+            }
             Some((column, lat_level, item)) => {
                 if results
                     .find(|(_column, lat_level2, _item)| lat_level == *lat_level2)
@@ -321,9 +339,7 @@ impl Scope {
         let table_name = None;
         self.resolve_internal(
             outer_scopes,
-            |_column, _lat_level, item| {
-                item.allow_unqualified_references && item.column_name == *column_name
-            },
+            |_column, _lat_level, item| item.allow_unqualified_references,
             table_name,
             column_name,
         )
@@ -368,7 +384,7 @@ impl Scope {
                 }
                 if item.table_name.as_ref().map(|n| n.matches(table_name)) == Some(true) {
                     seen_at_level = Some(lat_level);
-                    item.column_name == *column_name
+                    true
                 } else {
                     false
                 }

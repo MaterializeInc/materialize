@@ -139,6 +139,15 @@ pub struct TimelyConfig {
     ///
     /// See `differential_dataflow::Config::idle_merge_effort`.
     pub idle_arrangement_merge_effort: u32,
+    /// Proportionality value that decides whether to exert additional arrangement merge effort.
+    ///
+    /// Specifically, additional merge effort is exerted when the size of the second-largest batch
+    /// in an arrangement is within a factor of `arrangement_exert_proportionality` of the size of
+    /// the largest batch, or when a merge is already in progress.
+    ///
+    /// The higher the proportionality value, the more eagerly arrangement batches are merged. A
+    /// value of `0` (or `1`) disables eager merging.
+    pub arrangement_exert_proportionality: u32,
 }
 
 impl RustType<ProtoTimelyConfig> for TimelyConfig {
@@ -148,6 +157,7 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             addresses: self.addresses.into_proto(),
             process: self.process.into_proto(),
             idle_arrangement_merge_effort: self.idle_arrangement_merge_effort,
+            arrangement_exert_proportionality: self.arrangement_exert_proportionality,
         }
     }
 
@@ -157,6 +167,7 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             workers: proto.workers.into_rust()?,
             addresses: proto.addresses.into_rust()?,
             idle_arrangement_merge_effort: proto.idle_arrangement_merge_effort,
+            arrangement_exert_proportionality: proto.arrangement_exert_proportionality,
         })
     }
 }
@@ -170,6 +181,16 @@ impl TimelyConfig {
             })
             .collect()
     }
+}
+
+/// A trait for specific cluster commands that can be unpacked into
+/// `CreateTimely` variants.
+pub trait TryIntoTimelyConfig {
+    /// Attempt to unpack `self` into a `(TimelyConfig, ClusterStartupEpoch)`. Otherwise,
+    /// fail and return `self` back.
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self>
+    where
+        Self: Sized;
 }
 
 /// Specifies the location of a cluster replica.

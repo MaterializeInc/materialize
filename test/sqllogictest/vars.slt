@@ -434,5 +434,228 @@ SELECT generate_series(1, 2)
 query error db error: ERROR: result exceeds max size of 100 B
 SELECT generate_series(1, 10)
 
+# Regression for #22724
+# Ensure duplicate rows don't overcount bytes in the presence of LIMIT.
+query T
+SELECT x FROM (VALUES ('{"row": 1}')) AS a (x), generate_series(1, 50000) LIMIT 1
+----
+{"row": 1}
+
+# Ensure that a large ordering key but small projection does not count against the result size limit.
+query I
+select 1 from (select array_agg(generate_series) x from generate_series(1, 1000000)) order by x limit 1
+----
+1
+
 statement ok
 RESET max_query_result_size
+
+statement ok
+CREATE ROLE parker;
+
+statement error setting default session variables for a role is not supported
+ALTER ROLE parker SET cluster TO foo;
+
+# Enable Role variable defaults.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_role_vars TO true;
+----
+COMPLETE 0
+
+statement ok
+ALTER ROLE parker SET cluster TO foo;
+
+query T
+SHOW cluster;
+----
+default
+
+simple conn=parker_1,user=parker
+SHOW cluster;
+----
+foo
+COMPLETE 1
+
+simple conn=parker_1,user=parker
+ALTER ROLE parker RESET cluster;
+----
+COMPLETE 0
+
+# Altering the Role defaults does not take effect until you restart your session, this matches
+# Postgres.
+simple conn=parker_1,user=parker
+SHOW cluster;
+----
+foo
+COMPLETE 1
+
+# A new connection gets us a new session.
+simple conn=parker_2,user=parker
+SHOW cluster;
+----
+default
+COMPLETE 1
+
+# Roles can alter their own variables.
+simple conn=parker_2,user=parker
+ALTER ROLE parker SET cluster TO bar;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+bar
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+SET cluster TO session_var;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+session_var
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+RESET cluster;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+BEGIN;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+bar
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+SET cluster TO in_transaction;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+in_transaction
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+COMMIT;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+in_transaction
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+RESET cluster;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+bar
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+BEGIN;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SET LOCAL cluster TO local_transaction;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+local_transaction
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+ROLLBACK;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+bar
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+SHOW search_path;
+----
+public
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+ALTER ROLE parker SET search_path TO foo, bar, baz;
+----
+COMPLETE 0
+
+simple conn=parker_4,user=parker
+SHOW search_path;
+----
+foo, bar, baz
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+ALTER ROLE parker SET search_path TO DEFAULT;
+----
+COMPLETE 0
+
+simple conn=parker_5,user=parker
+SHOW search_path;
+----
+public
+COMPLETE 1
+
+statement ok
+CREATE ROLE joe;
+
+# You can set variable values for yourself, but you need CREATEROLE privileges to set them for
+# other roles.
+simple conn=parker_3,user=parker
+ALTER ROLE joe SET cluster TO wont_work;
+----
+db error: ERROR: permission denied for SYSTEM
+
+statement ok
+ALTER ROLE joe SET cluster TO will_work
+
+simple conn=joe,user=joe
+SHOW cluster;
+----
+will_work
+COMPLETE 1
+
+# Should not be able to set a system variable.
+simple conn=parker_3,user=parker
+ALTER ROLE parker SET metrics_retention TO 10;
+----
+db error: ERROR: unrecognized configuration parameter "metrics_retention"
+
+# Should not be able to set a variable that does not exist.
+simple conn=parker_3,user=parker
+ALTER ROLE parker SET i_am_a_fake_variable TO 10;
+----
+db error: ERROR: unrecognized configuration parameter "i_am_a_fake_variable"
+
+# mz_system cannot set a system variable.
+simple conn=mz_system,user=mz_system
+ALTER ROLE parker SET metrics_retention TO 10;
+----
+db error: ERROR: unrecognized configuration parameter "metrics_retention"

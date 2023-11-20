@@ -53,6 +53,9 @@ connectors, so you first need to define a MySQL connector configuration and then
 If you deploy the MySQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html), you **must** override the default value of `After-state only` to `false`.
 {{</ warning >}}
 
+{{< tabs >}}
+{{< tab "Debezium 1.5+">}}
+
 1. Create a connector configuration file and save it as `register-mysql.json`:
 
     ```json
@@ -78,6 +81,55 @@ If you deploy the MySQL Debezium connector in [Confluent Cloud](https://docs.con
 
     You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/connectors/mysql.html#mysql-connector-properties).
 
+{{< /tab >}}
+{{< tab "Debezium 2.0+">}}
+
+1. From Debezium 2.0, Confluent Schema Registry (CSR) support is not bundled in Debezium containers. To enable CSR, you must install the following Confluent Avro converter JAR files into the Kafka Connect plugin directory (by default, `/kafka/connect`):
+
+    * `kafka-connect-avro-converter`
+    * `kafka-connect-avro-data`
+    * `kafka-avro-serializer`
+    * `kafka-schema-serializer`
+    * `kafka-schema-registry-client`
+    * `common-config`
+    * `common-utils`
+
+    You can read more about this in the [Debezium documentation](https://debezium.io/documentation/reference/stable/configuration/avro.html#deploying-confluent-schema-registry-with-debezium-containers).
+
+1. Create a connector configuration file and save it as `register-mysql.json`:
+
+    ```json
+    {
+      "name": "your-connector",
+      "config": {
+          "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+          "tasks.max": "1",
+          "database.hostname": "mysql",
+          "database.port": "3306",
+          "database.user": "user",
+          "database.password": "mysqlpwd",
+          "database.server.id":"223344",
+          "topic.prefix": "dbserver1",
+          "database.include.list": "db1",
+          "database.history.kafka.topic":"dbserver1.history",
+          "database.history.kafka.bootstrap.servers":"kafka:9092",
+          "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+          "schema.history.internal.kafka.topic": "dbserver1.internal.history",
+          "table.include.list": "table1",
+          "key.converter": "io.confluent.connect.avro.AvroConverter",
+          "value.converter": "io.confluent.connect.avro.AvroConverter",
+          "key.converter.schema.registry.url": "http://<scheme-registry>:8081",
+          "value.converter.schema.registry.url": "http://<scheme-registry>:8081",
+          "include.schema.changes": false
+        }
+    }
+    ```
+
+    You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/2.4/connectors/mysql.html). By default, the connector writes events for each table to a Kafka topic named `serverName.databaseName.tableName`.
+
+{{< /tab >}}
+{{< /tabs >}}
+
 1. Start the Debezium MySQL connector using the configuration file:
 
     ```bash
@@ -100,8 +152,6 @@ If you deploy the MySQL Debezium connector in [Confluent Cloud](https://docs.con
       --from-beginning \
       --topic dbserver1.db1.table1
     ```
-
-    **Note:** By default, the connector writes events for each table to a Kafka topic named `serverName.databaseName.tableName`.
 
 ### Create a source
 

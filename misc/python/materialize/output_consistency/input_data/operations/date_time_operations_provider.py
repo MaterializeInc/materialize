@@ -17,6 +17,7 @@ from materialize.output_consistency.input_data.params.date_time_operation_param 
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     DATE_TIME_COMPONENT_PARAM,
     ISO8601_TIMESTAMP_PARAM,
+    PRECISION_PARAM,
     TIME_ZONE_PARAM,
     TYPE_FORMAT_PARAM,
 )
@@ -132,7 +133,7 @@ DATE_TIME_OPERATION_TYPES.append(
 DATE_TIME_OPERATION_TYPES.append(
     DbOperation(
         "$ AT TIME ZONE $::TEXT",
-        [DateTimeOperationParam(), TIME_ZONE_PARAM],
+        [DateTimeOperationParam(support_time=False), TIME_ZONE_PARAM],
         DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
     )
 )
@@ -140,7 +141,7 @@ DATE_TIME_OPERATION_TYPES.append(
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "timezone",
-        [TIME_ZONE_PARAM, DateTimeOperationParam()],
+        [TIME_ZONE_PARAM, DateTimeOperationParam(support_time=False)],
         DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
     )
 )
@@ -166,6 +167,7 @@ DATE_TIME_OPERATION_TYPES.append(
         "try_parse_monotonic_iso8601_timestamp",
         [ISO8601_TIMESTAMP_PARAM],
         DateTimeReturnTypeSpec(TIMESTAMP_TYPE_IDENTIFIER),
+        is_pg_compatible=False,
     )
 )
 
@@ -238,5 +240,23 @@ DATE_TIME_OPERATION_TYPES.append(
         "justify_interval",
         [TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+    )
+)
+
+# change precision for TIMESTAMP
+DATE_TIME_OPERATION_TYPES.append(
+    DbOperation(
+        "$::TIMESTAMP($)",
+        [DateTimeOperationParam(), PRECISION_PARAM],
+        DateTimeReturnTypeSpec(TIMESTAMP_TYPE_IDENTIFIER),
+    )
+)
+
+# change precision for TIMESTAMPTZ
+DATE_TIME_OPERATION_TYPES.append(
+    DbOperation(
+        "$::TIMESTAMPTZ($)",
+        [DateTimeOperationParam(), PRECISION_PARAM],
+        DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
     )
 )

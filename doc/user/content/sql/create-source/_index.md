@@ -18,23 +18,33 @@ Like other relations, sources are [namespaced](../namespaces/) by a database and
 
 ## Connectors
 
-Materialize bundles **native connectors** for the following external systems:
+Materialize bundles **native connectors** that allow ingesting data from the following external systems:
 
 {{< multilinkbox >}}
 {{< linkbox title="Message Brokers" >}}
 - [Kafka](/sql/create-source/kafka)
 - [Redpanda](/sql/create-source/kafka)
+- [Other message brokers](/integrations/#message-brokers)
 {{</ linkbox >}}
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/sql/create-source/postgres)
+- [MySQL](/integrations/#mysql)
+- [Other databases](/integrations/#other-databases)
 {{</ linkbox >}}
-{{< linkbox title="Datagen" >}}
-- [Load generator](/sql/create-source/load-generator)
-- [Webhook](/sql/create-source/webhook)
+{{< linkbox title="Webhooks" >}}
+- [Amazon EventBridge](/sql/create-source/webhook/#connecting-with-amazon-eventbridge)
+- [Segment](/ingest-data/segment/)
+- [Other webhooks](/sql/create-source/webhook)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 
 For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.
+
+**Sample data**
+
+To get started with no external dependencies, you can use the [load generator source](/sql/create-source/load-generator/)
+to produce sample data that is suitable for demo and performance test
+scenarios.
 
 ## Formats
 
@@ -232,8 +242,8 @@ It's a good idea to size up a source when:
     keys.
 
     In this case, it's also possible to enable _spill to disk_ to accommodate
-    larger state sizes without sizing up. See [`Disk-attached replicas`](/sql/create-cluster-replica#disk-attached-replicas)
-    for more details.
+    larger state sizes without sizing up. See the [`CREATE CLUSTER`: Disk](/sql/create-cluster#disk)
+    documentation for more details.
 
 Sources that specify the `SIZE` option are linked to a single-purpose cluster
 dedicated to maintaining that source.

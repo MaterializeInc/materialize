@@ -18,28 +18,31 @@
 
 //! Methods for checked timestamp operations.
 
-use std::fmt::Display;
+use std::error::Error;
+use std::fmt::{self, Display};
 use std::ops::Sub;
 
 use ::chrono::{
     DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
 };
+use mz_lowertest::MzReflect;
 use mz_ore::cast::{self, CastFrom};
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::chrono::ProtoNaiveDateTime;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use proptest::arbitrary::Arbitrary;
 use proptest::strategy::{BoxedStrategy, Strategy};
-use serde::{Serialize, Serializer};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize, Serializer};
 use thiserror::Error;
 
 use crate::adt::datetime::DateTimePart;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::DecimalLike;
-use crate::chrono::ProtoNaiveDateTime;
 use crate::scalar::{arb_naive_date_time, arb_utc_date_time};
 use crate::Datum;
 
-include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.date.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.timestamp.rs"));
 
 const MONTHS_PER_YEAR: i64 = cast::u16_to_i64(Interval::MONTH_PER_YEAR);
 const HOURS_PER_DAY: i64 = cast::u16_to_i64(Interval::HOUR_PER_DAY);
@@ -49,6 +52,94 @@ const SECONDS_PER_MINUTE: i64 = cast::u16_to_i64(Interval::SECOND_PER_MINUTE);
 const NANOSECONDS_PER_HOUR: i64 = NANOSECONDS_PER_MINUTE * MINUTES_PER_HOUR;
 const NANOSECONDS_PER_MINUTE: i64 = NANOSECONDS_PER_SECOND * SECONDS_PER_MINUTE;
 const NANOSECONDS_PER_SECOND: i64 = 10i64.pow(9);
+
+pub const MAX_PRECISION: u8 = 6;
+
+/// The `max_precision` of a [`ScalarType::Timestamp`] or
+/// [`ScalarType::TimestampTz`].
+///
+/// This newtype wrapper ensures that the length is within the valid range.
+///
+/// [`ScalarType::Timestamp`]: crate::ScalarType::Timestamp
+/// [`ScalarType::TimestampTz`]: crate::ScalarType::TimestampTz
+#[derive(
+    Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect,
+)]
+pub struct TimestampPrecision(pub(crate) u8);
+
+impl TimestampPrecision {
+    /// Consumes the newtype wrapper, returning the inner `u8`.
+    pub fn into_u8(self) -> u8 {
+        self.0
+    }
+}
+
+impl TryFrom<i64> for TimestampPrecision {
+    type Error = InvalidTimestampPrecisionError;
+
+    fn try_from(max_precision: i64) -> Result<Self, Self::Error> {
+        match u8::try_from(max_precision) {
+            Ok(max_precision) if max_precision <= MAX_PRECISION => {
+                Ok(TimestampPrecision(max_precision))
+            }
+            _ => Err(InvalidTimestampPrecisionError),
+        }
+    }
+}
+
+impl RustType<ProtoTimestampPrecision> for TimestampPrecision {
+    fn into_proto(&self) -> ProtoTimestampPrecision {
+        ProtoTimestampPrecision {
+            value: self.0.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoTimestampPrecision) -> Result<Self, TryFromProtoError> {
+        Ok(TimestampPrecision(proto.value.into_rust()?))
+    }
+}
+
+impl RustType<ProtoOptionalTimestampPrecision> for Option<TimestampPrecision> {
+    fn into_proto(&self) -> ProtoOptionalTimestampPrecision {
+        ProtoOptionalTimestampPrecision {
+            value: self.into_proto(),
+        }
+    }
+
+    fn from_proto(precision: ProtoOptionalTimestampPrecision) -> Result<Self, TryFromProtoError> {
+        precision.value.into_rust()
+    }
+}
+
+/// The error returned when constructing a [`VarCharMaxLength`] from an invalid
+/// value.
+///
+/// [`VarCharMaxLength`]: crate::adt::varchar::VarCharMaxLength
+#[derive(Debug, Clone)]
+pub struct InvalidTimestampPrecisionError;
+
+impl fmt::Display for InvalidTimestampPrecisionError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "precision for type timestamp or timestamptz must be between 0 and {}",
+            MAX_PRECISION
+        )
+    }
+}
+
+impl Error for InvalidTimestampPrecisionError {}
 
 /// Common set of methods for time component.
 pub trait TimeLike: chrono::Timelike {
@@ -704,6 +795,56 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
         // If at any point we overflow, map to a TimestampError.
         age_inner(self, other).ok_or(TimestampError::OutOfRange)
     }
+
+    /// Rounds the timestamp to the specified number of digits of precision.
+    pub fn round_to_precision(
+        &self,
+        precision: Option<TimestampPrecision>,
+    ) -> Result<CheckedTimestamp<T>, TimestampError> {
+        let precision = precision.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+        // maximum precision is micros
+        let power = MAX_PRECISION
+            .checked_sub(precision)
+            .expect("precision fits in micros");
+        let round_to_micros = 10_i64.pow(power.into());
+
+        let mut original = self.date_time();
+        let nanoseconds = original.timestamp_subsec_nanos();
+        // truncating to microseconds does not round it up
+        // i.e. 123456789 will be truncated to 123456
+        original = original.truncate_microseconds();
+        // depending upon the 7th digit here, we'll be
+        // adding 1 millisecond
+        // so eventually 123456789 will be rounded to 123457
+        let seventh_digit = (nanoseconds % 1_000) / 100;
+        assert!(seventh_digit < 10);
+        if seventh_digit >= 5 {
+            original = original + Duration::microseconds(1);
+        }
+        // this is copied from [`chrono::round::duration_round`]
+        // but using microseconds instead of nanoseconds precision
+        let stamp = original.timestamp_micros();
+        let dt = {
+            let delta_down = stamp % round_to_micros;
+            if delta_down == 0 {
+                original
+            } else {
+                let (delta_up, delta_down) = if delta_down < 0 {
+                    (delta_down.abs(), round_to_micros - delta_down.abs())
+                } else {
+                    (round_to_micros - delta_down, delta_down)
+                };
+                if delta_up <= delta_down {
+                    original + Duration::microseconds(delta_up)
+                } else {
+                    original - Duration::microseconds(delta_down)
+                }
+            }
+        };
+
+        let t = T::from_date_time(dt);
+        Self::from_timestamplike(t)
+    }
 }
 
 impl TryFrom<NaiveDateTime> for CheckedTimestamp<NaiveDateTime> {
@@ -857,6 +998,110 @@ mod test {
         // Test low - high.
         let result = low.age(&high).unwrap();
         assert_eq!(result, Interval::new(-months, 0, 0));
+    }
+
+    fn assert_round_to_precision(
+        dt: CheckedTimestamp<NaiveDateTime>,
+        precision: u8,
+        expected: i64,
+    ) {
+        let updated = dt
+            .round_to_precision(Some(TimestampPrecision(precision)))
+            .unwrap();
+        assert_eq!(expected, updated.timestamp_micros());
+    }
+
+    #[mz_ore::test]
+    fn test_round_to_precision() {
+        let date = CheckedTimestamp::try_from(
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .unwrap()
+                .and_hms_nano_opt(0, 0, 0, 123456789)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_round_to_precision(date, 0, 0);
+        assert_round_to_precision(date, 1, 100000);
+        assert_round_to_precision(date, 2, 120000);
+        assert_round_to_precision(date, 3, 123000);
+        assert_round_to_precision(date, 4, 123500);
+        assert_round_to_precision(date, 5, 123460);
+        assert_round_to_precision(date, 6, 123457);
+
+        let low =
+            CheckedTimestamp::try_from(LOW_DATE.and_hms_nano_opt(0, 0, 0, 123456789).unwrap())
+                .unwrap();
+        assert_round_to_precision(low, 0, -210863606400000000);
+        assert_round_to_precision(low, 1, -210863606399900000);
+        assert_round_to_precision(low, 2, -210863606399880000);
+        assert_round_to_precision(low, 3, -210863606399877000);
+        assert_round_to_precision(low, 4, -210863606399876500);
+        assert_round_to_precision(low, 5, -210863606399876540);
+        assert_round_to_precision(low, 6, -210863606399876543);
+
+        let high =
+            CheckedTimestamp::try_from(HIGH_DATE.and_hms_nano_opt(0, 0, 0, 123456789).unwrap())
+                .unwrap();
+        assert_round_to_precision(high, 0, 8210298326400000000);
+        assert_round_to_precision(high, 1, 8210298326400100000);
+        assert_round_to_precision(high, 2, 8210298326400120000);
+        assert_round_to_precision(high, 3, 8210298326400123000);
+        assert_round_to_precision(high, 4, 8210298326400123500);
+        assert_round_to_precision(high, 5, 8210298326400123460);
+        assert_round_to_precision(high, 6, 8210298326400123457);
+    }
+
+    #[mz_ore::test]
+    fn test_precision_edge_cases() {
+        let result = mz_ore::panic::catch_unwind(|| {
+            let date =
+                CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_micros(123456).unwrap())
+                    .unwrap();
+            let _ = date.round_to_precision(Some(TimestampPrecision(7)));
+        });
+        assert!(result.is_err());
+
+        let date =
+            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_micros(123456).unwrap())
+                .unwrap();
+        let date = date.round_to_precision(None).unwrap();
+        assert_eq!(123456, date.timestamp_micros());
+    }
+
+    #[mz_ore::test]
+    fn test_equality_with_same_precision() {
+        let date1 =
+            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123456).unwrap())
+                .unwrap();
+        let date1 = date1
+            .round_to_precision(Some(TimestampPrecision(0)))
+            .unwrap();
+
+        let date2 =
+            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123456789).unwrap())
+                .unwrap();
+        let date2 = date2
+            .round_to_precision(Some(TimestampPrecision(0)))
+            .unwrap();
+        assert_eq!(date1, date2);
+    }
+
+    #[mz_ore::test]
+    fn test_equality_with_different_precisions() {
+        let date1 =
+            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123500000).unwrap())
+                .unwrap();
+        let date1 = date1
+            .round_to_precision(Some(TimestampPrecision(5)))
+            .unwrap();
+
+        let date2 =
+            CheckedTimestamp::try_from(NaiveDateTime::from_timestamp_opt(0, 123456789).unwrap())
+                .unwrap();
+        let date2 = date2
+            .round_to_precision(Some(TimestampPrecision(4)))
+            .unwrap();
+        assert_eq!(date1, date2);
     }
 
     proptest! {

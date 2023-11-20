@@ -93,14 +93,16 @@ use chrono::{DateTime, Utc};
 use http::StatusCode;
 use itertools::Itertools;
 use mz_adapter::{TimestampContext, TimestampExplanation};
+use mz_environmentd::test_util::{self, MzTimestamp, PostgresErrorExt, Server, KAFKA_ADDRS};
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::result::ResultExt;
-use mz_ore::retry::{Retry, RetryResult};
+use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::sources::Timeline;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
@@ -108,10 +110,6 @@ use timely::order::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::{DbError, SqlState};
 use tracing::{debug, info};
-
-use crate::util::{MzTimestamp, PostgresErrorExt, Server, KAFKA_ADDRS};
-
-pub mod util;
 
 /// An HTTP server whose responses can be controlled from another thread.
 struct MockHttpServer {
@@ -170,7 +168,8 @@ fn test_no_block() {
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
     mz_ore::test::timeout(Duration::from_secs(120), || {
         println!("test_no_block: starting server");
-        let server = util::start_server(util::Config::default()).unwrap();
+        let server = test_util::start_server(test_util::Config::default()).unwrap();
+        server.enable_feature_flags(&["enable_connection_validation_syntax"]);
 
         server.runtime.block_on(async {
             println!("test_no_block: starting mock HTTP server");
@@ -183,7 +182,7 @@ fn test_no_block() {
                 println!("test_no_block: in thread; executing create source");
                 let result = client
                 .batch_execute(&format!(
-                    "CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}');",
+                    "CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}') WITH (VALIDATE = false);",
                     schema_registry_server.addr,
                 ))
                 .await;
@@ -192,7 +191,7 @@ fn test_no_block() {
 
                 let result = client
                     .batch_execute(&format!(
-                        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
+                        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
                         &*KAFKA_ADDRS,
                     ))
                     .await;
@@ -244,7 +243,8 @@ fn test_no_block() {
 /// does not crash the server.
 #[mz_ore::test]
 fn test_drop_connection_race() {
-    let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+    let server = test_util::start_server(test_util::Config::default().unsafe_mode()).unwrap();
+    server.enable_feature_flags(&["enable_connection_validation_syntax"]);
     info!("test_drop_connection_race: server started");
 
     server.runtime.block_on(async {
@@ -255,14 +255,14 @@ fn test_drop_connection_race() {
         let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}')",
+                "CREATE CONNECTION conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}') WITH (VALIDATE = false)",
                 schema_registry_server.addr,
             ))
             .await
             .unwrap();
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
+                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
                 &*KAFKA_ADDRS,
             ))
             .await
@@ -322,7 +322,7 @@ fn test_drop_connection_race() {
 
 #[mz_ore::test]
 fn test_time() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     server.enable_feature_flags(&["enable_dangerous_functions"]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -366,8 +366,8 @@ fn test_time() {
 
 #[mz_ore::test]
 fn test_subscribe_consolidation() {
-    let config = util::Config::default().workers(2);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().workers(2);
+    let server = test_util::start_server(config).unwrap();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -396,8 +396,8 @@ fn test_subscribe_consolidation() {
 
 #[mz_ore::test]
 fn test_subscribe_negative_diffs() {
-    let config = util::Config::default().workers(2);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().workers(2);
+    let server = test_util::start_server(config).unwrap();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -448,8 +448,8 @@ fn test_subscribe_negative_diffs() {
 
 #[mz_ore::test]
 fn test_empty_subscribe_notice() {
-    let config = util::Config::default().with_now(NOW_ZERO.clone());
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().with_now(NOW_ZERO.clone());
+    let server = test_util::start_server(config).unwrap();
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let mut client = server
         .pg_config()
@@ -458,7 +458,7 @@ fn test_empty_subscribe_notice() {
         .unwrap();
 
     client.batch_execute("CREATE TABLE t (a int)").unwrap();
-    let now = util::get_explain_timestamp("t", &mut client);
+    let now = test_util::get_explain_timestamp("t", &mut client);
     client
         .batch_execute(&format!("SUBSCRIBE TO t AS OF {now} UP TO {now}"))
         .unwrap();
@@ -479,12 +479,12 @@ fn test_empty_subscribe_notice() {
 
 #[mz_ore::test]
 fn test_empty_subscribe_error() {
-    let config = util::Config::default().with_now(NOW_ZERO.clone());
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().with_now(NOW_ZERO.clone());
+    let server = test_util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client.batch_execute("CREATE TABLE t (a int)").unwrap();
-    let now = util::get_explain_timestamp("t", &mut client);
+    let now = test_util::get_explain_timestamp("t", &mut client);
     let e = client
         .batch_execute(&format!("SUBSCRIBE TO t AS OF {now} UP TO {}", now - 1))
         .expect_err("expected DB error");
@@ -500,11 +500,11 @@ fn test_subscribe_basic() {
         let nowfn = Arc::clone(&nowfn);
         NowFn::from(move || (nowfn.lock().unwrap())())
     };
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .workers(2)
         .with_now(now)
         .unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -665,11 +665,12 @@ fn test_subscribe_basic() {
 fn test_subscribe_progress() {
     mz_ore::test::init_logging();
 
+    let config = test_util::Config::default().workers(2);
+    let server = test_util::start_server(config).unwrap();
+
     for has_initial_data in [false, true] {
         for has_index in [false, true] {
             for has_snapshot in [false, true] {
-                let config = util::Config::default().workers(2);
-                let server = util::start_server(config).unwrap();
                 let mut client_writes = server.connect(postgres::NoTls).unwrap();
                 let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -769,6 +770,10 @@ fn test_subscribe_progress() {
                     let data_ts = await_data(&mut client_reads, &mut last_seen_ts, &data);
                     await_progress(&mut client_reads, &mut last_seen_ts, data_ts + 1);
                 }
+
+                client_writes
+                    .batch_execute("DROP TABLE t1 CASCADE")
+                    .unwrap();
             }
         }
     }
@@ -778,8 +783,8 @@ fn test_subscribe_progress() {
 // turns them into nullable columns. See #6304.
 #[mz_ore::test]
 fn test_subscribe_progress_non_nullable_columns() {
-    let config = util::Config::default().workers(2);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().workers(2);
+    let server = test_util::start_server(config).unwrap();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -829,8 +834,8 @@ fn test_subscribe_progress_non_nullable_columns() {
 /// receive data or not.
 #[mz_ore::test]
 fn test_subcribe_continuous_progress() {
-    let config = util::Config::default().workers(2);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().workers(2);
+    let server = test_util::start_server(config).unwrap();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -914,8 +919,8 @@ fn test_subcribe_continuous_progress() {
 
 #[mz_ore::test]
 fn test_subscribe_fetch_timeout() {
-    let config = util::Config::default().workers(2);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().workers(2);
+    let server = test_util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client.batch_execute("CREATE TABLE t (i INT8)").unwrap();
@@ -1011,8 +1016,8 @@ fn test_subscribe_fetch_timeout() {
 
 #[mz_ore::test]
 fn test_subscribe_fetch_wait() {
-    let config = util::Config::default().workers(2);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().workers(2);
+    let server = test_util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client.batch_execute("CREATE TABLE t (i INT8)").unwrap();
@@ -1074,8 +1079,8 @@ fn test_subscribe_fetch_wait() {
 
 #[mz_ore::test]
 fn test_subscribe_empty_upper_frontier() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client
@@ -1095,7 +1100,7 @@ fn test_subscribe_empty_upper_frontier() {
 // does not keep the server alive forever.
 #[mz_ore::test]
 fn test_subscribe_shutdown() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
 
     // We have to use the async PostgreSQL client so that we can ungracefully
     // abort the connection task.
@@ -1135,8 +1140,8 @@ fn test_subscribe_shutdown() {
 
 #[mz_ore::test]
 fn test_subscribe_table_rw_timestamps() {
-    let config = util::Config::default().workers(3);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().workers(3);
+    let server = test_util::start_server(config).unwrap();
     let mut client_interactive = server.connect(postgres::NoTls).unwrap();
     let mut client_subscribe = server.connect(postgres::NoTls).unwrap();
 
@@ -1220,7 +1225,7 @@ fn test_subscribe_table_rw_timestamps() {
 // by another connection.
 #[mz_ore::test]
 fn test_temporary_views() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client_a = server.connect(postgres::NoTls).unwrap();
     let mut client_b = server.connect(postgres::NoTls).unwrap();
     client_a
@@ -1250,8 +1255,8 @@ fn test_temporary_views() {
 // Test EXPLAIN TIMESTAMP with tables.
 #[mz_ore::test]
 fn test_explain_timestamp_table() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
     let timestamp_re = Regex::new(r"\s*(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
 
@@ -1281,8 +1286,8 @@ source materialize.public.t1 (u1, storage):
 // Test `EXPLAIN TIMESTAMP AS JSON`
 #[mz_ore::test]
 fn test_explain_timestamp_json() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("CREATE TABLE t1 (i1 int)").unwrap();
 
@@ -1300,27 +1305,24 @@ fn test_explain_timestamp_json() {
 // 2. Acquires read holds for all objects within the same time domain
 // 3. Errors during a write-only transaction
 // 4. Errors when an object outside the chosen time domain is referenced
+//
+// GitHub issue # 18950
 #[mz_ore::test]
-fn test_github_18950() {
-    // Set the timestamp to zero for deterministic initial timestamps.
-    let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
-    let now = {
-        let nowfn = Arc::clone(&nowfn);
-        NowFn::from(move || (nowfn.lock().unwrap())())
-    };
+fn test_transactional_explain_timestamps() {
+    let config = test_util::Config::default().workers(2).unsafe_mode();
 
-    let config = util::Config::default()
-        .workers(2)
-        .with_now(now)
-        .unsafe_mode();
-
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
 
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
     client_writes
         .batch_execute("CREATE TABLE t1 (i1 int)")
+        .unwrap();
+
+    client_writes.batch_execute("CREATE SCHEMA s").unwrap();
+    client_writes
+        .batch_execute("CREATE TABLE s.t2 (i2 int)")
         .unwrap();
 
     // Verify execution during a write-only txn fails
@@ -1341,7 +1343,7 @@ fn test_github_18950() {
     client_reads.batch_execute("BEGIN").unwrap();
     let mut query_timestamp = None;
 
-    for i in 1..5 {
+    for _ in 1..5 {
         let row = client_reads
             .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
             .unwrap();
@@ -1367,8 +1369,6 @@ fn test_github_18950() {
         // Ensure `t1`'s read frontier remains <= the query timestamp
         assert!(*explain_t1_read_frontier <= query_timestamp.unwrap());
 
-        // Increase now by 2s each iteration
-        *nowfn.lock().unwrap() = NowFn::from(move || 2000 * i);
         // Inserting tends to cause sources to compact, so this should ideally
         // strengthen the assertion above that `t1`'s read frontier should
         // not advance during the txn
@@ -1379,10 +1379,7 @@ fn test_github_18950() {
 
     // Errors when an object outside the chosen time domain is referenced
     let error = client_reads
-        .query_one(
-            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_catalog.mz_views;",
-            &[],
-        )
+        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM s.t2;", &[])
         .unwrap_err();
 
     assert!(format!("{}", error)
@@ -1443,12 +1440,12 @@ fn test_utilization_hold() {
         NowFn::from(move || *timestamp.lock().unwrap())
     };
     let data_dir = tempfile::tempdir().unwrap();
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_now(now_fn)
         .data_directory(data_dir.path());
 
     // Create the server with the past time, to make sure the table is created.
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
 
     // Fast-forward time to make sure the table is still readable at the old time.
     *now.lock().unwrap() = now_millis;
@@ -1462,27 +1459,9 @@ fn test_utilization_hold() {
                 .execute(&format!("SET cluster={cluster}"), &[])
                 .unwrap();
 
-            // Hack: we think there might be an issue where sinces
-            // can briefly be zero on startup, which breaks our logic here.
-            //
-            // So just spin until it's not zero.
-            // TODO[btv] - Get rid of this loop if that bug is ever fixed
-            let explain = Retry::default()
-                .initial_backoff(Duration::from_secs(1))
-                .factor(1.0)
-                .max_tries(10)
-                .retry(|_| {
-                    let row = client.query_one(explain_q, &[]).unwrap();
-                    let explain: String = row.get(0);
-                    let explain: TimestampExplanation<Timestamp> =
-                        serde_json::from_str(&explain).unwrap();
-                    if explain.determination.since.clone().into_option() == Some(Timestamp::MIN) {
-                        RetryResult::RetryableErr(())
-                    } else {
-                        RetryResult::Ok(explain)
-                    }
-                })
-                .expect("Since never became non-zero");
+            let row = client.query_one(explain_q, &[]).unwrap();
+            let explain: String = row.get(0);
+            let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
 
             // Assert that we actually used the indexes/tables, as required
             for s in &explain.sources {
@@ -1499,8 +1478,9 @@ fn test_utilization_hold() {
                 .since
                 .into_option()
                 .expect("The since must be finite");
-
-            assert!(since.less_equal(&past_since));
+            // Plus 10 to allow for a small number of write timestamps to be
+            // consumed.
+            assert!(since.less_equal(&past_since.checked_add(10).unwrap()));
             // Assert we aren't lagging by more than 30 days + 1 second.
             // If we ever make the since granularity configurable, this line will
             // need to be changed.
@@ -1546,8 +1526,8 @@ fn test_utilization_hold() {
 #[ignore] // TODO(necaris): Re-enable this as soon as possible
 #[mz_ore::test]
 fn test_github_12546() {
-    let config = util::Config::default().with_propagate_crashes(false);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().with_propagate_crashes(false);
+    let server = test_util::start_server(config).unwrap();
     server.enable_feature_flags(&["enable_dangerous_functions"]);
 
     server
@@ -1599,8 +1579,8 @@ fn test_github_12546() {
 
 #[mz_ore::test]
 fn test_github_12951() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     // Verify sinks (SUBSCRIBE) are correctly handled for a dropped cluster.
     {
@@ -1659,8 +1639,8 @@ fn test_github_12951() {
 #[mz_ore::test]
 // Tests github issue #13100
 fn test_subscribe_outlive_cluster() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     // Verify sinks (SUBSCRIBE) are correctly handled for a dropped cluster, when a new cluster is created.
     let mut client1 = server.connect(postgres::NoTls).unwrap();
@@ -1694,8 +1674,8 @@ fn test_subscribe_outlive_cluster() {
 
 #[mz_ore::test]
 fn test_read_then_write_serializability() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     // Create table with initial value
     {
@@ -1751,26 +1731,26 @@ fn test_timestamp_recovery() {
         NowFn::from(move || *timestamp.lock().unwrap())
     };
     let data_dir = tempfile::tempdir().unwrap();
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_now(now_fn)
         .data_directory(data_dir.path());
 
     // Start a server and get the current global timestamp
     let global_timestamp = {
-        let server = util::start_server(config.clone()).unwrap();
+        let server = test_util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         client.batch_execute("CREATE TABLE t1 (i1 INT)").unwrap();
-        util::get_explain_timestamp("t1", &mut client)
+        test_util::get_explain_timestamp("t1", &mut client)
     };
 
     // Rollback the current time and ensure that a value larger than the old global timestamp is
     // recovered
     {
         *now.lock().expect("lock poisoned") = 0;
-        let server = util::start_server(config).unwrap();
+        let server = test_util::start_server(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
-        let recovered_timestamp = util::get_explain_timestamp("t1", &mut client);
+        let recovered_timestamp = test_util::get_explain_timestamp("t1", &mut client);
         assert!(recovered_timestamp > global_timestamp);
     }
 }
@@ -1783,13 +1763,13 @@ fn test_timeline_read_holds() {
         let now = Arc::clone(&now);
         NowFn::from(move || *now.lock().unwrap())
     };
-    let config = util::Config::default().with_now(now_fn).unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().with_now(now_fn).unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
     let mut mz_client = server.connect(postgres::NoTls).unwrap();
 
     let view_name = "v_hold";
     let source_name = "source_hold";
-    let (mut pg_client, cleanup_fn) = util::create_postgres_source_with_table(
+    let (mut pg_client, cleanup_fn) = test_util::create_postgres_source_with_table(
         &server.runtime,
         &mut mz_client,
         view_name,
@@ -1801,7 +1781,8 @@ fn test_timeline_read_holds() {
     // Create user table in Materialize.
     mz_client.batch_execute("DROP TABLE IF EXISTS t;").unwrap();
     mz_client.batch_execute("CREATE TABLE t (a INT);").unwrap();
-    util::insert_with_deterministic_timestamps("t", "(42)", &server, Arc::clone(&now)).unwrap();
+    test_util::insert_with_deterministic_timestamps("t", "(42)", &server, Arc::clone(&now))
+        .unwrap();
 
     // Insert data into source.
     let source_rows: i64 = 10;
@@ -1812,7 +1793,7 @@ fn test_timeline_read_holds() {
             .unwrap();
     }
 
-    util::wait_for_view_population(&mut mz_client, view_name, source_rows).unwrap();
+    test_util::wait_for_view_population(&mut mz_client, view_name, source_rows).unwrap();
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mut mz_join_client = server.connect(postgres::NoTls).unwrap();
@@ -1835,13 +1816,13 @@ fn test_linearizability() {
         let now = Arc::clone(&now);
         NowFn::from(move || *now.lock().unwrap())
     };
-    let config = util::Config::default().with_now(now_fn).unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().with_now(now_fn).unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
     let mut mz_client = server.connect(postgres::NoTls).unwrap();
 
     let view_name = "v_lin";
     let source_name = "source_lin";
-    let (mut pg_client, cleanup_fn) = util::create_postgres_source_with_table(
+    let (mut pg_client, cleanup_fn) = test_util::create_postgres_source_with_table(
         &server.runtime,
         &mut mz_client,
         view_name,
@@ -1855,7 +1836,7 @@ fn test_linearizability() {
         .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))
         .unwrap();
 
-    util::wait_for_view_population(&mut mz_client, view_name, 1).unwrap();
+    test_util::wait_for_view_population(&mut mz_client, view_name, 1).unwrap();
 
     // The user table's write frontier will be close to zero because we use a deterministic
     // now function in this test. It may be slightly higher than zero because bootstrapping
@@ -1869,19 +1850,19 @@ fn test_linearizability() {
     mz_client
         .batch_execute("SET transaction_isolation = serializable")
         .unwrap();
-    let view_ts = util::get_explain_timestamp(view_name, &mut mz_client);
+    let view_ts = test_util::get_explain_timestamp(view_name, &mut mz_client);
     // Create user table in Materialize.
     mz_client.batch_execute("DROP TABLE IF EXISTS t;").unwrap();
     mz_client.batch_execute("CREATE TABLE t (a INT);").unwrap();
-    let join_ts = util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // In serializable transaction isolation, read timestamps can go backwards.
     assert!(join_ts < view_ts);
 
     mz_client
         .batch_execute("SET transaction_isolation = 'strict serializable'")
         .unwrap();
-    let view_ts = util::get_explain_timestamp(view_name, &mut mz_client);
-    let join_ts = util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    let view_ts = test_util::get_explain_timestamp(view_name, &mut mz_client);
+    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // Since the query on the join was done after the query on the view, it should have a higher or
     // equal timestamp in strict serializable mode.
     assert!(join_ts >= view_ts);
@@ -1889,8 +1870,8 @@ fn test_linearizability() {
     mz_client
         .batch_execute("SET transaction_isolation = serializable")
         .unwrap();
-    let view_ts = util::get_explain_timestamp(view_name, &mut mz_client);
-    let join_ts = util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    let view_ts = test_util::get_explain_timestamp(view_name, &mut mz_client);
+    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
     // If we go back to serializable, then timestamps can revert again.
     assert!(join_ts < view_ts);
 
@@ -1899,8 +1880,8 @@ fn test_linearizability() {
 
 #[mz_ore::test]
 fn test_internal_users() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     assert!(server
         .pg_config()
@@ -1926,8 +1907,8 @@ fn test_internal_users() {
 
 #[mz_ore::test]
 fn test_internal_users_cluster() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     for (user, expected_cluster) in INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.iter() {
         let mut internal_client = server
@@ -1948,8 +1929,8 @@ fn test_internal_users_cluster() {
 // crashing
 #[mz_ore::test]
 fn test_internal_ports() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     {
         let mut external_client = server.connect(postgres::NoTls).unwrap();
@@ -2006,8 +1987,8 @@ fn test_internal_ports() {
 // needed for this test.
 #[mz_ore::test]
 fn test_alter_system_invalid_param() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     let mut mz_client = server
         .pg_config_internal()
@@ -2034,8 +2015,8 @@ fn test_alter_system_invalid_param() {
 
 #[mz_ore::test]
 fn test_concurrent_writes() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     let num_tables = 10;
 
@@ -2092,7 +2073,7 @@ fn test_concurrent_writes() {
 
 #[mz_ore::test]
 fn test_load_generator() {
-    let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+    let server = test_util::start_server(test_util::Config::default().unsafe_mode()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client
@@ -2128,8 +2109,8 @@ fn test_load_generator() {
 
 #[mz_ore::test]
 fn test_introspection_user_permissions() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     let mut external_client = server.connect(postgres::NoTls).unwrap();
     let mut introspection_client = server
@@ -2157,7 +2138,7 @@ fn test_introspection_user_permissions() {
         .is_err());
 
     assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
     assert!(introspection_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
@@ -2170,7 +2151,7 @@ fn test_introspection_user_permissions() {
         .batch_execute("SET CLUSTER TO 'mz_system'")
         .unwrap();
     assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
     assert!(introspection_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
@@ -2184,7 +2165,7 @@ fn test_introspection_user_permissions() {
         .unwrap();
     assert!(introspection_client.query("SELECT * FROM t1", &[]).is_err());
     assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
     assert!(introspection_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
@@ -2196,8 +2177,8 @@ fn test_introspection_user_permissions() {
 
 #[mz_ore::test]
 fn test_idle_in_transaction_session_timeout() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
     server.enable_feature_flags(&["enable_dangerous_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2286,25 +2267,25 @@ fn test_coord_startup_blocking() {
         NowFn::from(move || *timestamp.lock().expect("lock poisoned"))
     };
     let data_dir = tempfile::tempdir().unwrap();
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_now(now_fn)
         .data_directory(data_dir.path());
 
     // Start 3 servers and reserve the first 3 timestamp ranges.
     {
-        let server = util::start_server(config.clone()).unwrap();
+        let server = test_util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         client.query("SELECT 1", &[]).unwrap();
     };
     {
-        let server = util::start_server(config.clone()).unwrap();
+        let server = test_util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         client.query("SELECT 1", &[]).unwrap();
     };
     {
-        let server = util::start_server(config.clone()).unwrap();
+        let server = test_util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         client.query("SELECT 1", &[]).unwrap();
@@ -2313,7 +2294,7 @@ fn test_coord_startup_blocking() {
     let (tx, rx) = std::sync::mpsc::sync_channel(0);
     std::thread::spawn(move || {
         let server =
-            util::start_server(config.clone()).expect("unable to start server asynchronously");
+            test_util::start_server(config.clone()).expect("unable to start server asynchronously");
         let mut client = server
             .connect(postgres::NoTls)
             .expect("unable to start client asynchronously");
@@ -2339,8 +2320,8 @@ fn test_coord_startup_blocking() {
 
 #[mz_ore::test]
 fn test_peek_on_dropped_cluster() {
-    let config = util::Config::default().unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
 
     let mut read_client = server.connect(postgres::NoTls).unwrap();
     read_client.batch_execute("CREATE TABLE t ()").unwrap();
@@ -2392,8 +2373,8 @@ fn test_peek_on_dropped_cluster() {
 
 #[mz_ore::test]
 fn test_emit_timestamp_notice() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
@@ -2456,8 +2437,8 @@ fn test_emit_timestamp_notice() {
 
 #[mz_ore::test]
 fn test_isolation_level_notice() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
@@ -2493,10 +2474,10 @@ fn test_isolation_level_notice() {
 
 #[test] // allow(test-attribute)
 fn test_emit_tracing_notice() {
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_enable_tracing(true)
         .with_system_parameter_default("opentelemetry_filter".to_string(), "debug".to_string());
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
@@ -2623,8 +2604,8 @@ fn test_subscribe_on_dropped_source() {
             .unwrap();
     }
 
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     test_subscribe_on_dropped_source_inner(&server, vec!["t"], "SUBSCRIBE t", |res, rx| {
         res.unwrap();
@@ -2643,8 +2624,8 @@ fn test_subscribe_on_dropped_source() {
 
 #[mz_ore::test]
 fn test_dont_drop_sinks_twice() {
-    let config = util::Config::default().workers(4);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().workers(4);
+    let server = test_util::start_server(config).unwrap();
 
     let (notice_tx, mut notice_rx) = futures::channel::mpsc::unbounded();
 
@@ -2701,8 +2682,8 @@ fn test_dont_drop_sinks_twice() {
 
 #[mz_ore::test]
 fn test_timelines_persist_after_failed_transaction() {
-    let config = util::Config::default().unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
 
     server.enable_feature_flags(&["enable_create_source_denylist_with_options"]);
 
@@ -2744,14 +2725,8 @@ fn test_timelines_persist_after_failed_transaction() {
 // we have no way to disconnect sessions using SLT.
 #[mz_ore::test]
 fn test_mz_sessions() {
-    // Set the timestamp to zero for deterministic initial timestamps.
-    let now = Arc::new(Mutex::new(0));
-    let now_fn = {
-        let now = Arc::clone(&now);
-        NowFn::from(move || *now.lock().unwrap())
-    };
-    let config = util::Config::default().with_now(now_fn).unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     let mut foo_client = server
         .pg_config()
@@ -2782,20 +2757,19 @@ fn test_mz_sessions() {
 
     // Concurrent session appears in mz_sessions and is removed from mz_sessions.
     {
-        *now.lock().expect("lock poisoned") += 1_000;
-        let _bar_client = server
+        let mut bar_client = server
             .pg_config()
             .user("bar")
             .connect(postgres::NoTls)
             .unwrap();
         assert_eq!(
-            foo_client
+            bar_client
                 .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
                 .unwrap()
                 .get::<_, i64>(0),
             2,
         );
-        let bar_session_row = foo_client
+        let bar_session_row = bar_client
             .query_one(
                 &format!("SELECT role_id FROM mz_internal.mz_sessions WHERE id <> {foo_conn_id}"),
                 &[],
@@ -2803,14 +2777,16 @@ fn test_mz_sessions() {
             .unwrap();
         let bar_role_id = bar_session_row.get::<_, String>("role_id");
         assert_eq!(
-            foo_client
+            bar_client
                 .query_one("SELECT name FROM mz_roles WHERE id = $1", &[&bar_role_id])
                 .unwrap()
                 .get::<_, String>(0),
             "bar",
         );
-        *now.lock().expect("lock poisoned") += 1_000;
     }
+
+    // Wait for the previous session to get cleaned up.
+    std::thread::sleep(Duration::from_secs(3));
 
     assert_eq!(
         foo_client
@@ -2830,14 +2806,13 @@ fn test_mz_sessions() {
     // Concurrent session, with the same name as active session,
     // appears in mz_sessions and is removed from mz_sessions.
     {
-        *now.lock().expect("lock poisoned") += 1_000;
-        let _other_foo_client = server
+        let mut other_foo_client = server
             .pg_config()
             .user("foo")
             .connect(postgres::NoTls)
             .unwrap();
         assert_eq!(
-            foo_client
+            other_foo_client
                 .query_one("SELECT count(*) FROM mz_internal.mz_sessions", &[])
                 .unwrap()
                 .get::<_, i64>(0),
@@ -2853,8 +2828,10 @@ fn test_mz_sessions() {
         let other_foo_role_id = other_foo_session_row.get::<_, String>("role_id");
         assert_ne!(foo_conn_id, other_foo_conn_id);
         assert_eq!(foo_role_id, other_foo_role_id);
-        *now.lock().expect("lock poisoned") += 1_000;
     }
+
+    // Wait for the previous session to get cleaned up.
+    std::thread::sleep(Duration::from_secs(3));
 
     assert_eq!(
         foo_client
@@ -2875,8 +2852,8 @@ fn test_mz_sessions() {
 #[mz_ore::test]
 fn test_auto_run_on_introspection_feature_enabled() {
     // unsafe_mode enables the feature as a whole
-    let config = util::Config::default().unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let mut client = server
@@ -2928,11 +2905,15 @@ fn test_auto_run_on_introspection_feature_enabled() {
         .unwrap();
     assert_introspection_notice(true);
 
-    let _row = client
-        .query_one(
-            "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
-            &[],
-        )
+    // We add a retry here since it might take a moment to get a replica heartbeat.
+    let _row = Retry::default()
+        .max_tries(5)
+        .retry(|_state| {
+            client.query_one(
+                "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
+                &[],
+            )
+        })
         .unwrap();
     assert_introspection_notice(true);
 
@@ -2971,11 +2952,13 @@ fn test_auto_run_on_introspection_feature_enabled() {
     assert_introspection_notice(false);
 }
 
+const INTROSPECTION_NOTICE: &str = "results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables";
+
 #[mz_ore::test]
 fn test_auto_run_on_introspection_feature_disabled() {
     // unsafe_mode enables the feature as a whole
-    let config = util::Config::default().unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let mut client = server
@@ -2986,16 +2969,15 @@ fn test_auto_run_on_introspection_feature_disabled() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let mut assert_introspection_notice = |expected| {
+    let mut assert_introspection_notice = |expected: Option<&str>| {
         match (rx.try_next(), expected) {
-            (Ok(Some(notice)), true) => {
+            (Ok(Some(notice)), Some(expected)) => {
                 let msg = notice.message();
-                let expected = "query was automatically run on the \"mz_introspection\" cluster";
-                assert_eq!(msg, expected);
+                assert!(msg.contains(expected));
             }
-            (Err(_), false) => (),
-            (_, true) => panic!("Didn't get the expected notice!"),
-            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+            (Err(_), None) => (),
+            (_, Some(_)) => panic!("Didn't get the expected notice!"),
+            (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
         while let Ok(Some(_)) = rx.try_next() {}
@@ -3015,25 +2997,29 @@ fn test_auto_run_on_introspection_feature_disabled() {
     let _row = client
         .query_one("SELECT * FROM mz_functions LIMIT 1", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     let _row = client
         .query_one("SELECT * FROM pg_attribute LIMIT 1", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
-    let _row = client
-        .query_one(
-            "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
-            &[],
-        )
+    // We add a retry here since it might take a moment to get a replica heartbeat.
+    let _row = Retry::default()
+        .max_tries(5)
+        .retry(|_state| {
+            client.query_one(
+                "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
+                &[],
+            )
+        })
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     let _rows = client
         .query(
@@ -3041,25 +3027,25 @@ fn test_auto_run_on_introspection_feature_disabled() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     client
         .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM mz_functions);")
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     client.batch_execute("FETCH ALL c").unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 
     client.batch_execute("COMMIT").unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(None);
 }
 
 #[mz_ore::test]
 fn test_auto_run_on_introspection_per_replica_relations() {
     // unsafe_mode enables the feature as a whole
-    let config = util::Config::default().unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let mut client = server
@@ -3070,16 +3056,15 @@ fn test_auto_run_on_introspection_per_replica_relations() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let mut assert_introspection_notice = |expected| {
+    let mut assert_introspection_notice = |expected: Option<&str>| {
         match (rx.try_next(), expected) {
-            (Ok(Some(notice)), true) => {
+            (Ok(Some(notice)), Some(expected)) => {
                 let msg = notice.message();
-                let expected = "query was automatically run on the \"mz_introspection\" cluster";
-                assert_eq!(msg, expected);
+                assert!(msg.contains(expected));
             }
-            (Err(_), false) => (),
-            (_, true) => panic!("Didn't get the expected notice!"),
-            (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
+            (Err(_), None) => (),
+            (_, Some(_)) => panic!("Didn't get the expected notice!"),
+            (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
         while let Ok(Some(_)) = rx.try_next() {}
@@ -3102,7 +3087,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     // `mz_dataflow_operator_parents` is a VIEW that depends on per-replica relations
     let _rows = client
@@ -3111,14 +3096,14 @@ fn test_auto_run_on_introspection_per_replica_relations() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     // Enable the feature
     client
         .execute("SET auto_route_introspection_queries = true", &[])
         .unwrap();
 
-    // Even after enabling the feature we still shouldn't emit any notices
+    // Even after enabling the feature we still shouldn't emit the auto-routing notice
 
     let _rows = client
         .query(
@@ -3126,19 +3111,19 @@ fn test_auto_run_on_introspection_per_replica_relations() {
             &[],
         )
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 
     let _rows = client
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
-    assert_introspection_notice(false);
+    assert_introspection_notice(Some(INTROSPECTION_NOTICE));
 }
 
 #[mz_ore::test]
 fn test_max_connections() {
     mz_ore::test::init_logging();
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     let mut mz_client = server
         .pg_config_internal()
@@ -3232,16 +3217,13 @@ fn test_max_connections() {
 #[mz_ore::test]
 fn test_pg_cancel_backend() {
     mz_ore::test::init_logging();
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     let mut mz_client = server
         .pg_config_internal()
         .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)
-        .unwrap();
-    mz_client
-        .batch_execute("ALTER SYSTEM SET enable_ld_rbac_checks TO true")
         .unwrap();
     mz_client
         .batch_execute("ALTER SYSTEM SET enable_rbac_checks TO true")
@@ -3353,8 +3335,8 @@ fn test_pg_cancel_backend() {
 #[mz_ore::test]
 fn test_params() {
     mz_ore::test::init_logging();
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -3402,4 +3384,139 @@ fn test_params() {
         "test"
     );
     client.batch_execute("COMMIT").unwrap();
+}
+
+// Test pg_cancel_backend after the authenticated role is dropped.
+#[mz_ore::test]
+fn test_pg_cancel_dropped_role() {
+    mz_ore::test::init_logging();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
+    let dropped_role = "r1";
+
+    let mut query_client = server.connect(postgres::NoTls).unwrap();
+
+    // Create role.
+    query_client
+        .execute(&format!("CREATE ROLE {dropped_role}"), &[])
+        .unwrap();
+
+    // Start session using role.
+    let mut dropped_client = server
+        .pg_config()
+        .user(dropped_role)
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    // Get the connection ID of the new session.
+    let connection_id = dropped_client
+        .query_one(
+            &format!(
+                "SELECT s.id
+         FROM mz_internal.mz_sessions s
+         JOIN mz_roles r ON s.role_id = r.id
+         WHERE r.name = '{dropped_role}'"
+            ),
+            &[],
+        )
+        .unwrap()
+        .get::<_, UInt4>(0)
+        .0;
+
+    // Drop role.
+    query_client
+        .execute(&format!("DROP ROLE {dropped_role}"), &[])
+        .unwrap();
+
+    // Test that pg_cancel_backend doesn't panic. It's expected to fail with a privilege error. To
+    // execute pg_cancel_backend you must be a member of the authenticated role of the connection.
+    // Since the authenticated role doesn't exist, no one can be a member, and no one will have the
+    // required privileges.
+    let err = query_client
+        .query_one(&format!("SELECT pg_cancel_backend({connection_id})"), &[])
+        .unwrap_err();
+
+    assert_eq!(err.code().unwrap(), &SqlState::INSUFFICIENT_PRIVILEGE);
+}
+
+#[mz_ore::test]
+fn test_peek_on_dropped_indexed_view() {
+    mz_ore::test::init_logging();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
+
+    let mut ddl_client = server.connect(postgres::NoTls).unwrap();
+    let mut peek_client = server.connect(postgres::NoTls).unwrap();
+
+    ddl_client.batch_execute("CREATE TABLE t (a INT)").unwrap();
+    ddl_client
+        .batch_execute("CREATE VIEW v AS SELECT (a + 1) AS a FROM t")
+        .unwrap();
+    ddl_client.batch_execute("CREATE INDEX i ON v (a)").unwrap();
+
+    // Asynchronously query an indexed view.
+    let handle = thread::spawn(move || {
+        peek_client.query(
+            &format!("SELECT * FROM v AS OF {}", mz_repr::Timestamp::MAX),
+            &[],
+        )
+    });
+
+    let index_id: String = ddl_client
+        .query_one("SELECT id FROM mz_indexes WHERE name = 'i'", &[])
+        .unwrap()
+        .get(0);
+
+    // Wait for SELECT to start.
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let count: i64 = ddl_client
+                .query_one(
+                    &format!(
+                "SELECT COUNT(*) FROM mz_internal.mz_active_peeks WHERE index_id = '{index_id}'"
+            ),
+                    &[],
+                )
+                .unwrap()
+                .get(0);
+            if count <= 0 {
+                Err("Peek not active")
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+
+    // Drop the table, view, and index.
+    ddl_client.batch_execute("DROP TABLE t CASCADE").unwrap();
+
+    // Check that the peek is cancelled an all resources are cleaned up.
+    let select_res = handle.join().unwrap();
+    let select_err = select_res.unwrap_err().to_string();
+    assert!(
+        select_err.contains(
+            "query could not complete because relation \"materialize.public.v\" was dropped"
+        ),
+        "unexpected error: {select_err}"
+    );
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let count: i64 = ddl_client
+                .query_one(
+                    &format!(
+                        "SELECT COUNT(*) FROM mz_internal.mz_active_peeks WHERE index_id = '{index_id}'"
+                    ),
+                    &[],
+                )
+                .unwrap()
+                .get(0);
+            if count > 0 {
+                Err("Peek still active")
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
 }

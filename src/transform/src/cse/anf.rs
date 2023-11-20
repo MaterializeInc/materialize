@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use mz_expr::visit::VisitChildren;
-use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
+use mz_expr::{AccessStrategy, Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
@@ -31,8 +31,8 @@ use crate::TransformCtx;
 
 impl crate::Transform for ANF {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "anf")
     )]
@@ -203,6 +203,7 @@ impl Bindings {
                 *relation = MirRelationExpr::Get {
                     id: Id::Local(LocalId::new(*id)),
                     typ,
+                    access_strategy: AccessStrategy::UnknownOrLocal,
                 }
             }
 

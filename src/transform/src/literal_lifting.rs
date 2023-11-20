@@ -53,8 +53,8 @@ impl CheckedRecursion for LiteralLifting {
 
 impl crate::Transform for LiteralLifting {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "literal_lifting")
     )]
@@ -229,7 +229,7 @@ impl LiteralLifting {
                         Ok(Vec::new())
                     }
                 }
-                MirRelationExpr::Get { id, typ } => {
+                MirRelationExpr::Get { id, typ, .. } => {
                     // A get expression may need to have literal expressions appended to it.
                     let literals = gets.get(id).cloned().unwrap_or_else(Vec::new);
                     if !literals.is_empty() {

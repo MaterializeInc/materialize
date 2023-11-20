@@ -15,16 +15,14 @@ from typing import Any
 
 from pg8000 import Cursor  # type: ignore
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Localstack,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -198,7 +196,7 @@ def populate(c: Composition) -> None:
             $ kafka-ingest format=bytes topic=source1 repeat=1000000
             A${kafka-ingest.iteration}
             > CREATE CONNECTION IF NOT EXISTS kafka_conn
-              TO KAFKA (BROKER '${testdrive.kafka-addr}')
+              TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
             > CREATE SOURCE source1
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source1-${testdrive.seed}')
               FORMAT BYTES
@@ -295,7 +293,7 @@ def validate(c: Composition) -> None:
             11
 
             > CREATE CONNECTION IF NOT EXISTS kafka_conn
-              TO KAFKA (BROKER '${testdrive.kafka-addr}')
+              TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             # New sources
             > CREATE SOURCE source2

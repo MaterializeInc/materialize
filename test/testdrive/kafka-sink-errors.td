@@ -17,7 +17,7 @@ ALTER SYSTEM SET enable_kafka_config_denylist_options = true
 > CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (1);
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -51,7 +51,8 @@ contains:REPLICATION FACTOR for sink topics must be a positive integer or -1 for
   INTO KAFKA CONNECTION kafka_conn (ACKS = foo, TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:Invalid value for configuration property "request.required.acks" acks foo
+contains:KAFKA sink validation: admin client errored
+detail:Invalid value for configuration property "request.required.acks" acks foo
 
 # Ensure that a sink whose topic fails to create does not result in an
 # orphaned linked cluster. See #17061.

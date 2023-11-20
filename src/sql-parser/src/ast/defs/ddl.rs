@@ -26,6 +26,36 @@ use std::fmt;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, Expr, Ident, OrderByExpr, UnresolvedItemName, WithOptionValue};
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MaterializedViewOptionName {
+    /// The `ASSERT NOT NULL [=] <ident>` option.
+    AssertNotNull,
+}
+
+impl AstDisplay for MaterializedViewOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            MaterializedViewOptionName::AssertNotNull => f.write_str("ASSERT NOT NULL"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MaterializedViewOption<T: AstInfo> {
+    pub name: MaterializedViewOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for MaterializedViewOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Schema {
     pub schema: String,
@@ -136,25 +166,67 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CsrConfigOptionName {
+pub enum CsrConfigOptionName<T: AstInfo> {
     AvroKeyFullname,
     AvroValueFullname,
+    NullDefaults,
+    AvroDocOn(AvroDocOn<T>),
+}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AvroDocOn<T: AstInfo> {
+    pub identifier: DocOnIdentifier<T>,
+    pub for_schema: DocOnSchema,
+}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DocOnSchema {
+    KeyOnly,
+    ValueOnly,
+    All,
 }
 
-impl AstDisplay for CsrConfigOptionName {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DocOnIdentifier<T: AstInfo> {
+    Column(T::ColumnName),
+    Type(T::ItemName),
+}
+
+impl<T: AstInfo> AstDisplay for AvroDocOn<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(match self {
-            CsrConfigOptionName::AvroKeyFullname => "AVRO KEY FULLNAME",
-            CsrConfigOptionName::AvroValueFullname => "AVRO VALUE FULLNAME",
-        })
+        match &self.for_schema {
+            DocOnSchema::KeyOnly => f.write_str("KEY "),
+            DocOnSchema::ValueOnly => f.write_str("VALUE "),
+            DocOnSchema::All => {}
+        }
+        match &self.identifier {
+            DocOnIdentifier::Column(name) => {
+                f.write_str("DOC ON COLUMN ");
+                f.write_node(name);
+            }
+            DocOnIdentifier::Type(name) => {
+                f.write_str("DOC ON TYPE ");
+                f.write_node(name);
+            }
+        }
     }
 }
-impl_display!(CsrConfigOptionName);
+impl_display_t!(AvroDocOn);
+
+impl<T: AstInfo> AstDisplay for CsrConfigOptionName<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CsrConfigOptionName::AvroKeyFullname => f.write_str("AVRO KEY FULLNAME"),
+            CsrConfigOptionName::AvroValueFullname => f.write_str("AVRO VALUE FULLNAME"),
+            CsrConfigOptionName::NullDefaults => f.write_str("NULL DEFAULTS"),
+            CsrConfigOptionName::AvroDocOn(doc_on) => f.write_node(doc_on),
+        }
+    }
+}
+impl_display_t!(CsrConfigOptionName);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// An option in a `{FROM|INTO} CONNECTION ...` statement.
 pub struct CsrConfigOption<T: AstInfo> {
-    pub name: CsrConfigOptionName,
+    pub name: CsrConfigOptionName<T>,
     pub value: Option<WithOptionValue<T>>,
 }
 
@@ -374,7 +446,6 @@ pub enum SourceIncludeMetadataType {
     Key,
     Timestamp,
     Partition,
-    Topic,
     Offset,
     Headers,
 }
@@ -385,7 +456,6 @@ impl AstDisplay for SourceIncludeMetadataType {
             SourceIncludeMetadataType::Key => f.write_str("KEY"),
             SourceIncludeMetadataType::Timestamp => f.write_str("TIMESTAMP"),
             SourceIncludeMetadataType::Partition => f.write_str("PARTITION"),
-            SourceIncludeMetadataType::Topic => f.write_str("TOPIC"),
             SourceIncludeMetadataType::Offset => f.write_str("OFFSET"),
             SourceIncludeMetadataType::Headers => f.write_str("HEADERS"),
         }
@@ -560,258 +630,83 @@ impl<T: AstInfo> AstDisplay for DbzTxMetadataOption<T> {
 }
 impl_display_t!(DbzTxMetadataOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum KafkaConnectionOptionName {
+// All connection options are bundled together to allow us to parse `ALTER
+// CONNECTION` without specifying the type of connection we're altering. Il faut
+// souffrir pour être belle.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ConnectionOptionName {
+    AccessKeyId,
+    AvailabilityZones,
+    AwsPrivatelink,
     Broker,
     Brokers,
-    ProgressTopic,
-    SshTunnel,
-    SslKey,
-    SslCertificate,
-    SslCertificateAuthority,
-    SaslMechanisms,
-    SaslUsername,
-    SaslPassword,
-}
-
-impl AstDisplay for KafkaConnectionOptionName {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(match self {
-            KafkaConnectionOptionName::Broker => "BROKER",
-            KafkaConnectionOptionName::Brokers => "BROKERS",
-            KafkaConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",
-            KafkaConnectionOptionName::SshTunnel => "SSH TUNNEL",
-            KafkaConnectionOptionName::SslKey => "SSL KEY",
-            KafkaConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
-            KafkaConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
-            KafkaConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
-            KafkaConnectionOptionName::SaslUsername => "SASL USERNAME",
-            KafkaConnectionOptionName::SaslPassword => "SASL PASSWORD",
-        })
-    }
-}
-impl_display!(KafkaConnectionOptionName);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// An option in a `CREATE CONNECTION...KAFKA`.
-pub struct KafkaConnectionOption<T: AstInfo> {
-    pub name: KafkaConnectionOptionName,
-    pub value: Option<WithOptionValue<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for KafkaConnectionOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
-impl_display_t!(KafkaConnectionOption);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CsrConnectionOptionName {
-    AwsPrivatelink,
-    Password,
-    Port,
-    SshTunnel,
-    SslCertificate,
-    SslCertificateAuthority,
-    SslKey,
-    Url,
-    Username,
-}
-
-impl AstDisplay for CsrConnectionOptionName {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(match self {
-            CsrConnectionOptionName::AwsPrivatelink => "AWS PRIVATELINK",
-            CsrConnectionOptionName::Password => "PASSWORD",
-            CsrConnectionOptionName::Port => "PORT",
-            CsrConnectionOptionName::SshTunnel => "SSH TUNNEL",
-            CsrConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
-            CsrConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
-            CsrConnectionOptionName::SslKey => "SSL KEY",
-            CsrConnectionOptionName::Url => "URL",
-            CsrConnectionOptionName::Username => "USERNAME",
-        })
-    }
-}
-impl_display!(CsrConnectionOptionName);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// An option in a `CREATE CONNECTION...CONFLUENT SCHEMA REGISTRY`.
-pub struct CsrConnectionOption<T: AstInfo> {
-    pub name: CsrConnectionOptionName,
-    pub value: Option<WithOptionValue<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for CsrConnectionOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
-impl_display_t!(CsrConnectionOption);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum PostgresConnectionOptionName {
-    AwsPrivatelink,
     Database,
+    Endpoint,
     Host,
     Password,
     Port,
+    ProgressTopic,
+    Region,
+    RoleArn,
+    SaslMechanisms,
+    SaslPassword,
+    SaslUsername,
+    SecretAccessKey,
+    SecurityProtocol,
+    ServiceName,
     SshTunnel,
     SslCertificate,
     SslCertificateAuthority,
     SslKey,
     SslMode,
-    User,
-}
-
-impl AstDisplay for PostgresConnectionOptionName {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(match self {
-            PostgresConnectionOptionName::AwsPrivatelink => "AWS PRIVATELINK",
-            PostgresConnectionOptionName::Database => "DATABASE",
-            PostgresConnectionOptionName::Host => "HOST",
-            PostgresConnectionOptionName::Password => "PASSWORD",
-            PostgresConnectionOptionName::Port => "PORT",
-            PostgresConnectionOptionName::SshTunnel => "SSH TUNNEL",
-            PostgresConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
-            PostgresConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
-            PostgresConnectionOptionName::SslKey => "SSL KEY",
-            PostgresConnectionOptionName::SslMode => "SSL MODE",
-            PostgresConnectionOptionName::User => "USER",
-        })
-    }
-}
-impl_display!(PostgresConnectionOptionName);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// An option in a `CREATE CONNECTION ... POSTGRES`.
-pub struct PostgresConnectionOption<T: AstInfo> {
-    pub name: PostgresConnectionOptionName,
-    pub value: Option<WithOptionValue<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for PostgresConnectionOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
-impl_display_t!(PostgresConnectionOption);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum AwsConnectionOptionName {
-    AccessKeyId,
-    Endpoint,
-    Region,
-    RoleArn,
-    SecretAccessKey,
     Token,
-}
-
-impl AstDisplay for AwsConnectionOptionName {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(match self {
-            AwsConnectionOptionName::AccessKeyId => "ACCESS KEY ID",
-            AwsConnectionOptionName::Endpoint => "ENDPOINT",
-            AwsConnectionOptionName::Region => "REGION",
-            AwsConnectionOptionName::RoleArn => "ROLE ARN",
-            AwsConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
-            AwsConnectionOptionName::Token => "TOKEN",
-        })
-    }
-}
-impl_display!(AwsConnectionOptionName);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// An option in a `CREATE CONNECTION...AWS`.
-pub struct AwsConnectionOption<T: AstInfo> {
-    pub name: AwsConnectionOptionName,
-    pub value: Option<WithOptionValue<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for AwsConnectionOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
-impl_display_t!(AwsConnectionOption);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum AwsPrivatelinkConnectionOptionName {
-    ServiceName,
-    AvailabilityZones,
-}
-
-impl AstDisplay for AwsPrivatelinkConnectionOptionName {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(match self {
-            AwsPrivatelinkConnectionOptionName::ServiceName => "SERVICE NAME",
-            AwsPrivatelinkConnectionOptionName::AvailabilityZones => "AVAILABILITY ZONES",
-        })
-    }
-}
-impl_display!(AwsPrivatelinkConnectionOptionName);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// An option in a `CREATE CONNECTION...AWS PRIVATELINK`.
-pub struct AwsPrivatelinkConnectionOption<T: AstInfo> {
-    pub name: AwsPrivatelinkConnectionOptionName,
-    pub value: Option<WithOptionValue<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for AwsPrivatelinkConnectionOption<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.name);
-        if let Some(v) = &self.value {
-            f.write_str(" = ");
-            f.write_node(v);
-        }
-    }
-}
-impl_display_t!(AwsPrivatelinkConnectionOption);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum SshConnectionOptionName {
-    Host,
-    Port,
+    Url,
     User,
 }
 
-impl AstDisplay for SshConnectionOptionName {
+impl AstDisplay for ConnectionOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            SshConnectionOptionName::Host => "HOST",
-            SshConnectionOptionName::Port => "PORT",
-            SshConnectionOptionName::User => "USER",
+            ConnectionOptionName::AccessKeyId => "ACCESS KEY ID",
+            ConnectionOptionName::AvailabilityZones => "AVAILABILITY ZONES",
+            ConnectionOptionName::AwsPrivatelink => "AWS PRIVATELINK",
+            ConnectionOptionName::Broker => "BROKER",
+            ConnectionOptionName::Brokers => "BROKERS",
+            ConnectionOptionName::Database => "DATABASE",
+            ConnectionOptionName::Endpoint => "ENDPOINT",
+            ConnectionOptionName::Host => "HOST",
+            ConnectionOptionName::Password => "PASSWORD",
+            ConnectionOptionName::Port => "PORT",
+            ConnectionOptionName::ProgressTopic => "PROGRESS TOPIC",
+            ConnectionOptionName::Region => "REGION",
+            ConnectionOptionName::RoleArn => "ROLE ARN",
+            ConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
+            ConnectionOptionName::SaslPassword => "SASL PASSWORD",
+            ConnectionOptionName::SaslUsername => "SASL USERNAME",
+            ConnectionOptionName::SecurityProtocol => "SECURITY PROTOCOL",
+            ConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
+            ConnectionOptionName::ServiceName => "SERVICE NAME",
+            ConnectionOptionName::SshTunnel => "SSH TUNNEL",
+            ConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
+            ConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
+            ConnectionOptionName::SslKey => "SSL KEY",
+            ConnectionOptionName::SslMode => "SSL MODE",
+            ConnectionOptionName::Token => "TOKEN",
+            ConnectionOptionName::Url => "URL",
+            ConnectionOptionName::User => "USER",
         })
     }
 }
-impl_display!(SshConnectionOptionName);
+impl_display!(ConnectionOptionName);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// An option in a `CREATE CONNECTION...SSH`.
-pub struct SshConnectionOption<T: AstInfo> {
-    pub name: SshConnectionOptionName,
+/// An option in a `CREATE CONNECTION`.
+pub struct ConnectionOption<T: AstInfo> {
+    pub name: ConnectionOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
 
-impl<T: AstInfo> AstDisplay for SshConnectionOption<T> {
+impl<T: AstInfo> AstDisplay for ConnectionOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
         if let Some(v) = &self.value {
@@ -820,67 +715,43 @@ impl<T: AstInfo> AstDisplay for SshConnectionOption<T> {
         }
     }
 }
-impl_display_t!(SshConnectionOption);
+impl_display_t!(ConnectionOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateConnection<T: AstInfo> {
-    Aws {
-        options: Vec<AwsConnectionOption<T>>,
-    },
-    AwsPrivatelink {
-        options: Vec<AwsPrivatelinkConnectionOption<T>>,
-    },
-    Kafka {
-        options: Vec<KafkaConnectionOption<T>>,
-    },
-    Csr {
-        options: Vec<CsrConnectionOption<T>>,
-    },
-    Postgres {
-        options: Vec<PostgresConnectionOption<T>>,
-    },
-    Ssh {
-        options: Vec<SshConnectionOption<T>>,
-    },
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum CreateConnectionType {
+    Aws,
+    AwsPrivatelink,
+    Kafka,
+    Csr,
+    Postgres,
+    Ssh,
 }
 
-impl<T: AstInfo> AstDisplay for CreateConnection<T> {
+impl AstDisplay for CreateConnectionType {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Kafka { options } => {
-                f.write_str("KAFKA (");
-                f.write_node(&display::comma_separated(options));
-                f.write_str(")");
+            Self::Kafka => {
+                f.write_str("KAFKA");
             }
-            Self::Csr { options } => {
-                f.write_str("CONFLUENT SCHEMA REGISTRY (");
-                f.write_node(&display::comma_separated(options));
-                f.write_str(")");
+            Self::Csr => {
+                f.write_str("CONFLUENT SCHEMA REGISTRY");
             }
-            Self::Postgres { options } => {
-                f.write_str("POSTGRES (");
-                f.write_node(&display::comma_separated(options));
-                f.write_str(")");
+            Self::Postgres => {
+                f.write_str("POSTGRES");
             }
-            Self::Aws { options } => {
-                f.write_str("AWS (");
-                f.write_node(&display::comma_separated(options));
-                f.write_str(")");
+            Self::Aws => {
+                f.write_str("AWS");
             }
-            Self::AwsPrivatelink { options } => {
-                f.write_str("AWS PRIVATELINK (");
-                f.write_node(&display::comma_separated(options));
-                f.write_str(")");
+            Self::AwsPrivatelink => {
+                f.write_str("AWS PRIVATELINK");
             }
-            Self::Ssh { options } => {
-                f.write_str("SSH TUNNEL (");
-                f.write_node(&display::comma_separated(options));
-                f.write_str(")");
+            Self::Ssh => {
+                f.write_str("SSH TUNNEL");
             }
         }
     }
 }
-impl_display_t!(CreateConnection);
+impl_display!(CreateConnectionType);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateConnectionOptionName {

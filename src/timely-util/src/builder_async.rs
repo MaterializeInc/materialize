@@ -32,7 +32,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as Operato
 use timely::dataflow::operators::generic::{
     InputHandleCore, OperatorInfo, OutputHandleCore, OutputWrapper,
 };
-use timely::dataflow::operators::{Capability, InputCapability};
+use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
@@ -74,7 +74,11 @@ impl ArcWake for TimelyWaker {
         arc_self.task_ready.store(true, Ordering::SeqCst);
         // Only activate the timely operator if it's not already active to avoid an infinite loop
         if !arc_self.active.load(Ordering::SeqCst) {
-            arc_self.activator.activate().unwrap();
+            // We don't have any guarantees about how long the Waker will be held for and so we
+            // must be prepared for the receiving end to have hung up when we finally do get woken.
+            // This can happen if by the time the waker is called the receiving timely worker has
+            // been shutdown. For this reason we ignore the activation error.
+            let _ = arc_self.activator.activate();
         }
     }
 }
@@ -556,32 +560,33 @@ impl<G: Scope> OperatorBuilder<G> {
     /// # Capability handling
     ///
     /// Unlike [`OperatorBuilder::build`], this method does not give owned capabilities to the
-    /// constructor. All initial capabilities are wrapped in an `Option` and a mutable reference to
-    /// them is given instead. This is done to avoid storing owned capabilities in the state of the
-    /// logic future which would make using the `?` operator unsafe, since the frontiers would
-    /// incorrectly advance, potentially causing incorrect actions downstream.
+    /// constructor. All initial capabilities are wrapped in a `CapabilitySet` and a mutable
+    /// reference to them is given instead. This is done to avoid storing owned capabilities in the
+    /// state of the logic future which would make using the `?` operator unsafe, since the
+    /// frontiers would incorrectly advance, potentially causing incorrect actions downstream.
     ///
     /// ```ignore
     /// builder.build_fallible(|caps| Box::pin(async move {
     ///     // Assert that we have the number of capabilities we expect
     ///     // `cap` will be a `&mut Option<Capability<T>>`:
-    ///     let [cap]: &mut [_; 1] = caps.try_into().unwrap();
+    ///     let [cap_set]: &mut [_; 1] = caps.try_into().unwrap();
     ///
     ///     // Using cap to send data:
-    ///     output.give(cap.as_ref().unwrap(), 42);
+    ///     output.give(&cap_set[0], 42);
     ///
-    ///     // Using cap to downgrade it:
-    ///     cap.as_mut().unwrap().downgrade();
+    ///     // Using cap_set to downgrade it:
+    ///     cap_set.downgrade([]);
     ///
     ///     // Explicitly dropping the capability:
-    ///     // Simply running `drop(cap)` will only drop the reference and not the capability itself!
-    ///     *cap = None;
+    ///     // Simply running `drop(cap_set)` will only drop the reference and not the capability set itself!
+    ///     *cap_set = CapabilitySet::new();
     ///
     ///     // !! BIG WARNING !!:
-    ///     // It is tempting to `take` the capability out of the option for convenience. This will
+    ///     // It is tempting to `take` the capability out of the set for convenience. This will
     ///     // move the capability into the future state, tying its lifetime to it, which will get
     ///     // dropped when an error is hit, causing incorrect progress statements.
-    ///     let cap = cap.take().unwrap(); // DO NOT DO THIS
+    ///     let cap = cap_set.delayed(&Timestamp::minimum());
+    ///     *cap_set = CapabilitySet::new(); // DO NOT DO THIS
     /// }));
     /// ```
     pub fn build_fallible<E: 'static, F>(
@@ -590,7 +595,7 @@ impl<G: Scope> OperatorBuilder<G> {
     ) -> (Button, StreamCore<G, Vec<Rc<E>>>)
     where
         F: for<'a> FnOnce(
-                &'a mut [Option<Capability<G::Timestamp>>],
+                &'a mut [CapabilitySet<G::Timestamp>],
             ) -> Pin<Box<dyn Future<Output = Result<(), E>> + 'a>>
             + 'static,
     {
@@ -599,7 +604,10 @@ impl<G: Scope> OperatorBuilder<G> {
         let (mut error_output, error_stream) = self.new_output_connection(disconnected);
         let button = self.build(|mut caps| async move {
             let error_cap = caps.pop().unwrap();
-            let mut caps = caps.into_iter().map(Some).collect::<Vec<_>>();
+            let mut caps = caps
+                .into_iter()
+                .map(CapabilitySet::from_elem)
+                .collect::<Vec<_>>();
             if let Err(err) = constructor(&mut *caps).await {
                 error_output.give(&error_cap, Rc::new(err)).await;
                 drop(error_cap);

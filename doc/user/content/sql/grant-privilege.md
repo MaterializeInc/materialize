@@ -93,7 +93,7 @@ The privileges required to execute this statement are:
 - Ownership of affected objects.
 - `USAGE` privileges on the containing database if the affected object is a schema.
 - `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
-- superuser status if the privilege is a system privilege.
+- _superuser_ status if the privilege is a system privilege.
 
 ## Useful views
 
@@ -112,6 +112,7 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
+- [SHOW PRIVILEGES](../show-privileges)
 - [CREATE ROLE](../create-role)
 - [ALTER ROLE](../alter-role)
 - [DROP ROLE](../drop-role)

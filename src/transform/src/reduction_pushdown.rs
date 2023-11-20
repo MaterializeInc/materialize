@@ -61,8 +61,8 @@ pub struct ReductionPushdown;
 
 impl crate::Transform for ReductionPushdown {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "reduction_pushdown")
     )]

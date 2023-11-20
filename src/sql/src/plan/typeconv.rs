@@ -350,8 +350,14 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         (Float64, String) => Assignment: CastFloat64ToString(func::CastFloat64ToString),
 
         // DATE
-        (Date, Timestamp) => Implicit: CastDateToTimestamp(func::CastDateToTimestamp),
-        (Date, TimestampTz) => Implicit: CastDateToTimestampTz(func::CastDateToTimestampTz),
+        (Date, Timestamp) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+            let p = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(CastDateToTimestamp(func::CastDateToTimestamp(p))))
+        }),
+        (Date, TimestampTz) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+            let p = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(CastDateToTimestampTz(func::CastDateToTimestampTz(p))))
+        }),
         (Date, String) => Assignment: CastDateToString(func::CastDateToString),
 
         // TIME
@@ -360,13 +366,31 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
 
         // TIMESTAMP
         (Timestamp, Date) => Assignment: CastTimestampToDate(func::CastTimestampToDate),
-        (Timestamp, TimestampTz) => Implicit: CastTimestampToTimestampTz(func::CastTimestampToTimestampTz),
+        (Timestamp, TimestampTz) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            let from = from_type.unwrap_timestamp_precision();
+            let to = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampToTimestampTz(func::CastTimestampToTimestampTz{from, to})))
+        }),
+        (Timestamp, Timestamp) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            let from = from_type.unwrap_timestamp_precision();
+            let to = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(AdjustTimestampPrecision(func::AdjustTimestampPrecision{from, to})))
+        }),
         (Timestamp, Time) => Assignment: CastTimestampToTime(func::CastTimestampToTime),
         (Timestamp, String) => Assignment: CastTimestampToString(func::CastTimestampToString),
 
         // TIMESTAMPTZ
         (TimestampTz, Date) => Assignment: CastTimestampTzToDate(func::CastTimestampTzToDate),
-        (TimestampTz, Timestamp) => Assignment: CastTimestampTzToTimestamp(func::CastTimestampTzToTimestamp),
+        (TimestampTz, Timestamp) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            let from = from_type.unwrap_timestamp_precision();
+            let to = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(CastTimestampTzToTimestamp(func::CastTimestampTzToTimestamp{from, to})))
+        }),
+        (TimestampTz, TimestampTz) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            let from = from_type.unwrap_timestamp_precision();
+            let to = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(AdjustTimestampTzPrecision(func::AdjustTimestampTzPrecision{from, to})))
+        }),
         (TimestampTz, Time) => Assignment: CastTimestampTzToTime(func::CastTimestampTzToTime),
         (TimestampTz, String) => Assignment: CastTimestampTzToString(func::CastTimestampTzToString),
 
@@ -449,8 +473,14 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         }),
         (String, Date) => Explicit: CastStringToDate(func::CastStringToDate),
         (String, Time) => Explicit: CastStringToTime(func::CastStringToTime),
-        (String, Timestamp) => Explicit: CastStringToTimestamp(func::CastStringToTimestamp),
-        (String, TimestampTz) => Explicit: CastStringToTimestampTz(func::CastStringToTimestampTz),
+        (String, Timestamp) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+            let p = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(CastStringToTimestamp(func::CastStringToTimestamp(p))))
+        }),
+        (String, TimestampTz) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+            let p = to_type.unwrap_timestamp_precision();
+            Some(move |e: HirScalarExpr| e.call_unary(CastStringToTimestampTz(func::CastStringToTimestampTz(p))))
+        }),
         (String, Interval) => Explicit: CastStringToInterval(func::CastStringToInterval),
         (String, Bytes) => Explicit: CastStringToBytes(func::CastStringToBytes),
         (String, Jsonb) => Explicit: CastStringToJsonb(func::CastStringToJsonb),
@@ -645,7 +675,7 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
             let scale = to_type.unwrap_numeric_max_scale();
             Some(move |e: HirScalarExpr| match scale {
                 None => e,
-                Some(scale) => e.call_unary(UnaryFunc::RescaleNumeric(func::RescaleNumeric(scale))),
+                Some(scale) => e.call_unary(UnaryFunc::AdjustNumericScale(func::AdjustNumericScale(scale))),
             })
         }),
         (Numeric, Float32) => Implicit: CastNumericToFloat32(func::CastNumericToFloat32),

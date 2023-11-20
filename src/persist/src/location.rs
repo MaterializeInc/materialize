@@ -10,16 +10,21 @@
 //! Abstractions over files, cloud storage, etc used in persistence.
 
 use std::fmt;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::Stream;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
+use mz_postgres_client::error::PostgresError;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tracing::{Instrument, Span};
 
 use crate::error::Error;
 
@@ -109,7 +114,7 @@ impl Determinate {
     /// Return a new Determinate wrapping the given error.
     ///
     /// Exposed for testing via [crate::unreliable].
-    pub(crate) fn new(inner: anyhow::Error) -> Self {
+    pub fn new(inner: anyhow::Error) -> Self {
         Determinate { inner }
     }
 }
@@ -195,6 +200,15 @@ impl std::error::Error for ExternalError {}
 impl PartialEq for ExternalError {
     fn eq(&self, other: &Self) -> bool {
         self.to_string() == other.to_string()
+    }
+}
+
+impl From<PostgresError> for ExternalError {
+    fn from(x: PostgresError) -> Self {
+        match x {
+            PostgresError::Determinate(e) => ExternalError::Determinate(Determinate::new(e)),
+            PostgresError::Indeterminate(e) => ExternalError::Indeterminate(Indeterminate::new(e)),
+        }
     }
 }
 
@@ -320,6 +334,22 @@ pub enum CaSResult {
     ExpectationMismatch,
 }
 
+/// Wraps all calls to a backing store in a new tokio task. This adds extra overhead,
+/// but insulates the system from callers who fail to drive futures promptly to completion,
+/// which can cause timeouts or resource exhaustion in a store.
+#[derive(Debug)]
+pub struct Tasked<A>(pub Arc<A>);
+
+impl<A> Tasked<A> {
+    fn clone_backing(&self) -> Arc<A> {
+        Arc::clone(&self.0)
+    }
+}
+
+/// A boxed stream, similar to what `async_trait` desugars async functions to, but hardcoded
+/// to our standard result type.
+pub type ResultStream<'a, T> = Pin<Box<dyn Stream<Item = Result<T, ExternalError>> + Send + 'a>>;
+
 /// An abstraction for [VersionedData] held in a location in persistent storage
 /// where the data are conditionally updated by version.
 ///
@@ -330,6 +360,9 @@ pub enum CaSResult {
 /// range [0, i64::MAX].
 #[async_trait]
 pub trait Consensus: std::fmt::Debug {
+    /// Returns all the keys ever created in the consensus store.
+    fn list_keys(&self) -> ResultStream<String>;
+
     /// Returns a recent version of `data`, and the corresponding sequence number, if
     /// one exists at this location.
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError>;
@@ -370,6 +403,69 @@ pub trait Consensus: std::fmt::Debug {
     /// `seqno` is greater than the current sequence number, or if there is no
     /// data at this key.
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError>;
+}
+
+#[async_trait]
+impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
+    fn list_keys(&self) -> ResultStream<String> {
+        // Similarly to Blob::list_keys_and_metadata, this is difficult to make into a task.
+        // (If we use an unbounded channel between the task and the caller, we can buffer forever;
+        // if we use a bounded channel, we lose the isolation benefits of Tasked.)
+        // However, this should only be called in administrative contexts
+        // and not in the main state-machine impl.
+        self.0.list_keys()
+    }
+
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::head",
+            async move { backing.head(&key).await }.instrument(Span::current()),
+        )
+        .await?
+    }
+
+    async fn compare_and_set(
+        &self,
+        key: &str,
+        expected: Option<SeqNo>,
+        new: VersionedData,
+    ) -> Result<CaSResult, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::cas",
+            async move { backing.compare_and_set(&key, expected, new).await }
+                .instrument(Span::current()),
+        )
+        .await?
+    }
+
+    async fn scan(
+        &self,
+        key: &str,
+        from: SeqNo,
+        limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::scan",
+            async move { backing.scan(&key, from, limit).await }.instrument(Span::current()),
+        )
+        .await?
+    }
+
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::truncate",
+            async move { backing.truncate(&key, seqno).await }.instrument(Span::current()),
+        )
+        .await?
+    }
 }
 
 /// Metadata about a particular blob stored by persist
@@ -421,6 +517,82 @@ pub trait Blob: std::fmt::Debug {
     /// Returns Some and the size of the deleted blob if if exists. Succeeds and
     /// returns None if it does not exist.
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError>;
+
+    /// Restores a previously-deleted key to the map, if possible.
+    ///
+    /// Returns successfully if the key exists after this call: perhaps because it already existed
+    /// or was restored. (In particular, this makes restore idempotent.)
+    /// Fails if we were unable to restore any value for that key:
+    /// perhaps the key was never written, or was permanently deleted.
+    ///
+    /// It is acceptable for [Blob::restore] to be unable
+    /// to restore keys, in which case this method should succeed iff the key exists.
+    async fn restore(&self, key: &str) -> Result<(), ExternalError>;
+}
+
+#[async_trait]
+impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::get",
+            async move { backing.get(&key).await }.instrument(Span::current()),
+        )
+        .await?
+    }
+
+    /// List all of the keys in the map with metadata about the entry.
+    ///
+    /// Can be optionally restricted to only list keys starting with a
+    /// given prefix.
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
+        // TODO: No good way that I can see to make this one a task because of
+        // the closure and Blob needing to be object-safe.
+        self.0.list_keys_and_metadata(key_prefix, f).await
+    }
+
+    /// Inserts a key-value pair into the map.
+    ///
+    /// When atomicity is required, writes must be atomic and either succeed or
+    /// leave the previous value intact.
+    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::set",
+            async move { backing.set(&key, value, atomic).await }.instrument(Span::current()),
+        )
+        .await?
+    }
+
+    /// Remove a key from the map.
+    ///
+    /// Returns Some and the size of the deleted blob if if exists. Succeeds and
+    /// returns None if it does not exist.
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::delete",
+            async move { backing.delete(&key).await }.instrument(Span::current()),
+        )
+        .await?
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::restore",
+            async move { backing.restore(&key).await }.instrument(Span::current()),
+        )
+        .await?
+    }
 }
 
 #[cfg(test)]
@@ -428,6 +600,7 @@ pub mod tests {
     use std::future::Future;
 
     use anyhow::anyhow;
+    use futures_util::TryStreamExt;
     use uuid::Uuid;
 
     use crate::location::Atomicity::{AllowNonAtomic, RequireAtomic};
@@ -561,6 +734,22 @@ pub mod tests {
         blob0.set("empty", Bytes::new(), AllowNonAtomic).await?;
         assert_eq!(blob0.delete("empty").await, Ok(Some(0)));
 
+        // Attempt to restore a key. Not all backends will be able to restore, but
+        // we can confirm that our data is visible iff restore reported success.
+        blob0
+            .set("undelete", Bytes::from("data"), AllowNonAtomic)
+            .await?;
+        // Restoring should always succeed when the key exists.
+        blob0.restore("undelete").await?;
+        assert_eq!(blob0.delete("undelete").await?, Some("data".len()));
+        let expected = match blob0.restore("undelete").await {
+            Ok(()) => Some(Bytes::from("data").into()),
+            Err(ExternalError::Determinate(_)) => None,
+            Err(other) => return Err(other),
+        };
+        assert_eq!(blob0.get("undelete").await?, expected);
+        blob0.delete("undelete").await?;
+
         // Empty blob contains no keys.
         blob0.delete("k0a").await?;
         let mut blob_keys = get_keys(&blob0).await?;
@@ -670,6 +859,10 @@ pub mod tests {
             consensus.compare_and_set(&key, None, state.clone()).await,
             Ok(CaSResult::Committed),
         );
+
+        // The new key is visible in state.
+        let keys: Vec<_> = consensus.list_keys().try_collect().await?;
+        assert_eq!(keys, vec![key.to_owned()]);
 
         // We can observe the a recent value on successful update.
         assert_eq!(consensus.head(&key).await, Ok(Some(state.clone())));

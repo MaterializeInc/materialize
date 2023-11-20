@@ -26,18 +26,18 @@ $ set-from-sql var=source-size
 SELECT size FROM mz_sources WHERE name = 'gen'
 
 > SHOW SOURCES
-name         type       size
---------------------------------
- customer  subsource       <null>
- gen       load-generator  ${source-size}
- gen_progress  progress        <null>
- lineitem  subsource       <null>
- nation    subsource       <null>
- orders    subsource       <null>
- part      subsource       <null>
- partsupp  subsource       <null>
- region    subsource       <null>
- supplier  subsource       <null>
+name           type            size             cluster
+-------------------------------------------------------
+ customer      subsource       <null>           <null>
+ gen           load-generator  ${source-size}   materialize_public_gen
+ gen_progress  progress        <null>           <null>
+ lineitem      subsource       <null>           <null>
+ nation        subsource       <null>           <null>
+ orders        subsource       <null>           <null>
+ part          subsource       <null>           <null>
+ partsupp      subsource       <null>           <null>
+ region        subsource       <null>           <null>
+ supplier      subsource       <null>           <null>
 
 # SF * 150,000
 > SELECT count(*) FROM customer
@@ -1497,3 +1497,5 @@ true
   ORDER BY
       cntrycode;
 7 values hashing to 3782c67124c71b5bcb3460934dec46de
+
+> DROP SOURCE gen CASCADE

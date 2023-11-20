@@ -205,14 +205,44 @@ id::timestamp with time zone
 id::timestamptz
 
 parse-scalar roundtrip
+id::timestamp without time zone
+----
+id::timestamp
+
+parse-scalar roundtrip
+id::timestamp(3) with time zone
+----
+id::timestamptz(3)
+
+parse-scalar roundtrip
+id::timestamp(3) without time zone
+----
+id::timestamp(3)
+
+parse-scalar roundtrip
 (id::timestamp with time zone::timestamp without time zone  )  ::  double precision::text
 ----
 (id::timestamptz::timestamp)::float8::text
 
 parse-scalar roundtrip
+(id::timestamp(5) with time zone::timestamp(2) without time zone  )  ::  double precision::text
+----
+(id::timestamptz(5)::timestamp(2))::float8::text
+
+parse-scalar roundtrip
+(id::timestamp(5) with time zone::timestamp(-1) without time zone  )  ::  double precision::text
+----
+(id::timestamptz(5)::timestamp(-1))::float8::text
+
+parse-scalar roundtrip
 CAST(c::jsonb->>'f' AS timestamptz)
 ----
 (c::jsonb ->> 'f')::timestamptz
+
+parse-scalar roundtrip
+CAST(c::jsonb->>'f' AS timestamptz(4))
+----
+(c::jsonb ->> 'f')::timestamptz(4)
 
 parse-scalar roundtrip
 id::numeric FROM customer

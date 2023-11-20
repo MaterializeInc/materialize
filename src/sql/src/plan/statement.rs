@@ -19,8 +19,8 @@ use mz_sql_parser::ast::{
     ColumnDef, RawItemName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
     UnresolvedSchemaName,
 };
-use mz_storage_client::types::connections::inline::ReferencedConnection;
-use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
@@ -29,8 +29,9 @@ use crate::catalog::{
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
-    QualifiedItemName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedIds, ResolvedItemName, ResolvedSchemaName, SchemaSpecifier, SystemObjectId,
+    QualifiedItemName, RawDatabaseSpecifier, ResolvedColumnName, ResolvedDataType,
+    ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName, ResolvedSchemaName, SchemaSpecifier,
+    SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -120,6 +121,7 @@ pub fn describe(
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
+        Statement::AlterObjectSwap(stmt) => ddl::describe_alter_object_swap(&scx, stmt)?,
         Statement::AlterRole(stmt) => ddl::describe_alter_role(&scx, stmt)?,
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
         Statement::AlterSetCluster(stmt) => ddl::describe_alter_set_cluster(&scx, stmt)?,
@@ -209,6 +211,7 @@ pub fn describe(
         Statement::Delete(stmt) => dml::describe_delete(&scx, stmt)?,
         Statement::ExplainPlan(stmt) => dml::describe_explain_plan(&scx, stmt)?,
         Statement::ExplainTimestamp(stmt) => dml::describe_explain_timestamp(&scx, stmt)?,
+        Statement::ExplainSinkSchema(stmt) => dml::describe_explain_schema(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
         Statement::Select(stmt) => dml::describe_select(&scx, stmt)?,
         Statement::Subscribe(stmt) => dml::describe_subscribe(&scx, stmt)?,
@@ -294,6 +297,7 @@ pub fn plan(
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
+        Statement::AlterObjectSwap(stmt) => ddl::plan_alter_object_swap(scx, stmt),
         Statement::AlterRole(stmt) => ddl::plan_alter_role(scx, stmt),
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
         Statement::AlterSetCluster(stmt) => ddl::plan_alter_item_set_cluster(scx, stmt),
@@ -338,6 +342,7 @@ pub fn plan(
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
         Statement::ExplainPlan(stmt) => dml::plan_explain_plan(scx, stmt, params),
         Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt, params),
+        Statement::ExplainSinkSchema(stmt) => dml::plan_explain_schema(scx, stmt),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
         Statement::Subscribe(stmt) => dml::plan_subscribe(scx, stmt, params, None),
@@ -539,12 +544,12 @@ impl<'a> StatementContext<'a> {
         let database_spec = match full_name.database {
             RawDatabaseSpecifier::Ambient => ResolvedDatabaseSpecifier::Ambient,
             RawDatabaseSpecifier::Name(name) => ResolvedDatabaseSpecifier::Id(
-                self.resolve_database(&UnresolvedDatabaseName(Ident::new(name)))?
+                self.resolve_database(&UnresolvedDatabaseName(Ident::new(name)?))?
                     .id(),
             ),
         };
         let schema_spec = self
-            .resolve_schema_in_database(&database_spec, &Ident::new(full_name.schema))?
+            .resolve_schema_in_database(&database_spec, &Ident::new(full_name.schema)?)?
             .id()
             .clone();
         Ok(QualifiedItemName {
@@ -708,6 +713,29 @@ impl<'a> StatementContext<'a> {
         }
     }
 
+    pub fn get_column_by_resolved_name(
+        &self,
+        name: &ResolvedColumnName,
+    ) -> Result<(&dyn CatalogItem, usize), PlanError> {
+        match name {
+            ResolvedColumnName::Column {
+                relation: ResolvedItemName::Item { id, .. },
+                index,
+                ..
+            } => {
+                let item = self.get_item(id);
+                Ok((item, *index))
+            }
+            ResolvedColumnName::Column {
+                relation: ResolvedItemName::Cte { .. } | ResolvedItemName::Error,
+                ..
+            }
+            | ResolvedColumnName::Error => {
+                unreachable!("should have been caught in name resolution")
+            }
+        }
+    }
+
     pub fn resolve_function(
         &self,
         name: UnresolvedItemName,
@@ -847,7 +875,7 @@ impl<'a> StatementContext<'a> {
         let mut columns = vec![];
         let mut null_cols = BTreeSet::new();
         for (column_name, column_type) in desc.iter() {
-            let name = Ident::new(column_name.as_str().to_owned());
+            let name = Ident::new(column_name.as_str().to_owned())?;
 
             let ty = mz_pgrepr::Type::from(&column_type.scalar_type);
             let data_type = self.resolve_type(ty)?;
@@ -908,6 +936,8 @@ impl<'a> StatementContext<'a> {
     /// if objects do not exist) so should never be used to handle user input.
     pub fn dangerous_resolve_name(&self, name: Vec<&str>) -> ResolvedItemName {
         tracing::trace!("dangerous_resolve_name {:?}", name);
+        // Note: Using unchecked here is okay because this function is already dangerous.
+        let name: Vec<_> = name.into_iter().map(Ident::new_unchecked).collect();
         let name = UnresolvedItemName::qualified(&name);
         let entry = match self.resolve_item(RawItemName::Name(name.clone())) {
             Ok(entry) => entry,

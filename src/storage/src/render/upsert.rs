@@ -16,15 +16,17 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use differential_dataflow::consolidation;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::future::FutureExt;
 use itertools::Itertools;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_storage_client::metrics::BackpressureMetrics;
-use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
-use mz_storage_client::types::sources::UpsertEnvelope;
+use mz_storage_operators::metrics::BackpressureMetrics;
+use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_types::sources::UpsertEnvelope;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
 };
@@ -37,12 +39,13 @@ use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
+use crate::healthcheck::HealthStatusUpdate;
 use crate::render::sources::OutputIndex;
 use crate::render::upsert::types::{
     upsert_bincode_opts, AutoSpillBackend, InMemoryHashMap, RocksDBParams, UpsertState,
     UpsertStateBackend,
 };
-use crate::source::types::{HealthStatus, HealthStatusUpdate, UpsertMetrics};
+use crate::source::types::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 
 mod rocksdb;
@@ -157,32 +160,20 @@ pub fn rehydration_finished<G, T>(
     let mut input = builder.new_input(input, Pipeline);
 
     builder.build(move |_capabilities| async move {
-        loop {
-            match input.next().await {
-                Some(AsyncEvent::Progress(frontier)) => {
-                    if PartialOrder::less_equal(&resume_upper, &frontier) {
-                        tracing::info!(
-                        "timely-{} upsert source {} has downgraded past the resume upper ({:?}) across all workers",
-                        worker_id,
-                        id,
-                        resume_upper
-                    );
-                        drop(token);
-                        break;
-                    }
-                }
-                None => {
-                    // Shutdown has been triggered or the shard is closed, so we shutdown.
-                    // Note that we will likely get a `Progress([])` event before this,
-                    // but we cover it for an abundance of caution.
-                    drop(token);
-                    break;
-                }
-                _ => {
-                    // we don't expect data
-                }
+        let mut input_upper = Antichain::from_elem(Timestamp::minimum());
+        // Ensure this operator finishes if the resume upper is `[0]`
+        while !PartialOrder::less_equal(&resume_upper, &input_upper) {
+            let Some(event) = input.next().await else {
+                break;
+            };
+            if let AsyncEvent::Progress(upper) = event {
+                input_upper = upper;
             }
         }
+        tracing::info!(
+            "timely-{worker_id} upsert source {id} has downgraded past the resume upper ({resume_upper:?}) across all workers",
+        );
+        drop(token);
     });
 }
 
@@ -243,6 +234,11 @@ where
         let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
         let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
         let rocksdb_dir = scratch_directory
+            .join("storage")
+            .join("upsert")
+            .join(source_config.id.to_string())
+            .join(source_config.worker_id.to_string());
+        let legacy_rocksdb_dir = scratch_directory
             .join(source_config.id.to_string())
             .join(source_config.worker_id.to_string());
 
@@ -263,6 +259,7 @@ where
                     AutoSpillBackend::new(
                         RocksDBParams {
                             instance_path: rocksdb_dir,
+                            legacy_instance_path: legacy_rocksdb_dir,
                             env,
                             tuning_config: tuning,
                             shared_metrics: rocksdb_shared_metrics,
@@ -287,6 +284,7 @@ where
                     rocksdb::RocksDB::new(
                         mz_rocksdb::RocksDBInstance::new(
                             &rocksdb_dir,
+                            &legacy_rocksdb_dir,
                             mz_rocksdb::InstanceOptions::defaults_with_env(env),
                             tuning,
                             rocksdb_shared_metrics,
@@ -420,7 +418,7 @@ where
         let mut state = UpsertState::new(
             state().await,
             upsert_shared_metrics,
-            upsert_metrics,
+            &upsert_metrics,
             source_config.source_statistics,
             upsert_config.shrink_upsert_unused_buffers_by_ratio
         );
@@ -429,6 +427,7 @@ where
 
         let mut stash = vec![];
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
+        let mut legacy_errors_to_correct = vec![];
 
         while !PartialOrder::less_equal(&resume_upper, &snapshot_upper)
             || (upsert_config.wait_for_input_resumption && !PartialOrder::less_equal(&resume_upper, &input_upper))
@@ -487,6 +486,20 @@ where
                 }
             }
 
+            for (_, value, diff) in events.iter_mut() {
+                if let Err(UpsertError::Value(ref mut err)) = value {
+                    // If we receive a legacy error in the snapshot we will keep a note of it but
+                    // insert a non-legacy error in our state. This is so that if this error is
+                    // ever retracted we will correctly retract the non-legacy version because by
+                    // that time we will have emitted the error correction, which happens before
+                    // processing any of the new source input.
+                    if err.is_legacy_dont_touch_it {
+                        legacy_errors_to_correct.push((err.clone(), diff.clone()));
+                        err.is_legacy_dont_touch_it = false;
+                    }
+                }
+            }
+
             match state
                 .merge_snapshot_chunk(
                     events.drain(..),
@@ -529,6 +542,22 @@ where
         // After snapshotting, our output frontier is exactly the `resume_upper`
         if let Some(ts) = resume_upper.as_option() {
             output_cap.downgrade(ts);
+        }
+
+        // Now it's time to emit the error corrections. It doesn't matter at what timestamp we emit
+        // them at because all they do is change the representation. The error count at any
+        // timestamp remains constant.
+        upsert_metrics.legacy_value_errors.set(u64::cast_from(legacy_errors_to_correct.len()));
+        consolidation::consolidate(&mut legacy_errors_to_correct);
+        for (mut error, diff) in legacy_errors_to_correct {
+            assert!(error.is_legacy_dont_touch_it, "attempted to correct non-legacy error");
+            tracing::info!("correcting legacy error {error:?} with diff {diff}");
+            let time = output_cap.time().clone();
+            let retraction = Err(UpsertError::Value(error.clone()));
+            error.is_legacy_dont_touch_it = false;
+            let insertion = Err(UpsertError::Value(error));
+            output_handle.give(&output_cap, (retraction, time.clone(), -diff)).await;
+            output_handle.give(&output_cap, (insertion, time, diff)).await;
         }
 
         tracing::info!(
@@ -707,13 +736,7 @@ async fn process_upsert_state_error<G: Scope>(
     >,
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,
 ) {
-    let update = HealthStatusUpdate {
-        update: HealthStatus::StalledWithError {
-            error: e.context(context).to_string_with_causes(),
-            hint: None,
-        },
-        should_halt: true,
-    };
+    let update = HealthStatusUpdate::halting(e.context(context).to_string_with_causes(), None);
     health_output.give(health_cap, (0, update)).await;
     std::future::pending::<()>().await;
     unreachable!("pending future never returns");

@@ -234,6 +234,7 @@ The inner object's various `type_X` fields are lower-level details that can be u
 A single row result.
 Will only occur after a `Rows` message.
 The payload is an array of JSON values corresponding to the columns from the `Rows` message.
+Numeric results are converted to strings to avoid possible JavaScript number inaccuracy.
 
 #### `ParameterStatus`
 

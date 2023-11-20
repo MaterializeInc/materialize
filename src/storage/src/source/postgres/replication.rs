@@ -99,8 +99,9 @@ use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection};
+use mz_ssh_util::tunnel_manager::SshTunnelManager;
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 
@@ -164,8 +165,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         let table_info = reader_table_info;
         Box::pin(async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap, upper_cap]: &mut [_; 2] = caps.try_into().unwrap();
-            let (data_cap, upper_cap) = (data_cap.as_mut().unwrap(), upper_cap.as_mut().unwrap());
+            let [data_cap_set, upper_cap_set]: &mut [_; 2] = caps.try_into().unwrap();
 
             if !config.responsible_for("slot") {
                 return Ok(());
@@ -176,9 +176,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .connection
                 .config(&*context.secrets_reader)
                 .await?
-                .replication_timeouts(config.params.pg_replication_timeouts.clone());
+                .tcp_timeouts(config.params.pg_source_tcp_timeouts.clone());
+
             let slot = &connection.publication_details.slot;
-            let replication_client = connection_config.connect_replication().await?;
+            let replication_client = connection_config.connect_replication(
+                &context.ssh_tunnel_manager,
+            ).await?;
             super::ensure_replication_slot(&replication_client, slot).await?;
             let slot_lsn = super::fetch_slot_resume_lsn(&replication_client, slot).await?;
 
@@ -193,8 +196,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let Some(resume_lsn) = resume_upper.into_option() else {
                 return Ok(());
             };
-            data_cap.downgrade(&resume_lsn);
-            upper_cap.downgrade(&resume_lsn);
+            data_cap_set.downgrade([&resume_lsn]);
+            upper_cap_set.downgrade([&resume_lsn]);
             trace!(%id, "timely-{worker_id} replication reader started lsn={}", resume_lsn);
 
 
@@ -215,7 +218,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let mut committed_uppers = pin!(committed_uppers);
 
-            let client = connection_config.connect("replication metadata").await?;
+            let client = connection_config.connect(
+                "replication metadata",
+                &context.ssh_tunnel_manager,
+            ).await?;
             if let Err(err) = ensure_publication_exists(&client, &connection.publication).await? {
                 // If the publication gets deleted there is nothing else to do. These errors
                 // are not retractable.
@@ -230,7 +236,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     // (in practice) never conflict any previously revealed
                     // portions of the TVC.
                     let update = ((oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
-                    data_output.give(data_cap, update).await;
+                    data_output.give(&data_cap_set[0], update).await;
                 }
                 return Ok(());
             }
@@ -238,11 +244,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let slot = &connection.publication_details.slot;
             let mut stream = pin!(raw_stream(
                 &config,
+                &context.ssh_tunnel_manager,
                 &connection_config,
-                &client,
+                client,
                 slot,
                 &connection.publication,
-                *data_cap.time(),
+                *data_cap_set[0].time(),
                 committed_uppers.as_mut()
             )
             .peekable());
@@ -254,7 +261,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
-                let mut new_upper = *data_cap.time();
+                let mut new_upper = *data_cap_set[0].time();
                 match event {
                     Ok(XLogData(data)) => match data.data() {
                         Begin(begin) => {
@@ -265,6 +272,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 commit_lsn,
                                 &table_info,
                                 &connection_config,
+                                &context.ssh_tunnel_manager,
                                 &metrics,
                                 &connection.publication,
                                 &mut errored
@@ -287,9 +295,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             }
                             new_upper = commit_lsn + 1;
                             if container.len() > max_capacity {
-                                data_output.give_container(data_cap, &mut container).await;
-                                upper_cap.downgrade(&new_upper);
-                                data_cap.downgrade(&new_upper);
+                                data_output.give_container(&data_cap_set[0], &mut container).await;
+                                upper_cap_set.downgrade([&new_upper]);
+                                data_cap_set.downgrade([&new_upper]);
                             }
                         },
                         _ => return Err(TransientError::BareTransactionEvent),
@@ -304,10 +312,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                 let will_yield = stream.as_mut().peek().now_or_never().is_none();
                 if will_yield {
-                    data_output.give_container(data_cap, &mut container).await;
-                    upper_cap.downgrade(&new_upper);
-                    data_cap.downgrade(&new_upper);
-                    rewinds.retain(|_, (_, req)| data_cap.time() <= &req.snapshot_lsn);
+                    data_output.give_container(&data_cap_set[0], &mut container).await;
+                    upper_cap_set.downgrade([&new_upper]);
+                    data_cap_set.downgrade([&new_upper]);
+                    rewinds.retain(|_, (_, req)| data_cap_set[0].time() <= &req.snapshot_lsn);
                 }
             }
             // We never expect the replication stream to gracefully end
@@ -350,8 +358,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 /// The returned stream will contain all transactions that whose commit LSN is beyond `resume_lsn`.
 fn raw_stream<'a>(
     config: &'a RawSourceCreationConfig,
+    ssh_tunnel_manager: &'a SshTunnelManager,
     connection_config: &'a mz_postgres_util::Config,
-    metadata_client: &'a Client,
+    metadata_client: Client,
     slot: &'a str,
     publication: &'a str,
     resume_lsn: MzOffset,
@@ -362,7 +371,9 @@ fn raw_stream<'a>(
         let mut uppers = pin!(uppers);
         let mut last_committed_upper = resume_lsn;
 
-        let replication_client = connection_config.connect_replication().await?;
+        let replication_client = connection_config
+            .connect_replication(ssh_tunnel_manager)
+            .await?;
         super::ensure_replication_slot(&replication_client, slot).await?;
 
         // Postgres will return all transactions that commit *at or after* after the provided LSN,
@@ -370,7 +381,7 @@ fn raw_stream<'a>(
         let lsn = PgLsn::from(resume_lsn.offset);
         let query = format!(
             r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" '{}')"#,
-            Ident::from(slot.clone()).to_ast_string(),
+            Ident::new_unchecked(slot.clone()).to_ast_string(),
             lsn,
             publication,
         );
@@ -382,7 +393,7 @@ fn raw_stream<'a>(
         // to avoid a TOCTOU issue we must do this check after starting the replication stream. We
         // cannot use the replication client to do that because it's already in CopyBoth mode.
         // [1] https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION-SLOT-LOGICAL
-        let min_resume_lsn = super::fetch_slot_resume_lsn(metadata_client, slot).await?;
+        let min_resume_lsn = super::fetch_slot_resume_lsn(&metadata_client, slot).await?;
         if !(resume_lsn == MzOffset::from(0) || min_resume_lsn <= resume_lsn) {
             let err = TransientError::OvercompactedReplicationSlot {
                 available_lsn: min_resume_lsn,
@@ -438,6 +449,7 @@ fn extract_transaction<'a>(
     commit_lsn: MzOffset,
     table_info: &'a BTreeMap<u32, (usize, PostgresTableDesc, Vec<MirScalarExpr>)>,
     connection_config: &'a mz_postgres_util::Config,
+    ssh_tunnel_manager: &'a SshTunnelManager,
     metrics: &'a PgSourceMetrics,
     publication: &'a str,
     errored_tables: &'a mut HashSet<u32>,
@@ -505,6 +517,7 @@ fn extract_transaction<'a>(
                         // ensure e.g. we haven't received a schema update with the same terminal
                         // column name which is actually a different column.
                         let upstream_info = mz_postgres_util::publication_info(
+                            ssh_tunnel_manager,
                             connection_config,
                             publication,
                             Some(rel_id),

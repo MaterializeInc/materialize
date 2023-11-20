@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
-use axum::Json;
+use axum::{Extension, Json};
 use futures::future::BoxFuture;
 use futures::Future;
 use http::StatusCode;
@@ -26,10 +26,10 @@ use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary,
-    SessionClient, Severity,
+    SessionClient,
 };
 use mz_interchange::encode::TypedDatum;
-use mz_interchange::json::ToJson;
+use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::result::ResultExt;
 use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
@@ -43,7 +43,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::debug;
 use tungstenite::protocol::frame::coding::CloseCode;
 
-use crate::http::{init_ws, AuthedClient, WsState, MAX_REQUEST_SIZE};
+use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
 
 pub async fn handle_sql(
     mut client: AuthedClient,
@@ -67,10 +67,13 @@ struct ErrorResponse {
 
 pub async fn handle_sql_ws(
     State(state): State<WsState>,
+    existing_user: Option<Extension<AuthedUser>>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    // An upstream middleware may have already provided the user for us
+    let user = existing_user.and_then(|Extension(user)| Some(user));
     ws.max_message_size(MAX_REQUEST_SIZE)
-        .on_upgrade(|ws| async move { run_ws(&state, ws).await })
+        .on_upgrade(|ws| async move { run_ws(&state, user, ws).await })
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -87,10 +90,14 @@ pub enum WebSocketAuth {
         #[serde(default)]
         options: BTreeMap<String, String>,
     },
+    OptionsOnly {
+        #[serde(default)]
+        options: BTreeMap<String, String>,
+    },
 }
 
-async fn run_ws(state: &WsState, mut ws: WebSocket) {
-    let mut client = match init_ws(state, &mut ws).await {
+async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
+    let mut client = match init_ws(state, user, &mut ws).await {
         Ok(client) => client,
         Err(e) => {
             // We omit most detail from the error message we send to the client, to
@@ -253,9 +260,7 @@ async fn forward_notices(
     let ws_notices = notices.into_iter().map(|notice| {
         WebSocketResponse::Notice(Notice {
             message: notice.to_string(),
-            severity: Severity::for_adapter_notice(&notice)
-                .as_str()
-                .to_lowercase(),
+            severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),
         })
@@ -665,7 +670,10 @@ impl ResultSender for WebSocket {
                                         datums
                                             .iter()
                                             .enumerate()
-                                            .map(|(i, d)| TypedDatum::new(*d, &types[i]).json())
+                                            .map(|(i, d)| {
+                                                TypedDatum::new(*d, &types[i])
+                                                    .json(&JsonNumberPolicy::ConvertNumberToString)
+                                            })
                                             .collect(),
                                     ),
                                 )
@@ -816,7 +824,7 @@ async fn execute_request<S: ResultSender>(
     }
 
     fn parse<'a>(
-        client: &mut SessionClient,
+        client: &SessionClient,
         query: &'a str,
     ) -> Result<Vec<StatementParseResult<'a>>, anyhow::Error> {
         match client.parse(query) {
@@ -920,7 +928,7 @@ async fn execute_stmt<S: ResultSender>(
             None => Datum::Null,
             Some(raw_param) => {
                 match mz_pgrepr::Value::decode(
-                    mz_pgrepr::Format::Text,
+                    mz_pgwire_common::Format::Text,
                     &pg_typ,
                     raw_param.as_bytes(),
                 ) {
@@ -936,7 +944,7 @@ async fn execute_stmt<S: ResultSender>(
     }
 
     let result_formats = vec![
-        mz_pgrepr::Format::Text;
+        mz_pgwire_common::Format::Text;
         prep_stmt
             .desc()
             .relation_desc
@@ -1065,7 +1073,7 @@ async fn execute_stmt<S: ResultSender>(
             let types = &desc.typ().column_types;
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
-                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json()).collect());
+                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json(&JsonNumberPolicy::ConvertNumberToString)).collect());
             }
             let tag = format!("SELECT {}", sql_rows.len());
             SqlResult::rows(client, tag, sql_rows, desc).into()
@@ -1077,7 +1085,7 @@ async fn execute_stmt<S: ResultSender>(
             let types = &desc.typ().column_types;
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
-                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json()).collect());
+                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json(&JsonNumberPolicy::ConvertNumberToString)).collect());
             }
             let tag = format!("SELECT {}", sql_rows.len());
             SqlResult::rows(client, tag, sql_rows, desc).into()
@@ -1111,9 +1119,7 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
         .into_iter()
         .map(|notice| Notice {
             message: notice.to_string(),
-            severity: Severity::for_adapter_notice(&notice)
-                .as_str()
-                .to_lowercase(),
+            severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),
         })

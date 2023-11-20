@@ -14,6 +14,10 @@ use reqwest_retry::RetryTransientMiddleware;
 
 pub mod tokens;
 
+/// Client for Frontegg auth requests.
+///
+/// Internally the client will attempt to de-dupe requests, e.g. if a single user tries to connect
+/// many clients at once, we'll de-dupe the authentication requests.
 #[derive(Clone, Debug)]
 pub struct Client {
     pub client: reqwest_middleware::ClientWithMiddleware,

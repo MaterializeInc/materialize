@@ -120,10 +120,6 @@ use opentelemetry::KeyValue;
 /// orchestrators and does not belong in a foundational crate like `mz_ore`.
 #[derive(Debug, Clone, clap::Parser)]
 pub struct TracingCliArgs {
-    /// This arg has been replaced. Use the `log_filter` system variable or
-    /// `--startup-log-filter` arg instead.
-    #[clap(long, env = "LOG_FILTER", value_name = "FILTER")]
-    pub log_filter: Option<CloneableEnvFilter>,
     /// Which tracing events to log to stderr.
     ///
     /// This value is a comma-separated list of filter directives. Each filter
@@ -185,10 +181,6 @@ pub struct TracingCliArgs {
         use_value_delimiter = true
     )]
     pub opentelemetry_header: Vec<KeyValueArg<HeaderName, HeaderValue>>,
-    /// This arg has been replaced. Use the `opentelemetry_filter` system
-    /// variable or `--startup-opentelemetry-filter` arg instead.
-    #[clap(long, env = "OPENTELEMETRY_FILTER")]
-    pub opentelemetry_filter: Option<CloneableEnvFilter>,
     /// Which tracing events to export to the OpenTelemetry endpoint specified
     /// by `--opentelemetry-endpoint`.
     ///
@@ -398,13 +390,11 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
             let tokio_console_listen_addr = listen_addrs.get("tokio-console");
             let mut args = (service_config.args)(listen_addrs);
             let TracingCliArgs {
-                log_filter: _,
-                startup_log_filter: _,
+                startup_log_filter,
                 log_prefix,
                 log_format,
                 opentelemetry_endpoint,
                 opentelemetry_header,
-                opentelemetry_filter: _,
                 startup_opentelemetry_filter: _,
                 opentelemetry_resource,
                 #[cfg(feature = "tokio-console")]
@@ -416,6 +406,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 sentry_dsn,
                 sentry_environment,
             } = &self.tracing_args;
+            args.push(format!("--startup-log-filter={startup_log_filter}"));
             args.push(format!("--log-format={log_format}"));
             if log_prefix.is_some() {
                 args.push(format!("--log-prefix={}-{}", self.namespace, id));

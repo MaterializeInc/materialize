@@ -298,6 +298,33 @@ DETAIL: The following relations in the query are outside the transaction's time 
 Only the following relations are available:
 "materialize.public.t"
 "materialize.public.t5727"
+"mz_catalog.mz_array_types"
+"mz_catalog.mz_base_types"
+"mz_catalog.mz_columns"
+"mz_catalog.mz_connections"
+"mz_catalog.mz_databases"
+"mz_catalog.mz_functions"
+"mz_catalog.mz_index_columns"
+"mz_catalog.mz_indexes"
+"mz_catalog.mz_list_types"
+"mz_catalog.mz_map_types"
+"mz_catalog.mz_materialized_views"
+"mz_catalog.mz_operators"
+"mz_catalog.mz_pseudo_types"
+"mz_catalog.mz_role_members"
+"mz_catalog.mz_roles"
+"mz_catalog.mz_schemas"
+"mz_catalog.mz_secrets"
+"mz_catalog.mz_sinks"
+"mz_catalog.mz_sources"
+"mz_catalog.mz_system_privileges"
+"mz_catalog.mz_tables"
+"mz_catalog.mz_types"
+"mz_catalog.mz_views"
+"mz_internal.mz_aggregates"
+"mz_internal.mz_comments"
+"mz_internal.mz_object_dependencies"
+"mz_internal.mz_type_pg_metadata"
 
 # Verify that changed tables and views don't change during a transaction.
 
@@ -756,8 +783,8 @@ COMMIT
 simple
 SHOW SOURCES
 ----
-s,load-generator,1
-s_progress,progress,NULL
+s,load-generator,1,materialize_public_s
+s_progress,progress,NULL,NULL
 COMPLETE 2
 
 # Test a statement that doesn't work even in this mode because of ambiguous responses.
@@ -799,3 +826,404 @@ simple
 SHOW SOURCES
 ----
 COMPLETE 0
+
+# Test that the cluster cannot change mid-transaction.
+
+statement ok
+DROP TABLE t CASCADE
+
+statement ok
+CREATE TABLE t (a INT)
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET cluster cannot be called in an active transaction
+SET CLUSTER TO c
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement error SET cluster cannot be called in an active transaction
+SET LOCAL CLUSTER TO c
+
+statement ok
+ROLLBACK
+
+# Test that the cluster can change at the start of a transaction.
+
+statement ok
+BEGIN
+
+statement ok
+SET CLUSTER TO c
+
+statement ok
+SELECT * FROM t
+
+statement ok
+COMMIT
+
+statement ok
+SET CLUSTER TO default
+
+statement ok
+BEGIN
+
+statement ok
+SET LOCAL CLUSTER TO c
+
+statement ok
+SELECT * FROM t
+
+statement ok
+COMMIT
+
+statement ok
+SET CLUSTER TO default
+
+# Test that the cluster is selected at the start of a transaction and doesn't change.
+
+## Auto-routing selects mz_introspection at the start of transaction.
+
+statement ok
+BEGIN
+
+statement ok
+SHOW VIEWS
+
+query T multiline
+EXPLAIN SELECT *, generate_series(1, 100) FROM mz_views
+----
+Explained Query:
+  CrossJoin type=differential
+    ArrangeBy keys=[[]]
+      ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***]
+    ArrangeBy keys=[[]]
+      Constant
+        total_rows (diffs absed): 100
+        first_rows:
+          - (1)
+          - (2)
+          - (3)
+          - (4)
+          - (5)
+          - (6)
+          - (7)
+          - (8)
+          - (9)
+          - (10)
+          - (11)
+          - (12)
+          - (13)
+          - (14)
+          - (15)
+          - (16)
+          - (17)
+          - (18)
+          - (19)
+          - (20)
+
+Used Indexes:
+  - mz_internal.mz_show_views_ind (*** full scan ***)
+
+EOF
+
+statement ok
+COMMIT
+
+## Auto-routing doesn't select mz_introspection in the middle of a transaction.
+
+# Since mz_views uses custom types, the postgres client will look it up in the catalog on
+# first use. If the first use happens to be in a transaction, then we can get unexpected time
+# domain errors. This is an annoying hack to load the information in the postgres client before
+# we start any transactions.
+statement ok
+SELECT * FROM mz_views LIMIT 0
+----
+
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t, mz_views
+
+query T multiline
+EXPLAIN SHOW VIEWS
+----
+Explained Query:
+  Project (#3)
+    Filter (#2 = "u3")
+      ReadStorage mz_catalog.mz_views
+
+Source mz_catalog.mz_views
+  filter=((#2 = "u3"))
+
+EOF
+
+statement ok
+COMMIT
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_swap = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE SCHEMA blue;
+
+statement ok
+CREATE SCHEMA green;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+blue  u6
+green  u7
+public  u3
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER SCHEMA blue SWAP WITH green;
+
+statement ok
+COMMIT;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+blue  u7
+green  u6
+public  u3
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER SCHEMA blue SWAP WITH green;
+
+statement ok
+ALTER SCHEMA green RENAME TO purple;
+
+statement ok
+ROLLBACK;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+blue  u7
+green  u6
+public  u3
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER SCHEMA green RENAME TO purple;
+
+# Modify the Catalog from a different session while a transaction is open.
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE yellow_t1 (x int);
+----
+COMPLETE 0
+
+statement error db error: ERROR: object state changed while transaction was in progress
+ALTER SCHEMA blue RENAME to pink;
+
+statement ok
+ROLLBACK;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+blue  u7
+green  u6
+public  u3
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER SCHEMA blue RENAME TO pink;
+
+statement ok
+ALTER SCHEMA pink RENAME TO purple;
+
+statement ok
+ALTER SCHEMA purple RENAME TO orange;
+
+statement ok
+ALTER SCHEMA orange RENAME TO red;
+
+statement ok
+ALTER SCHEMA red RENAME TO orange;
+
+statement ok
+COMMIT;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+green  u6
+orange  u7
+public  u3
+
+statement ok
+BEGIN;
+
+statement error db error: ERROR: schema 'green' already exists
+ALTER SCHEMA orange RENAME TO green;
+
+statement ok
+COMMIT;
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+green  u6
+orange  u7
+public  u3
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER SCHEMA green RENAME TO red;
+
+statement error db error: ERROR: schema 'red' already exists
+ALTER SCHEMA orange RENAME TO red;
+
+statement ok
+COMMIT;
+
+# Transaction should be rolled back and nothing should change.
+
+query TT
+SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
+----
+green  u6
+orange  u7
+public  u3
+
+statement ok
+CREATE TABLE green_t1 (x int);
+
+statement ok
+CREATE VIEW green_v1 AS ( SELECT SUM(x) FROM green_t1 );
+
+statement ok
+CREATE CLUSTER green_compute SIZE '1';
+
+statement ok
+CREATE MATERIALIZED VIEW green_mv1 IN CLUSTER green_compute AS ( SELECT AVG(x) FROM green_t1 );
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE green_t1 RENAME TO blue_t1;
+
+statement ok
+ALTER VIEW green_v1 RENAME TO blue_v1;
+
+statement ok
+ALTER MATERIALIZED VIEW green_mv1 RENAME TO blue_mv1;
+
+statement ok
+ALTER CLUSTER green_compute RENAME TO blue_compute;
+
+statement ok
+COMMIT;
+
+statement ok
+INSERT INTO blue_t1 VALUES (10), (20), (30);
+
+query I
+SELECT * FROM blue_v1;
+----
+60
+
+query I
+SELECT * FROM blue_mv1;
+----
+20
+
+query TT
+SELECT name, id FROM mz_clusters WHERE id LIKE 'u%';
+----
+c u3
+default u1
+blue_compute u4
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO blue_t1 VALUES (40), (50), (60);
+
+statement error db error: ERROR: transaction in write-only mode
+ALTER TABLE blue_t1 RENAME TO red_t1;
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM blue_t1 LIMIT 1;
+----
+10
+
+statement ok
+BEGIN;
+
+query I
+SELECT * FROM blue_v1;
+----
+60
+
+statement error db error: ERROR: transaction in read-only mode
+ALTER TABLE blue_t1 RENAME TO red_t1;
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM blue_t1 LIMIT 1;
+----
+10
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE blue_t1 RENAME TO purple_t1;
+
+statement error db error: ERROR: transactions which modify objects are restricted to just modifying objects
+SELECT * FROM blue_mv1;
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM blue_t1 LIMIT 1;
+----
+10
+
+# Cleanup.
+
+statement ok
+DROP CLUSTER blue_compute CASCADE;

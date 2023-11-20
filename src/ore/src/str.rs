@@ -111,7 +111,7 @@ where
     }
 }
 
-/// Give na closure, it creates a Display that simply calls the given closure when fmt'd.
+/// Given a closure, it creates a Display that simply calls the given closure when fmt'd.
 pub fn closure_to_display<F>(fun: F) -> impl fmt::Display
 where
     F: Fn(&mut fmt::Formatter) -> fmt::Result,
@@ -288,6 +288,63 @@ impl std::ops::SubAssign<usize> for Indent {
 impl fmt::Display for Indent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.buff)
+    }
+}
+
+/// Newtype wrapper around [`String`] whose _byte_ length is guaranteed to be less than or equal to
+/// the provided `MAX`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaxLenString<const MAX: usize>(String);
+
+impl<const MAX: usize> MaxLenString<MAX> {
+    /// Creates a new [`MaxLenString`] returning an error if `s` is more than `MAX` bytes long.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mz_ore::str::MaxLenString;
+    ///
+    /// type ShortString = MaxLenString<30>;
+    ///
+    /// let good = ShortString::new("hello".to_string()).unwrap();
+    /// assert_eq!(good.as_str(), "hello");
+    ///
+    /// // Note: this is only 8 characters, but each character requires 4 bytes.
+    /// let too_long = "😊😊😊😊😊😊😊😊";
+    /// let smol = ShortString::new(too_long.to_string());
+    /// assert!(smol.is_err());
+    /// ```
+    ///
+    pub fn new(s: String) -> Result<Self, String> {
+        if s.len() > MAX {
+            return Err(s);
+        }
+
+        Ok(MaxLenString(s))
+    }
+
+    /// Consume self, returning the inner [`String`].
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+
+    /// Returns a reference to the underlying string.
+    pub fn as_str(&self) -> &str {
+        self
+    }
+}
+
+impl<const MAX: usize> Deref for MaxLenString<MAX> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<const MAX: usize> fmt::Display for MaxLenString<MAX> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 

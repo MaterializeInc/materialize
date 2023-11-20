@@ -10,32 +10,31 @@
 //! CLI introspection tools for persist
 
 use std::any::Any;
+use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::anyhow;
-use async_trait::async_trait;
-use bytes::Bytes;
-use mz_ore::bytes::SegmentedBytes;
+use anyhow::{anyhow, bail};
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist::cfg::{BlobConfig, ConsensusConfig};
-use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
-};
+use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::codec_impls::TodoSchema;
+use mz_persist_types::{Codec, Codec64};
 use prometheus::proto::{MetricFamily, MetricType};
-use tracing::{info, warn};
+use timely::progress::Timestamp;
+use tracing::info;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cli::inspect::StateArgs;
+use crate::cli::args::{make_blob, make_consensus, StateArgs, StoreArgs};
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
-use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::rpc::NoopPubSubSender;
 use crate::write::WriterId;
@@ -59,6 +58,9 @@ pub(crate) enum Command {
     ForceCompaction(ForceCompactionArgs),
     /// Manually kick off a GC run for a shard.
     ForceGc(ForceGcArgs),
+    /// Attempt to ensure that all the files referenced by consensus are available
+    /// in Blob.
+    RestoreBlob(RestoreBlobArgs),
 }
 
 /// Manually completes all fueled compactions in a shard.
@@ -79,6 +81,17 @@ pub(crate) struct ForceGcArgs {
     state: StateArgs,
 }
 
+/// Attempt to restore all the blobs that are referenced by the current state of consensus.
+#[derive(Debug, clap::Parser)]
+pub(crate) struct RestoreBlobArgs {
+    #[clap(flatten)]
+    state: StoreArgs,
+
+    /// The number of concurrent restore operations to run at once.
+    #[clap(long, default_value_t = 16)]
+    concurrency: usize,
+}
+
 /// Runs the given read-write admin command.
 pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
     match command.command {
@@ -90,12 +103,14 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                     .set_compaction_memory_bound_bytes(args.compaction_memory_bound_bytes);
             }
             let metrics_registry = MetricsRegistry::new();
-            let () = force_compaction(
+            let () = force_compaction::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>(
                 cfg,
                 &metrics_registry,
                 shard_id,
                 &args.state.consensus_uri,
                 &args.state.blob_uri,
+                Arc::new(TodoSchema::default()),
+                Arc::new(TodoSchema::default()),
                 command.commit,
             )
             .await?;
@@ -118,6 +133,63 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             .await?;
             info_log_non_zero_metrics(&metrics_registry.gather());
         }
+        Command::RestoreBlob(args) => {
+            let RestoreBlobArgs {
+                state:
+                    StoreArgs {
+                        consensus_uri,
+                        blob_uri,
+                    },
+                concurrency,
+            } = args;
+            let commit = command.commit;
+            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let metrics_registry = MetricsRegistry::new();
+            let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
+            let consensus =
+                make_consensus(&cfg, &consensus_uri, commit, Arc::clone(&metrics)).await?;
+            let blob = make_blob(&cfg, &blob_uri, commit, Arc::clone(&metrics)).await?;
+            let versions = StateVersions::new(
+                cfg.clone(),
+                Arc::clone(&consensus),
+                Arc::clone(&blob),
+                metrics,
+            );
+
+            let not_restored: Vec<_> = consensus
+                .list_keys()
+                .flat_map_unordered(concurrency, |shard| {
+                    stream::once(Box::pin(async {
+                        let shard_id = shard?;
+                        let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
+                        let start = Instant::now();
+                        info!("Restoring blob state for shard {shard_id}.",);
+                        let shard_not_restored = crate::internal::restore::restore_blob(
+                            &versions,
+                            blob.as_ref(),
+                            &cfg.build_version,
+                            shard_id,
+                        )
+                        .await?;
+                        info!(
+                            "Restored blob state for shard {shard_id}; {} errors, {:?} elapsed.",
+                            shard_not_restored.len(),
+                            start.elapsed()
+                        );
+                        Ok::<_, ExternalError>(shard_not_restored)
+                    }))
+                })
+                .try_fold(vec![], |mut a, b| async move {
+                    a.extend(b);
+                    Ok(a)
+                })
+                .await?;
+
+            info_log_non_zero_metrics(&metrics_registry.gather());
+            if !not_restored.is_empty() {
+                bail!("referenced blobs were not restored: {not_restored:#?}")
+            }
+        }
     }
     Ok(())
 }
@@ -129,7 +201,7 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
                 MetricType::COUNTER => m.get_counter().get_value(),
                 MetricType::GAUGE => m.get_gauge().get_value(),
                 x => {
-                    warn!("unhandled {} metric type: {:?}", mf.get_name(), x);
+                    info!("unhandled {} metric type: {:?}", mf.get_name(), x);
                     continue;
                 }
             };
@@ -156,19 +228,27 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
 }
 
 /// Manually completes all fueled compactions in a shard.
-pub async fn force_compaction(
+pub async fn force_compaction<K, V, T, D>(
     cfg: PersistConfig,
     metrics_registry: &MetricsRegistry,
     shard_id: ShardId,
     consensus_uri: &str,
     blob_uri: &str,
+    key_schema: Arc<K::Schema>,
+    val_schema: Arc<V::Schema>,
     commit: bool,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), anyhow::Error>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
 
-    let mut machine = make_machine(
+    let mut machine = make_typed_machine::<K, V, T, D>(
         &cfg,
         consensus,
         Arc::clone(&blob),
@@ -214,20 +294,20 @@ pub async fn force_compaction(
                 continue;
             }
             let schemas = Schemas {
-                key: Arc::new(TodoSchema::default()),
-                val: Arc::new(TodoSchema::default()),
+                key: Arc::clone(&key_schema),
+                val: Arc::clone(&val_schema),
             };
-            let res =
-                Compactor::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::compact(
-                    CompactConfig::new(&cfg, &writer_id),
-                    Arc::clone(&blob),
-                    Arc::clone(&metrics),
-                    Arc::clone(&machine.applier.shard_metrics),
-                    Arc::new(IsolatedRuntime::new()),
-                    req,
-                    schemas,
-                )
-                .await?;
+
+            let res = Compactor::<K, V, T, D>::compact(
+                CompactConfig::new(&cfg, &writer_id),
+                Arc::clone(&blob),
+                Arc::clone(&metrics),
+                Arc::clone(&machine.applier.shard_metrics),
+                Arc::new(IsolatedRuntime::new()),
+                req,
+                schemas,
+            )
+            .await?;
             info!(
                 "attempt {} req {}: compacted into {} parts {} bytes in {:?}",
                 attempt,
@@ -269,108 +349,6 @@ pub async fn force_compaction(
     }
 }
 
-/// Wrap a lower-level service (Blob or Consensus) to make it read only.
-/// This is probably not elaborate enough to work in general -- folks may expect to read
-/// their own writes, among other things -- but it should handle the case of GC, where
-/// all reads finish before the writes begin.
-#[derive(Debug)]
-struct ReadOnly<T>(T);
-
-#[async_trait]
-impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
-    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
-        self.0.get(key).await
-    }
-
-    async fn list_keys_and_metadata(
-        &self,
-        key_prefix: &str,
-        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
-    ) -> Result<(), ExternalError> {
-        self.0.list_keys_and_metadata(key_prefix, f).await
-    }
-
-    async fn set(&self, key: &str, _value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
-        warn!("ignoring set({key}) in read-only mode");
-        Ok(())
-    }
-
-    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
-        warn!("ignoring delete({key}) in read-only mode");
-        Ok(None)
-    }
-}
-
-#[async_trait]
-impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
-    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
-        self.0.head(key).await
-    }
-
-    async fn compare_and_set(
-        &self,
-        key: &str,
-        _expected: Option<SeqNo>,
-        _new: VersionedData,
-    ) -> Result<CaSResult, ExternalError> {
-        warn!("ignoring cas({key}) in read-only mode");
-        Ok(CaSResult::Committed)
-    }
-
-    async fn scan(
-        &self,
-        key: &str,
-        from: SeqNo,
-        limit: usize,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
-        self.0.scan(key, from, limit).await
-    }
-
-    async fn truncate(&self, key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
-        warn!("ignoring truncate({key}) in read-only mode");
-        Ok(0)
-    }
-}
-
-pub(super) async fn make_consensus(
-    cfg: &PersistConfig,
-    consensus_uri: &str,
-    commit: bool,
-    metrics: Arc<Metrics>,
-) -> anyhow::Result<Arc<dyn Consensus + Send + Sync>> {
-    let consensus = ConsensusConfig::try_from(
-        consensus_uri,
-        Box::new(cfg.clone()),
-        metrics.postgres_consensus.clone(),
-    )?;
-    let consensus = consensus.clone().open().await?;
-    let consensus = if commit {
-        consensus
-    } else {
-        Arc::new(ReadOnly(consensus))
-    };
-    let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&metrics)));
-    Ok(consensus)
-}
-
-pub(super) async fn make_blob(
-    cfg: &PersistConfig,
-    blob_uri: &str,
-    commit: bool,
-    metrics: Arc<Metrics>,
-) -> anyhow::Result<Arc<dyn Blob + Send + Sync>> {
-    let blob =
-        BlobConfig::try_from(blob_uri, Box::new(cfg.clone()), metrics.s3_blob.clone()).await?;
-    let blob = blob.clone().open().await?;
-    let blob = if commit {
-        blob
-    } else {
-        Arc::new(ReadOnly(blob))
-    };
-    let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&metrics)));
-    Ok(blob)
-}
-
 async fn make_machine(
     cfg: &PersistConfig,
     consensus: Arc<dyn Consensus + Send + Sync>,
@@ -379,6 +357,26 @@ async fn make_machine(
     shard_id: ShardId,
     commit: bool,
 ) -> anyhow::Result<Machine<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>> {
+    make_typed_machine::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>(
+        cfg, consensus, blob, metrics, shard_id, commit,
+    )
+    .await
+}
+
+async fn make_typed_machine<K, V, T, D>(
+    cfg: &PersistConfig,
+    consensus: Arc<dyn Consensus + Send + Sync>,
+    blob: Arc<dyn Blob + Send + Sync>,
+    metrics: Arc<Metrics>,
+    shard_id: ShardId,
+    commit: bool,
+) -> anyhow::Result<Machine<K, V, T, D>>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
+{
     let state_versions = Arc::new(StateVersions::new(
         cfg.clone(),
         consensus,
@@ -420,7 +418,7 @@ async fn make_machine(
         break;
     }
 
-    let machine = Machine::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::new(
+    let machine = Machine::<K, V, T, D>::new(
         cfg.clone(),
         shard_id,
         Arc::clone(&metrics),

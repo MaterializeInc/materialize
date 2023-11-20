@@ -1260,11 +1260,22 @@ ORDER BY company_id;
 
 # Now test the window function version of string_agg.
 
-query error supported
+query IT
 SELECT company_id, string_agg(employee, ',')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  A
+2  B
+2  B,B
+3  C
+3  C,C
+3  C,C,C
+4  D
+4  D,D
+4  D,D,D
+4  D,D,D,D
 
 query error unknown catalog item 'b'
 SELECT company_id, string_agg(employee::BYTEA, b',')
@@ -1272,11 +1283,22 @@ OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(employee, '')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  A
+2  B
+2  BB
+3  C
+3  CC
+3  CCC
+4  D
+4  DD
+4  DDD
+4  DDDD
 
 query error unknown catalog item 'b'
 SELECT company_id, string_agg(employee::BYTEA, b'')
@@ -1284,79 +1306,156 @@ OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(employee, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  A
+2  B
+2  BB
+3  C
+3  CC
+3  CCC
+4  D
+4  DD
+4  DDD
+4  DDDD
 
-query error supported
+query error string_agg on BYTEA not yet supported
 SELECT company_id, string_agg(employee::BYTEA, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(NULL::TEXT, employee)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  NULL
+2  NULL
+2  NULL
+3  NULL
+3  NULL
+3  NULL
+4  NULL
+4  NULL
+4  NULL
+4  NULL
 
-query error supported
+query error string_agg on BYTEA not yet supported
 SELECT company_id, string_agg(NULL::BYTEA, employee::BYTEA)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(NULL::TEXT, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  NULL
+2  NULL
+2  NULL
+3  NULL
+3  NULL
+3  NULL
+4  NULL
+4  NULL
+4  NULL
+4  NULL
 
-query error supported
+query error string_agg on BYTEA not yet supported
 SELECT company_id, string_agg(NULL::BYTEA, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(NULL, NULL::TEXT)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  NULL
+2  NULL
+2  NULL
+3  NULL
+3  NULL
+3  NULL
+4  NULL
+4  NULL
+4  NULL
+4  NULL
 
-query error supported
+query error string_agg on BYTEA not yet supported
 SELECT company_id, string_agg(NULL, NULL::BYTEA)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(NULL, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  NULL
+2  NULL
+2  NULL
+3  NULL
+3  NULL
+3  NULL
+4  NULL
+4  NULL
+4  NULL
+4  NULL
 
-query error supported
+query IT
 SELECT company_id, string_agg(employee, lower(employee))
 OVER (PARTITION BY company_id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  A
+2  BbB
+2  BbB
+3  CcCcC
+3  CcCcC
+3  CcCcC
+4  DdDdDdD
+4  DdDdDdD
+4  DdDdDdD
+4  DdDdDdD
 
-query error supported
+query IT
 SELECT company_id, string_agg(lower(employee), employee)
 OVER (PARTITION BY company_id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  a
+2  bBb
+2  bBb
+3  cCcCc
+3  cCcCc
+3  cCcCc
+4  dDdDdDd
+4  dDdDdDd
+4  dDdDdDd
+4  dDdDdDd
 
-query error supported
+query error db error: ERROR: function string_agg\(text, text, text\) does not exist
 SELECT company_id, string_agg(employee, employee, employee)
 OVER (PARTITION BY company_id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query error db error: ERROR: function string_agg\(text\) does not exist
 SELECT company_id, string_agg(employee)
 OVER (PARTITION BY company_id)
 FROM string_agg_test

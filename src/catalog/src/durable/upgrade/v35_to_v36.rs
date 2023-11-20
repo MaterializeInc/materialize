@@ -1,0 +1,191 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+use std::collections::BTreeMap;
+
+use mz_stash::upgrade::{wire_compatible, MigrationAction, WireCompatible};
+use mz_stash::{Transaction, TypedCollection};
+use mz_stash_types::StashError;
+
+use crate::durable::upgrade::{objects_v35 as v35, objects_v36 as v36};
+
+wire_compatible!(v35::ServerConfigurationKey with v36::ServerConfigurationKey);
+wire_compatible!(v35::ServerConfigurationValue with v36::ServerConfigurationValue);
+
+const SYSTEM_CONFIGURATION_COLLECTION: TypedCollection<
+    v35::ServerConfigurationKey,
+    v35::ServerConfigurationValue,
+> = TypedCollection::new("system_configuration");
+
+const ENABLE_LD_RBAC_CHECKS_NAME: &str = "enable_ld_rbac_checks";
+const ENABLE_RBAC_CHECKS_NAME: &str = "enable_rbac_checks";
+
+/// Persist `false` for existing environments' RBAC flags, iff they're not already set.
+pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
+    SYSTEM_CONFIGURATION_COLLECTION
+        .migrate_to(
+            tx,
+            |entries: &BTreeMap<v35::ServerConfigurationKey, v35::ServerConfigurationValue>| {
+                let mut updates = Vec::with_capacity(entries.len());
+                let mut found_ld_flag = false;
+                let mut found_user_flag = false;
+
+                for (key, value) in entries {
+                    if key.name == ENABLE_LD_RBAC_CHECKS_NAME {
+                        found_ld_flag = true;
+                    } else if key.name == ENABLE_RBAC_CHECKS_NAME {
+                        found_user_flag = true;
+                    }
+
+                    let new_key: v36::ServerConfigurationKey = WireCompatible::convert(key);
+                    let new_value: v36::ServerConfigurationValue = WireCompatible::convert(value);
+                    updates.push(MigrationAction::Update(key.clone(), (new_key, new_value)));
+                }
+
+                if !found_ld_flag {
+                    updates.push(MigrationAction::Insert(
+                        v36::ServerConfigurationKey {
+                            name: ENABLE_LD_RBAC_CHECKS_NAME.to_string(),
+                        },
+                        v36::ServerConfigurationValue {
+                            value: false.to_string(),
+                        },
+                    ));
+                }
+
+                if !found_user_flag {
+                    updates.push(MigrationAction::Insert(
+                        v36::ServerConfigurationKey {
+                            name: ENABLE_RBAC_CHECKS_NAME.to_string(),
+                        },
+                        v36::ServerConfigurationValue {
+                            value: false.to_string(),
+                        },
+                    ));
+                }
+
+                updates
+            },
+        )
+        .await
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_stash::Stash;
+
+    use super::*;
+
+    const SYSTEM_CONFIGURATION_COLLECTION_V36: TypedCollection<
+        v36::ServerConfigurationKey,
+        v36::ServerConfigurationValue,
+    > = TypedCollection::new("system_configuration");
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn smoke_test_existing_flags() {
+        Stash::with_debug_stash(|mut stash| async move {
+            SYSTEM_CONFIGURATION_COLLECTION
+                .insert_without_overwrite(
+                    &mut stash,
+                    vec![
+                        (
+                            v35::ServerConfigurationKey {
+                                name: ENABLE_LD_RBAC_CHECKS_NAME.to_string(),
+                            },
+                            v35::ServerConfigurationValue {
+                                value: true.to_string(),
+                            },
+                        ),
+                        (
+                            v35::ServerConfigurationKey {
+                                name: ENABLE_RBAC_CHECKS_NAME.to_string(),
+                            },
+                            v35::ServerConfigurationValue {
+                                value: true.to_string(),
+                            },
+                        ),
+                    ],
+                )
+                .await
+                .expect("insert failed");
+
+            // Run the migration.
+            stash
+                .with_transaction(|tx| {
+                    Box::pin(async move {
+                        upgrade(&tx).await?;
+                        Ok(())
+                    })
+                })
+                .await
+                .expect("transaction failed");
+
+            let mut system_configs: Vec<_> = SYSTEM_CONFIGURATION_COLLECTION_V36
+                .peek_one(&mut stash)
+                .await
+                .expect("peek failed")
+                .into_iter()
+                .map(|(key, value)| (key.name, value.value))
+                .collect();
+            system_configs.sort();
+
+            assert_eq!(
+                system_configs,
+                vec![
+                    (ENABLE_LD_RBAC_CHECKS_NAME.to_string(), true.to_string()),
+                    (ENABLE_RBAC_CHECKS_NAME.to_string(), true.to_string()),
+                ]
+            );
+        })
+        .await
+        .expect("stash failed");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn smoke_test_empty_flags() {
+        Stash::with_debug_stash(|mut stash| async move {
+            SYSTEM_CONFIGURATION_COLLECTION
+                .insert_without_overwrite(&mut stash, vec![])
+                .await
+                .expect("insert failed");
+
+            // Run the migration.
+            stash
+                .with_transaction(|tx| {
+                    Box::pin(async move {
+                        upgrade(&tx).await?;
+                        Ok(())
+                    })
+                })
+                .await
+                .expect("transaction failed");
+
+            let mut system_configs: Vec<_> = SYSTEM_CONFIGURATION_COLLECTION_V36
+                .peek_one(&mut stash)
+                .await
+                .expect("peek failed")
+                .into_iter()
+                .map(|(key, value)| (key.name, value.value))
+                .collect();
+            system_configs.sort();
+
+            assert_eq!(
+                system_configs,
+                vec![
+                    (ENABLE_LD_RBAC_CHECKS_NAME.to_string(), false.to_string()),
+                    (ENABLE_RBAC_CHECKS_NAME.to_string(), false.to_string()),
+                ]
+            );
+        })
+        .await
+        .expect("stash failed");
+    }
+}

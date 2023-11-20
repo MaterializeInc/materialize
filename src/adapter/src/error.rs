@@ -19,19 +19,20 @@ use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
+use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
-use mz_repr::role_id::RoleId;
 use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
+use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
-use mz_storage_client::controller::StorageError;
+use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
 use smallvec::SmallVec;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 
-use crate::{catalog, rbac};
+use crate::catalog;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -81,6 +82,8 @@ pub enum AdapterError {
     },
     /// SET TRANSACTION ISOLATION LEVEL was called in the middle of a transaction.
     InvalidSetIsolationLevel,
+    /// SET cluster was called in the middle of a transaction.
+    InvalidSetCluster,
     /// No such storage instance size has been configured.
     InvalidStorageClusterSize {
         size: String,
@@ -99,6 +102,8 @@ pub enum AdapterError {
     },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
+    /// Transaction cluster was dropped in the middle of a transaction.
+    ConcurrentClusterDrop,
     /// Target cluster has no replicas to service query.
     NoClusterReplicasAvailable(String),
     /// The named operation cannot be run in a transaction.
@@ -145,8 +150,6 @@ pub enum AdapterError {
     Canceled,
     /// An idle session in a transaction has timed out.
     IdleInTransactionSessionTimeout,
-    /// An error occurred in a SQL catalog operation.
-    SqlCatalog(mz_sql::catalog::CatalogError),
     /// The transaction is in single-subscribe mode.
     SubscribeOnlyTransaction,
     /// An error occurred in the MIR stage of the optimizer.
@@ -204,14 +207,24 @@ pub enum AdapterError {
     MultiTableWriteTransaction,
     /// The transaction can only execute a single statement.
     SingleStatementTransaction,
+    /// The transaction can only execute simple DDL.
+    DDLOnlyTransaction,
+    /// Another session modified the Catalog while this transaction was open.
+    DDLTransactionRace,
+    /// Used to prevent us from durably committing state while a DDL transaction is open, should
+    /// never be returned to the user.
+    DDLTransactionDryRun {
+        /// New operations that were run in the transaction.
+        new_ops: Vec<crate::catalog::Op>,
+        /// New resulting `CatalogState`.
+        new_state: crate::catalog::CatalogState,
+    },
     /// An error occurred in the storage layer
-    Storage(mz_storage_client::controller::StorageError),
+    Storage(mz_storage_types::controller::StorageError),
     /// An error occurred in the compute layer
     Compute(anyhow::Error),
     /// An error in the orchestrator layer
     Orchestrator(anyhow::Error),
-    /// The active role was dropped while a user was logged in.
-    ConcurrentRoleDrop(RoleId),
     /// A statement tried to drop a role that had dependent objects.
     ///
     /// The map keys are role names and values are detailed error messages.
@@ -219,6 +232,17 @@ pub enum AdapterError {
 }
 
 impl AdapterError {
+    pub fn into_response(self, severity: Severity) -> ErrorResponse {
+        ErrorResponse {
+            severity,
+            code: self.code(),
+            message: self.to_string(),
+            detail: self.detail(),
+            hint: self.hint(),
+            position: None,
+        }
+    }
+
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
@@ -275,7 +299,6 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::VarError(e) => e.detail(),
-            AdapterError::ConcurrentRoleDrop(_) => Some("Please disconnect and re-connect with a valid role.".into()),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
             AdapterError::DependentObject(dependent_objects) => {
                 Some(dependent_objects
@@ -303,7 +326,6 @@ impl AdapterError {
                     .to_string(),
             ),
             AdapterError::Catalog(c) => c.hint(),
-            AdapterError::SqlCatalog(e) => e.hint(),
             AdapterError::Eval(e) => e.hint(),
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
@@ -388,10 +410,12 @@ impl AdapterError {
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidSetIsolationLevel => SqlState::ACTIVE_SQL_TRANSACTION,
+            AdapterError::InvalidSetCluster => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::InvalidStorageClusterSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::SourceOrSinkSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
+            AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
@@ -412,7 +436,6 @@ impl AdapterError {
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
-            AdapterError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Transform(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UnallowedOnCluster { .. } => {
@@ -431,16 +454,18 @@ impl AdapterError {
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::DDLTransactionRace => SqlState::T_R_SERIALIZATION_FAILURE,
+            AdapterError::DDLTransactionDryRun { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
-            // "write-only transaction" and "single table write transaction" are
-            // not things in Postgres. This error code is the generic "bad txn thing"
-            // code, so it's probably the best choice.
+            // "write-only transaction", "single table write transaction", or "ddl only
+            // transaction" are not things in Postgres. This error code is the generic "bad txn
+            // thing" code, so it's probably the best choice.
             AdapterError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::DDLOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Storage(_) | AdapterError::Compute(_) | AdapterError::Orchestrator(_) => {
                 SqlState::INTERNAL_ERROR
             }
-            AdapterError::ConcurrentRoleDrop(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
             AdapterError::VarError(e) => match e {
                 VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
@@ -507,6 +532,9 @@ impl fmt::Display for AdapterError {
                 f,
                 "SET TRANSACTION ISOLATION LEVEL must be called before any query"
             ),
+            AdapterError::InvalidSetCluster => {
+                write!(f, "SET cluster cannot be called in an active transaction")
+            }
             AdapterError::InvalidStorageClusterSize { size, .. } => {
                 write!(f, "unknown source size {size}")
             }
@@ -518,6 +546,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
+            }
+            AdapterError::ConcurrentClusterDrop => {
+                write!(f, "the transaction's active cluster has been dropped")
             }
             AdapterError::NoClusterReplicasAvailable(cluster) => {
                 write!(
@@ -581,7 +612,6 @@ impl fmt::Display for AdapterError {
             AdapterError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
             }
-            AdapterError::SqlCatalog(e) => e.fmt(f),
             AdapterError::SubscribeOnlyTransaction => {
                 f.write_str("SUBSCRIBE in transactions must be the only read statement")
             }
@@ -647,12 +677,16 @@ impl fmt::Display for AdapterError {
             AdapterError::MultiTableWriteTransaction => {
                 f.write_str("write transactions only support writes to a single table")
             }
+            AdapterError::DDLOnlyTransaction => f.write_str(
+                "transactions which modify objects are restricted to just modifying objects",
+            ),
+            AdapterError::DDLTransactionRace => {
+                f.write_str("object state changed while transaction was in progress")
+            }
+            AdapterError::DDLTransactionDryRun { .. } => f.write_str("ddl transaction dry run"),
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
             AdapterError::Orchestrator(e) => e.fmt(f),
-            AdapterError::ConcurrentRoleDrop(role_id) => {
-                write!(f, "role {role_id} was concurrently dropped")
-            }
             AdapterError::DependentObject(dependent_objects) => {
                 let role_str = if dependent_objects.keys().count() == 1 {
                     "role"
@@ -696,6 +730,12 @@ impl From<catalog::Error> for AdapterError {
     }
 }
 
+impl From<mz_catalog::durable::CatalogError> for AdapterError {
+    fn from(e: mz_catalog::durable::CatalogError) -> Self {
+        catalog::Error::from(e).into()
+    }
+}
+
 impl From<EvalError> for AdapterError {
     fn from(e: EvalError) -> AdapterError {
         AdapterError::Eval(e)
@@ -713,7 +753,7 @@ impl From<ExplainError> for AdapterError {
 
 impl From<mz_sql::catalog::CatalogError> for AdapterError {
     fn from(e: mz_sql::catalog::CatalogError) -> AdapterError {
-        AdapterError::SqlCatalog(e)
+        AdapterError::Catalog(catalog::Error::from(e))
     }
 }
 
@@ -781,6 +821,12 @@ impl From<VarError> for AdapterError {
 impl From<rbac::UnauthorizedError> for AdapterError {
     fn from(e: rbac::UnauthorizedError) -> Self {
         AdapterError::Unauthorized(e)
+    }
+}
+
+impl From<mz_sql_parser::ast::IdentError> for AdapterError {
+    fn from(value: mz_sql_parser::ast::IdentError) -> Self {
+        AdapterError::PlanError(PlanError::InvalidIdent(value))
     }
 }
 

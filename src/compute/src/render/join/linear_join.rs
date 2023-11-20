@@ -11,14 +11,18 @@
 //!
 //! Consult [LinearJoinPlan] documentation for details.
 
+use std::time::Instant;
+
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
-use mz_compute_client::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
-use mz_compute_client::plan::join::JoinClosure;
-use mz_repr::{DatumVec, Diff, Row, RowArena};
-use mz_storage_client::types::errors::DataflowError;
+use mz_compute_types::dataflows::YieldSpec;
+use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
+use mz_compute_types::plan::join::JoinClosure;
+use mz_repr::fixed_length::IntoRowByTypes;
+use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::Scope;
@@ -26,7 +30,8 @@ use timely::progress::timestamp::{Refines, Timestamp};
 
 use crate::extensions::arrange::MzArrange;
 use crate::render::context::{
-    Arrangement, ArrangementFlavor, ArrangementImport, CollectionBundle, Context,
+    ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
+    SpecializedArrangementImport,
 };
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::typedefs::RowSpine;
@@ -34,35 +39,84 @@ use crate::typedefs::RowSpine;
 /// Available linear join implementations.
 ///
 /// See the `mz_join_core` module docs for our rationale for providing two join implementations.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub enum LinearJoinImpl {
-    #[default]
     Materialize,
     DifferentialDataflow,
 }
 
-impl LinearJoinImpl {
-    /// Run this join implementation on the provided arrangements.
-    fn run<G, Tr1, Tr2, L, I>(
+/// Specification of how linear joins are to be executed.
+///
+/// Note that currently `yielding` only affects the `Materialize` join implementation, as the DD
+/// join doesn't allow configuring its yielding behavior. Merging [#390] would fix this.
+///
+/// [#390]: https://github.com/TimelyDataflow/differential-dataflow/pull/390
+#[derive(Clone, Copy)]
+pub struct LinearJoinSpec {
+    pub implementation: LinearJoinImpl,
+    pub yielding: YieldSpec,
+}
+
+impl Default for LinearJoinSpec {
+    fn default() -> Self {
+        Self {
+            implementation: LinearJoinImpl::Materialize,
+            yielding: YieldSpec {
+                after_work: Some(1_000_000),
+                after_time: None,
+            },
+        }
+    }
+}
+
+impl LinearJoinSpec {
+    /// Render a join operator according to this specification.
+    fn render<G, Tr1, Tr2, L, I, K, V1, V2>(
         &self,
         arranged1: &Arranged<G, Tr1>,
         arranged2: &Arranged<G, Tr2>,
+        shutdown_token: ShutdownToken,
         result: L,
     ) -> Collection<G, I::Item, Diff>
     where
         G: Scope,
         G::Timestamp: Lattice,
-        Tr1: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
-        Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, R = Diff> + Clone + 'static,
         L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
         I: IntoIterator,
         I::Item: Data,
+        K: Data,
+        V1: Data,
+        V2: Data,
     {
-        match self {
-            Self::DifferentialDataflow => {
+        use LinearJoinImpl::*;
+
+        match (
+            self.implementation,
+            self.yielding.after_work,
+            self.yielding.after_time,
+        ) {
+            (DifferentialDataflow, _, _) => {
                 differential_dataflow::operators::JoinCore::join_core(arranged1, arranged2, result)
             }
-            Self::Materialize => mz_join_core(arranged1, arranged2, result),
+            (Materialize, Some(work_limit), Some(time_limit)) => {
+                let yield_fn =
+                    move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
+                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+            }
+            (Materialize, Some(work_limit), None) => {
+                let yield_fn = move |_start, work| work >= work_limit;
+                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+            }
+            (Materialize, None, Some(time_limit)) => {
+                let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
+                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+            }
+            (Materialize, None, None) => {
+                let yield_fn = |_start, _work| false;
+                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+            }
         }
     }
 }
@@ -77,12 +131,12 @@ where
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
     /// A dataflow-local arrangement.
-    Local(Arrangement<G, Row>),
+    Local(SpecializedArrangement<G>),
     /// An imported arrangement.
-    Trace(ArrangementImport<G, Row, T>),
+    Trace(SpecializedArrangementImport<G, T>),
 }
 
-impl<G, T> Context<G, Row, T>
+impl<G, T> Context<G, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
@@ -90,10 +144,10 @@ where
 {
     pub(crate) fn render_join(
         &mut self,
-        inputs: Vec<CollectionBundle<G, Row, T>>,
+        inputs: Vec<CollectionBundle<G, T>>,
         linear_plan: LinearJoinPlan,
-    ) -> CollectionBundle<G, Row, T> {
-        self.scope.region_named("Join(Linear)", |inner| {
+    ) -> CollectionBundle<G, T> {
+        self.scope.clone().region_named("Join(Linear)", |inner| {
             // Collect all error streams, and concatenate them at the end.
             let mut errors = Vec::new();
 
@@ -131,8 +185,9 @@ where
                         let (j, errs) = joined.flat_map_fallible("LinearJoinInitialization", {
                             // Reuseable allocation for unpacking.
                             let mut datums = DatumVec::new();
-                            let mut row_builder = Row::default();
                             move |row| {
+                                let binding = SharedRow::get();
+                                let mut row_builder = binding.borrow_mut();
                                 let temp_storage = RowArena::new();
                                 let mut datums_local = datums.borrow_with(&row);
                                 // TODO(mcsherry): re-use `row` allocation.
@@ -154,13 +209,11 @@ where
             for stage_plan in linear_plan.stage_plans.into_iter() {
                 // Different variants of `joined` implement this differently,
                 // and the logic is centralized there.
-                let stream = differential_join(
-                    self.linear_join_impl,
+                let stream = self.differential_join(
                     joined,
                     inputs[stage_plan.lookup_relation].enter_region(inner),
                     stage_plan,
                     &mut errors,
-                    self.enable_arrangement_size_logging,
                 );
                 // Update joined results and capture any errors.
                 joined = JoinedFlavor::Collection(stream);
@@ -174,8 +227,9 @@ where
                     let (updates, errs) = joined.flat_map_fallible("LinearJoinFinalization", {
                         // Reuseable allocation for unpacking.
                         let mut datums = DatumVec::new();
-                        let mut row_builder = Row::default();
                         move |row| {
+                            let binding = SharedRow::get();
+                            let mut row_builder = binding.borrow_mut();
                             let temp_storage = RowArena::new();
                             let mut datums_local = datums.borrow_with(&row);
                             // TODO(mcsherry): re-use `row` allocation.
@@ -201,153 +255,232 @@ where
             .leave_region()
         })
     }
-}
 
-/// Looks up the arrangement for the next input and joins it to the arranged
-/// version of the join of previous inputs. This is split into its own method
-/// to enable reuse of code with different types of `prev_keyed`.
-fn differential_join<G, T>(
-    join_impl: LinearJoinImpl,
-    mut joined: JoinedFlavor<G, T>,
-    lookup_relation: CollectionBundle<G, Row, T>,
-    LinearStagePlan {
-        stream_key,
-        stream_thinning,
-        lookup_key,
-        closure,
-        lookup_relation: _,
-    }: LinearStagePlan,
-    errors: &mut Vec<Collection<G, DataflowError, Diff>>,
-    enable_arrangement_size_logging: bool,
-) -> Collection<G, Row, Diff>
-where
-    G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
-{
-    // If we have only a streamed collection, we must first form an arrangement.
-    if let JoinedFlavor::Collection(stream) = joined {
-        let mut row_buf = Row::default();
-        let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
-            // Reuseable allocation for unpacking.
-            let mut datums = DatumVec::new();
-            move |row| {
-                let temp_storage = RowArena::new();
-                let datums_local = datums.borrow_with(&row);
-                row_buf.packer().try_extend(
-                    stream_key
-                        .iter()
-                        .map(|e| e.eval(&datums_local, &temp_storage)),
-                )?;
-                let key = row_buf.clone();
-                row_buf
-                    .packer()
-                    .extend(stream_thinning.iter().map(|e| datums_local[*e]));
-                let value = row_buf.clone();
-                Ok((key, value))
-            }
-        });
-
-        errors.push(errs);
-        let arranged =
-            keyed.mz_arrange::<RowSpine<_, _, _, _>>("JoinStage", enable_arrangement_size_logging);
-        joined = JoinedFlavor::Local(arranged);
-    }
-
-    // Demultiplex the four different cross products of arrangement types we might have.
-    let arrangement = lookup_relation
-        .arrangement(&lookup_key[..])
-        .expect("Arrangement absent despite explicit construction");
-    match joined {
-        JoinedFlavor::Collection(_) => {
-            unreachable!("JoinedFlavor::Collection variant avoided at top of method");
-        }
-        JoinedFlavor::Local(local) => match arrangement {
-            ArrangementFlavor::Local(oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, local, oks, closure);
-                errors.push(errs1.as_collection(|k, _v| k.clone()));
-                errors.extend(errs2);
-                oks
-            }
-            ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, local, oks, closure);
-                errors.push(errs1.as_collection(|k, _v| k.clone()));
-                errors.extend(errs2);
-                oks
-            }
-        },
-        JoinedFlavor::Trace(trace) => match arrangement {
-            ArrangementFlavor::Local(oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, trace, oks, closure);
-                errors.push(errs1.as_collection(|k, _v| k.clone()));
-                errors.extend(errs2);
-                oks
-            }
-            ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, trace, oks, closure);
-                errors.push(errs1.as_collection(|k, _v| k.clone()));
-                errors.extend(errs2);
-                oks
-            }
-        },
-    }
-}
-
-/// Joins the arrangement for `next_input` to the arranged version of the
-/// join of previous inputs. This is split into its own method to enable
-/// reuse of code with different types of `next_input`.
-///
-/// The return type includes an optional error collection, which may be
-/// `None` if we can determine that `closure` cannot error.
-fn differential_join_inner<G, T, Tr1, Tr2>(
-    join_impl: LinearJoinImpl,
-    prev_keyed: Arranged<G, Tr1>,
-    next_input: Arranged<G, Tr2>,
-    closure: JoinClosure,
-) -> (
-    Collection<G, Row, Diff>,
-    Option<Collection<G, DataflowError, Diff>>,
-)
-where
-    G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
-    Tr1: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
-    Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
-{
-    // Reuseable allocation for unpacking.
-    let mut datums = DatumVec::new();
-    let mut row_builder = Row::default();
-
-    if closure.could_error() {
-        let (oks, err) = join_impl
-            .run(&prev_keyed, &next_input, move |key, old, new| {
-                let temp_storage = RowArena::new();
-                let mut datums_local = datums.borrow_with_many(&[key, old, new]);
-                closure
-                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                    .map_err(DataflowError::from)
-                    .transpose()
-            })
-            .inner
-            .ok_err(|(x, t, d)| {
-                // TODO(mcsherry): consider `ok_err()` for `Collection`.
-                match x {
-                    Ok(x) => Ok((x, t, d)),
-                    Err(x) => Err((x, t, d)),
+    /// Looks up the arrangement for the next input and joins it to the arranged
+    /// version of the join of previous inputs.
+    fn differential_join<S>(
+        &self,
+        mut joined: JoinedFlavor<S, T>,
+        lookup_relation: CollectionBundle<S, T>,
+        LinearStagePlan {
+            stream_key,
+            stream_thinning,
+            lookup_key,
+            closure,
+            lookup_relation: _,
+        }: LinearStagePlan,
+        errors: &mut Vec<Collection<S, DataflowError, Diff>>,
+    ) -> Collection<S, Row, Diff>
+    where
+        S: Scope<Timestamp = G::Timestamp>,
+    {
+        // If we have only a streamed collection, we must first form an arrangement.
+        if let JoinedFlavor::Collection(stream) = joined {
+            let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
+                // Reuseable allocation for unpacking.
+                let mut datums = DatumVec::new();
+                move |row| {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let temp_storage = RowArena::new();
+                    let datums_local = datums.borrow_with(&row);
+                    row_builder.packer().try_extend(
+                        stream_key
+                            .iter()
+                            .map(|e| e.eval(&datums_local, &temp_storage)),
+                    )?;
+                    let key = row_builder.clone();
+                    row_builder
+                        .packer()
+                        .extend(stream_thinning.iter().map(|e| datums_local[*e]));
+                    let value = row_builder.clone();
+                    Ok((key, value))
                 }
             });
 
-        (oks.as_collection(), Some(err.as_collection()))
-    } else {
-        let oks = join_impl.run(&prev_keyed, &next_input, move |key, old, new| {
-            let temp_storage = RowArena::new();
-            let mut datums_local = datums.borrow_with_many(&[key, old, new]);
-            closure
-                .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                .expect("Closure claimed to never error")
-        });
+            errors.push(errs);
 
-        (oks, None)
+            // TODO(vmarcos): We should implement further arrangement specialization here (#22104).
+            // By knowing how types propagate through joins we could specialize intermediate
+            // arrangements as well, either in values or eventually in keys.
+            let arranged = keyed.mz_arrange::<RowSpine<_, _, _, _>>("JoinStage");
+            joined = JoinedFlavor::Local(SpecializedArrangement::RowRow(arranged));
+        }
+
+        macro_rules! dispatch {
+            ($A:tt, $B:tt, $prev_keyed:expr, $next_input:expr) => {{
+                let empty = Some(vec![]);
+                match ($prev_keyed, $next_input) {
+                    ($A::RowUnit(prev_keyed), $B::RowUnit(next_input)) => self
+                        .differential_join_inner(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            empty.clone(),
+                            empty,
+                            closure,
+                        ),
+                    ($A::RowUnit(prev_keyed), $B::RowRow(next_input)) => self
+                        .differential_join_inner(
+                            prev_keyed, next_input, None, empty, None, closure,
+                        ),
+                    ($A::RowRow(prev_keyed), $B::RowUnit(next_input)) => self
+                        .differential_join_inner(
+                            prev_keyed, next_input, None, None, empty, closure,
+                        ),
+                    ($A::RowRow(prev_keyed), $B::RowRow(next_input)) => self
+                        .differential_join_inner(prev_keyed, next_input, None, None, None, closure),
+                }
+            }};
+        }
+
+        // Demultiplex the four different cross products of arrangement types we might have.
+        let arrangement = lookup_relation
+            .arrangement(&lookup_key[..])
+            .expect("Arrangement absent despite explicit construction");
+        match joined {
+            JoinedFlavor::Collection(_) => {
+                unreachable!("JoinedFlavor::Collection variant avoided at top of method");
+            }
+            JoinedFlavor::Local(local) => match arrangement {
+                ArrangementFlavor::Local(oks, errs1) => {
+                    let (oks, errs2) =
+                        dispatch!(SpecializedArrangement, SpecializedArrangement, local, oks);
+                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.extend(errs2);
+                    oks
+                }
+                ArrangementFlavor::Trace(_gid, oks, errs1) => {
+                    let (oks, errs2) = dispatch!(
+                        SpecializedArrangement,
+                        SpecializedArrangementImport,
+                        local,
+                        oks
+                    );
+                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.extend(errs2);
+                    oks
+                }
+            },
+            JoinedFlavor::Trace(trace) => match arrangement {
+                ArrangementFlavor::Local(oks, errs1) => {
+                    let (oks, errs2) = dispatch!(
+                        SpecializedArrangementImport,
+                        SpecializedArrangement,
+                        trace,
+                        oks
+                    );
+                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.extend(errs2);
+                    oks
+                }
+                ArrangementFlavor::Trace(_gid, oks, errs1) => {
+                    let (oks, errs2) = dispatch!(
+                        SpecializedArrangementImport,
+                        SpecializedArrangementImport,
+                        trace,
+                        oks
+                    );
+                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.extend(errs2);
+                    oks
+                }
+            },
+        }
+    }
+
+    /// Joins the arrangement for `next_input` to the arranged version of the
+    /// join of previous inputs. This is split into its own method to enable
+    /// reuse of code with different types of `next_input`.
+    ///
+    /// The return type includes an optional error collection, which may be
+    /// `None` if we can determine that `closure` cannot error.
+    fn differential_join_inner<S, Tr1, Tr2, K, V1, V2>(
+        &self,
+        prev_keyed: Arranged<S, Tr1>,
+        next_input: Arranged<S, Tr2>,
+        key_types: Option<Vec<ColumnType>>,
+        prev_types: Option<Vec<ColumnType>>,
+        next_types: Option<Vec<ColumnType>>,
+        closure: JoinClosure,
+    ) -> (
+        Collection<S, Row, Diff>,
+        Option<Collection<S, DataflowError, Diff>>,
+    )
+    where
+        S: Scope<Timestamp = G::Timestamp>,
+        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        K: Data + IntoRowByTypes,
+        V1: Data + IntoRowByTypes,
+        V2: Data + IntoRowByTypes,
+    {
+        // Reuseable allocation for unpacking.
+        let mut datums = DatumVec::new();
+
+        if closure.could_error() {
+            let (oks, err) = self
+                .linear_join_spec
+                .render(
+                    &prev_keyed,
+                    &next_input,
+                    self.shutdown_token.clone(),
+                    move |key, old, new| {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
+                        let temp_storage = RowArena::new();
+
+                        let key = key.into_datum_iter(key_types.as_deref());
+                        let old = old.into_datum_iter(prev_types.as_deref());
+                        let new = new.into_datum_iter(next_types.as_deref());
+
+                        let mut datums_local = datums.borrow();
+                        datums_local.extend(key);
+                        datums_local.extend(old);
+                        datums_local.extend(new);
+
+                        closure
+                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                            .map_err(DataflowError::from)
+                            .transpose()
+                    },
+                )
+                .inner
+                .ok_err(|(x, t, d)| {
+                    // TODO(mcsherry): consider `ok_err()` for `Collection`.
+                    match x {
+                        Ok(x) => Ok((x, t, d)),
+                        Err(x) => Err((x, t, d)),
+                    }
+                });
+
+            (oks.as_collection(), Some(err.as_collection()))
+        } else {
+            let oks = self.linear_join_spec.render(
+                &prev_keyed,
+                &next_input,
+                self.shutdown_token.clone(),
+                move |key, old, new| {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let temp_storage = RowArena::new();
+
+                    let key = key.into_datum_iter(key_types.as_deref());
+                    let old = old.into_datum_iter(prev_types.as_deref());
+                    let new = new.into_datum_iter(next_types.as_deref());
+
+                    let mut datums_local = datums.borrow();
+                    datums_local.extend(key);
+                    datums_local.extend(old);
+                    datums_local.extend(new);
+
+                    closure
+                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                        .expect("Closure claimed to never error")
+                },
+            );
+
+            (oks, None)
+        }
     }
 }

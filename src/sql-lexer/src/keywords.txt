@@ -27,6 +27,7 @@ Access
 Acks
 Add
 Addresses
+Aggregate
 All
 Alter
 And
@@ -36,6 +37,7 @@ Arrangement
 Array
 As
 Asc
+Assert
 At
 Auction
 Authority
@@ -45,6 +47,7 @@ Aws
 Begin
 Between
 Bigint
+Billed
 Body
 Boolean
 Both
@@ -107,6 +110,7 @@ Decimal
 Declare
 Decorrelated
 Default
+Defaults
 Delete
 Delimited
 Delimiter
@@ -115,6 +119,7 @@ Details
 Discard
 Disk
 Distinct
+Doc
 Dot
 Double
 Drop
@@ -177,10 +182,12 @@ Info
 Inherit
 Inline
 Inner
+Input
 Insert
 Inspect
 Int
 Integer
+Internal
 Intersect
 Interval
 Into
@@ -215,6 +222,7 @@ Materialize
 Materialized
 Max
 Mechanisms
+Membership
 Merge
 Message
 Metadata
@@ -275,6 +283,7 @@ Privatelink
 Privileges
 Progress
 Protobuf
+Protocol
 Publication
 Query
 Quote
@@ -320,6 +329,7 @@ Second
 Seconds
 Secret
 Secrets
+Security
 Seed
 Select
 Sequences
@@ -352,6 +362,7 @@ Subsource
 Subsources
 Substring
 Superuser
+Swap
 System
 Table
 Tables
@@ -367,6 +378,7 @@ Time
 Timeline
 Timeout
 Timestamp
+TimestampTz
 To
 Token
 Topic

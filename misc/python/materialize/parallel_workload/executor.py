@@ -9,27 +9,23 @@
 
 import random
 import threading
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
 import pg8000
 
-log: TextIO | None
+from materialize.data_ingest.query_error import QueryError
+
+if TYPE_CHECKING:
+    from materialize.parallel_workload.database import Database
+
+logging: TextIO | None
 lock: threading.Lock
 
 
 def initialize_logging() -> None:
-    global log, lock
-    log = open("parallel-workload-queries.log", "w")
+    global logging, lock
+    logging = open("parallel-workload-queries.log", "w")
     lock = threading.Lock()
-
-
-class QueryError(Exception):
-    msg: str
-    query: str
-
-    def __init__(self, msg: str, query: str):
-        self.msg = msg
-        self.query = query
 
 
 class Executor:
@@ -38,12 +34,20 @@ class Executor:
     pg_pid: int
     # Used by INSERT action to prevent writing into different tables in the same transaction
     insert_table: int | None
+    db: "Database"
+    reconnect_next: bool
+    rollback_next: bool
+    last_log: str
 
-    def __init__(self, rng: random.Random, cur: pg8000.Cursor):
+    def __init__(self, rng: random.Random, cur: pg8000.Cursor, db: "Database"):
         self.rng = rng
         self.cur = cur
+        self.db = db
         self.pg_pid = -1
         self.insert_table = None
+        self.reconnect_next = True
+        self.rollback_next = True
+        self.last_log = ""
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -51,6 +55,7 @@ class Executor:
     def commit(self) -> None:
         self.insert_table = None
         try:
+            self.log("commit")
             self.cur._c.commit()
         except Exception as e:
             raise QueryError(str(e), "commit")
@@ -58,23 +63,32 @@ class Executor:
     def rollback(self) -> None:
         self.insert_table = None
         try:
+            self.log("rollback")
             self.cur._c.rollback()
         except Exception as e:
             raise QueryError(str(e), "rollback")
 
+    def log(self, msg: str) -> None:
+        global logging, lock
+
+        if not logging:
+            return
+
+        thread_name = threading.current_thread().getName()
+        self.last_log = msg
+
+        with lock:
+            print(f"[{thread_name}] {msg}", file=logging)
+            logging.flush()
+
     def execute(
         self, query: str, extra_info: str = "", explainable: bool = False
     ) -> None:
-        global log, lock
         if explainable and self.rng.choice([True, False]):
             query = f"EXPLAIN {query}"
         query += ";"
-        thread_name = threading.current_thread().getName()
         extra_info_str = f" ({extra_info})" if extra_info else ""
-        if log:
-            with lock:
-                print(f"[{thread_name}] {query}{extra_info_str}", file=log)
-                log.flush()
+        self.log(f"{query}{extra_info_str}")
         try:
             self.cur.execute(query)
         except Exception as e:

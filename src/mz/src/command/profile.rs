@@ -37,6 +37,7 @@ use crate::{
     config_file::TomlProfile,
     context::{Context, ProfileContext},
     error::Error,
+    error::Error::ProfileNameAlreadyExistsError,
     server::server,
 };
 
@@ -152,12 +153,23 @@ pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPass
 /// 1. By prompting your user and email.
 /// 2. By opening the browser and creating the credentials in the console.
 pub async fn init(
-    scx: &mut Context,
-    profile_name: Option<String>,
+    scx: &Context,
     no_browser: bool,
+    force: bool,
     admin_endpoint: Option<Url>,
     cloud_endpoint: Option<Url>,
 ) -> Result<(), Error> {
+    let config_file = scx.config_file();
+    let profile = scx
+        .get_global_profile()
+        .map_or(config_file.profile().to_string(), |n| n);
+
+    if let Some(profiles) = scx.config_file().profiles() {
+        if profiles.contains_key(&profile) && !force {
+            return Err(ProfileNameAlreadyExistsError(profile));
+        }
+    }
+
     let app_password = match no_browser {
         true => init_without_browser(admin_endpoint.clone()).await?,
         false => init_with_browser(cloud_endpoint.clone()).await?,
@@ -171,18 +183,13 @@ pub async fn init(
         cloud_endpoint: cloud_endpoint.map(|url| url.to_string()),
     };
 
-    scx.config_file()
-        .add_profile(
-            profile_name.map_or(scx.config_file().profile().to_string(), |n| n),
-            new_profile,
-        )
-        .await?;
+    config_file.add_profile(profile, new_profile).await?;
 
     Ok(())
 }
 
 /// List all the possible config values for the profile.
-pub fn list(cx: &mut Context) -> Result<(), Error> {
+pub fn list(cx: &Context) -> Result<(), Error> {
     if let Some(profiles) = cx.config_file().profiles() {
         let output = cx.output_formatter();
 
@@ -199,9 +206,12 @@ pub fn list(cx: &mut Context) -> Result<(), Error> {
 }
 
 /// Removes the profile from the configuration file.
-pub async fn remove(cx: &mut Context) -> Result<(), Error> {
+pub async fn remove(cx: &Context) -> Result<(), Error> {
     cx.config_file()
-        .remove_profile(cx.config_file().profile())
+        .remove_profile(
+            &cx.get_global_profile()
+                .unwrap_or(cx.config_file().profile().to_string()),
+        )
         .await
 }
 
@@ -255,17 +265,18 @@ impl ToString for ConfigArg {
 
 /// Shows the value of a profile configuration field.
 pub fn config_get(
-    cx: &mut ProfileContext,
+    cx: &ProfileContext,
     ConfigGetArgs { name }: ConfigGetArgs<'_>,
 ) -> Result<(), Error> {
-    let value = cx.config_file().get_profile_param(name).unwrap();
+    let profile = cx.get_profile();
+    let value = cx.config_file().get_profile_param(name, &profile)?;
     cx.output_formatter().output_scalar(value)?;
     Ok(())
 }
 
 /// Shows all the possible field and its values in the profile configuration.
-pub fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
-    let profile_params = cx.config_file().list_profile_params()?;
+pub fn config_list(cx: &ProfileContext) -> Result<(), Error> {
+    let profile_params = cx.config_file().list_profile_params(&cx.get_profile())?;
     let output = cx.output_formatter();
 
     // Structure to format the output. The name of the field equals the column name.
@@ -294,10 +305,12 @@ pub struct ConfigSetArgs<'a> {
 
 /// Sets a value in the profile configuration.
 pub async fn config_set(
-    cx: &mut ProfileContext,
+    cx: &ProfileContext,
     ConfigSetArgs { name, value }: ConfigSetArgs<'_>,
 ) -> Result<(), Error> {
-    cx.config_file().set_profile_param(name, Some(value)).await
+    cx.config_file()
+        .set_profile_param(&cx.get_profile(), name, Some(value))
+        .await
 }
 
 /// Represents the args to remove the value from a profile configuration field.
@@ -308,8 +321,10 @@ pub struct ConfigRemoveArgs<'a> {
 
 /// Removes the value from a profile configuration field.
 pub async fn config_remove(
-    cx: &mut ProfileContext,
+    cx: &ProfileContext,
     ConfigRemoveArgs { name }: ConfigRemoveArgs<'_>,
 ) -> Result<(), Error> {
-    cx.config_file().set_profile_param(name, None).await
+    cx.config_file()
+        .set_profile_param(&cx.get_profile(), name, None)
+        .await
 }

@@ -11,8 +11,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Materialized, Redpanda, Testdrive, Toxiproxy
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Materialized(options=["--persist-pubsub-url=http://toxiproxy:6879"]),
@@ -84,7 +87,7 @@ def workflow_default(c: Composition) -> None:
                   TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}');
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
                 > INSERT INTO t1 SELECT generate_series, 1 FROM generate_series(1,1000000);
                 $ kafka-ingest format=avro key-format=avro topic=pubsub-disruption schema=${schema} key-schema=${keyschema} start-iteration=1 repeat=1000000

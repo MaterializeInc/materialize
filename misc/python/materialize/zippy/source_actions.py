@@ -10,10 +10,12 @@
 import random
 from textwrap import dedent
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.kafka_capabilities import KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
+from materialize.zippy.replica_capabilities import source_capable_clusters
 from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.storaged_capabilities import StoragedRunning
 
@@ -23,7 +25,13 @@ class CreateSourceParameterized(ActionFactory):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, StoragedRunning, KafkaRunning, TopicExists}
+        return {
+            BalancerdIsRunning,
+            MzIsRunning,
+            StoragedRunning,
+            KafkaRunning,
+            TopicExists,
+        }
 
     def __init__(self, max_sources: int = 10) -> None:
         self.max_sources = max_sources
@@ -40,6 +48,9 @@ class CreateSourceParameterized(ActionFactory):
                     source=SourceExists(
                         name=new_source_name,
                         topic=random.choice(capabilities.get(TopicExists)),
+                        cluster_name=random.choice(
+                            source_capable_clusters(capabilities)
+                        ),
                     ),
                 )
             ]
@@ -61,10 +72,10 @@ class CreateSource(Action):
                   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
                 > CREATE CONNECTION IF NOT EXISTS {self.source.name}_kafka_conn
-                  TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                  TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE {self.source.name}
-                  IN CLUSTER storaged
+                  IN CLUSTER {self.source.cluster_name}
                   FROM KAFKA CONNECTION {self.source.name}_kafka_conn
                   (TOPIC 'testdrive-{self.source.topic.name}-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn

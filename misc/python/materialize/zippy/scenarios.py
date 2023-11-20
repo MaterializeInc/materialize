@@ -8,6 +8,11 @@
 # by the Apache License, Version 2.0.
 
 
+from materialize.zippy.balancerd_actions import (
+    BalancerdRestart,
+    BalancerdStart,
+    BalancerdStop,
+)
 from materialize.zippy.crdb_actions import CockroachRestart, CockroachStart
 from materialize.zippy.debezium_actions import CreateDebeziumSource, DebeziumStart
 from materialize.zippy.framework import ActionOrFactory, Scenario
@@ -49,6 +54,7 @@ DEFAULT_BOOTSTRAP: list[ActionOrFactory] = [
     MinioStart,
     MzStart,
     StoragedStart,
+    BalancerdStart,
 ]
 
 
@@ -83,8 +89,11 @@ class UserTables(Scenario):
 
     def config(self) -> dict[ActionOrFactory, float]:
         return {
-            MzStart: 1,
-            MzStop: 15,
+            MzStart: 5,
+            BalancerdStart: 1,
+            MzStop: 10,
+            BalancerdStop: 1,
+            BalancerdRestart: 1,
             KillClusterd: 10,
             StoragedRestart: 5,
             CreateTableParameterized(): 10,
@@ -290,7 +299,6 @@ class UserTablesLarge(Scenario):
             ): 10,
             CreateSinkParameterized(max_sinks=10): 10,
             ValidateView: 10,
-            Ingest: 50,
             DML: 50,
         }
 

@@ -44,15 +44,15 @@ pub enum ConfigCommand {
     },
 }
 
-pub async fn run(mut cx: Context, cmd: ConfigCommand) -> Result<(), Error> {
+pub async fn run(cx: Context, cmd: ConfigCommand) -> Result<(), Error> {
     match &cmd {
-        ConfigCommand::Get { name } => mz::command::config::get(&mut cx, GetArgs { name }),
-        ConfigCommand::List => mz::command::config::list(&mut cx),
+        ConfigCommand::Get { name } => mz::command::config::get(&cx, GetArgs { name }),
+        ConfigCommand::List => mz::command::config::list(&cx),
         ConfigCommand::Set { name, value } => {
-            mz::command::config::set(&mut cx, SetArgs { name, value }).await
+            mz::command::config::set(&cx, SetArgs { name, value }).await
         }
         ConfigCommand::Remove { name } => {
-            mz::command::config::remove(&mut cx, RemoveArgs { name }).await
+            mz::command::config::remove(&cx, RemoveArgs { name }).await
         }
     }
 }

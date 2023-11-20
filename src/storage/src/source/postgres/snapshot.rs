@@ -136,11 +136,12 @@ use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin::pin;
 use std::rc::Rc;
+use std::str::FromStr;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::{Broadcast, ConnectLoop, Feedback};
+use timely::dataflow::operators::{Broadcast, CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::types::PgLsn;
@@ -152,8 +153,8 @@ use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 
@@ -230,8 +231,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let id = config.id;
             let worker_id = config.worker_id;
 
-            let [data_cap, rewind_cap, snapshot_cap]: &mut [_; 3] = caps.try_into().unwrap();
-            let data_cap = data_cap.as_mut().unwrap();
+            let [data_cap_set, rewind_cap_set, snapshot_cap_set]: &mut [_; 3] = caps.try_into().unwrap();
             trace!(
                 %id,
                 "timely-{worker_id} initializing table reader with {} tables to snapshot",
@@ -248,11 +248,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .connection
                 .config(&*context.secrets_reader)
                 .await?
-                .replication_timeouts(config.params.pg_replication_timeouts.clone());
+                .tcp_timeouts(config.params.pg_source_tcp_timeouts.clone());
             let task_name = format!("timely-{worker_id} PG snapshotter");
 
             let client = if is_snapshot_leader {
-                let client = connection_config.connect_replication().await?;
+                let client = connection_config.connect_replication(
+                    &context.ssh_tunnel_manager,
+                ).await?;
                 // The main slot must be created *before* we start snapshotting so that we can be
                 // certain that the temporarly slot created for the snapshot start at an LSN that
                 // is greater than or equal to that of the main slot.
@@ -260,14 +262,41 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                 let snapshot_info = export_snapshot(&client).await?;
                 trace!(%id, "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
-                let cap = snapshot_cap.as_ref().unwrap();
-                snapshot_handle.give(cap, snapshot_info).await;
+                snapshot_handle.give(&snapshot_cap_set[0], snapshot_info).await;
 
                 client
             } else {
                 // Only the snapshot leader needs a replication connection.
-                connection_config.connect(&task_name).await?
+                connection_config.connect(
+                    &task_name,
+                    &context.ssh_tunnel_manager,
+                ).await?
             };
+
+            // Configure statement_timeout based on param. We want to be able to
+            // override the server value here in case it's set too low,
+            // respective to the size of the data we need to copy.
+            //
+            // Value is known to accept milliseconds w/o units.
+            // https://www.postgresql.org/docs/current/runtime-config-client.html
+            client.simple_query(
+                &format!("SET statement_timeout = {}", config.params.pg_source_snapshot_statement_timeout.as_millis())
+            ).await?;
+
+            mz_ore::soft_assert!{{
+                let row = simple_query_opt(&client, "SHOW statement_timeout;")
+                    .await?
+                    .unwrap();
+                let timeout = row.get("statement_timeout").unwrap().to_owned();
+
+                // This only needs to be compatible for values we test; doesn't
+                // need to generalize all possible interval/duration mappings.
+                mz_repr::adt::interval::Interval::from_str(&timeout)
+                    .map(|i| i.duration())
+                    .unwrap()
+                    .unwrap()
+                    == config.params.pg_source_snapshot_statement_timeout
+            }, "SET statement_timeout in PG snapshot did not take effect"};
 
             let (snapshot, snapshot_lsn) = loop {
                 match snapshot_input.next_mut().await {
@@ -286,11 +315,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             for &oid in reader_snapshot_table_info.keys() {
                 trace!(%id, "timely-{worker_id} producing rewind request for {oid}");
                 let req = RewindRequest { oid, snapshot_lsn };
-                rewinds_handle.give(rewind_cap.as_ref().unwrap(), req).await;
+                rewinds_handle.give(&rewind_cap_set[0], req).await;
             }
-            *rewind_cap = None;
+            *rewind_cap_set = CapabilitySet::new();
 
             let upstream_info = mz_postgres_util::publication_info(
+                &context.ssh_tunnel_manager,
                 &connection_config,
                 &connection.publication,
                 None,
@@ -302,7 +332,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 let desc = match verify_schema(oid, expected_desc, &upstream_info) {
                     Ok(()) => expected_desc,
                     Err(err) => {
-                        raw_handle.give(data_cap, ((oid, Err(err)), MzOffset::minimum(), 1)).await;
+                        raw_handle.give(&data_cap_set[0], ((oid, Err(err)), MzOffset::minimum(), 1)).await;
                         continue;
                     }
                 };
@@ -312,13 +342,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 // emulate's PG's rules for name formatting.
                 let query = format!(
                     "COPY {}.{} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                    Ident::from(desc.namespace.clone()).to_ast_string(),
-                    Ident::from(desc.name.clone()).to_ast_string(),
+                    Ident::new_unchecked(desc.namespace.clone()).to_ast_string(),
+                    Ident::new_unchecked(desc.name.clone()).to_ast_string(),
                 );
                 let mut stream = pin!(client.copy_out_simple(&query).await?);
 
                 while let Some(bytes) = stream.try_next().await? {
-                    raw_handle.give(data_cap, ((oid, Ok(bytes)), MzOffset::minimum(), 1)).await;
+                    raw_handle.give(&data_cap_set[0], ((oid, Ok(bytes)), MzOffset::minimum(), 1)).await;
                 }
             }
             // Failure scenario after we have produced the snapshot, but before a successful COMMIT
@@ -328,14 +358,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // its client since this is what holds the exported transaction alive.
             if is_snapshot_leader {
                 trace!(%id, "timely-{worker_id} waiting for all workers to finish");
-                *snapshot_cap = None;
+                *snapshot_cap_set = CapabilitySet::new();
                 while snapshot_input.next().await.is_some() {}
                 trace!(%id, "timely-{worker_id} (leader) comitting COPY transaction");
                 client.simple_query("COMMIT").await?;
             } else {
                 trace!(%id, "timely-{worker_id} comitting COPY transaction");
                 client.simple_query("COMMIT").await?;
-                *snapshot_cap = None;
+                *snapshot_cap_set = CapabilitySet::new();
             }
             drop(client);
             Ok(())

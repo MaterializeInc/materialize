@@ -1,0 +1,157 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode standard
+
+reset-server
+
+# Enable the feature.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_swap TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE SCHEMA blue;
+
+statement ok
+CREATE TABLE blue.t1 (x int);
+
+statement ok
+INSERT INTO blue.t1 VALUES (1), (2), (3);
+
+statement ok
+CREATE SCHEMA green;
+
+statement ok
+CREATE TABLE green.t2 (y int);
+
+statement ok
+INSERT INTO green.t2 VALUES (4), (5), (6);
+
+statement error db error: ERROR: unknown catalog item 'blue\.t2'
+SELECT * FROM blue.t2;
+
+statement ok
+ALTER SCHEMA blue SWAP WITH green;
+
+query I
+SELECT * FROM blue.t2;
+----
+4
+5
+6
+
+statement ok
+CREATE SCHEMA "!\_\""w3😊_weird_name";
+
+statement ok
+CREATE TABLE "!\_\""w3😊_weird_name".t2 (y int);
+
+statement ok
+INSERT INTO "!\_\""w3😊_weird_name".t2 VALUES (7), (8), (9);
+
+statement ok
+ALTER SCHEMA blue SWAP WITH "!\_\""w3😊_weird_name";
+
+query I
+SELECT * FROM "!\_\""w3😊_weird_name".t2;
+----
+4
+5
+6
+
+statement ok
+ALTER SCHEMA blue SWAP WITH blue;
+
+query I
+SELECT * FROM blue.t2;
+----
+7
+8
+9
+
+statement error db error: ERROR: unknown schema 'null'
+ALTER SCHEMA blue SWAP WITH NULL;
+
+statement error db error: ERROR: unknown schema 'null'
+ALTER SCHEMA NULL SWAP WITH green;
+
+statement ok
+CREATE SCHEMA this_is_a_schema_with_a_super_long_name_of_exactly_255_characters_which_happens_to_be_the_maximum_we_allow_in_materialize_for_identifiers_of_any_kind_including_for_the_schema_name_so_this_should_still_work_perfectly_fine_as_long_as_we_dont_make_it_longer;
+
+statement ok
+ALTER SCHEMA this_is_a_schema_with_a_super_long_name_of_exactly_255_characters_which_happens_to_be_the_maximum_we_allow_in_materialize_for_identifiers_of_any_kind_including_for_the_schema_name_so_this_should_still_work_perfectly_fine_as_long_as_we_dont_make_it_longer SWAP WITH blue;
+
+query I
+SELECT * FROM this_is_a_schema_with_a_super_long_name_of_exactly_255_characters_which_happens_to_be_the_maximum_we_allow_in_materialize_for_identifiers_of_any_kind_including_for_the_schema_name_so_this_should_still_work_perfectly_fine_as_long_as_we_dont_make_it_longer.t2;
+----
+7
+8
+9
+
+statement error db error: ERROR: cannot swap schemas that are in the ambient database
+ALTER SCHEMA mz_internal SWAP WITH mz_catalog;
+
+statement ok
+CREATE DATABASE a;
+
+statement ok
+CREATE SCHEMA a.green;
+
+statement ok
+CREATE DATABASE b;
+
+statement ok
+CREATE SCHEMA b.blue;
+
+statement error db error: ERROR: Expected end of statement, found dot
+ALTER SCHEMA a.green SWAP WITH b.blue;
+
+statement error db error: ERROR: unacceptable schema name 'mz_swap'
+CREATE SCHEMA mz_swap;
+
+statement ok
+CREATE CLUSTER foo SIZE = '1';
+
+statement ok
+CREATE CLUSTER bar SIZE = '1';
+
+statement ok
+CREATE INDEX green_idx IN CLUSTER foo ON green.t1 (x);
+
+query T
+SELECT name FROM mz_clusters JOIN ( SELECT cluster_id FROM mz_indexes WHERE name = 'green_idx' ) my_index ON mz_clusters.id = my_index.cluster_id;
+----
+foo
+
+statement ok
+ALTER CLUSTER foo SWAP WITH bar;
+
+query T
+SELECT name FROM mz_clusters JOIN ( SELECT cluster_id FROM mz_indexes WHERE name = 'green_idx' ) my_index ON mz_clusters.id = my_index.cluster_id;
+----
+bar
+
+# Disable the feature.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_swap TO false;
+----
+COMPLETE 0
+
+statement error db error: ERROR: the ALTER SWAP feature for objects is not supported
+ALTER CLUSTER bar SWAP WITH foo;
+
+# Cleanup.
+
+statement ok
+DROP CLUSTER foo CASCADE;
+
+statement ok
+DROP CLUSTER bar CASCADE;

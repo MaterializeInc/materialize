@@ -18,9 +18,10 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
+use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
-use mz_ore::id_gen::{IdAllocator, IdHandle};
+use mz_ore::id_gen::IdAllocator;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
@@ -31,7 +32,7 @@ use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, SUPPORT_USER};
-use mz_sql::session::vars::VarInput;
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use mz_transform::Optimizer;
 use prometheus::Histogram;
@@ -42,8 +43,8 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{
-    AppendWebhookResponse, Canceled, CatalogDump, CatalogSnapshot, Command, ExecuteResponse,
-    GetVariablesResponse, Response,
+    Canceled, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse,
+    Response,
 };
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
@@ -51,15 +52,8 @@ use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
+use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, PeekResponseUnary, StartupResponse};
-
-/// Inner type of a [`ConnectionId`], `u32` for postgres compatibility.
-///
-/// Note: Generally you should not use this type directly, and instead use [`ConnectionId`].
-pub type ConnectionIdType = u32;
-
-/// An abstraction allowing us to name different connections.
-pub type ConnectionId = IdHandle<ConnectionIdType>;
 
 /// A handle to a running coordinator.
 ///
@@ -203,16 +197,30 @@ impl Client {
 
         let StartupResponse {
             role_id,
-            set_vars,
+            write_notify,
+            session_vars,
+            role_vars,
             catalog,
         } = response;
+
+        // Before we do ANYTHING, we need to wait for our BuiltinTable writes to complete. We wait
+        // for the writes here, as opposed to during the Startup command, because we don't want to
+        // block the coordinator on a Builtin Table write.
+        write_notify.await;
+
         client.session().initialize_role_metadata(role_id);
-        for (name, val) in set_vars {
-            client
-                .session()
-                .vars_mut()
-                .set(None, &name, VarInput::Flat(&val), false)
+        let vars_mut = client.session().vars_mut();
+        for (name, val) in session_vars {
+            vars_mut
+                .set(None, &name, val.borrow(), false)
                 .expect("constrained to be valid");
+        }
+        for (name, val) in role_vars {
+            if let Err(err) = vars_mut.set_role_default(&name, val.borrow()) {
+                // Note: erroring here is unexpected, but we don't want to panic if somehow our
+                // assumptions are wrong.
+                tracing::error!("failed to set peristed role default, {err:?}");
+            }
         }
         client
             .session()
@@ -462,8 +470,10 @@ impl SessionClient {
         let desc =
             Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
         let params = vec![];
-        let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
-        let logging = self.session().mint_logging(sql);
+        let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
+        let now = self.now();
+        let redacted_sql = stmt.to_ast_string_redacted();
+        let logging = self.session().mint_logging(sql, redacted_sql, now);
         self.session().set_portal(
             name,
             desc,
@@ -564,6 +574,31 @@ impl SessionClient {
         catalog.dump().map_err(AdapterError::from)
     }
 
+    /// Checks the catalog for internal consistency, returning a JSON object describing the
+    /// inconsistencies, if there are any.
+    ///
+    /// No authorization is performed, so access to this function must be limited to internal
+    /// servers or superusers.
+    pub async fn check_catalog(&mut self) -> Result<(), serde_json::Value> {
+        let catalog = self.catalog_snapshot().await;
+        catalog.check_consistency()
+    }
+
+    /// Checks the coordinator for internal consistency, returning a JSON object describing the
+    /// inconsistencies, if there are any. This is a superset of checks that check_catalog performs,
+    ///
+    /// No authorization is performed, so access to this function must be limited to internal
+    /// servers or superusers.
+    pub async fn check_coordinator(&mut self) -> Result<(), serde_json::Value> {
+        self.send_without_session(|tx| Command::CheckConsistency { tx })
+            .await
+            .map_err(|inconsistencies| {
+                serde_json::to_value(inconsistencies).unwrap_or_else(|_| {
+                    serde_json::Value::String("failed to serialize inconsistencies".to_string())
+                })
+            })
+    }
+
     /// Tells the coordinator a statement has finished execution, in the cases
     /// where we have no other reason to communicate with the coordinator.
     pub fn retire_execute(
@@ -597,7 +632,7 @@ impl SessionClient {
         let result: Result<_, AdapterError> =
             mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, columns, rows)
                 .err_into()
-                .and_then(|values| values.lower().err_into())
+                .and_then(|values| values.lower(conn_catalog.system_vars()).err_into())
                 .and_then(|values| {
                     Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context())
                         .optimize(values)
@@ -701,7 +736,8 @@ impl SessionClient {
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
                 | Command::Terminate { .. }
-                | Command::RetireExecute { .. } => {}
+                | Command::RetireExecute { .. }
+                | Command::CheckConsistency { .. } => {}
             };
             cmd
         });

@@ -9,13 +9,13 @@
 
 //! Structs and traits for `EXPLAIN AS TEXT`.
 
-use itertools::Itertools;
 use std::fmt;
 
-use mz_ore::str::{separated, Indent, IndentLike};
+use mz_ore::str::{Indent, IndentLike};
 
 use crate::explain::{
-    CompactScalarSeq, ExprHumanizer, Indices, ScalarOps, UnsupportedFormat, UsedIndexes,
+    CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, ScalarOps, UnsupportedFormat,
+    UsedIndexes,
 };
 use crate::Row;
 
@@ -73,7 +73,7 @@ where
         writeln!(f, "{}Used Indexes:", ctx.as_mut())?;
         *ctx.as_mut() += 1;
         for (id, usage_types) in &self.0 {
-            let usage_types = separated(", ", usage_types.iter().sorted().dedup());
+            let usage_types = IndexUsageType::display_vec(usage_types);
             if let Some(name) = ctx.as_ref().humanize_id(*id) {
                 writeln!(f, "{}- {} ({})", ctx.as_mut(), name, usage_types)?;
             } else {
@@ -192,7 +192,7 @@ pub fn text_string_at<'a, T: DisplayText<C>, C, F: Fn() -> C>(t: &'a T, f: F) ->
 fn write_first_rows(
     f: &mut fmt::Formatter<'_>,
     first_rows: &Vec<(&Row, &crate::Diff)>,
-    ctx: &mut Indent,
+    ctx: &Indent,
 ) -> fmt::Result {
     for (row, diff) in first_rows {
         if **diff == 1 {

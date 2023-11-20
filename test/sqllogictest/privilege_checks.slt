@@ -19,18 +19,6 @@ ALTER SYSTEM SET enable_rbac_checks TO true;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO true;
-----
-COMPLETE 0
-
-# Enable webhook sources.
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_webhook_sources TO true;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_connection_validation_syntax TO true;
 ----
 COMPLETE 0
@@ -78,12 +66,12 @@ COMPLETE 0
 # CREATE CONNECTION
 
 simple conn=joe,user=joe
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
@@ -93,12 +81,12 @@ GRANT CREATE ON SCHEMA materialize.public TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=child,user=child
-CREATE CONNECTION conn1 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION conn1 TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -346,6 +334,11 @@ CREATE CLUSTER source_cluster REPLICAS (r1 (SIZE '1'));
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 CREATE SOURCE s2 IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER;
 ----
@@ -493,6 +486,33 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE CREATE ON CLUSTER source_cluster FROM joe;
+----
+COMPLETE 0
+
+# mz_support reading from progress source
+
+simple conn=mz_system,user=mz_system
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+simple conn=mz_support,user=mz_support
+SET CLUSTER TO "default";
+----
+COMPLETE 0
+
+simple conn=mz_support,user=mz_support
+SELECT * FROM s_progress LIMIT 0;
+----
+COMPLETE 0
+
+simple conn=mz_support,user=mz_support
+SET CLUSTER TO mz_introspection;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP SOURCE s;
 ----
 COMPLETE 0
 
@@ -1328,6 +1348,48 @@ DROP TABLE t;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'https://google.com') WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+SHOW CREATE CONNECTION csr_conn;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=child,user=child
+SHOW CREATE CONNECTION csr_conn;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+SHOW CREATE CONNECTION csr_conn;
+----
+materialize.public.csr_conn,CREATE CONNECTION "materialize"."public"."csr_conn" TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com')
+COMPLETE 1
+
+simple conn=child,user=child
+SHOW CREATE CONNECTION csr_conn;
+----
+materialize.public.csr_conn,CREATE CONNECTION "materialize"."public"."csr_conn" TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com')
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION csr_conn;
+----
+COMPLETE 0
+
 # SELECT
 
 ## Table
@@ -1361,16 +1423,6 @@ simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
-
-simple conn=joe,user=joe
-SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
-simple conn=child,user=child
-SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON TYPE ty TO joe;
@@ -1640,40 +1692,28 @@ GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
-EXPLAIN SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
-simple conn=child,user=child
-EXPLAIN SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON TYPE ty TO joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
+simple multiline,conn=joe,user=joe
 EXPLAIN SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for TABLE "materialize.public.t"
+Explained Query:
+  ReadStorage materialize.public.t
 
-simple conn=child,user=child
+EOF
+COMPLETE 1
+
+simple multiline,conn=child,user=child
 EXPLAIN SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for TABLE "materialize.public.t"
+Explained Query:
+  ReadStorage materialize.public.t
 
-simple conn=mz_system,user=mz_system
-GRANT SELECT ON TABLE t TO joe;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE SELECT ON TABLE t FROM joe;
-----
-COMPLETE 0
+EOF
+COMPLETE 1
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON TYPE ty FROM joe;
@@ -1692,6 +1732,111 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 DROP TYPE ty;
+----
+COMPLETE 0
+
+## Explain schema
+
+simple conn=mz_system,user=mz_system
+CREATE TYPE ty AS (a text);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON TYPE ty FROM PUBLIC;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE t (a ty);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'https://google.com') WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_sink_doc_on_option = true;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') KEY (a) NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (DOC ON COLUMN ty.a = 'comment') ENVELOPE UPSERT;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple multiline,conn=joe,user=joe
+EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') KEY (a) NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (DOC ON COLUMN ty.a = 'comment') ENVELOPE UPSERT;
+----
+{
+  "type": "record",
+  "name": "envelope",
+  "fields": [
+    {
+      "name": "a",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "record0",
+          "namespace": "com.materialize.sink",
+          "fields": [
+            {
+              "name": "a",
+              "type": [
+                "null",
+                "string"
+              ],
+              "doc": "comment"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+EOF
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_sink_doc_on_option = false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP TABLE t;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP TYPE ty;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION kafka_conn;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION csr_conn;
 ----
 COMPLETE 0
 
@@ -1732,68 +1877,26 @@ GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
+simple multiline,conn=joe,user=joe
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for VIEW "materialize.public.v"
+Explained Query:
+  ReadStorage materialize.public.t
 
-simple conn=child,user=child
+EOF
+COMPLETE 1
+
+simple multiline,conn=child,user=child
 EXPLAIN SELECT * FROM v;
 ----
-db error: ERROR: permission denied for VIEW "materialize.public.v"
+Explained Query:
+  ReadStorage materialize.public.t
+
+EOF
+COMPLETE 1
 
 simple conn=mz_system,user=mz_system
-GRANT SELECT ON TABLE v TO joe;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-EXPLAIN SELECT * FROM v;
-----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
-
-simple conn=child,user=child
-EXPLAIN SELECT * FROM v;
-----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
-
-simple conn=mz_system,user=mz_system
-GRANT USAGE ON SCHEMA materialize.public TO view_owner;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-EXPLAIN SELECT * FROM v;
-----
-db error: ERROR: permission denied for TABLE "materialize.public.t"
-
-simple conn=child,user=child
-EXPLAIN SELECT * FROM v;
-----
-db error: ERROR: permission denied for TABLE "materialize.public.t"
-
-simple conn=mz_system,user=mz_system
-GRANT SELECT ON TABLE t TO view_owner;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE SELECT ON TABLE t FROM view_owner;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE SELECT ON TABLE v FROM joe;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE USAGE ON SCHEMA materialize.public FROM joe;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM view_owner;
+REVOKE CREATE ON SCHEMA materialize.public FROM view_owner;
 ----
 COMPLETE 0
 
@@ -1812,6 +1915,88 @@ DROP ROLE view_owner;
 ----
 COMPLETE 0
 
+## EXPLAIN MATERIALIZED VIEW
+
+### We use the materialize role for these tests because we need the multiline functionality
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW mv IN CLUSTER default AS SELECT 1
+----
+COMPLETE 0
+
+query error permission denied for SCHEMA "materialize.public"
+EXPLAIN MATERIALIZED VIEW mv;
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO materialize;
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Constant
+    - (1)
+
+EOF
+
+simple conn=mz_system,user=mz_system
+DROP MATERIALIZED VIEW mv
+----
+COMPLETE 0
+
+## EXPLAIN INDEX
+
+### We use the materialize role for these tests because we need the multiline functionality
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE t (a INT)
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX i IN CLUSTER default ON t(a)
+----
+COMPLETE 0
+
+query error permission denied for SCHEMA "materialize.public"
+EXPLAIN INDEX i;
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO materialize;
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN INDEX i;
+----
+materialize.public.i:
+  ArrangeBy keys=[[#0]]
+    ReadStorage materialize.public.t
+
+EOF
+
+simple conn=mz_system,user=mz_system
+DROP INDEX i
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP TABLE t
+----
+COMPLETE 0
+
 # INSERT
 
 simple conn=mz_system,user=mz_system
@@ -1822,12 +2007,12 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for SCHEMA "materialize.public"
+db error: ERROR: permission denied for TABLE "materialize.public.t"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
@@ -3205,17 +3390,5 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
-----
-COMPLETE 0
-
-# Disable webhook sources.
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_webhook_sources TO false;
 ----
 COMPLETE 0

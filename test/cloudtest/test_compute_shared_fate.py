@@ -7,12 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
 import subprocess
 import time
 from textwrap import dedent
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.cluster import cluster_pod_name
+
+LOGGER = logging.getLogger(__name__)
 
 CLUSTER_SIZE = 8
 
@@ -32,7 +35,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > INSERT INTO t1 SELECT 234000 + generate_series FROM generate_series(1, 1000);
 
-            > CREATE CONNECTION kafka TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+            > CREATE CONNECTION kafka TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE SOURCE s1
               FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-shared-fate-${{testdrive.seed}}')
@@ -97,7 +100,7 @@ def kill_clusterd(
 
     pod_name = cluster_pod_name(cluster_id, replica_id, compute_id)
 
-    print(f"sending signal {signal} to pod {pod_name}...")
+    LOGGER.info(f"sending signal {signal} to pod {pod_name}...")
 
     try:
         mz.kubectl(

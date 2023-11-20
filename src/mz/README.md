@@ -55,6 +55,7 @@ SUBCOMMANDS:
    ```
    aws/us-east-1  enabled
    aws/eu-west-1  disabled
+   aws/us-west-2  disabled
    ```
 
 4. Launch a SQL shell connected to one of the enabled regions in your
@@ -134,7 +135,7 @@ Field             | Type   | Description
 `app-password`    | string | *Secret.* The app password to use for this profile.
 `region`          | string | The default region to use for this profile.
 `vault`           | string | The vault to use for this profile. See [Global parameters](#global-parameters) above.
-`api-endpoint`    | string | *Internal use only.* The Materialize API endpoint to use.
+`cloud-endpoint`  | string | *Internal use only.* The Materialize API endpoint to use.
 `admin-endpoint`  | string | *Internal use only.* The Materialize administration endpoint to use.
 
 

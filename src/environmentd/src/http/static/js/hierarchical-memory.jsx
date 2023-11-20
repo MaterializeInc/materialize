@@ -261,8 +261,8 @@ function Dataflows(props) {
           let ids_seen = [];
           const edges = scope_channels.get(addr).map(([source, target, source_port, target_port, sent, batch_sent]) => {
             // if either `source` or `target` are zero, they signify a scope input or output, respectively.
-            let source1 = source != 0 ? addr_to_id[addr.concat(", ").concat(source)] : `input_${source_port}`;
-            let target1 = target != 0 ? addr_to_id[addr.concat(", ").concat(target)] : `output_${target_port}`;
+            let source1 = source != "0" ? addr_to_id[addr.concat(", ").concat(source)] : `input_${source_port}`;
+            let target1 = target != "0" ? addr_to_id[addr.concat(", ").concat(target)] : `output_${target_port}`;
             ids_seen.push(source1);
             ids_seen.push(target1);
             return sent == null ? `${source1} -> ${target1} [style="dashed"]` :
@@ -412,36 +412,8 @@ async function getCreateView(dataflow_name) {
   return { name: create_table.rows[0][0], create: create_table.rows[0][1] };
 }
 
-function makeAddrStr(addrs, id, other) {
-  let addr = addrs[id].slice();
-  // The 0 source or target should not append itself to the address.
-  if (other !== 0) {
-    addr.push(other);
-  }
-  return addrStr(addr);
-}
-
 function addrStr(addr) {
   return addr.join(', ');
-}
-
-// dispNs displays ns nanoseconds in a human-readable string.
-function dispNs(ns) {
-  const timeTable = [
-    [60, 's'],
-    [60, 'm'],
-    [60, 'h'],
-  ];
-  const parts = [];
-  let v = ns / 1e9;
-  timeTable.forEach(([div, disp], idx) => {
-    const part = Math.floor(v % div);
-    if (part >= 1 || idx === 0) {
-      parts.unshift(`${part}${disp}`);
-    }
-    v = Math.floor(v / div);
-  });
-  return parts.join('');
 }
 
 function toggle_active(e) {

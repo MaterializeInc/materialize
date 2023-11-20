@@ -8,44 +8,80 @@
 # by the Apache License, Version 2.0.
 
 import os
-import subprocess
 
 import pandas as pd
-from matplotlib import pyplot as plt  # type: ignore
+from matplotlib import pyplot as plt
+
+from materialize.scalability.df.df_details import DfDetails
+from materialize.scalability.df.df_totals import DfTotals
+from materialize.scalability.io import paths
+from materialize.scalability.plot.plot import (
+    plot_duration_by_connections_for_workload,
+    plot_duration_by_endpoints_for_workload,
+    plot_tps_per_connections,
+)
 
 
-def plotit(csv_file_name: str) -> None:
-    targets = next(os.walk("results"))[1]
-    legend = []
-    plt.rcParams["figure.figsize"] = (16, 10)
-    fig, (summary_subplot, details_subplot) = plt.subplots(2, 1)
-    for i, target in enumerate(targets):
-        target_sha = target.split(" ")[1].strip("()")
+def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
+    fig = plt.figure(layout="constrained", figsize=(16, 22))
+    (
+        tps_figure,
+        duration_per_connections_figure,
+        duration_per_endpoints_figure,
+    ) = fig.subfigures(3, 1)
 
-        target_comment = None
-        try:
-            target_comment = subprocess.check_output(
-                ["git", "log", "-1", "--pretty=format:%s", target_sha], text=True
+    df_totals_by_endpoint_name, df_details_by_endpoint_name = load_data_from_filesystem(
+        workload_name
+    )
+
+    plot_tps_per_connections(
+        workload_name,
+        tps_figure,
+        df_totals_by_endpoint_name,
+        baseline_version_name=None,
+        include_zero_in_y_axis=include_zero_in_y_axis,
+    )
+
+    plot_duration_by_connections_for_workload(
+        workload_name,
+        duration_per_connections_figure,
+        df_details_by_endpoint_name,
+        include_zero_in_y_axis=include_zero_in_y_axis,
+    )
+    plot_duration_by_endpoints_for_workload(
+        workload_name,
+        duration_per_endpoints_figure,
+        df_details_by_endpoint_name,
+        include_zero_in_y_axis=include_zero_in_y_axis,
+    )
+
+
+def load_data_from_filesystem(
+    workload_name: str,
+) -> tuple[dict[str, DfTotals], dict[str, DfDetails]]:
+    endpoint_names = paths.get_endpoint_names_from_results_dir()
+    endpoint_names.sort()
+
+    df_totals_by_endpoint_name = dict()
+    df_details_by_endpoint_name = dict()
+
+    for i, endpoint_name in enumerate(endpoint_names):
+        totals_data_path = paths.df_totals_csv(endpoint_name, workload_name)
+        details_data_path = paths.df_details_csv(endpoint_name, workload_name)
+
+        if not os.path.exists(totals_data_path):
+            print(
+                f"Skipping {workload_name} for endpoint {endpoint_name} (data not present)"
             )
-        except subprocess.CalledProcessError:
-            # Sometimes mz_version() will report a Git SHA that is not available
-            # in the current repository
-            pass
+            continue
 
-        legend.append(f"{target} - {target_comment}")
+        assert os.path.exists(details_data_path)
 
-        df = pd.read_csv(f"results/{target}/{csv_file_name}.csv")
-        summary_subplot.scatter(df["concurrency"], df["tps"], label="tps")
-
-        df_details = pd.read_csv(f"results/{target}/{csv_file_name}_details.csv")
-        details_subplot.scatter(
-            df_details["concurrency"] + i, df_details["wallclock"], alpha=0.25
+        df_totals_by_endpoint_name[endpoint_name] = DfTotals(
+            pd.read_csv(totals_data_path)
+        )
+        df_details_by_endpoint_name[endpoint_name] = DfDetails(
+            pd.read_csv(details_data_path)
         )
 
-    summary_subplot.set_ylabel("Transactions Per Second")
-    summary_subplot.set_xlabel("Concurrent SQL Connections")
-    summary_subplot.legend(legend)
-
-    details_subplot.set_ylabel("Latency in Seconds")
-    details_subplot.set_xlabel("Concurrent SQL Connections")
-    details_subplot.legend(legend)
+    return df_totals_by_endpoint_name, df_details_by_endpoint_name

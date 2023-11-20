@@ -82,17 +82,16 @@ fn main() {
 
     prost_build::Config::new()
         .btree_map(["."])
+        .extern_path(".mz_proto", "::mz_proto")
         .compile_protos(
             &[
                 "repr/src/antichain.proto",
-                "repr/src/chrono.proto",
                 "repr/src/global_id.proto",
                 "repr/src/row.proto",
                 "repr/src/strconv.proto",
                 "repr/src/relation_and_scalar.proto",
                 "repr/src/role_id.proto",
                 "repr/src/url.proto",
-                "repr/src/explain.proto",
                 "repr/src/adt/array.proto",
                 "repr/src/adt/char.proto",
                 "repr/src/adt/date.proto",
@@ -102,6 +101,7 @@ fn main() {
                 "repr/src/adt/numeric.proto",
                 "repr/src/adt/range.proto",
                 "repr/src/adt/regex.proto",
+                "repr/src/adt/timestamp.proto",
                 "repr/src/adt/varchar.proto",
             ],
             &[".."],

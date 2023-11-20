@@ -13,17 +13,17 @@
 # Define t0 source
 define
 DefSource name=t0
-  - bigint
-  - bigint
-  - text?
+  - c0: bigint
+  - c1: bigint
+  - c2: text?
 ----
 Source defined as t0
 
 # Define t1 source
 define
 DefSource name=t1 keys=[[#0]]
-  - bigint
-  - text?
+  - c0: bigint
+  - c1: text?
 ----
 Source defined as t1
 
@@ -38,7 +38,7 @@ Return
           Negate
             Join on=(#0 = #3)
               Get t0
-              Distinct group_by=[#0]
+              Distinct project=[#0]
                 Get l0
         Get t0
     Project (#0, #1, #2, #0, #4)

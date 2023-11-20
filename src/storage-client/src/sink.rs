@@ -8,37 +8,46 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
-use mz_ore::collections::CollectionExt;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
-use rdkafka::ClientContext;
-use tracing::warn;
-
-use crate::types::connections::inline::ReferencedConnection;
-use crate::types::connections::ConnectionContext;
-use crate::types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionBuilder,
-    KafkaSinkConnectionRetention, KafkaSinkFormat, KafkaSinkProgressConnection,
-    PublishedSchemaInfo, StorageSinkConnection, StorageSinkConnectionBuilder,
+use maplit::btreemap;
+use mz_kafka_util::client::{
+    MzClientContext, TunnelingClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
 };
+use mz_ore::collections::CollectionExt;
+use mz_ore::retry::Retry;
+use mz_ore::task;
+use mz_repr::{GlobalId, Timestamp};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt};
+use mz_storage_types::sinks::{
+    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
+    KafkaSinkConnectionRetention, KafkaSinkFormat,
+};
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::error::KafkaError;
+use rdkafka::{ClientContext, Message, Offset, TopicPartitionList};
+use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
-/// Build a sink connection.
-// N.B.: We don't want to use a `StorageError` here because some of those variants should not be
-// infinitely retried -- and we don't one to unintentionally be introduced in this function.
-pub async fn build_sink_connection(
-    builder: StorageSinkConnectionBuilder,
-    // TODO: The entire sink connection pipeline needs to be refactored and this
-    // will be removed as part of that.
-    referenced_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
-    connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection<ReferencedConnection>, anyhow::Error> {
-    match (builder, referenced_builder) {
-        (StorageSinkConnectionBuilder::Kafka(k), StorageSinkConnectionBuilder::Kafka(rk)) => {
-            build_kafka(k, rk, connection_context).await
-        }
+/// Formatter for Kafka group.id setting
+pub struct SinkGroupId;
+
+impl SinkGroupId {
+    pub fn new(sink_id: GlobalId) -> String {
+        format!("materialize-bootstrap-sink-{sink_id}")
+    }
+}
+
+/// Formatter for the progress topic's key's
+pub struct ProgressKey;
+
+impl ProgressKey {
+    pub fn new(sink_id: GlobalId) -> String {
+        format!("mz-sink-{sink_id}")
     }
 }
 
@@ -226,78 +235,312 @@ async fn publish_kafka_schemas(
     Ok((key_schema_id, value_schema_id))
 }
 
-async fn build_kafka(
-    builder: KafkaSinkConnectionBuilder,
-    referenced_builder: KafkaSinkConnectionBuilder<ReferencedConnection>,
-    connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection<ReferencedConnection>, anyhow::Error> {
-    // Create Kafka topic.
-    let client: AdminClient<_> = builder
+/// Ensures that the Kafka sink's data and consistency collateral exist.
+///
+/// # Errors
+/// - If the [`KafkaSinkConnection`]'s consistency collateral exists and
+///   contains data for this sink, but the sink's data topic does not exist.
+pub async fn build_kafka(
+    sink_id: mz_repr::GlobalId,
+    connection: &mut KafkaSinkConnection,
+    connection_cx: &ConnectionContext,
+) -> Result<(), ContextCreationError> {
+    let client: AdminClient<_> = connection
         .connection
-        .create_with_context(&connection_context, MzClientContext, &BTreeMap::new())
+        .create_with_context(connection_cx, MzClientContext::default(), &BTreeMap::new())
         .await
-        .context("creating admin client failed")?;
+        .add_context("creating admin client failed")?;
+
+    // Check for existence of progress topic; if it exists and contains data for
+    // this sink, we expect the data topic to exist, as well. Note that we don't
+    // expect the converse to be true because we don't want to prevent users
+    // from creating topics before setting up their sinks.
+    let meta = client
+        .inner()
+        .fetch_metadata(None, Duration::from_secs(10))
+        .check_ssh_status(client.inner().context())
+        .add_context("fetching metadata")?;
+
+    // Check if the broker's metadata already contains the progress topic.
+    let progress_topic = match &connection.consistency_config {
+        KafkaConsistencyConfig::Progress { topic } => {
+            meta.topics().iter().find(|t| t.name() == topic)
+        }
+    };
+
+    // If the consistency topic exists, check to see if it contains this sink's
+    // data.
+    if let Some(progress_topic) = progress_topic {
+        let progress_client: BaseConsumer<_> = connection
+            .connection
+            .create_with_context(
+                connection_cx,
+                MzClientContext::default(),
+                &btreemap! {
+                    "group.id" => SinkGroupId::new(sink_id),
+                    "isolation.level" => "read_committed".into(),
+                    "enable.auto.commit" => "false".into(),
+                    "auto.offset.reset" => "earliest".into(),
+                    "enable.partition.eof" => "true".into(),
+                },
+            )
+            .await?;
+
+        let progress_client = Arc::new(progress_client);
+        let latest_ts = determine_latest_progress_record(
+            format!("build_kafka_{}", sink_id),
+            progress_topic.name().to_string(),
+            ProgressKey::new(sink_id),
+            Arc::clone(&progress_client),
+        )
+        .await
+        .check_ssh_status(progress_client.client().context())?;
+
+        // If we have progress data, we should have the topic listed in the
+        // broker's metadata. If we don't, error.
+        if latest_ts.is_some() && !meta.topics().iter().any(|t| t.name() == connection.topic) {
+            Err(anyhow::anyhow!(
+                "sink progress data exists, but sink data topic is missing"
+            ))?
+        }
+    }
+
+    // Create Kafka topic.
     ensure_kafka_topic(
         &client,
-        &builder.topic_name,
-        builder.partition_count,
-        builder.replication_factor,
-        builder.retention,
+        &connection.topic,
+        connection.partition_count,
+        connection.replication_factor,
+        connection.retention,
     )
     .await
-    .context("error registering kafka topic for sink")?;
+    .check_ssh_status(client.inner().context())
+    .add_context("error registering kafka topic for sink")?;
 
-    let published_schema_info = match builder.format {
-        KafkaSinkFormat::Avro {
+    match &connection.format {
+        KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
             key_schema,
             value_schema,
             csr_connection,
-            ..
-        } => {
-            let ccsr = csr_connection.connect(&connection_context).await?;
+        }) => {
+            let ccsr = csr_connection.connect(connection_cx).await?;
             let (key_schema_id, value_schema_id) = publish_kafka_schemas(
                 &ccsr,
-                &builder.topic_name,
+                &connection.topic,
                 key_schema.as_deref(),
                 Some(mz_ccsr::SchemaType::Avro),
-                &value_schema,
+                value_schema,
                 mz_ccsr::SchemaType::Avro,
             )
             .await
             .context("error publishing kafka schemas for sink")?;
-            Some(PublishedSchemaInfo {
+
+            connection.format = KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::Published {
                 key_schema_id,
                 value_schema_id,
             })
         }
-        KafkaSinkFormat::Json => None,
+        KafkaSinkFormat::Avro(_) | KafkaSinkFormat::Json => {}
+    }
+
+    match &connection.consistency_config {
+        KafkaConsistencyConfig::Progress { topic } => ensure_kafka_topic(
+            &client,
+            topic,
+            1,
+            connection.replication_factor,
+            KafkaSinkConnectionRetention::default(),
+        )
+        .await
+        .check_ssh_status(client.inner().context())
+        .add_context("error registering kafka consistency topic for sink")?,
     };
 
-    let progress = match builder.consistency_config {
-        KafkaConsistencyConfig::Progress { topic } => {
-            ensure_kafka_topic(
-                &client,
-                &topic,
-                1,
-                builder.replication_factor,
-                KafkaSinkConnectionRetention::default(),
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+/// This struct is emitted as part of a transactional produce, and captures the information we
+/// need to resume the Kafka sink at the correct place in the sunk collection. (Currently, all
+/// we need is the timestamp... this is a record to make it easier to add more metadata in the
+/// future if needed.) It's encoded as JSON to make it easier to introspect while debugging, and
+/// because we expect it to remain small.
+///
+/// Unlike the old consistency topic, this is not intended to be a user-facing feature; it's there
+/// purely so the sink can maintain its transactional guarantees. Any future user-facing consistency
+/// information should be added elsewhere instead of overloading this record.
+pub struct ProgressRecord {
+    pub timestamp: Timestamp,
+}
+
+/// Determines the latest progress record from the specified topic for the given
+/// key (e.g. akin to a sink's GlobalId).
+pub async fn determine_latest_progress_record(
+    name: String,
+    progress_topic: String,
+    progress_key: String,
+    progress_client: Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>,
+) -> Result<Option<Timestamp>, anyhow::Error> {
+    // Polls a message from a Kafka Source.  Blocking so should always be called on background
+    // thread.
+    fn get_next_message<C>(
+        consumer: &BaseConsumer<C>,
+        timeout: Duration,
+    ) -> Result<Option<(Vec<u8>, Vec<u8>, i64)>, anyhow::Error>
+    where
+        C: ConsumerContext,
+    {
+        if let Some(result) = consumer.poll(timeout) {
+            match result {
+                Ok(message) => match message.payload() {
+                    Some(p) => Ok(Some((
+                        message.key().unwrap_or(&[]).to_vec(),
+                        p.to_vec(),
+                        message.offset(),
+                    ))),
+                    None => bail!("unexpected null payload"),
+                },
+                Err(KafkaError::PartitionEOF(_)) => Ok(None),
+                Err(err) => bail!("Failed to process message {}", err),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    // Retrieves the latest committed timestamp from the progress topic.  Blocking so should
+    // always be called on background thread
+    fn get_latest_ts<C>(
+        progress_topic: &str,
+        progress_key: &str,
+        progress_client: &BaseConsumer<C>,
+        timeout: Duration,
+    ) -> Result<Option<Timestamp>, anyhow::Error>
+    where
+        C: ConsumerContext,
+    {
+        // ensure the progress topic has exactly one partition
+        let partitions = mz_kafka_util::client::get_partitions(
+            progress_client.client(),
+            progress_topic,
+            timeout,
+        )
+        .with_context(|| {
+            format!(
+                "Unable to fetch metadata about progress topic {}",
+                progress_topic
+            )
+        })?;
+
+        if partitions.len() != 1 {
+            bail!(
+                    "Progress topic {} should contain a single partition, but instead contains {} partitions",
+                    progress_topic, partitions.len(),
+                );
+        }
+
+        let partition = partitions.into_element();
+
+        // We scan from the beginning and see if we can find a progress record. We have
+        // to do it like this because Kafka Control Batches mess with offsets. We
+        // therefore cannot simply take the last offset from the back and expect a
+        // progress message there. With a transactional producer, the OffsetTail(1) will
+        // not point to an progress message but a control message. With aborted
+        // transactions, there might even be a lot of garbage at the end of the
+        // topic or in between.
+
+        let mut tps = TopicPartitionList::new();
+        tps.add_partition(progress_topic, partition);
+        tps.set_partition_offset(progress_topic, partition, Offset::Beginning)?;
+
+        progress_client.assign(&tps).with_context(|| {
+            format!(
+                "Error seeking in progress topic {}:{}",
+                progress_topic, partition
+            )
+        })?;
+
+        let (lo, hi) = progress_client
+            .fetch_watermarks(progress_topic, 0, timeout)
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to fetch metadata while reading from progress topic: {}",
+                    e
+                )
+            })?;
+
+        // Empty topic.  Return early to avoid unnecessary call to kafka below.
+        if hi == 0 {
+            return Ok(None);
+        }
+
+        let mut latest_ts = None;
+        let mut latest_offset = None;
+
+        let progress_key_bytes = progress_key.as_bytes();
+        while let Some((key, message, offset)) = get_next_message(progress_client, timeout)? {
+            debug_assert!(offset >= latest_offset.unwrap_or(0));
+            latest_offset = Some(offset);
+
+            let timestamp_opt = if &key == progress_key_bytes {
+                let progress: ProgressRecord = serde_json::from_slice(&message)?;
+                Some(progress.timestamp)
+            } else {
+                None
+            };
+
+            if let Some(ts) = timestamp_opt {
+                if ts >= latest_ts.unwrap_or_else(timely::progress::Timestamp::minimum) {
+                    latest_ts = Some(ts);
+                }
+            }
+
+            // If the next possible offset for the client is past the high watermark, we've seen
+            // everything we expect to see.
+            let position = progress_client
+                .position()?
+                .find_partition(progress_topic, partition)
+                .ok_or_else(|| anyhow!("No progress info for known partition"))?
+                .offset();
+            if let Offset::Offset(i) = position {
+                if i >= hi {
+                    break;
+                }
+            }
+        }
+
+        // Topic not empty but we couldn't read any messages.  We don't expect this to happen but we
+        // have no reason to rely on kafka not inserting any internal messages at the beginning.
+        if latest_offset.is_none() {
+            debug!(
+                "unable to read any messages from non-empty topic {}:{}, lo/hi: {}/{}",
+                progress_topic, partition, lo, hi
+            );
+        }
+        Ok(latest_ts)
+    }
+
+    // Only actually used for retriable errors.
+    Retry::default()
+        .max_tries(3)
+        .clamp_backoff(Duration::from_secs(60 * 10))
+        .retry_async(|_| async {
+            let progress_topic = progress_topic.clone();
+            let progress_key = progress_key.clone();
+            let progress_client = Arc::clone(&progress_client);
+            task::spawn_blocking(
+                || format!("get_latest_ts:{name}"),
+                move || {
+                    get_latest_ts(
+                        &progress_topic,
+                        &progress_key,
+                        &progress_client,
+                        DEFAULT_FETCH_METADATA_TIMEOUT,
+                    )
+                },
             )
             .await
-            .context("error registering kafka consistency topic for sink")?;
-
-            KafkaSinkProgressConnection { topic }
-        }
-    };
-
-    Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
-        connection: referenced_builder.connection,
-        connection_id: builder.connection_id,
-        topic: builder.topic_name,
-        relation_key_indices: builder.relation_key_indices,
-        key_desc_and_indices: builder.key_desc_and_indices,
-        value_desc: builder.value_desc,
-        published_schema_info,
-        progress,
-        fuel: builder.fuel,
-    }))
+            .unwrap_or_else(|e| bail!(e))
+        })
+        .await
 }

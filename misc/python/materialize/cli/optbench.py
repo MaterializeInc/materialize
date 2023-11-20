@@ -239,11 +239,11 @@ def compare(
 
     try:
         base_df = pd.read_csv(base, quoting=csv.QUOTE_MINIMAL).agg(
-            [np.min, np.median, np.max]
+            ["min", "median", "max"]
         )
 
         diff_df = pd.read_csv(diff, quoting=csv.QUOTE_MINIMAL).agg(
-            [np.min, np.median, np.max]
+            ["min", "median", "max"]
         )
 
         # compute diff/base quotient for all (metric, query) pairs

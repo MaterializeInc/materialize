@@ -9,10 +9,9 @@
 
 //! Check that the visible type of each query has not been changed
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use itertools::Itertools;
 use mz_expr::{
@@ -27,11 +26,11 @@ use mz_repr::{ColumnName, ColumnType, RelationType, Row, ScalarBaseType, ScalarT
 ///
 /// We use a `RefCell` to ensure that contexts are shared by multiple typechecker passes.
 /// Shared contexts help catch consistency issues.
-pub type SharedContext = Rc<RefCell<Context>>;
+pub type SharedContext = Arc<Mutex<Context>>;
 
 /// Generates an empty context
 pub fn empty_context() -> SharedContext {
-    Rc::new(RefCell::new(BTreeMap::new()))
+    Arc::new(Mutex::new(BTreeMap::new()))
 }
 
 /// The possible forms of inconsistency/errors discovered during typechecking.
@@ -515,7 +514,7 @@ impl Typecheck {
 
                 Ok(typ.column_types.clone())
             }
-            Get { typ, id } => {
+            Get { typ, id, .. } => {
                 if let Id::Global(_global_id) = id {
                     if !ctx.contains_key(id) {
                         // TODO(mgree) pass QueryContext through to check these types
@@ -716,7 +715,7 @@ impl Typecheck {
                             }
                         }
                     }
-                    JoinImplementation::IndexedFilter(_global_id, key, consts) => {
+                    JoinImplementation::IndexedFilter(_coll_id, _idx_id, key, consts) => {
                         let typ: Vec<ColumnType> = key
                             .iter()
                             .map(|k| tc.typecheck_scalar(k, expr, &t_in_global))
@@ -940,6 +939,7 @@ impl Typecheck {
                 Get {
                     id: Id::Local(id),
                     typ,
+                    ..
                 } => {
                     if !ids.contains(id) {
                         return Ok(());
@@ -1163,7 +1163,7 @@ impl crate::Transform for Typecheck {
         relation: &mut MirRelationExpr,
         transform_ctx: &mut crate::TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        let mut typecheck_ctx = self.ctx.borrow_mut();
+        let mut typecheck_ctx = self.ctx.lock().expect("typecheck ctx");
 
         let expected = transform_ctx
             .global_id

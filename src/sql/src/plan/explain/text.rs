@@ -350,6 +350,14 @@ impl fmt::Display for HirScalarExpr {
                             Some(&value_window_expr.window_frame),
                         )
                     }
+                    WindowExprType::Aggregate(aggregate_window_expr) => {
+                        write!(f, "{}", aggregate_window_expr.aggregate_expr)?;
+                        (
+                            &aggregate_window_expr.order_by,
+                            false,
+                            Some(&aggregate_window_expr.window_frame),
+                        )
+                    }
                 };
 
                 // Reconstruct the ORDER BY (see comment on `WindowExpr.order_by`).
@@ -382,11 +390,11 @@ impl fmt::Display for HirScalarExpr {
                 // This is close to the SQL syntax, but we are adding some [] to make it easier to
                 // read.
                 write!(f, " over (")?;
-                if !expr.partition.is_empty() {
+                if !expr.partition_by.is_empty() {
                     write!(
                         f,
                         "partition by [{}] ",
-                        separated(", ", expr.partition.iter())
+                        separated(", ", expr.partition_by.iter())
                     )?;
                 }
                 write!(f, "order by [{}]", separated(", ", order_by.iter()))?;

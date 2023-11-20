@@ -20,7 +20,7 @@ $ kafka-ingest format=avro topic=avro-bad-json schema=${writer} timestamp=1
 {"f1": "__debezium_unavailable_value"}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE avro_bad_json
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-bad-json-${testdrive.seed}')

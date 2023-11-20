@@ -152,28 +152,27 @@ CREATE INDEX sections_fk_courses ON sections (course_id);
 ```
 
 ```sql
-EXPLAIN VIEW course_schedule;
+EXPLAIN SELECT * FROM course_schedule;
 ```
 
 ```
-                             Optimized Plan
------------------------------------------------------------------------
- materialize.public.course_schedule:                                  +
-   Project (#1, #5, #7)                                               +
-     Filter (#0) IS NOT NULL AND (#4) IS NOT NULL                     +
-       Join on=(#0 = #3 AND #4 = #6) type=delta                       + <-- delta join
-         ArrangeBy keys=[[#0]]                                        +
-           Get materialize.public.teachers                            +
-         ArrangeBy keys=[[#1], [#2]]                                  +
-           Get materialize.public.sections                            +
-         ArrangeBy keys=[[#0]]                                        +
-           Get materialize.public.courses                             +
-                                                                      +
- Used Indexes:                                                        +
-   - materialize.public.pk_teachers (delta join 1st input (full scan))+
-   - materialize.public.sections_fk_teachers (delta join lookup)      +
-   - materialize.public.pk_courses (delta join lookup)                +
-   - materialize.public.sections_fk_courses (delta join lookup)       +
+Optimized Plan
+Explained Query:
+  Project (#1, #5, #7)
+    Filter (#0) IS NOT NULL AND (#4) IS NOT NULL
+      Join on=(#0 = #3 AND #4 = #6) type=delta                 <---------- Delta join
+        ArrangeBy keys=[[#0]]
+          ReadIndex on=teachers pk_teachers=[delta join 1st input (full scan)]
+        ArrangeBy keys=[[#1], [#2]]
+          ReadIndex on=sections sections_fk_teachers=[delta join lookup] sections_fk_courses=[delta join lookup]
+        ArrangeBy keys=[[#0]]
+          ReadIndex on=courses pk_courses=[delta join lookup]
+
+Used Indexes:
+  - materialize.public.pk_teachers (delta join 1st input (full scan))
+  - materialize.public.sections_fk_teachers (delta join lookup)
+  - materialize.public.pk_courses (delta join lookup)
+  - materialize.public.sections_fk_courses (delta join lookup)
 ```
 
 For [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) with a delta join, place the smallest input (taking into account predicates that filter from it) first in the `FROM` clause.
@@ -264,24 +263,24 @@ EXPLAIN
 ```
 
 ```
-                                   Optimized Plan
-------------------------------------------------------------------------------------
- Explained Query:                                                                  +
-   Project (#1, #6, #8)                                                            +
-     Filter (#0) IS NOT NULL AND (#5) IS NOT NULL                                  +
-       Join on=(#0 = #4 AND #5 = #7) type=delta                                    +
-         ArrangeBy keys=[[#0]]                                                     +
-           ReadExistingIndex materialize.public.teachers lookup_value=("Escalante")+
-         ArrangeBy keys=[[#1], [#2]]                                               +
-           Get materialize.public.sections                                         +
-         ArrangeBy keys=[[#0]]                                                     +
-           Get materialize.public.courses                                          +
-                                                                                   +
- Used Indexes:                                                                     +
-   - materialize.public.teachers_name (lookup)                                     +
-   - materialize.public.sections_fk_teachers (delta join lookup)                   +
-   - materialize.public.pk_courses (delta join lookup)                             +
-   - materialize.public.sections_fk_courses (delta join lookup)                    +
+                                                  Optimized Plan
+------------------------------------------------------------------------------------------------------------------
+ Explained Query:                                                                                                +
+   Project (#1, #6, #8)                                                                                          +
+     Filter (#0) IS NOT NULL AND (#5) IS NOT NULL                                                                +
+       Join on=(#0 = #4 AND #5 = #7) type=delta                                                                  +
+         ArrangeBy keys=[[#0]]                                                                                   +
+           ReadIndex on=materialize.public.teachers teachers_name=[lookup value=("Escalante")]                   +
+         ArrangeBy keys=[[#1], [#2]]                                                                             +
+           ReadIndex on=sections sections_fk_teachers=[delta join lookup] sections_fk_courses=[delta join lookup]+
+         ArrangeBy keys=[[#0]]                                                                                   +
+           ReadIndex on=courses pk_courses=[delta join lookup]                                                   +
+                                                                                                                 +
+ Used Indexes:                                                                                                   +
+   - materialize.public.teachers_name (lookup)                                                                   +
+   - materialize.public.sections_fk_teachers (delta join lookup)                                                 +
+   - materialize.public.pk_courses (delta join lookup)                                                           +
+   - materialize.public.sections_fk_courses (delta join lookup)                                                  +
 ```
 
 You can see in the above `EXPLAIN` printout that the system will use `teachers_name` for a point lookup, and use three other indexes for the execution of the delta join. Note that the `pk_teachers` index is not used, as explained [above](#joins-with-filters).
@@ -292,13 +291,13 @@ The following are the possible index usage types:
 - `differential join`: Materialize will use the index to perform a _differential join_. For a differential join between two relations, the amount of memory required is proportional to the sum of the sizes of each of the input relations that are **not** indexed. In other words, if an input is already indexed, then the size of that input won't affect the memory usage of a differential join between two relations. For a join between more than two relations, we recommend aiming for a delta join instead of a differential join, as explained [above](#optimize-multi-way-joins-with-delta-joins). A differential join between more than two relations will perform a series of binary differential joins on top of each other, and each of these binary joins (except the first one) will use memory proportional to the size of the intermediate data that is fed into the join.
 - `delta join 1st input (full scan)`: Materialize will use the index for the first input of a [delta join](#optimize-multi-way-joins-with-delta-joins). Note that the first input of a delta join is always fully scanned. However, executing the join won't require additional memory if the input is indexed.
 - `delta join lookup`: Materialize will use the index for a non-first input of a [delta join](#optimize-multi-way-joins-with-delta-joins). This means that, in an ad hoc query, the join will perform only lookups into the index.
-- `fast path limit`: When a [fast path](/sql/explain/#fast-path-queries) query has a `LIMIT` clause but no `ORDER BY` clause, then Materialize will read from the index only as many records as required to satisfy the `LIMIT` (plus `OFFSET`) clause.
+- `fast path limit`: When a [fast path](/sql/explain-plan/#fast-path-queries) query has a `LIMIT` clause but no `ORDER BY` clause, then Materialize will read from the index only as many records as required to satisfy the `LIMIT` (plus `OFFSET`) clause.
 
 ## Query hints
 
-Materialize has at present one important [query hint]: the `EXPECTED GROUP SIZE`. This hint applies to indexed or materialized views that need to incrementally maintain [`MIN`], [`MAX`], or [Top K] queries, as specified, e.g., by `GROUP BY`, `LATERAL`, or `DISTINCT ON`. Maintaining these queries while delivering low latency result updates is demanding in terms of main memory. This is because Materialize builds a hierarchy of aggregations so that data can be physically partitioned into small groups. By having only small groups at each level of the hierarchy, we can make sure that recomputing aggregations is not slowed down by skew in the sizes of the original query groups.
+Materialize has at present three important [query hints]: `AGGREGATE INPUT GROUP SIZE`, `DISTINCT ON INPUT GROUP SIZE`, and `LIMIT INPUT GROUP SIZE`. These hints apply to indexed or materialized views that need to incrementally maintain [`MIN`], [`MAX`], or [Top K] queries, as specified by SQL aggregations, `DISTINCT ON`, or `LIMIT` clauses. Maintaining these queries while delivering low latency result updates is demanding in terms of main memory. This is because Materialize builds a hierarchy of aggregations so that data can be physically partitioned into small groups. By having only small groups at each level of the hierarchy, we can make sure that recomputing aggregations is not slowed down by skew in the sizes of the original query groups.
 
-The number of levels needed in the hierarchical scheme is by default set assuming that there may be large query groups in the input data. By specifying the `EXPECTED GROUP SIZE`, it is possible to refine this assumption, allowing Materialize to build a hierarchy with fewer levels and lower memory consumption without sacrificing update latency.
+The number of levels needed in the hierarchical scheme is by default set assuming that there may be large query groups in the input data. By specifying the query hints, it is possible to refine this assumption, allowing Materialize to build a hierarchy with fewer levels and lower memory consumption without sacrificing update latency.
 
 Consider the previous example with the collection `sections`. Maintenance of the maximum `course_id` per `teacher` can be achieved with a materialized view:
 
@@ -309,7 +308,7 @@ FROM sections
 GROUP BY teacher_id;
 ```
 
-If the largest number of `course_id` values that are allocated to a single `teacher_id` is known, then this number can be provided as the `EXPECTED GROUP SIZE`. For the query above, it is possible to get an estimate for this number by:
+If the largest number of `course_id` values that are allocated to a single `teacher_id` is known, then this number can be provided as the `AGGREGATE INPUT GROUP SIZE`. For the query above, it is possible to get an estimate for this number by:
 
 ```sql
 SELECT MAX(course_count)
@@ -320,29 +319,29 @@ FROM (
 );
 ```
 
-However, the estimate is based only on data that is already present in the system. So taking into account how much this largest number could expand is critical to avoid issues with update latency after tuning the `EXPECTED GROUP SIZE`.
+However, the estimate is based only on data that is already present in the system. So taking into account how much this largest number could expand is critical to avoid issues with update latency after tuning the query hint.
 
-For our example, let's suppose that we determined the largest number of courses per teacher to be `1000`. Then, the original definition of `max_course_id_per_teacher` can be revised to include the `EXPECTED GROUP SIZE` query hint as follows:
+For our example, let's suppose that we determined the largest number of courses per teacher to be `1000`. Then, the original definition of `max_course_id_per_teacher` can be revised to include the `AGGREGATE INPUT GROUP SIZE` query hint as follows:
 
 ```sql
 CREATE MATERIALIZED VIEW max_course_id_per_teacher AS
 SELECT teacher_id, MAX(course_id)
 FROM sections
 GROUP BY teacher_id
-OPTIONS (EXPECTED GROUP SIZE = 1000)
+OPTIONS (AGGREGATE INPUT GROUP SIZE = 1000)
 ```
 
-The same hint can be provided in [Top K] query patterns specified by `DISTINCT ON` or `LATERAL`. As examples, consider that we wish not to compute the maximum `course_id`, but rather the `id` of the section of this top course. This computation can be incrementally maintained by the following materialized view:
+The other two hints can be provided in [Top K] query patterns specified by `DISTINCT ON` or `LIMIT`. As examples, consider that we wish not to compute the maximum `course_id`, but rather the `id` of the section of this top course. This computation can be incrementally maintained by the following materialized view:
 
 ```sql
 CREATE MATERIALIZED VIEW section_of_top_course_per_teacher AS
 SELECT DISTINCT ON(teacher_id) teacher_id, id AS section_id
 FROM sections
-OPTIONS (EXPECTED GROUP SIZE = 1000)
+OPTIONS (DISTINCT ON INPUT GROUP SIZE = 1000)
 ORDER BY teacher_id ASC, course_id DESC;
 ```
 
-In the above examples, we see that the `EXPECTED GROUP SIZE` hint is always positioned in an `OPTIONS` clause after a `GROUP BY` clause, but before an `ORDER BY`, as captured by the [`SELECT` syntax]. However, in the case of Top K using a `LATERAL` subquery and `LIMIT`, the hint is specified in the subquery. For instance, the following materialized view illustrates how to incrementally maintain the top-3 section `id`s ranked by `course_id` for each teacher:
+In the above examples, we see that the query hints are always positioned in an `OPTIONS` clause after a `GROUP BY` clause, but before an `ORDER BY`, as captured by the [`SELECT` syntax]. However, in the case of Top K using a `LATERAL` subquery and `LIMIT`, it is important to note that the hint is specified in the subquery. For instance, the following materialized view illustrates how to incrementally maintain the top-3 section `id`s ranked by `course_id` for each teacher:
 
 ```sql
 CREATE MATERIALIZED VIEW sections_of_top_3_courses_per_teacher AS
@@ -351,12 +350,12 @@ FROM teachers grp,
      LATERAL (SELECT id AS section_id
               FROM sections
               WHERE teacher_id = grp.id
-              OPTIONS (EXPECTED GROUP SIZE = 1000)
+              OPTIONS (LIMIT INPUT GROUP SIZE = 1000)
               ORDER BY course_id DESC
               LIMIT 3);
 ```
 
-For indexed and materialized views that have already been created without specifying an `EXPECTED GROUP SIZE` query hint, Materialize includes an introspection view, [`mz_internal.mz_expected_group_size_advice`], that can be used to query, for a given cluster, all incrementally maintained [dataflows] where tuning of the `EXPECTED GROUP SIZE` could be beneficial. The introspection view also provides an advice value based on an estimate of how many levels could be cut from the hierarchy. The following query illustrates how to access this introspection view:
+For indexed and materialized views that have already been created without specifying query hints, Materialize includes an introspection view, [`mz_internal.mz_expected_group_size_advice`], that can be used to query, for a given cluster, all incrementally maintained [dataflows] where tuning of the above query hints could be beneficial. The introspection view also provides an advice value based on an estimate of how many levels could be cut from the hierarchy. The following query illustrates how to access this introspection view:
 
 ```sql
 SELECT dataflow_name, region_name, levels, to_cut, hint
@@ -364,13 +363,13 @@ FROM mz_internal.mz_expected_group_size_advice
 ORDER BY dataflow_name, region_name;
 ```
 
-The column `hint` provides the estimated value to be provided to the `EXPECTED GROUP SIZE`.
+The column `hint` provides the estimated value to be provided to the `AGGREGATE INPUT GROUP SIZE` in the case of a `MIN` or `MAX` aggregation or to the `DISTINCT ON INPUT GROUP SIZE` or `LIMIT INPUT GROUP SIZE` in the case of a Top K pattern.
 
 ## Learn more
 
 Check out the blog post [Delta Joins and Late Materialization](https://materialize.com/blog/delta-joins/) to go deeper on join optimization in Materialize.
 
-[query hint]: /sql/select/#query-hints
+[query hints]: /sql/select/#query-hints
 [arrangements]: /get-started/arrangements/#arrangements
 [`MIN`]: /sql/functions/#min
 [`MAX`]: /sql/functions/#max

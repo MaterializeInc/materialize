@@ -142,7 +142,7 @@ def main() -> None:
         )
         cur.execute(
             f"""CREATE CONNECTION kafka_conn
-            TO KAFKA (BROKER '{args.confluent_host}:9092')"""
+            TO KAFKA (BROKER '{args.confluent_host}:9092', SECURITY PROTOCOL PLAINTEXT)"""
         )
         cur.execute(
             """CREATE SOURCE src

@@ -15,8 +15,8 @@ use std::time::Duration;
 use differential_dataflow::{AsCollection, Collection};
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Diff, Row};
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sources::{
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sources::{
     Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset, SourceTimestamp,
 };
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
@@ -25,7 +25,8 @@ use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod auction;
@@ -73,6 +74,8 @@ impl SourceRender for LoadGeneratorSourceConnection {
     type Value = Row;
     type Time = MzOffset;
 
+    const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Generator;
+
     fn render<G: Scope<Timestamp = MzOffset>>(
         self,
         scope: &mut G,
@@ -90,7 +93,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             Diff,
         >,
         Option<Stream<G, Infallible>>,
-        Stream<G, (usize, HealthStatusUpdate)>,
+        Stream<G, HealthStatusMessage>,
         Rc<dyn Any>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -128,13 +131,18 @@ impl SourceRender for LoadGeneratorSourceConnection {
                         let message = (
                             output,
                             Ok(SourceMessage {
-                                upstream_time_millis: None,
                                 key: (),
                                 value,
-                                headers: None,
+                                metadata: Row::default(),
                             }),
                         );
-                        data_output.give(&cap, (message, offset, diff)).await;
+
+                        // Some generators always reproduce their TVC from the beginning which can
+                        // generate a significant amount of data that will overwhelm the dataflow.
+                        // Since those are not required downstream we eagerly ignore them here.
+                        if resume_offset <= offset {
+                            data_output.give(&cap, (message, offset, diff)).await;
+                        }
                     }
                     Event::Progress(Some(offset)) => {
                         cap.downgrade(&offset);
@@ -152,7 +160,12 @@ impl SourceRender for LoadGeneratorSourceConnection {
             }
         });
 
-        let status = [(0, HealthStatusUpdate::status(HealthStatus::Running))].to_stream(scope);
+        let status = [HealthStatusMessage {
+            index: 0,
+            namespace: Self::STATUS_NAMESPACE.clone(),
+            update: HealthStatusUpdate::running(),
+        }]
+        .to_stream(scope);
         (
             stream.as_collection(),
             None,

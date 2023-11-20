@@ -9,22 +9,20 @@
 
 import os
 
-from materialize import MZ_ROOT, spawn, ui
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Cockroach,
-    Kafka,
-    Postgres,
-    SchemaRegistry,
-    Zookeeper,
-)
+from materialize import MZ_ROOT, buildkite, spawn, ui
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
     Kafka(
         # We need a stable port to advertise, so pick one that is unlikely to
         # conflict with a Kafka cluster running on the local machine.
-        port="30123:30123",
+        ports=["30123:30123"],
         allow_host_ports=True,
         environment_extra=[
             "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
@@ -104,10 +102,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         try:
             spawn.runv(cmd + args.args, env=env)
         finally:
-            spawn.runv(["xz", "-0", "coverage/cargotest.lcov"])
-            spawn.runv(
-                ["buildkite-agent", "artifact", "upload", "coverage/cargotest.lcov.xz"]
-            )
+            spawn.runv(["zstd", "coverage/cargotest.lcov"])
+            buildkite.upload_artifact("coverage/cargotest.lcov.zst")
     else:
         if args.miri_full:
             spawn.runv(
@@ -129,14 +125,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ],
                 env=env,
             )
+
             cpu_count = os.cpu_count()
             assert cpu_count
+
+            partition = int(os.environ.get("BUILDKITE_PARALLEL_JOB", 0)) + 1
+            total = int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
+
             spawn.runv(
                 [
                     "cargo",
                     "nextest",
                     "run",
                     "--profile=ci",
+                    f"--partition=count:{partition}/{total}",
                     # Most tests don't use 100% of a CPU core, so run two tests per CPU.
                     # TODO(def-): Reenable when #19931 is fixed
                     # f"--test-threads={cpu_count * 2}",

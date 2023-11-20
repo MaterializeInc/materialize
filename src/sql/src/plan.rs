@@ -26,17 +26,14 @@
 // `plan_root_query` and fanning out based on the contents of the `SELECT`
 // statement.
 
-// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
-// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
-#![allow(clippy::extra_unused_lifetimes)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use maplit::btreeset;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
@@ -48,9 +45,9 @@ use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
-use mz_storage_client::types::connections::inline::ReferencedConnection;
-use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
-use mz_storage_client::types::sources::{SourceDesc, Timeline};
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
@@ -63,7 +60,7 @@ use crate::catalog::{
 };
 use crate::names::{
     Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
-    ResolvedIds, SystemObjectId,
+    ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -71,7 +68,6 @@ pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod lowering;
 pub(crate) mod notice;
-pub(crate) mod optimize;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
@@ -89,12 +85,12 @@ pub use expr::{
     AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
     WindowExprType,
 };
+pub use lowering::Config as HirToMirConfig;
 pub use notice::PlanNotice;
-pub use optimize::OptimizerConfig;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
-pub use statement::ddl::PlannedRoleAttributes;
+pub use statement::ddl::{PlannedAlterRoleOption, PlannedRoleVariable};
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
@@ -138,8 +134,10 @@ pub enum Plan {
     CopyFrom(CopyFromPlan),
     ExplainPlan(ExplainPlanPlan),
     ExplainTimestamp(ExplainTimestampPlan),
+    ExplainSinkSchema(ExplainSinkSchemaPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
+    AlterClusterSwap(AlterClusterSwapPlan),
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
@@ -155,6 +153,9 @@ pub enum Plan {
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
+    AlterItemSwap(AlterItemSwapPlan),
+    AlterSchemaRename(AlterSchemaRenamePlan),
+    AlterSchemaSwap(AlterSchemaSwapPlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
@@ -200,6 +201,15 @@ impl Plan {
                     PlanKind::AlterClusterRename,
                     PlanKind::AlterClusterReplicaRename,
                     PlanKind::AlterItemRename,
+                    PlanKind::AlterSchemaRename,
+                    PlanKind::AlterNoop,
+                ]
+            }
+            StatementKind::AlterObjectSwap => {
+                vec![
+                    PlanKind::AlterClusterSwap,
+                    PlanKind::AlterItemSwap,
+                    PlanKind::AlterSchemaSwap,
                     PlanKind::AlterNoop,
                 ]
             }
@@ -249,6 +259,7 @@ impl Plan {
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::ExplainPlan => vec![PlanKind::ExplainPlan],
             StatementKind::ExplainTimestamp => vec![PlanKind::ExplainTimestamp],
+            StatementKind::ExplainSinkSchema => vec![PlanKind::ExplainSinkSchema],
             StatementKind::Fetch => vec![PlanKind::Fetch],
             StatementKind::GrantPrivileges => vec![PlanKind::GrantPrivileges],
             StatementKind::GrantRole => vec![PlanKind::GrantRole],
@@ -334,6 +345,7 @@ impl Plan {
             Plan::CopyFrom(_) => "copy from",
             Plan::ExplainPlan(_) => "explain plan",
             Plan::ExplainTimestamp(_) => "explain timestamp",
+            Plan::ExplainSinkSchema(_) => "explain schema",
             Plan::Insert(_) => "insert",
             Plan::AlterNoop(plan) => match plan.object_type {
                 ObjectType::Table => "alter table",
@@ -354,6 +366,7 @@ impl Plan {
             },
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
+            Plan::AlterClusterSwap(_) => "alter cluster swap",
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterIndexSetOptions(_) => "alter index",
@@ -361,6 +374,9 @@ impl Plan {
             Plan::AlterSink(_) => "alter sink",
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
+            Plan::AlterItemSwap(_) => "swap item",
+            Plan::AlterSchemaRename(_) => "alter rename schema",
+            Plan::AlterSchemaSwap(_) => "alter swap schema",
             Plan::AlterSecret(_) => "alter secret",
             Plan::AlterSystemSet(_) => "alter system",
             Plan::AlterSystemReset(_) => "alter system",
@@ -522,6 +538,8 @@ pub enum ReplicaConfig {
         availability_zone: Option<String>,
         compute: ComputeReplicaConfig,
         disk: bool,
+        internal: bool,
+        billed_as: Option<String>,
     },
 }
 
@@ -558,7 +576,15 @@ pub enum SourceSinkClusterConfig {
         /// The size of the replica to create in the linked cluster.
         size: String,
     },
-    /// The user did not specify a cluster behavior, so use the default.
+    /// The user did not specify a cluster behavior, so the actual behavior depends on
+    /// the context. For sources the behavior depends on the data source:
+    ///
+    ///   - Ingestion: Use the default behavior.
+    ///   - Source: Use the same cluster as the data source source.
+    ///   - Progress: Use the same cluster as the non-progress source.
+    ///   - Webhook: Does not allow undefined configs.
+    ///
+    /// For sinks, always use the default behavior.
     ///
     /// NOTE(benesch): we plan to remove this variant in the future by having
     /// the planner bind a source or sink with no `SIZE` or `IN CLUSTER` option
@@ -568,8 +594,7 @@ pub enum SourceSinkClusterConfig {
 }
 
 impl SourceSinkClusterConfig {
-    /// Returns the ID of the cluster that this source/sink will be created on, if one exists. If
-    /// one doesn't exist, then a new cluster will be created.
+    /// Returns the ID of the cluster that this source/sink will be created on, if one exists.
     pub fn cluster_id(&self) -> Option<&ClusterId> {
         match self {
             SourceSinkClusterConfig::Existing { id } => Some(id),
@@ -590,7 +615,7 @@ pub struct CreateConnectionPlan {
 pub struct ValidateConnectionPlan {
     pub id: GlobalId,
     /// The connection to validate.
-    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Debug)]
@@ -811,27 +836,125 @@ pub enum Explainee {
     MaterializedView(GlobalId),
     /// An existing index.
     Index(GlobalId),
-    /// The object to be explained is a one-off query and may or may not be
-    /// served using a dataflow.
-    /// The object to be explained is a one-off query.
-    ///
-    /// THe query may be served using a dataflow or using a FastPathPlan.
-    ///
-    /// Queries that have their `broken` flag set are expected to cause a panic
-    /// in the optimizer code. In this case, pipeline execution will stop, but
-    /// panic will be intercepted and will not propagate to the caller. This is
-    /// useful when debugging queries that cause panics.
+    /// A SQL statement.
+    Statement(ExplaineeStatement),
+}
+
+/// Explainee types that are statements.
+#[derive(Clone, Debug, EnumKind)]
+#[enum_kind(ExplaineeStatementKind)]
+pub enum ExplaineeStatement {
+    /// The object to be explained is a SELECT statement.
     Query {
         raw_plan: HirRelationExpr,
-        row_set_finishing: Option<RowSetFinishing>,
+        row_set_finishing: RowSetFinishing,
+        desc: RelationDesc,
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
     },
+    /// The object to be explained is a CREATE MATERIALIZED VIEW.
+    CreateMaterializedView {
+        name: QualifiedItemName,
+        raw_plan: HirRelationExpr,
+        column_names: Vec<ColumnName>,
+        cluster_id: ClusterId,
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+        non_null_assertions: Vec<usize>,
+    },
+    /// The object to be explained is a CREATE INDEX.
+    CreateIndex {
+        name: QualifiedItemName,
+        index: Index,
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+    },
+}
+
+impl ExplaineeStatement {
+    pub fn depends_on(&self) -> BTreeSet<GlobalId> {
+        match self {
+            Self::Query { raw_plan, .. } => raw_plan.depends_on(),
+            Self::CreateMaterializedView { raw_plan, .. } => raw_plan.depends_on(),
+            Self::CreateIndex { index, .. } => btreeset! {index.on},
+        }
+    }
+
+    /// Statements that have their `broken` flag set are expected to cause a
+    /// panic in the optimizer code. In this case:
+    ///
+    /// 1. The optimizer pipeline execution will stop, but the panic will be
+    ///    intercepted and will not propagate to the caller. The partial
+    ///    optimizer trace collected until this point will be available.
+    /// 2. The optimizer trace tracing subscriber will delegate regular tracing
+    ///    spans and events to the default subscriber.
+    ///
+    /// This is useful when debugging queries that cause panics.
+    pub fn broken(&self) -> bool {
+        match self {
+            Self::Query { broken, .. } => *broken,
+            Self::CreateMaterializedView { broken, .. } => *broken,
+            Self::CreateIndex { broken, .. } => *broken,
+        }
+    }
+
+    pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
+        match self {
+            Self::Query {
+                row_set_finishing,
+                desc,
+                ..
+            } => {
+                if !row_set_finishing.is_trivial(desc.arity()) {
+                    // Use the optional finishing extracted in the plan_query call.
+                    Some(row_set_finishing.clone())
+                } else {
+                    None
+                }
+            }
+            Self::CreateMaterializedView { .. } => {
+                // Trivial finishing asserted in plan_create_materialized_view.
+                None
+            }
+            Self::CreateIndex { .. } => {
+                // Trivial finishing for indexes on views asserted in plan_view.
+                None
+            }
+        }
+    }
+}
+
+impl ExplaineeStatementKind {
+    pub fn supports(&self, stage: &ExplainStage) -> bool {
+        use ExplainStage::*;
+        match self {
+            Self::Query => true,
+            Self::CreateMaterializedView => true,
+            Self::CreateIndex => ![RawPlan, DecorrelatedPlan].contains(stage),
+        }
+    }
+}
+
+impl std::fmt::Display for ExplaineeStatementKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Query => write!(f, "QUERY"),
+            Self::CreateMaterializedView => write!(f, "CREATE MATERIALIZED VIEW"),
+            Self::CreateIndex => write!(f, "CREATE INDEX"),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct ExplainTimestampPlan {
     pub format: ExplainFormat,
     pub raw_plan: HirRelationExpr,
+}
+
+#[derive(Debug)]
+pub struct ExplainSinkSchemaPlan {
+    pub sink_from: GlobalId,
+    pub json_schema: String,
 }
 
 #[derive(Debug)]
@@ -846,7 +969,7 @@ pub struct SendDiffsPlan {
 #[derive(Debug)]
 pub struct InsertPlan {
     pub id: GlobalId,
-    pub values: mz_expr::MirRelationExpr,
+    pub values: HirRelationExpr,
     pub returning: Vec<mz_expr::MirScalarExpr>,
 }
 
@@ -948,6 +1071,39 @@ pub struct AlterItemRenamePlan {
 }
 
 #[derive(Debug)]
+pub struct AlterSchemaRenamePlan {
+    pub cur_schema_spec: (ResolvedDatabaseSpecifier, SchemaSpecifier),
+    pub new_schema_name: String,
+}
+
+#[derive(Debug)]
+pub struct AlterSchemaSwapPlan {
+    pub schema_a_spec: (ResolvedDatabaseSpecifier, SchemaSpecifier),
+    pub schema_a_name: String,
+    pub schema_b_spec: (ResolvedDatabaseSpecifier, SchemaSpecifier),
+    pub schema_b_name: String,
+    pub name_temp: String,
+}
+
+#[derive(Debug)]
+pub struct AlterClusterSwapPlan {
+    pub id_a: ClusterId,
+    pub id_b: ClusterId,
+    pub name_a: String,
+    pub name_b: String,
+    pub name_temp: String,
+}
+
+#[derive(Debug)]
+pub struct AlterItemSwapPlan {
+    pub id_a: GlobalId,
+    pub id_b: GlobalId,
+    pub full_name_a: FullItemName,
+    pub full_name_b: FullItemName,
+    pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
 pub struct AlterSecretPlan {
     pub id: GlobalId,
     pub secret_as: MirScalarExpr,
@@ -971,7 +1127,7 @@ pub struct AlterSystemResetAllPlan {}
 pub struct AlterRolePlan {
     pub id: RoleId,
     pub name: String,
-    pub attributes: PlannedRoleAttributes,
+    pub option: PlannedAlterRoleOption,
 }
 
 #[derive(Debug)]
@@ -1101,7 +1257,7 @@ pub struct CommentPlan {
     pub object_id: CommentObjectId,
     /// A sub-component of the object that this comment is associated with, e.g. a column.
     ///
-    /// TODO(parkmycar): Make this a newtype ColumnPos that accounts for SQL's 1-indexing.
+    /// TODO(parkmycar): <https://github.com/MaterializeInc/materialize/issues/22246>.
     pub sub_component: Option<usize>,
     /// The comment itself. If `None` that indicates we should clear the existing comment.
     pub comment: Option<String>,
@@ -1149,14 +1305,50 @@ pub struct Ingestion {
 pub struct WebhookValidation {
     /// The expression used to validate a request.
     pub expression: MirScalarExpr,
+    /// Description of the source that will be created.
+    pub relation_desc: RelationDesc,
     /// The column index to provide the request body and whether to provide it as bytes.
     pub bodies: Vec<(usize, bool)>,
     /// The column index to provide the request headers and whether to provide the values as bytes.
-    ///
-    /// TODO(parkmycar): Support filtering down to specific headers.
     pub headers: Vec<(usize, bool)>,
     /// Any secrets that are used in that validation.
     pub secrets: Vec<WebhookValidationSecret>,
+}
+
+impl WebhookValidation {
+    const MAX_REDUCE_TIME: Duration = Duration::from_secs(60);
+
+    /// Attempt to reduce the internal [`MirScalarExpr`] into a simpler expression.
+    ///
+    /// The reduction happens on a separate thread, we also only wait for
+    /// `WebhookValidation::MAX_REDUCE_TIME` before timing out and returning an error.
+    pub async fn reduce_expression(&mut self) -> Result<(), &'static str> {
+        let WebhookValidation {
+            expression,
+            relation_desc,
+            ..
+        } = self;
+
+        // On a different thread, attempt to reduce the expression.
+        let mut expression_ = expression.clone();
+        let desc_ = relation_desc.clone();
+        let reduce_task = mz_ore::task::spawn_blocking(
+            || "webhook-validation-reduce",
+            move || {
+                expression_.reduce(&desc_.typ().column_types);
+                expression_
+            },
+        );
+
+        match tokio::time::timeout(Self::MAX_REDUCE_TIME, reduce_task).await {
+            Ok(Ok(reduced_expr)) => {
+                *expression = reduced_expr;
+                Ok(())
+            }
+            Ok(Err(_)) => Err("joining task"),
+            Err(_) => Err("timeout"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1196,7 +1388,7 @@ pub struct WebhookValidationSecret {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_client::types::connections::Connection<ReferencedConnection>,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Clone, Debug)]
@@ -1209,14 +1401,14 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
+    pub connection: StorageSinkConnection<ReferencedConnection>,
     pub envelope: SinkEnvelope,
 }
 
 #[derive(Clone, Debug)]
 pub struct View {
     pub create_sql: String,
-    pub expr: mz_expr::MirRelationExpr,
+    pub expr: HirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub temporary: bool,
 }
@@ -1224,9 +1416,10 @@ pub struct View {
 #[derive(Clone, Debug)]
 pub struct MaterializedView {
     pub create_sql: String,
-    pub expr: mz_expr::MirRelationExpr,
+    pub expr: HirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub cluster_id: ClusterId,
+    pub non_null_assertions: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]

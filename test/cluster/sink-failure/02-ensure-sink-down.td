@@ -15,4 +15,4 @@
       mz_sinks.name = 'snk'
           AND
       status = 'stalled';
-snk "synthetic error"
+snk "kafka: synthetic error"

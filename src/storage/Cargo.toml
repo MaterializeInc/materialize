@@ -52,22 +52,36 @@ mz-rocksdb = { path = "../rocksdb" }
 mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-ssh-util = { path = "../ssh-util" }
 mz-storage-client = { path = "../storage-client" }
+mz-storage-operators = { path = "../storage-operators" }
+mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 once_cell = { version = "1.16.0" }
 postgres-protocol = { version = "0.6.5" }
 prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
-rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+rdkafka = { version = "0.29.0", features = [
+    "cmake-build",
+    "ssl-vendored",
+    "libz-static",
+    "zstd",
+] }
 regex = { version = "1.7.0" }
-rocksdb = { git = "https://github.com/MaterializeInc/rust-rocksdb", branch = "master", default-features = false, features = ["snappy", "zstd", "lz4"] }
+rocksdb = { git = "https://github.com/MaterializeInc/rust-rocksdb", branch = "master", default-features = false, features = [
+    "snappy",
+    "zstd",
+    "lz4",
+] }
 seahash = "4"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
 sha2 = "0.10.6"
-timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
-tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "test-util"] }
+timely = { version = "0.12.0", default-features = false, features = [
+    "bincode",
+] }
+tokio = { version = "1.32.0", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }
 tokio-stream = "0.1.11"
 tokio-util = { version = "0.7.4", features = ["io"] }
@@ -93,7 +107,7 @@ mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools = "0.10.5"
 num_cpus = "1.14.0"
 tempfile = "3.2.0"
-tokio = { version = "1.24.2", features = ["test-util"] }
+tokio = { version = "1.32.0", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

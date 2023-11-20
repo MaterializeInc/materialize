@@ -30,15 +30,16 @@
 //! constructor for [`Explain`] to indicate that the implementation does
 //! not support this `$format`.
 
+use itertools::Itertools;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::Indent;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_ore::str::{bracketed, separated, Indent};
 
 use crate::explain::dot::{dot_string, DisplayDot};
 use crate::explain::json::{json_string, DisplayJson};
@@ -53,8 +54,6 @@ pub mod tracing;
 
 #[cfg(feature = "tracing_")]
 pub use crate::explain::tracing::trace_plan;
-
-include!(concat!(env!("OUT_DIR"), "/mz_repr.explain.rs"));
 
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -181,6 +180,12 @@ pub struct ExplainConfig {
     pub filter_pushdown: bool,
     /// Show cardinality information.
     pub cardinality: bool,
+    /// Show inferred column names.
+    pub column_names: bool,
+    /// Use inferred column names when rendering scalar and aggregate expressions.
+    pub humanized_exprs: bool,
+    /// Enable outer join lowering implemented in #22347 and #22348.
+    pub enable_new_outer_join_lowering: Option<bool>,
 }
 
 impl Default for ExplainConfig {
@@ -193,12 +198,15 @@ impl Default for ExplainConfig {
             non_negative: false,
             no_fast_path: true,
             raw_plans: true,
-            raw_syntax: true,
+            raw_syntax: false,
             subtree_size: false,
             timing: false,
             types: false,
             filter_pushdown: false,
             cardinality: false,
+            column_names: false,
+            humanized_exprs: false,
+            enable_new_outer_join_lowering: None,
         }
     }
 }
@@ -211,6 +219,7 @@ impl ExplainConfig {
             || self.types
             || self.keys
             || self.cardinality
+            || self.column_names
     }
 }
 
@@ -237,12 +246,40 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             types: flags.remove("types"),
             filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
             cardinality: flags.remove("cardinality"),
+            column_names: flags.remove("column_names"),
+            humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
+            enable_new_outer_join_lowering: parse_flag(&mut flags, "new_outer_join_lowering")?,
         };
         if flags.is_empty() {
             Ok(result)
         } else {
-            anyhow::bail!("unsupported 'EXPLAIN ... WITH' flags: {:?}", flags)
+            anyhow::bail!("unsupported 'EXPLAIN ... WITH' unknown flags: {flags:?}")
         }
+    }
+}
+
+/// Parses a `feature` flag that can be overriden in [`ExplainConfig`].
+///
+/// Either `enable_$feature` or `disable_$feature` can be given, but not both at
+/// the same time. Returns `Some(true)` / `Some(false)` if the corresponding
+/// `ExplainConfig` flag is set and `None` if neither are present. If both flags
+/// are set at the same time bails with an error.
+fn parse_flag(
+    flags: &mut BTreeSet<String>,
+    feature: &'static str,
+) -> Result<Option<bool>, anyhow::Error> {
+    let enabled = flags.remove(&format!("enable_{feature}"));
+    let disabled = flags.remove(&format!("disable_{feature}"));
+
+    if enabled ^ disabled {
+        Ok(Some(enabled && !disabled))
+    } else if !(enabled && disabled) {
+        Ok(None)
+    } else {
+        let mut flags = BTreeSet::<String>::new();
+        flags.insert(format!("enable_{feature}"));
+        flags.insert(format!("disable_{feature}"));
+        anyhow::bail!("unsupported 'EXPLAIN ... WITH' conflicting flags: {flags:?}")
     }
 }
 
@@ -452,6 +489,79 @@ pub trait ExprHumanizer: fmt::Debug {
     fn id_exists(&self, id: GlobalId) -> bool;
 }
 
+/// An [`ExprHumanizer`] that extends the `inner` instance with shadow items
+/// that are reported as present, even though they might not exist in `inner`.
+#[derive(Debug)]
+pub struct ExprHumanizerExt<'a> {
+    /// A map of custom items that might not exist in the backing `inner`
+    /// humanizer, but are reported as present by this humanizer instance.
+    items: BTreeMap<GlobalId, TransientItem>,
+    /// The inner humanizer used to resolve queries for [GlobalId] values not
+    /// present in the `items` map.
+    inner: &'a dyn ExprHumanizer,
+}
+
+impl<'a> ExprHumanizerExt<'a> {
+    pub fn new(items: BTreeMap<GlobalId, TransientItem>, inner: &'a dyn ExprHumanizer) -> Self {
+        Self { items, inner }
+    }
+}
+
+impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
+    fn humanize_id(&self, id: GlobalId) -> Option<String> {
+        match self.items.get(&id) {
+            Some(item) => item.humanized_id.clone(),
+            None => self.inner.humanize_id(id),
+        }
+    }
+
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
+        match self.items.get(&id) {
+            Some(item) => item.humanized_id_unqualified.clone(),
+            None => self.inner.humanize_id_unqualified(id),
+        }
+    }
+
+    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+        self.inner.humanize_scalar_type(ty)
+    }
+
+    fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
+        match self.items.get(&id) {
+            Some(item) => item.column_names.clone(),
+            None => self.inner.column_names_for_id(id),
+        }
+    }
+
+    fn id_exists(&self, id: GlobalId) -> bool {
+        self.items.contains_key(&id) || self.inner.id_exists(id)
+    }
+}
+
+/// A description of a catalog item that does not exist, but can be reported as
+/// present in the catalog by a [`ExprHumanizerExt`] instance that has it in its
+/// `items` list.
+#[derive(Debug)]
+pub struct TransientItem {
+    humanized_id: Option<String>,
+    humanized_id_unqualified: Option<String>,
+    column_names: Option<Vec<String>>,
+}
+
+impl TransientItem {
+    pub fn new(
+        humanized_id: Option<String>,
+        humanized_id_unqualified: Option<String>,
+        column_names: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            humanized_id,
+            humanized_id_unqualified,
+            column_names,
+        }
+    }
+}
+
 /// A bare-minimum implementation of [`ExprHumanizer`].
 ///
 /// The `DummyHumanizer` does a poor job of humanizing expressions. It is
@@ -516,46 +626,114 @@ pub struct Attributes {
     pub non_negative: Option<bool>,
     pub subtree_size: Option<usize>,
     pub arity: Option<usize>,
-    pub types: Option<String>,
-    pub keys: Option<String>,
+    pub types: Option<Option<Vec<ColumnType>>>,
+    pub keys: Option<Vec<Vec<usize>>>,
     pub cardinality: Option<String>,
+    pub column_names: Option<Vec<String>>,
 }
 
-impl fmt::Display for Attributes {
+#[derive(Debug, Clone)]
+pub struct HumanizedAttributes<'a> {
+    attrs: &'a Attributes,
+    humanizer: &'a dyn ExprHumanizer,
+    config: &'a ExplainConfig,
+}
+
+impl<'a> HumanizedAttributes<'a> {
+    pub fn new<T>(attrs: &'a Attributes, ctx: &PlanRenderingContext<'a, T>) -> Self {
+        Self {
+            attrs,
+            humanizer: ctx.humanizer,
+            config: ctx.config,
+        }
+    }
+}
+
+impl<'a> fmt::Display for HumanizedAttributes<'a> {
+    // Attribute rendering is guarded by the ExplainConfig flag for each
+    // attribute. This is needed because we might have derived attributes that
+    // are not explicitly requested (such as column_names), in which case we
+    // don't want to display them.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut builder = f.debug_struct("//");
-        if let Some(subtree_size) = &self.subtree_size {
-            builder.field("subtree_size", subtree_size);
+
+        if self.config.subtree_size {
+            let subtree_size = self.attrs.subtree_size.expect("subtree_size");
+            builder.field("subtree_size", &subtree_size);
         }
-        if let Some(non_negative) = &self.non_negative {
-            builder.field("non_negative", non_negative);
+
+        if self.config.non_negative {
+            let non_negative = self.attrs.non_negative.expect("non_negative");
+            builder.field("non_negative", &non_negative);
         }
-        if let Some(arity) = &self.arity {
-            builder.field("arity", arity);
+
+        if self.config.arity {
+            let arity = self.attrs.arity.expect("arity");
+            builder.field("arity", &arity);
         }
-        if let Some(types) = &self.types {
-            builder.field("types", types);
+
+        if self.config.types {
+            let types = match self.attrs.types.as_ref().expect("types") {
+                Some(types) => {
+                    let types = types
+                        .into_iter()
+                        .map(|c| self.humanizer.humanize_column_type(c))
+                        .collect::<Vec<_>>();
+
+                    bracketed("(", ")", separated(", ", types)).to_string()
+                }
+                None => "(<error>)".to_string(),
+            };
+            builder.field("types", &types);
         }
-        if let Some(keys) = &self.keys {
-            builder.field("keys", keys);
+
+        if self.config.keys {
+            let keys = self
+                .attrs
+                .keys
+                .as_ref()
+                .expect("keys")
+                .into_iter()
+                .map(|key| bracketed("[", "]", separated(", ", key)).to_string());
+            let keys = bracketed("(", ")", separated(", ", keys)).to_string();
+            builder.field("keys", &keys);
         }
-        if let Some(cardinality) = &self.cardinality {
+
+        if self.config.cardinality {
+            let cardinality = self.attrs.cardinality.as_ref().expect("cardinality");
             builder.field("cardinality", cardinality);
         }
+
+        if self.config.column_names {
+            let column_names = self.attrs.column_names.as_ref().expect("column_names");
+            let column_names = column_names.into_iter().enumerate().map(|(i, c)| {
+                if c.is_empty() {
+                    Cow::Owned(format!("#{i}"))
+                } else {
+                    Cow::Borrowed(c)
+                }
+            });
+            let column_names = bracketed("(", ")", separated(", ", column_names)).to_string();
+            builder.field("column_names", &column_names);
+        }
+
         builder.finish()
     }
 }
 
 /// A set of indexes that are used in the explained plan.
 ///
-/// Each vector element consists of the following components:
+/// Each element consists of the following components:
 /// 1. The id of the index.
 /// 2. A vector of [IndexUsageType] denoting how the index is used in the plan.
-#[derive(Debug)]
-pub struct UsedIndexes(Vec<(GlobalId, Vec<IndexUsageType>)>);
+///
+/// Using a `BTreeSet` here ensures a deterministic iteration order, which in turn ensures that
+/// the corresponding EXPLAIN output is determistic as well.
+#[derive(Debug, Default)]
+pub struct UsedIndexes(BTreeSet<(GlobalId, Vec<IndexUsageType>)>);
 
 impl UsedIndexes {
-    pub fn new(values: Vec<(GlobalId, Vec<IndexUsageType>)>) -> UsedIndexes {
+    pub fn new(values: BTreeSet<(GlobalId, Vec<IndexUsageType>)>) -> UsedIndexes {
         UsedIndexes(values)
     }
 
@@ -564,13 +742,7 @@ impl UsedIndexes {
     }
 }
 
-impl Default for UsedIndexes {
-    fn default() -> Self {
-        UsedIndexes(Vec::new())
-    }
-}
-
-#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum IndexUsageType {
     /// Read the entire index.
     FullScan,
@@ -581,18 +753,21 @@ pub enum IndexUsageType {
     /// When later input batches are arriving, all inputs are fully read.
     DeltaJoin(bool),
     /// `IndexedFilter`, e.g., something like `WHERE x = 42` with an index on `x`.
-    Lookup,
-    /// This is when the entire plan is simply an `ArrangeBy` + `Get`. This is a rare case, the only
-    /// situation that I know of when it occurs is if one index is used to build another index
-    /// without any transformations (but possibly with a different key). Note that we won't be able
-    /// to actually observe this case in an EXPLAIN output until we implement `EXPLAIN INDEX` or
-    /// `EXPLAIN CREATE INDEX`. (`export_index` is what inserts this `ArrangeBy`.)
-    PlanRoot,
+    /// This also stores the id of the index that we want to do the lookup from. (This id is already
+    /// chosen by `LiteralConstraints`, and then `IndexUsageType::Lookup` communicates this inside
+    /// `CollectIndexRequests` from the `IndexedFilter` to the `Get`.)
+    Lookup(GlobalId),
+    /// This is a rare case that happens when the user creates an index that is identical to an
+    /// existing one (i.e., on the same object, and with the same keys). We'll re-use the
+    /// arrangement of the existing index. The plan is an `ArrangeBy` + `Get`, where the `ArrangeBy`
+    /// is requesting the same key as an already existing index. (`export_index` is what inserts
+    /// this `ArrangeBy`.)
+    PlanRootNoArrangement,
     /// The index is used for directly writing to a sink. Can happen with a SUBSCRIBE to an indexed
     /// view.
     SinkExport,
-    /// The index is used for creating a new index. Currently, a `PlanRoot` usage will always
-    /// additionally be present together with an `IndexExport` usage.
+    /// The index is used for creating a new index. Note that either a `FullScan` or a
+    /// `PlanRootNoArrangement` usage will always accompany an `IndexExport` usage.
     IndexExport,
     /// When a fast path peek has a LIMIT, but no ORDER BY, then we read from the index only as many
     /// records (approximately), as the OFFSET + LIMIT needs.
@@ -616,7 +791,7 @@ impl std::fmt::Display for IndexUsageType {
             "{}",
             match self {
                 IndexUsageType::FullScan => "*** full scan ***",
-                IndexUsageType::Lookup => "lookup",
+                IndexUsageType::Lookup(_idx_id) => "lookup",
                 IndexUsageType::DifferentialJoin => "differential join",
                 IndexUsageType::DeltaJoin(true) => "delta join 1st input (full scan)",
                 // Technically, this is a lookup only for a snapshot. For later update batches, all
@@ -626,7 +801,7 @@ impl std::fmt::Display for IndexUsageType {
                 // number of records anyway. In other words, something is always scanning new
                 // updates, but we can avoid scanning records again and again in snapshots.
                 IndexUsageType::DeltaJoin(false) => "delta join lookup",
-                IndexUsageType::PlanRoot => "plan root",
+                IndexUsageType::PlanRootNoArrangement => "plan root (no new arrangement)",
                 IndexUsageType::SinkExport => "sink export",
                 IndexUsageType::IndexExport => "index export",
                 IndexUsageType::FastPathLimit => "fast path limit",
@@ -637,43 +812,12 @@ impl std::fmt::Display for IndexUsageType {
     }
 }
 
-impl RustType<ProtoIndexUsageType> for IndexUsageType {
-    fn into_proto(&self) -> ProtoIndexUsageType {
-        use crate::explain::proto_index_usage_type::Kind::*;
-        ProtoIndexUsageType {
-            kind: Some(match self {
-                IndexUsageType::FullScan => FullScan(()),
-                IndexUsageType::Lookup => Lookup(()),
-                IndexUsageType::DifferentialJoin => DifferentialJoin(()),
-                IndexUsageType::DeltaJoin(first) => DeltaJoin(*first),
-                IndexUsageType::PlanRoot => PlanRoot(()),
-                IndexUsageType::SinkExport => SinkExport(()),
-                IndexUsageType::IndexExport => IndexExport(()),
-                IndexUsageType::DanglingArrangeBy => DanglingArrangeBy(()),
-                IndexUsageType::Unknown => Unknown(()),
-                IndexUsageType::FastPathLimit => FastPathLimit(()),
-            }),
-        }
-    }
-    fn from_proto(proto: ProtoIndexUsageType) -> Result<Self, TryFromProtoError> {
-        use crate::explain::proto_index_usage_type::Kind::*;
-
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoIndexUsageType::Kind"))?;
-
-        match kind {
-            FullScan(()) => Ok(IndexUsageType::FullScan),
-            Lookup(()) => Ok(IndexUsageType::Lookup),
-            DifferentialJoin(()) => Ok(IndexUsageType::DifferentialJoin),
-            DeltaJoin(first) => Ok(IndexUsageType::DeltaJoin(first)),
-            PlanRoot(()) => Ok(IndexUsageType::PlanRoot),
-            SinkExport(()) => Ok(IndexUsageType::SinkExport),
-            IndexExport(()) => Ok(IndexUsageType::IndexExport),
-            DanglingArrangeBy(()) => Ok(IndexUsageType::DanglingArrangeBy),
-            Unknown(()) => Ok(IndexUsageType::Unknown),
-            FastPathLimit(()) => Ok(IndexUsageType::FastPathLimit),
-        }
+impl IndexUsageType {
+    pub fn display_vec<'a, I>(usage_types: I) -> impl Display + Sized + 'a
+    where
+        I: IntoIterator<Item = &'a IndexUsageType>,
+    {
+        separated(", ", usage_types.into_iter().sorted().dedup())
     }
 }
 
@@ -778,6 +922,9 @@ mod tests {
             types: false,
             filter_pushdown: false,
             cardinality: false,
+            column_names: false,
+            humanized_exprs: false,
+            enable_new_outer_join_lowering: None,
         };
         let context = ExplainContext {
             env,

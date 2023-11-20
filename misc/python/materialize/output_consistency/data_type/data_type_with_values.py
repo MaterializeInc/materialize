@@ -40,10 +40,14 @@ class DataTypeWithValues:
         value: str,
         column_name: str,
         characteristics: set[ExpressionCharacteristics],
+        is_pg_compatible: bool = True,
     ) -> None:
-        self.raw_values.append(
-            self._create_raw_value(value, column_name, characteristics)
-        )
+        raw_value = self._create_raw_value(value, column_name, characteristics)
+
+        if not is_pg_compatible:
+            raw_value.is_postgres_compatible = False
+
+        self.raw_values.append(raw_value)
 
     def add_characteristic_to_all_values(
         self, characteristic: ExpressionCharacteristics

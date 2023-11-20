@@ -60,7 +60,7 @@ REVOKE USAGE ON SCHEMA other FROM priv;
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS(public, other);
-contains:failed to connect to PostgreSQL database
+contains:insufficient privileges
 detail:user priv lacks USAGE privileges for schemas other
 
 #
@@ -74,7 +74,7 @@ REVOKE SELECT ON TABLE other.s FROM priv;
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS(public, other);
-contains:failed to connect to PostgreSQL database
+contains:insufficient privileges
 detail:user priv lacks SELECT privileges for tables other.s
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -86,5 +86,5 @@ REVOKE SELECT ON public."""select""" FROM priv;
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS(public);
-contains:failed to connect to PostgreSQL database
+contains:insufficient privileges
 detail:user priv lacks SELECT privileges for tables public."""select""", public."select"

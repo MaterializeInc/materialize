@@ -11,11 +11,18 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bytes::BytesMut;
+use mz_controller_types::ClusterId;
+use mz_ore::now::to_datetime;
+use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, now::EpochMillis};
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::plan::Params;
+use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
+use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
 use crate::coord::{ConnMeta, Coordinator};
@@ -24,6 +31,8 @@ use crate::statement_logging::{
     SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
     StatementEndedExecutionRecord, StatementPreparedRecord,
 };
+
+use super::Message;
 
 /// Metadata required for logging a prepared statement.
 #[derive(Debug)]
@@ -37,6 +46,9 @@ pub enum PreparedStatementLoggingInfo {
     StillToLog {
         /// The SQL text of the statement.
         sql: String,
+        /// The SQL text of the statement, redacted to follow our data management
+        /// policy
+        redacted_sql: String,
         /// When the statement was prepared
         prepared_at: EpochMillis,
         /// The name with which the statement was prepared
@@ -48,7 +60,7 @@ pub enum PreparedStatementLoggingInfo {
     },
 }
 
-#[derive(Debug, Ord, Eq, PartialOrd, PartialEq)]
+#[derive(Copy, Clone, Debug, Ord, Eq, PartialOrd, PartialEq)]
 pub struct StatementLoggingId(Uuid);
 
 #[derive(Debug)]
@@ -70,6 +82,10 @@ pub(crate) struct StatementLogging {
     /// Only used by tests; otherwise, `rand::thread_rng()` is used.
     /// Controlled by the system var `statement_logging_use_reproducible_rng`.
     reproducible_rng: rand_chacha::ChaCha8Rng,
+
+    pending_statement_execution_events: Vec<(Row, Diff)>,
+    pending_prepared_statement_events: Vec<Row>,
+    pending_session_events: Vec<Row>,
 }
 
 impl StatementLogging {
@@ -78,11 +94,57 @@ impl StatementLogging {
             executions_begun: BTreeMap::new(),
             unlogged_sessions: BTreeMap::new(),
             reproducible_rng: rand_chacha::ChaCha8Rng::seed_from_u64(42),
+            pending_statement_execution_events: Vec::new(),
+            pending_prepared_statement_events: Vec::new(),
+            pending_session_events: Vec::new(),
         }
     }
 }
 
 impl Coordinator {
+    pub(crate) fn spawn_statement_logging_task(&self) {
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        spawn(|| "statement_logging", async move {
+            // TODO[btv] make this configurable via LD?
+            // Although... Logging every 5 seconds seems like it
+            // should have acceptable cost for now, since we do a
+            // group commit for tables every 1s anyway.
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                let _ = internal_cmd_tx.send(Message::DrainStatementLog);
+            }
+        });
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn drain_statement_log(&mut self) {
+        let session_updates = std::mem::take(&mut self.statement_logging.pending_session_events)
+            .into_iter()
+            .map(|update| (update, 1))
+            .collect();
+        let prepared_statement_updates =
+            std::mem::take(&mut self.statement_logging.pending_prepared_statement_events)
+                .into_iter()
+                .map(|update| (update, 1))
+                .collect();
+        let statement_execution_updates =
+            std::mem::take(&mut self.statement_logging.pending_statement_execution_events);
+
+        use IntrospectionType::*;
+        for (type_, updates) in [
+            (SessionHistory, session_updates),
+            (PreparedStatementHistory, prepared_statement_updates),
+            (StatementExecutionHistory, statement_execution_updates),
+        ] {
+            self.controller
+                .storage
+                .record_introspection_updates(type_, updates)
+                .await;
+        }
+    }
+
     /// Returns any statement logging events needed for a particular
     /// prepared statement. Possibly mutates the `PreparedStatementLoggingInfo` metadata.
     ///
@@ -99,6 +161,7 @@ impl Coordinator {
             PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
+                redacted_sql,
                 prepared_at,
                 name,
                 session_id,
@@ -112,6 +175,7 @@ impl Coordinator {
                 out = Some(StatementPreparedRecord {
                     id: uuid,
                     sql: std::mem::take(sql),
+                    redacted_sql: std::mem::take(redacted_sql),
                     name: std::mem::take(name),
                     session_id: *session_id,
                     prepared_at: *prepared_at,
@@ -162,12 +226,226 @@ impl Coordinator {
         let began_record = self.statement_logging.executions_begun.remove(&id).expect(
             "matched `begin_statement_execution` and `end_statement_execution` invocations",
         );
-        let updates = self
-            .catalog
-            .state()
-            .pack_statement_ended_execution_updates(&began_record, &ended_record);
-        self.buffer_builtin_table_updates(updates);
+        for (row, diff) in
+            Self::pack_statement_ended_execution_updates(&began_record, &ended_record)
+        {
+            self.statement_logging
+                .pending_statement_execution_events
+                .push((row, diff));
+        }
     }
+
+    fn pack_statement_execution_inner(
+        record: &StatementBeganExecutionRecord,
+        packer: &mut RowPacker,
+    ) {
+        let StatementBeganExecutionRecord {
+            id,
+            prepared_statement_id,
+            sample_rate,
+            params,
+            began_at,
+            cluster_id,
+            cluster_name,
+            application_name,
+            transaction_isolation,
+            execution_timestamp,
+            transaction_id,
+            transient_index_id,
+        } = record;
+
+        let cluster = cluster_id.map(|id| id.to_string());
+        let transient_index_id = transient_index_id.map(|id| id.to_string());
+        packer.extend([
+            Datum::Uuid(*id),
+            Datum::Uuid(*prepared_statement_id),
+            Datum::Float64((*sample_rate).into()),
+            match &cluster {
+                None => Datum::Null,
+                Some(cluster_id) => Datum::String(cluster_id),
+            },
+            Datum::String(&*application_name),
+            cluster_name.as_ref().map(String::as_str).into(),
+            Datum::String(&*transaction_isolation),
+            (*execution_timestamp).into(),
+            Datum::UInt64(*transaction_id),
+            match &transient_index_id {
+                None => Datum::Null,
+                Some(transient_index_id) => Datum::String(transient_index_id),
+            },
+        ]);
+        packer
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: params.len(),
+                }],
+                params
+                    .iter()
+                    .map(|p| Datum::from(p.as_ref().map(String::as_str))),
+            )
+            .expect("correct array dimensions");
+        packer.push(Datum::TimestampTz(
+            to_datetime(*began_at).try_into().expect("Sane system time"),
+        ));
+    }
+
+    fn pack_statement_began_execution_update(record: &StatementBeganExecutionRecord) -> Row {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        Self::pack_statement_execution_inner(record, &mut packer);
+        packer.extend([
+            // finished_at
+            Datum::Null,
+            // finished_status
+            Datum::Null,
+            // error_message
+            Datum::Null,
+            // rows_returned
+            Datum::Null,
+            // execution_status
+            Datum::Null,
+        ]);
+        row
+    }
+
+    fn pack_statement_prepared_update(record: &StatementPreparedRecord) -> Row {
+        let StatementPreparedRecord {
+            id,
+            session_id,
+            name,
+            sql,
+            redacted_sql,
+            prepared_at,
+        } = record;
+        let row = Row::pack_slice(&[
+            Datum::Uuid(*id),
+            Datum::Uuid(*session_id),
+            Datum::String(name.as_str()),
+            Datum::String(sql.as_str()),
+            Datum::String(redacted_sql.as_str()),
+            Datum::TimestampTz(to_datetime(*prepared_at).try_into().expect("must fit")),
+        ]);
+        row
+    }
+
+    fn pack_session_history_update(event: &SessionHistoryEvent) -> Row {
+        let SessionHistoryEvent {
+            id,
+            connected_at,
+            application_name,
+            authenticated_user,
+        } = event;
+        Row::pack_slice(&[
+            Datum::Uuid(*id),
+            Datum::TimestampTz(
+                mz_ore::now::to_datetime(*connected_at)
+                    .try_into()
+                    .expect("must fit"),
+            ),
+            Datum::String(&*application_name),
+            Datum::String(&*authenticated_user),
+        ])
+    }
+    pub fn pack_full_statement_execution_update(
+        began_record: &StatementBeganExecutionRecord,
+        ended_record: &StatementEndedExecutionRecord,
+    ) -> Row {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        Self::pack_statement_execution_inner(began_record, &mut packer);
+        let (status, error_message, rows_returned, execution_strategy) = match &ended_record.reason
+        {
+            StatementEndedExecutionReason::Success {
+                rows_returned,
+                execution_strategy,
+            } => (
+                "success",
+                None,
+                rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
+                execution_strategy.map(|es| es.name()),
+            ),
+            StatementEndedExecutionReason::Canceled => ("canceled", None, None, None),
+            StatementEndedExecutionReason::Errored { error } => {
+                ("error", Some(error.as_str()), None, None)
+            }
+            StatementEndedExecutionReason::Aborted => ("aborted", None, None, None),
+        };
+        packer.extend([
+            Datum::TimestampTz(
+                to_datetime(ended_record.ended_at)
+                    .try_into()
+                    .expect("Sane system time"),
+            ),
+            status.into(),
+            error_message.into(),
+            rows_returned.into(),
+            execution_strategy.into(),
+        ]);
+        row
+    }
+
+    pub fn pack_statement_ended_execution_updates(
+        began_record: &StatementBeganExecutionRecord,
+        ended_record: &StatementEndedExecutionRecord,
+    ) -> Vec<(Row, Diff)> {
+        let retraction = Self::pack_statement_began_execution_update(began_record);
+        let new = Self::pack_full_statement_execution_update(began_record, ended_record);
+        vec![(retraction, -1), (new, 1)]
+    }
+
+    /// Mutate a statement execution record via the given function `f`.
+    fn mutate_record<F: FnOnce(&mut StatementBeganExecutionRecord)>(
+        &mut self,
+        StatementLoggingId(id): StatementLoggingId,
+        f: F,
+    ) {
+        let record = self
+            .statement_logging
+            .executions_begun
+            .get_mut(&id)
+            .expect("mutate_record must not be called after execution ends");
+        let retraction = Self::pack_statement_began_execution_update(record);
+        self.statement_logging
+            .pending_statement_execution_events
+            .push((retraction, -1));
+        f(record);
+        let update = Self::pack_statement_began_execution_update(record);
+        self.statement_logging
+            .pending_statement_execution_events
+            .push((update, 1));
+    }
+
+    /// Set the `cluster_id` for a statement, once it's known.
+    pub fn set_statement_execution_cluster(
+        &mut self,
+        id: StatementLoggingId,
+        cluster_id: ClusterId,
+    ) {
+        let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
+        self.mutate_record(id, |record| {
+            record.cluster_name = Some(cluster_name);
+            record.cluster_id = Some(cluster_id);
+        });
+    }
+
+    /// Set the `execution_timestamp` for a statement, once it's known
+    pub fn set_statement_execution_timestamp(
+        &mut self,
+        id: StatementLoggingId,
+        timestamp: Timestamp,
+    ) {
+        self.mutate_record(id, |record| {
+            record.execution_timestamp = Some(u64::from(timestamp));
+        });
+    }
+
+    pub fn set_transient_index_id(&mut self, id: StatementLoggingId, transient_index_id: GlobalId) {
+        self.mutate_record(id, |record| {
+            record.transient_index_id = Some(transient_index_id)
+        });
+    }
+
     /// Possibly record the beginning of statement execution, depending on a randomly-chosen value.
     /// If the execution beginning was indeed logged, returns a `StatementLoggingId` that must be
     /// passed to `end_statement_execution` to record when it ends.
@@ -177,6 +455,9 @@ impl Coordinator {
         params: Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
     ) -> Option<StatementLoggingId> {
+        if session.user().is_internal() {
+            return None;
+        }
         let sample_rate = self.statement_execution_sample_rate(session);
 
         let distribution = Bernoulli::new(sample_rate).expect("rate must be in range [0, 1]");
@@ -232,40 +513,49 @@ impl Coordinator {
             sample_rate,
             params,
             began_at: self.now(),
+            application_name: session.application_name().to_string(),
+            transaction_isolation: session.vars().transaction_isolation().to_string(),
+            transaction_id: session
+                .transaction()
+                .inner()
+                .expect("Every statement runs in an explicit or implicit transaction")
+                .id,
+            // These are not known yet; we'll fill them in later.
+            cluster_id: None,
+            cluster_name: None,
+            execution_timestamp: None,
+            transient_index_id: None,
         };
-        let ev = self
-            .catalog
-            .state()
-            .pack_statement_began_execution_update(&record, 1);
+        let mseh_update = Self::pack_statement_began_execution_update(&record);
+        self.statement_logging
+            .pending_statement_execution_events
+            .push((mseh_update, 1));
         self.statement_logging
             .executions_begun
             .insert(ev_id, record);
-        let updates = if let Some(ps_record) = ps_record {
-            let ps_ev = self
-                .catalog
-                .state()
-                .pack_statement_prepared_update(&ps_record);
+        if let Some(ps_record) = ps_record {
+            let ps_update = Self::pack_statement_prepared_update(&ps_record);
+            self.statement_logging
+                .pending_prepared_statement_events
+                .push(ps_update);
             if let Some(sh) = self
                 .statement_logging
                 .unlogged_sessions
                 .remove(&ps_record.session_id)
             {
-                let sh_ev = self.catalog.state().pack_session_history_update(&sh);
-                vec![sh_ev, ps_ev, ev]
-            } else {
-                vec![ps_ev, ev]
+                let sh_update = Self::pack_session_history_update(&sh);
+                self.statement_logging
+                    .pending_session_events
+                    .push(sh_update);
             }
-        } else {
-            vec![ev]
-        };
-        self.buffer_builtin_table_updates(updates);
+        }
         Some(StatementLoggingId(ev_id))
     }
 
     /// Record a new connection event
     pub fn begin_session_for_statement_logging(&mut self, session: &ConnMeta) {
         let id = session.uuid();
-        let session_role = session.session_role_id();
+        let session_role = session.authenticated_role_id();
         let event = SessionHistoryEvent {
             id,
             connected_at: session.connected_at(),

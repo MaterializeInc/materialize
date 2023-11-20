@@ -10,9 +10,11 @@
 import random
 from textwrap import dedent
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
+from materialize.zippy.replica_capabilities import source_capable_clusters
 from materialize.zippy.sink_capabilities import SinkExists
 from materialize.zippy.storaged_capabilities import StoragedRunning
 from materialize.zippy.view_capabilities import ViewExists
@@ -23,7 +25,7 @@ class CreateSinkParameterized(ActionFactory):
 
     @classmethod
     def requires(cls) -> list[set[type[Capability]]]:
-        return [{MzIsRunning, StoragedRunning, ViewExists}]
+        return [{BalancerdIsRunning, MzIsRunning, StoragedRunning, ViewExists}]
 
     def __init__(self, max_sinks: int = 10) -> None:
         self.max_sinks = max_sinks
@@ -35,6 +37,9 @@ class CreateSinkParameterized(ActionFactory):
 
         if new_sink_name:
             source_view = random.choice(capabilities.get(ViewExists))
+            cluster_name_out = random.choice(source_capable_clusters(capabilities))
+            cluster_name_in = random.choice(source_capable_clusters(capabilities))
+
             dest_view = ViewExists(
                 name=f"{new_sink_name}_view",
                 inputs=[source_view],
@@ -47,6 +52,8 @@ class CreateSinkParameterized(ActionFactory):
                         name=new_sink_name,
                         source_view=source_view,
                         dest_view=dest_view,
+                        cluster_name_out=cluster_name_out,
+                        cluster_name_in=cluster_name_in,
                     ),
                     capabilities=capabilities,
                 ),
@@ -94,18 +101,22 @@ class CreateSink(Action):
         c.testdrive(
             dedent(
                 f"""
-                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', PROGRESS TOPIC 'zippy-{self.sink.name}-${{testdrive.seed}}');
+                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', PROGRESS TOPIC 'zippy-{self.sink.name}-${{testdrive.seed}}', SECURITY PROTOCOL PLAINTEXT);
                 > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
-                > CREATE SINK {self.sink.name} FROM {self.sink.source_view.name}
+                > CREATE SINK {self.sink.name}
+                  IN CLUSTER {self.sink.cluster_name_out}
+                  FROM {self.sink.source_view.name}
                   INTO KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE DEBEZIUM;
 
+                $ kafka-verify-topic sink=materialize.public.{self.sink.name} await-value-schema=true
+
                 # Ingest the sink again in order to be able to validate its contents
 
                 > CREATE SOURCE {self.sink.name}_source
-                  IN CLUSTER storaged
+                  IN CLUSTER {self.sink.cluster_name_in}
                   FROM KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE NONE

@@ -41,36 +41,36 @@ CREATE MATERIALIZED VIEW num_bids AS
 CREATE INDEX num_bids_idx ON num_bids (item);
 ```
 
-The query of the materialized view joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the number of bids per auction. To understand how this SQL query is translated to a dataflow, we can use [`EXPLAIN`](https://materialize.com/docs/sql/explain/) to display the plan used to evaluate the join.
-Note that you can also explain the plan of queries and common views with `EXPLAIN` and `EXPLAIN VIEW`, respectively.
+The query of the materialized view joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the number of bids per auction. To understand how this SQL query is translated to a dataflow, we can use [`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/) to display the plan used to evaluate the join.
 
 ```sql
-EXPLAIN MATERIALIZED VIEW num_bids
+EXPLAIN MATERIALIZED VIEW num_bids;
 ```
 ```
-                Optimized Plan
------------------------------------------------
- materialize.qck.num_bids:                    +
-   Reduce group_by=[#0] aggregates=[count(*)] +
-     Project (#3)                             +
-       Filter (#1 < #4)                       +
-         Join on=(#0 = #2) type=differential  +
-           ArrangeBy keys=[[#0]]              +
-             Project (#2, #4)                 +
-               Get materialize.qck.bids       +
-           ArrangeBy keys=[[#0]]              +
-             Project (#0, #2, #3)             +
-               Get materialize.qck.auctions   +
+                    Optimized Plan
+-------------------------------------------------------
+ materialize.public.num_bids:                         +
+   Reduce group_by=[#0] aggregates=[count(*)]         +
+     Project (#3)                                     +
+       Filter (#1 < #4)                               +
+         Join on=(#0 = #2) type=differential          +
+           ArrangeBy keys=[[#0]]                      +
+             Project (#2, #4)                         +
+               ReadStorage materialize.public.bids    +
+           ArrangeBy keys=[[#0]]                      +
+             Project (#0, #2, #3)                     +
+               ReadStorage materialize.public.auctions+
+
 (1 row)
 ```
 
 The plan describes the specific operators that are used to evaluate the query.
 Some of these operators resemble relational algebra or map reduce style operators (`Filter`, `Join`, `Project`).
-Others are specific to Materialize (`Get`, `ArrangeBy`).
+Others are specific to Materialize (`ArrangeBy`, `ReadStorage`).
 
 In general, a high level understanding of what these operators do is sufficient for effective debugging:
 `Filter` filters records, `Join` joins records from two or more inputs, `Map` applies a function to transform records, etc.
-You can find more details on these operators in the [`EXPLAIN` documentation](https://materialize.com/docs/sql/explain/#operators-in-decorrelated-and-optimized-plans).
+You can find more details on these operators in the [`EXPLAIN PLAN` documentation](https://materialize.com/docs/sql/explain-plan/#operators-in-decorrelated-and-optimized-plans).
 But it's not important to have a deep understanding of all these operators for effective debugging.
 
 
@@ -184,6 +184,30 @@ ORDER BY elapsed_ns DESC
 From the results of this query we can see that most of the elapsed time of the dataflow is caused by the time it takes to maintain the updates in one of the arrangements of the dataflow of the materialized view.
 
 ## Why is Materialize unresponsive or slow?
+Slow responses can be the result of a number of factors, which we can help you understand and address.
+
+If you haven't already, you should consider an [index](https://materialize.com/docs/sql/create-index/) for your query, and check out the [optimizations](https://materialize.com/docs/transform-data/optimization/) on how to optimize query performance in Materialize.
+
+You can also consider changing your isolation level, depending on the [consistency guarantees](https://materialize.com/docs/get-started/isolation-level) that you need.
+
+### Transactions
+
+Transactions are a database concept for bundling multiple query steps into a single, all-or-nothing operation. You can read more about them in the [transactions](https://materialize.com/docs/sql/begin) section of our docs.
+
+In Materialize, `BEGIN` starts a transaction block. All statements in a transaction block will be executed in a single transaction until an explicit `COMMIT` or `ROLLBACK` is given. All statements in that transaction happen at the same timestamp, and that timestamp must be valid for all objects the transaction may access.
+
+What this means for latency: Materialize may delay queries against "slow" tables, materialized views, and indexes until they catch up to faster ones in the same schema. We recommend you avoid using transactions in contexts where you require low latency responses and are not certain that all objects in a schema will be equally current.
+
+What you can do:
+
+- Avoid using transactions where you don’t need them. For example, if you’re only executing single statements at a time.
+- Double check whether your SQL library or ORM is wrapping all queries in transactions on your behalf, and disable that setting, only using transactions explicitly when you want them.
+
+### Client-side latency
+
+To minimize the roundtrip latency associated with making requests from your client to Materialize, make your requests as physically close to your Materialize region as possible. For example, if you use the AWS `us-east-1` region for Materialize, your client server would ideally also be running in AWS `us-east-1`.
+
+### Debugging expensive dataflows and operators
 
 A large class of problems can be identified by using [`elapsed_time`](#identifying-expensive-operators-in-a-dataflow) to estimate the most expensive dataflows and operators.
 However, `elapsed_time` contains all work since the operator or dataflow was first created.
@@ -310,10 +334,10 @@ FROM mz_internal.mz_dataflow_arrangement_sizes
 ORDER BY size DESC
 ```
 ```
-  id   |     name     | records | size_mb
--------+--------------+---------+---------
- 19157 | num_bids     | 1612747 |  113.82
- 19158 | num_bids_idx |      13 |       0
+  id   |                  name                  | records | size_mb
+-------+----------------------------------------+---------+---------
+ 19157 | Dataflow: materialize.qck.num_bids     | 1612747 |  113.82
+ 19158 | Dataflow: materialize.qck.num_bids_idx |      13 |       0
 ```
 
 If you need to drill down into individual operators, you can query `mz_arrangement_sizes` instead.

@@ -528,7 +528,6 @@ impl StorageUsageClient {
     ///
     /// Can be safely called within retry_external to ensure it succeeds
     #[cfg(test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn size(
         &self,
         prefix: BlobKeyPrefix<'_>,
@@ -849,7 +848,7 @@ mod tests {
     /// This is just a sanity check for the overall flow of computing ShardUsage.
     /// The edge cases are exercised in separate tests.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/materialize/issues/19981
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn usage_sanity() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),

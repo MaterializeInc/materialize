@@ -14,13 +14,20 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use differential_dataflow::lattice::antichain_join;
+use differential_dataflow::lattice::{antichain_join, Lattice};
+use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::trace::TraceReader;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use timely::dataflow::operators::CapabilitySet;
+use timely::dataflow::scopes::Child;
+use timely::dataflow::Scope;
 use timely::progress::frontier::{Antichain, AntichainRef};
+use timely::progress::timestamp::Refines;
 
+use crate::logging::compute::{LogImportFrontiers, Logger};
 use crate::metrics::TraceMetrics;
-use crate::typedefs::{ErrsHandle, KeysValsHandle};
+use crate::render::context::SpecializedArrangementImport;
+use crate::typedefs::{ErrsHandle, TraceRowHandle};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
@@ -97,20 +104,113 @@ impl TraceManager {
     }
 }
 
+/// Represents a type-specialized trace handle for successful computations wherein keys or
+/// values were previously type-specialized via `render::context::SpecializedArrangementFlavor`.
+///
+/// The variants defined here must thus match the ones used in creating type-specialized
+/// arrangements.
+#[derive(Clone)]
+pub enum SpecializedTraceHandle {
+    RowUnit(TraceRowHandle<Row, (), Timestamp, Diff>),
+    RowRow(TraceRowHandle<Row, Row, Timestamp, Diff>),
+}
+
+impl SpecializedTraceHandle {
+    /// Obtains the logical compaction frontier for the underlying trace handle.
+    fn get_logical_compaction(&mut self) -> AntichainRef<Timestamp> {
+        match self {
+            SpecializedTraceHandle::RowUnit(handle) => handle.get_logical_compaction(),
+            SpecializedTraceHandle::RowRow(handle) => handle.get_logical_compaction(),
+        }
+    }
+
+    /// Advances the logical compaction frontier for the underlying trace handle.
+    pub fn set_logical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
+        match self {
+            SpecializedTraceHandle::RowUnit(handle) => handle.set_logical_compaction(frontier),
+            SpecializedTraceHandle::RowRow(handle) => handle.set_logical_compaction(frontier),
+        }
+    }
+
+    /// Advances the physical compaction frontier for the underlying trace handle.
+    pub fn set_physical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
+        match self {
+            SpecializedTraceHandle::RowUnit(handle) => handle.set_physical_compaction(frontier),
+            SpecializedTraceHandle::RowRow(handle) => handle.set_physical_compaction(frontier),
+        }
+    }
+
+    /// Reads the upper frontier of the underlying trace handle.
+    pub fn read_upper(&mut self, target: &mut Antichain<Timestamp>) {
+        match self {
+            SpecializedTraceHandle::RowUnit(handle) => handle.read_upper(target),
+            SpecializedTraceHandle::RowRow(handle) => handle.read_upper(target),
+        }
+    }
+
+    /// Maps the underlying trace handle to a `SpecializedArrangementImport`,
+    /// while readjusting times by `since` and `until`.
+    pub fn import_frontier_logged<'g, G, T>(
+        &mut self,
+        scope: &Child<'g, G, T>,
+        name: &str,
+        since: Antichain<Timestamp>,
+        until: Antichain<Timestamp>,
+        logger: Option<Logger>,
+        idx_id: GlobalId,
+        export_ids: Vec<GlobalId>,
+    ) -> (
+        SpecializedArrangementImport<Child<'g, G, T>, Timestamp>,
+        ShutdownButton<CapabilitySet<Timestamp>>,
+    )
+    where
+        G: Scope<Timestamp = Timestamp>,
+        T: Lattice + Refines<G::Timestamp>,
+    {
+        match self {
+            SpecializedTraceHandle::RowUnit(handle) => {
+                let (oks, oks_button) =
+                    handle.import_frontier_core(&scope.parent, name, since, until);
+                let oks = if let Some(logger) = logger {
+                    oks.log_import_frontiers(logger, idx_id, export_ids)
+                } else {
+                    oks
+                };
+                (
+                    SpecializedArrangementImport::RowUnit(oks.enter(scope)),
+                    oks_button,
+                )
+            }
+            SpecializedTraceHandle::RowRow(handle) => {
+                let (oks, oks_button) =
+                    handle.import_frontier_core(&scope.parent, name, since, until);
+                let oks = if let Some(logger) = logger {
+                    oks.log_import_frontiers(logger, idx_id, export_ids)
+                } else {
+                    oks
+                };
+                (
+                    SpecializedArrangementImport::RowRow(oks.enter(scope)),
+                    oks_button,
+                )
+            }
+        }
+    }
+}
+
 /// Bundles together traces for the successful computations (`oks`), the
 /// failed computations (`errs`), additional tokens that should share
-/// the lifetime of the bundled traces (`to_drop`), and a permutation
-/// describing how to reconstruct the original row (`permutation`).
+/// the lifetime of the bundled traces (`to_drop`).
 #[derive(Clone)]
 pub struct TraceBundle {
-    oks: KeysValsHandle,
+    oks: SpecializedTraceHandle,
     errs: ErrsHandle,
     to_drop: Option<Rc<dyn Any>>,
 }
 
 impl TraceBundle {
     /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
-    pub fn new(oks: KeysValsHandle, errs: ErrsHandle) -> TraceBundle {
+    pub fn new(oks: SpecializedTraceHandle, errs: ErrsHandle) -> TraceBundle {
         TraceBundle {
             oks,
             errs,
@@ -130,7 +230,7 @@ impl TraceBundle {
     }
 
     /// Returns a mutable reference to the `oks` trace.
-    pub fn oks_mut(&mut self) -> &mut KeysValsHandle {
+    pub fn oks_mut(&mut self) -> &mut SpecializedTraceHandle {
         &mut self.oks
     }
 

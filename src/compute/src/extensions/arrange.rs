@@ -42,11 +42,7 @@ where
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange<Tr>(
-        &self,
-        name: &str,
-        enable_arrangement_size_logging: bool,
-    ) -> Arranged<Self::Scope, TraceAgent<Tr>>
+    fn mz_arrange<Tr>(&self, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
     where
         Self::Key: ExchangeData + Hashable,
         Self::Val: ExchangeData,
@@ -67,12 +63,7 @@ where
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange_core<P, Tr>(
-        &self,
-        pact: P,
-        name: &str,
-        enable_arrangement_size_logging: bool,
-    ) -> Arranged<Self::Scope, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
     where
         P: ParallelizationContract<
             <Self::Scope as ScopeParent>::Timestamp,
@@ -106,11 +97,7 @@ where
     type Val = V;
     type R = R;
 
-    fn mz_arrange<Tr>(
-        &self,
-        name: &str,
-        enable_arrangement_size_logging: bool,
-    ) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         K: ExchangeData + Hashable,
         V: ExchangeData,
@@ -121,20 +108,10 @@ where
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
-        let arranged = self.arrange_named(name);
-        if enable_arrangement_size_logging {
-            arranged.log_arrangement_size()
-        } else {
-            arranged
-        }
+        self.arrange_named(name).log_arrangement_size()
     }
 
-    fn mz_arrange_core<P, Tr>(
-        &self,
-        pact: P,
-        name: &str,
-        enable_arrangement_size_logging: bool,
-    ) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K, V), G::Timestamp, R)>,
         Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + 'static,
@@ -143,12 +120,7 @@ where
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
-        let arranged = self.arrange_core(pact, name);
-        if enable_arrangement_size_logging {
-            arranged.log_arrangement_size()
-        } else {
-            arranged
-        }
+        self.arrange_core(pact, name).log_arrangement_size()
     }
 }
 
@@ -175,11 +147,7 @@ where
     type Val = ();
     type R = R;
 
-    fn mz_arrange<Tr>(
-        &self,
-        name: &str,
-        enable_arrangement_size_logging: bool,
-    ) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         K: ExchangeData + Hashable,
         R: ExchangeData,
@@ -187,26 +155,17 @@ where
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.0
-            .map(|d| (d, ()))
-            .mz_arrange(name, enable_arrangement_size_logging)
+        self.0.map(|d| (d, ())).mz_arrange(name)
     }
 
-    fn mz_arrange_core<P, Tr>(
-        &self,
-        pact: P,
-        name: &str,
-        enable_arrangement_size_logging: bool,
-    ) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K, ()), G::Timestamp, R)>,
         Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R> + 'static,
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.0
-            .map(|d| (d, ()))
-            .mz_arrange_core(pact, name, enable_arrangement_size_logging)
+        self.0.map(|d| (d, ())).mz_arrange_core(pact, name)
     }
 }
 
@@ -224,10 +183,7 @@ pub trait ArrangementSize {
 #[inline]
 fn vec_size<T>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
     let size_of_t = std::mem::size_of::<T>();
-    // A vector only owns an allocation if the capacity is > 0.
-    if data.capacity() > 0 {
-        callback(data.len() * size_of_t, data.capacity() * size_of_t);
-    }
+    callback(data.len() * size_of_t, data.capacity() * size_of_t);
 }
 
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
@@ -323,7 +279,7 @@ where
         log_arrangement_size_inner(self, |trace| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
-                allocations += 1;
+                allocations += usize::from(cap > 0);
                 size += siz;
                 capacity += cap
             };
@@ -351,7 +307,7 @@ where
         log_arrangement_size_inner(self, |trace| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
-                allocations += 1;
+                allocations += usize::from(cap > 0);
                 size += siz;
                 capacity += cap
             };

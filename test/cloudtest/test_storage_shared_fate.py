@@ -7,12 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
 import subprocess
 import time
 from textwrap import dedent
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.cluster import cluster_pod_name
+
+LOGGER = logging.getLogger(__name__)
 
 CLUSTER_SIZE = 8
 NUM_SOURCES = 4
@@ -40,6 +43,8 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
               INTO KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-sink{i}-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM;
+
+            $ kafka-verify-topic sink=materialize.public.sink{i} await-value-schema=true
 
             > CREATE SOURCE sink{i}_check
               IN CLUSTER storage_shared_fate
@@ -70,7 +75,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > CREATE CLUSTER storage_shared_fate REPLICAS (storage_shared_fate_replica (SIZE '{CLUSTER_SIZE}-1'));
 
-            > CREATE CONNECTION kafka TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+            > CREATE CONNECTION kafka TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT)
 
             $ kafka-create-topic topic=storage-shared-fate partitions={CLUSTER_SIZE*4}
 
@@ -131,7 +136,7 @@ def kill_clusterd(
 
     pod_name = cluster_pod_name(cluster_id, replica_id, compute_id)
 
-    print(f"sending signal {signal} to pod {pod_name}...")
+    LOGGER.info(f"sending signal {signal} to pod {pod_name}...")
 
     try:
         mz.kubectl(

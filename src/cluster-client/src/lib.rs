@@ -83,8 +83,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::bail;
-use mz_proto::{RustType, TryFromProtoError};
-use mz_stash::objects::proto;
 use serde::{Deserialize, Serialize};
 
 pub mod client;
@@ -143,26 +141,5 @@ impl FromStr for ReplicaId {
         }
 
         bail!("invalid replica ID: {}", s);
-    }
-}
-
-impl RustType<proto::ReplicaId> for ReplicaId {
-    fn into_proto(&self) -> proto::ReplicaId {
-        use proto::replica_id::Value::*;
-        proto::ReplicaId {
-            value: Some(match self {
-                Self::System(id) => System(*id),
-                Self::User(id) => User(*id),
-            }),
-        }
-    }
-
-    fn from_proto(proto: proto::ReplicaId) -> Result<Self, TryFromProtoError> {
-        use proto::replica_id::Value::*;
-        match proto.value {
-            Some(System(id)) => Ok(Self::System(id)),
-            Some(User(id)) => Ok(Self::User(id)),
-            None => Err(TryFromProtoError::missing_field("ReplicaId::value")),
-        }
     }
 }

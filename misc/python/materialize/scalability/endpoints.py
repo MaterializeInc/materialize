@@ -9,9 +9,13 @@
 
 import pg8000
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Materialized, Postgres
+from materialize import git
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.scalability.endpoint import Endpoint
+
+POSTGRES_ENDPOINT_NAME = "postgres"
 
 
 class MaterializeRemote(Endpoint):
@@ -25,6 +29,9 @@ class MaterializeRemote(Endpoint):
 
     def up(self) -> None:
         pass
+
+    def __str__(self) -> str:
+        return f"MaterializeRemote ({self.materialize_url})"
 
 
 class PostgresContainer(Endpoint):
@@ -52,8 +59,11 @@ class PostgresContainer(Endpoint):
             self.composition.up("postgres")
             self._port = self.composition.default_port("postgres")
 
-    def name(self) -> str:
-        return "postgres"
+    def try_load_version(self) -> str:
+        return POSTGRES_ENDPOINT_NAME
+
+    def __str__(self) -> str:
+        return "PostgresContainer"
 
 
 class MaterializeNonRemote(Endpoint):
@@ -91,12 +101,25 @@ class MaterializeLocal(MaterializeNonRemote):
     def up(self) -> None:
         self.lift_limits()
 
+    def __str__(self) -> str:
+        return f"MaterializeLocal ({self.host()})"
+
 
 class MaterializeContainer(MaterializeNonRemote):
-    def __init__(self, composition: Composition, image: str | None = None) -> None:
+    def __init__(
+        self,
+        composition: Composition,
+        specified_target: str,
+        image: str | None = None,
+        alternative_image: str | None = None,
+    ) -> None:
         self.composition = composition
         self.image = image
+        self.alternative_image = (
+            alternative_image if image != alternative_image else None
+        )
         self._port: int | None = None
+        self.specified_target = specified_target
         super().__init__()
 
     def port(self) -> int:
@@ -108,8 +131,43 @@ class MaterializeContainer(MaterializeNonRemote):
 
     def up(self) -> None:
         self.composition.down(destroy_volumes=True)
-        with self.composition.override(Materialized(image=self.image)):
+
+        print(f"Image is {self.image} (alternative: {self.alternative_image})")
+
+        if self.image is not None and self.alternative_image is not None:
+            if not self.composition.try_pull_service_image(
+                Materialized(image=self.image)
+            ):
+                # explicitly specified image cannot be found and alternative exists
+                print(
+                    f"Unable to find image {self.image}, proceeding with alternative image {self.alternative_image}!"
+                )
+                self.image = self.alternative_image
+            else:
+                print(f"Found image {self.image}, proceeding with this image.")
+
+        self.up_internal()
+        self.lift_limits()
+
+    def up_internal(self) -> None:
+        with self.composition.override(
+            Materialized(image=self.image, sanity_restart=False)
+        ):
             self.composition.up("materialized")
             self._port = self.composition.default_port("materialized")
 
-        self.lift_limits()
+    def __str__(self) -> str:
+        return (
+            f"MaterializeContainer ({self.image} specified as {self.specified_target})"
+        )
+
+
+def endpoint_name_to_description(endpoint_name: str) -> str:
+    if endpoint_name == POSTGRES_ENDPOINT_NAME:
+        return endpoint_name
+
+    commit_sha = endpoint_name.split(" ")[1].strip("()")
+
+    # empty when mz_version() reports a Git SHA that is not available in the current repository
+    commit_message = git.get_commit_message(commit_sha) or "unknown"
+    return f"{endpoint_name} - {commit_message}"

@@ -38,28 +38,16 @@ use std::error::Error;
 use std::{char, fmt};
 
 use mz_ore::lex::LexBuf;
-use mz_ore::str::StrExt;
+use mz_ore::str::{MaxLenString, StrExt};
 use serde::{Deserialize, Serialize};
 
 use crate::keywords::Keyword;
 
-#[cfg(target_arch = "wasm32")]
-use lol_alloc::{FreeListAllocator, LockedAllocator};
-
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
-
-#[cfg(target_arch = "wasm32")]
-#[global_allocator]
-static ALLOCATOR: LockedAllocator<FreeListAllocator> =
-    LockedAllocator::new(FreeListAllocator::new());
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(typescript_custom_section)]
-const LEX_TS_DEF: &'static str = r#"export function lex(query: string): PosToken[];"#;
-
-// Maximum allowed identifier length in bytes.
+/// Maximum allowed identifier length in bytes.
 pub const MAX_IDENTIFIER_LENGTH: usize = 255;
+
+/// Newtype that limits the length of identifiers.
+pub type IdentString = MaxLenString<MAX_IDENTIFIER_LENGTH>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LexerError {
@@ -93,7 +81,7 @@ impl LexerError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Keyword(Keyword),
-    Ident(String),
+    Ident(IdentString),
     String(String),
     HexString(String),
     Number(String),
@@ -155,47 +143,7 @@ macro_rules! bail {
 ///
 /// See the module documentation for more information about the lexical
 /// structure of SQL.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn lex(query: &str) -> Result<Vec<PosToken>, LexerError> {
-    lex_inner(query)
-}
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(js_name = PosToken, getter_with_clone, inspectable)]
-#[derive(Debug)]
-pub struct JsToken {
-    pub kind: String,
-    pub offset: usize,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl From<PosToken> for JsToken {
-    fn from(value: PosToken) -> Self {
-        JsToken {
-            kind: value.kind.to_string(),
-            offset: value.offset,
-        }
-    }
-}
-
-/// Lexes a SQL query.
-///
-/// Returns a list of tokens alongside their corresponding byte offset in the
-/// input string. Returns an error if the SQL query is lexically invalid.
-///
-/// See the module documentation for more information about the lexical
-/// structure of SQL.
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(skip_typescript)]
-pub fn lex(query: &str) -> Result<Vec<JsValue>, JsError> {
-    let lexed = lex_inner(query).map_err(|e| JsError::new(&e.message))?;
-    Ok(lexed
-        .into_iter()
-        .map(|token| JsValue::from(JsToken::from(token)))
-        .collect())
-}
-
-fn lex_inner(query: &str) -> Result<Vec<PosToken>, LexerError> {
     let buf = &mut LexBuf::new(query);
     let mut tokens = vec![];
     while let Some(ch) = buf.next() {
@@ -278,13 +226,13 @@ fn lex_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
     match word.parse() {
         Ok(kw) => Ok(Token::Keyword(kw)),
         Err(_) => {
-            if word.len() > MAX_IDENTIFIER_LENGTH {
+            let Ok(small) = IdentString::new(word.to_lowercase()) else {
                 bail!(
                     pos,
                     "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"
                 )
-            }
-            Ok(Token::Ident(word.to_lowercase()))
+            };
+            Ok(Token::Ident(small))
         }
     }
 }
@@ -301,13 +249,13 @@ fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
             None => bail!(pos, "unterminated quoted identifier"),
         }
     }
-    if s.len() > MAX_IDENTIFIER_LENGTH {
+    let Ok(small) = IdentString::new(s) else {
         bail!(
             pos,
             "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"
         )
-    }
-    Ok(Token::Ident(s))
+    };
+    Ok(Token::Ident(small))
 }
 
 fn lex_string(buf: &mut LexBuf) -> Result<String, LexerError> {

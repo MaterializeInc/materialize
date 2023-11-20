@@ -7,10 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
+
 syntax = "proto3";
 
 import "compute-client/src/logging.proto";
-import "compute-client/src/types/dataflows.proto";
+import "compute-types/src/dataflows.proto";
 import "expr/src/linear.proto";
 import "expr/src/relation.proto";
 import "persist-client/src/cfg.proto";
@@ -20,7 +22,7 @@ import "repr/src/row.proto";
 import "cluster-client/src/client.proto";
 import "service/src/params.proto";
 import "storage-client/src/client.proto";
-import "storage-client/src/types/parameters.proto";
+import "storage-types/src/parameters.proto";
 import "tracing/src/params.proto";
 
 import "google/protobuf/empty.proto";
@@ -33,21 +35,20 @@ message ProtoComputeCommand {
         mz_cluster_client.client.ProtoClusterStartupEpoch epoch = 2;
     }
 
-    message ProtoInstanceConfig {
-        logging.ProtoLoggingConfig logging_config = 1;
-        bool variable_length_row_encoding = 2;
-    }
-
     oneof kind {
         ProtoCreateTimely create_timely = 1;
         ProtoInstanceConfig create_instance = 2;
-        types.dataflows.ProtoDataflowDescription create_dataflow = 3;
+        mz_compute_types.dataflows.ProtoDataflowDescription create_dataflow = 3;
         mz_storage_client.client.ProtoCompaction allow_compaction = 4;
         ProtoPeek peek = 5;
         mz_proto.ProtoU128 cancel_peek = 6;
         google.protobuf.Empty initialization_complete = 7;
         ProtoComputeParameters update_configuration = 8;
     }
+}
+
+message ProtoInstanceConfig {
+    logging.ProtoLoggingConfig logging = 1;
 }
 
 message ProtoPeek {
@@ -63,9 +64,16 @@ message ProtoPeek {
 message ProtoComputeParameters {
     optional uint32 max_result_size = 1;
     mz_persist_client.cfg.ProtoPersistParameters persist = 2;
-    optional uint64 dataflow_max_inflight_bytes = 3;
+    ProtoComputeMaxInflightBytesConfig dataflow_max_inflight_bytes = 3;
     optional bool enable_mz_join_core = 4;
     mz_tracing.params.ProtoTracingParameters tracing = 5;
     mz_service.params.ProtoGrpcClientParameters grpc_client = 6;
-    optional bool enable_arrangement_size_logging = 7;
+    optional bool enable_jemalloc_profiling = 7;
+    optional bool enable_specialized_arrangements = 8;
+    mz_compute_types.dataflows.ProtoYieldSpec linear_join_yielding = 9;
+    optional bool enable_columnation_lgalloc = 10;
+}
+
+message ProtoComputeMaxInflightBytesConfig {
+    optional uint64 dataflow_max_inflight_bytes = 1;
 }

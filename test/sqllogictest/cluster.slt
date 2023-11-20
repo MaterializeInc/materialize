@@ -25,7 +25,7 @@ CREATE CLUSTER foo
 statement ok
 CREATE CLUSTER foo REPLICAS ()
 
-statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET, found dot
+statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
 ALTER CLUSTER foo.bar RENAME TO bar
 
 statement ok
@@ -203,15 +203,15 @@ bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary
 bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary_idx  2  import_id  NULL  false
 bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary_idx  3  worker_id  NULL  false
 bar  mz_compute_delays_histogram_raw  mz_compute_delays_histogram_raw_u7_primary_idx  4  delay_ns  NULL  false
+bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u7_primary_idx  1  export_id  NULL  false
+bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  3  time  NULL  false
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  2  import_id  NULL  false
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  3  worker_id  NULL  false
-bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  4  time  NULL  false
 bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  1  id  NULL  false
 bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  3  duration_ns  NULL  false
@@ -315,7 +315,7 @@ default
 statement error unknown cluster 'baz'
 DROP CLUSTER baz
 
-statement error cannot drop cluster with active objects
+statement error cannot drop cluster "bar" because other objects depend on it
 DROP CLUSTER bar
 
 query TTTT
@@ -344,7 +344,7 @@ CREATE CLUSTER baz REPLICAS (r1 (SIZE '1'))
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
 
-statement error cannot drop cluster with active objects
+statement error cannot drop cluster "baz" because other objects depend on it
 DROP CLUSTER baz
 
 statement ok
@@ -396,7 +396,7 @@ DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 'u1';
 ----
-24
+25
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT LIKE 's%';
@@ -409,7 +409,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-123
+138
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -417,12 +417,15 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-99
+113
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER default OWNER TO materialize
 ----
 COMPLETE 0
+
+statement ok
+ALTER CLUSTER default SET (MANAGED = false);
 
 statement error invalid SIZE: must provide a string value
 CREATE CLUSTER REPLICA default.size_1 SIZE;
@@ -622,7 +625,7 @@ CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', STORAGECTL ADDRESS
 # Test that the contents of mz_cluster_replicas look sensible
 
 statement ok
-CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'))
+CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'), size_1_8g (SIZE '1-8G'))
 
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
@@ -631,6 +634,7 @@ r1  1  1  18446744073709000000  18446744073709551615  1  1
 r1  1  1  18446744073709000000  18446744073709551615  1  1
 r1  1  1  18446744073709000000  18446744073709551615  1  1
 size_1  1  1  18446744073709000000  18446744073709551615  1  1
+size_1_8g  1-8G  1  18446744073709000000  8589934592  1  1
 size_2_2  2-2  2  18446744073709000000  18446744073709551615  2  2
 size_32  32  1  18446744073709000000  18446744073709551615  32  1
 
@@ -638,4 +642,158 @@ statement ok
 DROP CLUSTER foo CASCADE
 
 # Restore pristine server state
+reset-server
+
+# Tests for BILLED AS replicas
+
+statement ok
+CREATE CLUSTER t1 SIZE '1'
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.free SIZE '2', BILLED AS 'free'
+----
+db error: ERROR: cannot modify managed cluster t1
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.r1234 SIZE '2', INTERNAL, BILLED AS 'free'
+----
+db error: ERROR: r1234 is reserved for replicas of managed clusters
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.billed SIZE '2', INTERNAL
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.free SIZE '2', INTERNAL, BILLED AS 'free'
+----
+COMPLETE 0
+
+statement error db error: ERROR: cannot modify managed cluster t1
+CREATE CLUSTER REPLICA t1.free2 SIZE '2', BILLED AS 'free'
+
+statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+CREATE CLUSTER REPLICA t1.free2 SIZE '2', INTERNAL
+
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.invalid SIZE '2'
+----
+db error: ERROR: cannot modify managed cluster t1
+
+query TTTT
+SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
+----
+create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":false,"internal":true,"logical_size":"2","replica_id":"u4","replica_name":"free"}  mz_system
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.r123 SIZE '2', BILLED AS 'free'
+----
+db error: ERROR: cannot modify managed cluster t1
+
+query TTTTT
+SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id LIKE 'u%'
+----
+u1  r1  u1  1  s1
+u2  r1  u2  1  u1
+u4  free  u2  2  u1
+u3  billed  u2  2  u1
+
+query T
+SELECT id FROM mz_internal.mz_internal_cluster_replicas WHERE id LIKE 'u%'
+----
+u3
+u4
+
+statement error db error: ERROR: cannot modify managed cluster t1
+CREATE CLUSTER REPLICA t1.free2 SIZE '2', BILLED AS 'free'
+
+statement ok
+ALTER CLUSTER t1 SET (MANAGED false);
+
+statement ok
+ALTER CLUSTER t1 SET (MANAGED);
+
+statement ok
+DROP CLUSTER REPLICA t1.free;
+
+statement error db error: ERROR: cannot drop replica of managed cluster
+DROP CLUSTER REPLICA t1.r1;
+
+statement ok
+DROP CLUSTER t1
+
+statement ok
+CREATE CLUSTER t1 SIZE '1'
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.free SIZE '2', INTERNAL, BILLED AS 'free'
+----
+COMPLETE 0
+
+statement ok
+DROP CLUSTER t1
+
+statement ok
+CREATE CLUSTER t1 REPLICAS (r1 (SIZE '1'))
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.free SIZE '2', BILLED AS 'free', INTERNAL
+----
+COMPLETE 0
+
+query TTTT
+SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
+----
+create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":false,"internal":true,"logical_size":"2","replica_id":"u8","replica_name":"free"}  mz_system
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.internal_r2 SIZE '2', INTERNAL
+----
+COMPLETE 0
+
+statement ok
+DROP CLUSTER REPLICA t1.internal_r2
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.r2 SIZE '2'
+----
+COMPLETE 0
+
+statement ok
+DROP CLUSTER REPLICA t1.r2
+
+query TTTTT
+SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id LIKE 'u%'
+----
+u1  r1  u1  1  s1
+u7  r1  u4  1  u1
+u8  free  u4  2  u1
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA t1.r3 SIZE '2', BILLED AS 'free'
+----
+db error: ERROR: must specify INTERNAL when specifying BILLED AS
+
+statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+CREATE CLUSTER REPLICA t1.free2 SIZE '2', BILLED AS 'free'
+
+statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+CREATE CLUSTER REPLICA t1.free2 SIZE '2', INTERNAL
+
+statement ok
+ALTER CLUSTER t1 SET (MANAGED);
+
+statement ok
+ALTER CLUSTER t1 SET (MANAGED false);
+
+statement ok
+DROP CLUSTER REPLICA t1.free;
+
+statement ok
+DROP CLUSTER REPLICA t1.r1;
+
+statement ok
+DROP CLUSTER t1
+
 reset-server

@@ -66,6 +66,9 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_delays_histogram);
 1
 
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_compute_error_counts);
+1
+
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_active_peeks);
 1
 
@@ -208,3 +211,13 @@ SID   export_id   1           text
 SID   import_id   2           text
 SID   worker_id   3           uint8
 SID   time        4           mz_timestamp
+
+> SELECT mz_columns.id, mz_columns.name, position, type
+  FROM mz_views JOIN mz_columns USING (id)
+  WHERE mz_views.name = 'mz_compute_error_counts_per_worker'
+  ORDER BY position
+id      name        position    type
+--------------------------------------
+SID   export_id   1           text
+SID   worker_id   2           uint8
+SID   count       3           bigint

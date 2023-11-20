@@ -30,6 +30,39 @@ statement ok
 CREATE INDEX objects_idx ON objects(schema, object)
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_activity_log' ORDER BY position
+----
+1  execution_id  uuid
+2  sample_rate  double␠precision
+3  cluster_id  text
+4  application_name  text
+5  cluster_name  text
+6  transaction_isolation  text
+7  execution_timestamp  uint8
+8  transient_index_id  text
+9  params  text[]
+10  began_at  timestamp␠with␠time␠zone
+11  finished_at  timestamp␠with␠time␠zone
+12  finished_status  text
+13  error_message  text
+14  rows_returned  bigint
+15  execution_strategy  text
+16  transaction_id  uint8
+17  prepared_statement_id  uuid
+18  sql  text
+19  prepared_statement_name  text
+20  session_id  uuid
+21  redacted_sql  text
+22  prepared_at  timestamp␠with␠time␠zone
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
+----
+1  object_id  text
+2  replica_id  text
+3  write_frontier  mz_timestamp
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics' ORDER BY position
 ----
 1  replica_id  text
@@ -91,6 +124,19 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 7  credits_per_hour  numeric
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_internal_cluster_replicas' ORDER BY position
+----
+1  id           text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
+----
+1  id  text
+2  object_type  text
+3  object_sub_id  integer
+4  comment  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_dependencies' ORDER BY position
 ----
 1  object_id  text
@@ -100,20 +146,23 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
 ----
 1  object_id  text
-2  replica_id  text
-3  time  mz_timestamp
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_global_frontiers' ORDER BY position
-----
-1  object_id  text
-2  time  mz_timestamp
+2  read_frontier  mz_timestamp
+3  write_frontier  mz_timestamp
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_kafka_sources' ORDER BY position
 ----
 1  id  text
 2  group_id_base  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_lag' ORDER BY position
+----
+1  object_id  text
+2  local_lag  interval
+3  global_lag  interval
+4  slowest_local_input_id  text
+5  slowest_global_input_id  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
@@ -373,6 +422,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  referenced_object_ids  list
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_webhook_sources' ORDER BY position
+----
+1  id  text
+2  name  text
+3  url  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_active_peeks' ORDER BY position
 ----
 1  id  uuid
@@ -402,6 +458,12 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  import_id  text
 3  delay_ns  uint8
 4  count  numeric
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_error_counts' ORDER BY position
+----
+1  export_id  text
+2  count  numeric
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_exports' ORDER BY position
@@ -559,19 +621,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  requested_ns  uint8
 3  count  numeric
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
-----
-1  id  text
-2  object_type  text
-3  sub_id  uint8
-4  comment  text
-
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_internal') ORDER BY object
 ----
 mz_active_peeks
 mz_active_peeks_per_worker
+mz_activity_log
+mz_activity_log_redacted
 mz_aggregates
 mz_arrangement_batches_raw
 mz_arrangement_heap_allocations_raw
@@ -584,6 +640,7 @@ mz_arrangement_sharing_raw
 mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
 mz_cluster_links
+mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
 mz_cluster_replica_history
 mz_cluster_replica_metrics
@@ -595,6 +652,9 @@ mz_compute_delays_histogram
 mz_compute_delays_histogram_per_worker
 mz_compute_delays_histogram_raw
 mz_compute_dependencies
+mz_compute_error_counts
+mz_compute_error_counts_per_worker
+mz_compute_error_counts_raw
 mz_compute_exports
 mz_compute_exports_per_worker
 mz_compute_frontiers
@@ -628,7 +688,9 @@ mz_dataflows_per_worker
 mz_expected_group_size_advice
 mz_frontiers
 mz_global_frontiers
+mz_internal_cluster_replicas
 mz_kafka_sources
+mz_materialization_lag
 mz_message_batch_counts_received_raw
 mz_message_batch_counts_sent_raw
 mz_message_counts
@@ -644,6 +706,7 @@ mz_peek_durations_histogram_per_worker
 mz_peek_durations_histogram_raw
 mz_postgres_sources
 mz_prepared_statement_history
+mz_prepared_statement_history_redacted
 mz_records_per_dataflow
 mz_records_per_dataflow_operator
 mz_records_per_dataflow_operator_per_worker
@@ -674,6 +737,8 @@ mz_show_my_system_privileges
 mz_show_object_privileges
 mz_show_role_members
 mz_show_schema_privileges
+mz_show_sinks
+mz_show_sources
 mz_show_system_privileges
 mz_sink_statistics
 mz_sink_status_history
@@ -682,9 +747,9 @@ mz_source_statistics
 mz_source_status_history
 mz_source_statuses
 mz_statement_execution_history
+mz_statement_execution_history_redacted
 mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions
 mz_type_pg_metadata
-mz_view_foreign_keys
-mz_view_keys
+mz_webhook_sources

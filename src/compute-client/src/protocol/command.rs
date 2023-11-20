@@ -9,7 +9,8 @@
 
 //! Compute protocol commands.
 
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_compute_types::dataflows::{DataflowDescription, YieldSpec};
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cfg::PersistParameters;
@@ -17,7 +18,7 @@ use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError}
 use mz_repr::{GlobalId, Row};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::ProtoCompaction;
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::progress::any_antichain;
 use mz_tracing::params::TracingParameters;
 use proptest::prelude::{any, Arbitrary};
@@ -28,21 +29,11 @@ use timely::progress::frontier::Antichain;
 use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
-use crate::types::dataflows::DataflowDescription;
 
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_compute_client.protocol.command.rs"
 ));
-
-/// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
-/// if the controller attempt to reconcile them with different values
-/// for anything in this struct.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct InstanceConfig {
-    pub logging_config: LoggingConfig,
-    pub variable_length_row_encoding: bool,
-}
 
 /// Compute protocol commands, sent by the compute controller to replicas.
 ///
@@ -142,7 +133,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [Initialization Stage]: super#initialization-stage
-    CreateDataflow(DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>),
+    CreateDataflow(DataflowDescription<mz_compute_types::plan::Plan<T>, CollectionMetadata, T>),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
     /// a compute collection exported by one of the replica’s dataflow.
@@ -240,13 +231,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     config: Some(config.into_proto()),
                     epoch: Some(epoch.into_proto()),
                 }),
-                ComputeCommand::CreateInstance(InstanceConfig {
-                    logging_config,
-                    variable_length_row_encoding,
-                }) => CreateInstance(ProtoInstanceConfig {
-                    logging_config: Some(logging_config.into_proto()),
-                    variable_length_row_encoding: *variable_length_row_encoding,
-                }),
+                ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(params.into_proto())
@@ -274,14 +259,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
                 })
             }
-            Some(CreateInstance(ProtoInstanceConfig {
-                logging_config,
-                variable_length_row_encoding,
-            })) => Ok(ComputeCommand::CreateInstance(InstanceConfig {
-                logging_config: logging_config
-                    .into_rust_if_some("ProtoCreateInstance::logging_config")?,
-                variable_length_row_encoding,
-            })),
+            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(UpdateConfiguration(params)) => {
                 Ok(ComputeCommand::UpdateConfiguration(params.into_rust()?))
@@ -312,20 +290,21 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-            (any::<LoggingConfig>(), any::<bool>())
-                .prop_map(|(logging_config, variable_length_row_encoding)| {
-                    ComputeCommand::CreateInstance(InstanceConfig {
-                        logging_config,
-                        variable_length_row_encoding,
-                    })
-                })
+            any::<InstanceConfig>()
+                .prop_map(ComputeCommand::CreateInstance)
                 .boxed(),
             any::<ComputeParameters>()
                 .prop_map(ComputeCommand::UpdateConfiguration)
                 .boxed(),
-            any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>()
-                .prop_map(ComputeCommand::CreateDataflow)
-                .boxed(),
+            any::<
+                DataflowDescription<
+                    mz_compute_types::plan::Plan,
+                    CollectionMetadata,
+                    mz_repr::Timestamp,
+                >,
+            >()
+            .prop_map(ComputeCommand::CreateDataflow)
+            .boxed(),
             (any::<GlobalId>(), any_antichain())
                 .prop_map(|(id, frontier)| ComputeCommand::AllowCompaction { id, frontier })
                 .boxed(),
@@ -334,6 +313,30 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
                 .prop_map(|uuid| ComputeCommand::CancelPeek { uuid })
                 .boxed(),
         ])
+    }
+}
+
+/// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt
+/// if the controller attempt to reconcile them with different values
+/// for anything in this struct.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct InstanceConfig {
+    pub logging: LoggingConfig,
+}
+
+impl RustType<ProtoInstanceConfig> for InstanceConfig {
+    fn into_proto(&self) -> ProtoInstanceConfig {
+        ProtoInstanceConfig {
+            logging: Some(self.logging.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoInstanceConfig) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            logging: proto
+                .logging
+                .into_rust_if_some("ProtoCreateInstance::logging")?,
+        })
     }
 }
 
@@ -354,12 +357,22 @@ pub struct ComputeParameters {
     /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
     /// [`SubscribeBatch::updates`]: super::response::SubscribeBatch::updates
     pub max_result_size: Option<u32>,
-    /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-    pub dataflow_max_inflight_bytes: Option<usize>,
+    /// The maximum number of in-flight bytes emitted by persist_sources feeding
+    /// dataflows.
+    ///
+    /// NB: This value is optional, so the outer option indicates if this update
+    /// includes an override and the inner option is part of the config value.
+    pub dataflow_max_inflight_bytes: Option<Option<usize>>,
+    /// The yielding behavior with which linear joins should be rendered.
+    pub linear_join_yielding: Option<YieldSpec>,
     /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
     pub enable_mz_join_core: Option<bool>,
-    /// Enable arrangement size logging
-    pub enable_arrangement_size_logging: Option<bool>,
+    /// Whether to activate jemalloc heap profiling.
+    pub enable_jemalloc_profiling: Option<bool>,
+    /// Enable arrangement type specialization.
+    pub enable_specialized_arrangements: Option<bool>,
+    /// Enable lgalloc for columnation.
+    pub enable_columnation_lgalloc: Option<bool>,
     /// Persist client configuration.
     pub persist: PersistParameters,
     /// Tracing configuration.
@@ -374,8 +387,11 @@ impl ComputeParameters {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
+            linear_join_yielding,
             enable_mz_join_core,
-            enable_arrangement_size_logging,
+            enable_jemalloc_profiling,
+            enable_specialized_arrangements,
+            enable_columnation_lgalloc,
             persist,
             tracing,
             grpc_client,
@@ -387,12 +403,22 @@ impl ComputeParameters {
         if dataflow_max_inflight_bytes.is_some() {
             self.dataflow_max_inflight_bytes = dataflow_max_inflight_bytes;
         }
+        if linear_join_yielding.is_some() {
+            self.linear_join_yielding = linear_join_yielding;
+        }
         if enable_mz_join_core.is_some() {
             self.enable_mz_join_core = enable_mz_join_core;
         }
+        if enable_jemalloc_profiling.is_some() {
+            self.enable_jemalloc_profiling = enable_jemalloc_profiling;
+        }
 
-        if enable_arrangement_size_logging.is_some() {
-            self.enable_arrangement_size_logging = enable_arrangement_size_logging;
+        if enable_specialized_arrangements.is_some() {
+            self.enable_specialized_arrangements = enable_specialized_arrangements;
+        }
+
+        if enable_columnation_lgalloc.is_some() {
+            self.enable_columnation_lgalloc = enable_columnation_lgalloc;
         }
 
         self.persist.update(persist);
@@ -410,9 +436,16 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn into_proto(&self) -> ProtoComputeParameters {
         ProtoComputeParameters {
             max_result_size: self.max_result_size.into_proto(),
-            dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.into_proto(),
-            enable_arrangement_size_logging: self.enable_arrangement_size_logging.into_proto(),
+            dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.map(|x| {
+                ProtoComputeMaxInflightBytesConfig {
+                    dataflow_max_inflight_bytes: x.into_proto(),
+                }
+            }),
+            linear_join_yielding: self.linear_join_yielding.into_proto(),
             enable_mz_join_core: self.enable_mz_join_core.into_proto(),
+            enable_jemalloc_profiling: self.enable_jemalloc_profiling.into_proto(),
+            enable_specialized_arrangements: self.enable_specialized_arrangements.into_proto(),
+            enable_columnation_lgalloc: self.enable_columnation_lgalloc.into_proto(),
             persist: Some(self.persist.into_proto()),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
@@ -422,9 +455,15 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn from_proto(proto: ProtoComputeParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             max_result_size: proto.max_result_size.into_rust()?,
-            dataflow_max_inflight_bytes: proto.dataflow_max_inflight_bytes.into_rust()?,
-            enable_arrangement_size_logging: proto.enable_arrangement_size_logging.into_rust()?,
+            dataflow_max_inflight_bytes: proto
+                .dataflow_max_inflight_bytes
+                .map(|x| x.dataflow_max_inflight_bytes.into_rust())
+                .transpose()?,
+            linear_join_yielding: proto.linear_join_yielding.into_rust()?,
             enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
+            enable_jemalloc_profiling: proto.enable_jemalloc_profiling.into_rust()?,
+            enable_specialized_arrangements: proto.enable_specialized_arrangements.into_rust()?,
+            enable_columnation_lgalloc: proto.enable_columnation_lgalloc.into_rust()?,
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoComputeParameters::persist")?,
@@ -521,6 +560,15 @@ impl RustType<ProtoPeek> for Peek {
 
 fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
+}
+
+impl TryIntoTimelyConfig for ComputeCommand {
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
+        match self {
+            ComputeCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
+            cmd => Err(cmd),
+        }
+    }
 }
 
 #[cfg(test)]

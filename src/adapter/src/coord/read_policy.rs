@@ -25,7 +25,7 @@ use std::hash::Hash;
 
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_types::ComputeInstanceId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::controller::ReadPolicy;
 use timely::progress::frontier::MutableAntichain;
@@ -243,7 +243,7 @@ impl crate::coord::Coordinator {
             match timeline_context {
                 TimelineContext::TimelineDependent(timeline) => {
                     let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
-                    let read_ts = oracle.read_ts();
+                    let read_ts = oracle.read_ts().await;
                     let new_read_holds = self.initialize_read_holds(read_ts, &id_bundle);
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(&timeline).await;

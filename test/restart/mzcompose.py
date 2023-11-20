@@ -8,17 +8,13 @@
 # by the Apache License, Version 2.0.
 from textwrap import dedent
 
-import pg8000.exceptions
-
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Cockroach,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
 
@@ -160,22 +156,9 @@ def workflow_stash(c: Composition) -> None:
 
         cursor.execute("CREATE TABLE b (i INT)")
 
-        c.rm("cockroach")
-        c.up("cockroach")
-
-        # CockroachDB cleared its database, so this should fail.
-        #
-        # Depending on timing, this can fail in one of two ways. The stash error
-        # comes from the stash complaining. The network error comes from pg8000
-        # complaining because Materialize panicked.
-        try:
-            # Reusing the existing connection means we don't need to worry about
-            # detecting `ConnectionRefused` errors
-            cursor.execute("CREATE TABLE c (i INT)")
-            raise Exception("expected unreachable")
-        except pg8000.exceptions.InterfaceError as e:
-            if str(e) != "network error":
-                raise e
+        # No implicit restart as sanity check here, will panic:
+        # https://github.com/MaterializeInc/materialize/issues/20510
+        c.down(sanity_restart_mz=False)
 
 
 def workflow_storage_managed_collections(c: Composition) -> None:
@@ -187,8 +170,8 @@ def workflow_storage_managed_collections(c: Composition) -> None:
     # Storage collections are eventually consistent, so loop to be sure updates
     # have made it.
 
-    user_shards = None
-    while user_shards == None:
+    user_shards: list[str] = []
+    while len(user_shards) == 0:
         user_shards = c.sql_query(
             "SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%';"
         )
@@ -198,8 +181,8 @@ def workflow_storage_managed_collections(c: Composition) -> None:
     c.up("materialized")
 
     # Verify the shard mappings are still present and have not changed.
-    restart_user_shards = None
-    while restart_user_shards == None:
+    restart_user_shards: list[str] = []
+    while len(restart_user_shards) == 0:
         restart_user_shards = c.sql_query(
             "SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%';"
         )
@@ -333,7 +316,7 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
             $ kafka-create-topic topic=status-history
 
             > CREATE CONNECTION kafka_conn
-              TO KAFKA (BROKER '${testdrive.kafka-addr}');
+              TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
             > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
                 URL '${testdrive.schema-registry-url}'
@@ -347,6 +330,8 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
               INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM
+
+            $ kafka-verify-topic sink=materialize.public.kafka_sink
             """
         ),
     )
@@ -383,6 +368,8 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
     c.up("materialized")
 
     # Verify that we have fewer events now
+    # 7 because the truncation default is 5, and the restarted
+    # objects produce a new starting and running event.
     c.testdrive(
         service="testdrive_no_reset",
         input=dedent(
@@ -398,11 +385,8 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
 
 
 def workflow_default(c: Composition) -> None:
-    c.workflow("github-17578")
-    c.workflow("github-8021")
-    c.workflow("audit-log")
-    c.workflow("timelines")
-    c.workflow("stash")
-    c.workflow("allowed-cluster-replica-sizes")
-    c.workflow("drop-materialize-database")
-    c.workflow("bound-size-mz-status-history")
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)

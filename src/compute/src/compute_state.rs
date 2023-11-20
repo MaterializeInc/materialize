@@ -11,39 +11,42 @@ use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
-use std::sync::{atomic, Arc};
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::Duration;
 
 use bytesize::ByteSize;
-use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::Data;
 use mz_compute_client::logging::LoggingConfig;
-use mz_compute_client::plan::Plan;
 use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek,
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{GlobalId, Row, Timestamp};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_timely_util::probe;
+use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
+use mz_repr::{ColumnType, Diff, GlobalId, Row, Timestamp};
+use mz_storage_types::controller::CollectionMetadata;
 use timely::communication::Allocate;
+use timely::container::columnation::Columnation;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
-use tracing::{error, info, span, Level};
+use tracing::{error, info, span, warn, Level};
 use uuid::Uuid;
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
-use crate::metrics::{CollectionMetrics, ComputeMetrics};
-use crate::render::LinearJoinImpl;
-use crate::server::ResponseSender;
+use crate::metrics::ComputeMetrics;
+use crate::render::{LinearJoinImpl, LinearJoinSpec};
+use crate::server::{ComputeInstanceContext, ResponseSender};
+use crate::typedefs::TraceRowHandle;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -80,15 +83,17 @@ pub struct ComputeState {
     /// Max size in bytes of any result.
     max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-    pub dataflow_max_inflight_bytes: usize,
-    /// Implementation to use for rendering linear joins.
-    pub linear_join_impl: LinearJoinImpl,
+    pub dataflow_max_inflight_bytes: Option<usize>,
+    /// Specification for rendering linear joins.
+    pub linear_join_spec: LinearJoinSpec,
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
-    /// Enable arrangement size logging
-    pub enable_arrangement_size_logging: bool,
+    /// Enable arrangement type specialization.
+    pub enable_specialized_arrangements: bool,
+    /// Other configuration for compute
+    pub context: ComputeInstanceContext,
 }
 
 impl ComputeState {
@@ -98,6 +103,7 @@ impl ComputeState {
         persist_clients: Arc<PersistClientCache>,
         metrics: ComputeMetrics,
         tracing_handle: Arc<TracingHandle>,
+        context: ComputeInstanceContext,
     ) -> Self {
         let traces = TraceManager::new(metrics.for_traces(worker_id));
         let command_history = ComputeCommandHistory::new(metrics.for_history(worker_id));
@@ -112,11 +118,12 @@ impl ComputeState {
             persist_clients,
             command_history,
             max_result_size: u32::MAX,
-            dataflow_max_inflight_bytes: usize::MAX,
-            linear_join_impl: Default::default(),
+            dataflow_max_inflight_bytes: None,
+            linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
-            enable_arrangement_size_logging: Default::default(),
+            enable_specialized_arrangements: Default::default(),
+            context,
         }
     }
 
@@ -168,9 +175,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
 
-        self.compute_state
-            .command_history
-            .push(cmd.clone(), &self.compute_state.pending_peeks);
+        self.compute_state.command_history.push(cmd.clone());
 
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),
@@ -187,16 +192,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
-    fn handle_create_instance(
-        &mut self,
-        InstanceConfig {
-            logging_config,
-            variable_length_row_encoding,
-        }: InstanceConfig,
-    ) {
-        mz_repr::VARIABLE_LENGTH_ROW_ENCODING
-            .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
-        self.initialize_logging(&logging_config);
+    fn handle_create_instance(&mut self, config: InstanceConfig) {
+        self.initialize_logging(&config.logging);
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
@@ -205,8 +202,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
-            enable_arrangement_size_logging,
+            linear_join_yielding,
             enable_mz_join_core,
+            enable_jemalloc_profiling,
+            enable_specialized_arrangements,
+            enable_columnation_lgalloc,
             persist,
             tracing,
             grpc_client: _grpc_client,
@@ -218,14 +218,55 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
         }
-        if let Some(v) = enable_arrangement_size_logging {
-            self.compute_state.enable_arrangement_size_logging = v;
+        if let Some(v) = linear_join_yielding {
+            self.compute_state.linear_join_spec.yielding = v;
+        }
+        if let Some(v) = enable_specialized_arrangements {
+            self.compute_state.enable_specialized_arrangements = v;
         }
         if let Some(v) = enable_mz_join_core {
-            self.compute_state.linear_join_impl = match v {
+            self.compute_state.linear_join_spec.implementation = match v {
                 false => LinearJoinImpl::DifferentialDataflow,
                 true => LinearJoinImpl::Materialize,
             };
+        }
+        match enable_jemalloc_profiling {
+            Some(true) => {
+                mz_ore::task::spawn(
+                    || "activate-jemalloc-profiling",
+                    mz_prof::activate_jemalloc_profiling(),
+                );
+            }
+            Some(false) => {
+                mz_ore::task::spawn(
+                    || "deactivate-jemalloc-profiling",
+                    mz_prof::deactivate_jemalloc_profiling(),
+                );
+            }
+            None => (),
+        }
+        match enable_columnation_lgalloc {
+            Some(true) => {
+                if let Some(path) = self.compute_state.context.scratch_directory.as_ref() {
+                    info!(path = ?path, "Enabling lgalloc");
+                    lgalloc::lgalloc_set_config(
+                        lgalloc::LgAlloc::new()
+                            .enable()
+                            .with_path(path.clone())
+                            .with_background_config(lgalloc::BackgroundWorkerConfig {
+                                interval: Duration::from_secs(1),
+                                batch: 32,
+                            }),
+                    );
+                } else {
+                    warn!("Not enabling lgalloc, scratch directory not specified");
+                }
+            }
+            Some(false) => {
+                info!("Disabling lgalloc");
+                lgalloc::lgalloc_set_config(&lgalloc::LgAlloc::new())
+            }
+            None => {}
         }
 
         persist.apply(self.compute_state.persist_clients.cfg());
@@ -236,19 +277,35 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Collect the exported object identifiers, paired with their associated "collection" identifier.
         // The latter is used to extract dependency information, which is in terms of collections ids.
         let dataflow_index = self.timely_worker.next_dataflow_index();
+        let as_of = dataflow.as_of.clone().unwrap();
+
+        if dataflow.is_transient() {
+            tracing::debug!(
+                name = %dataflow.debug_name,
+                import_ids = %dataflow.display_import_ids(),
+                export_ids = %dataflow.display_export_ids(),
+                as_of = ?as_of.elements(),
+                until = ?dataflow.until.elements(),
+                "creating dataflow",
+            );
+        } else {
+            tracing::info!(
+                name = %dataflow.debug_name,
+                import_ids = %dataflow.display_import_ids(),
+                export_ids = %dataflow.display_export_ids(),
+                as_of = ?as_of.elements(),
+                until = ?dataflow.until.elements(),
+                "creating dataflow",
+            );
+        };
 
         // Initialize compute and logging state for each object.
-        let worker_id = self.timely_worker.index();
         for object_id in dataflow.export_ids() {
-            let metrics = self
-                .compute_state
-                .metrics
-                .for_collection(object_id, worker_id);
-            let mut collection = CollectionState::new(metrics);
+            let mut collection = CollectionState::new();
 
-            let as_of = dataflow.as_of.clone().unwrap();
-            collection.as_of = as_of.clone();
-            collection.set_reported_frontier(ReportedFrontier::NotReported { lower: as_of });
+            collection.reported_frontier = ReportedFrontier::NotReported {
+                lower: as_of.clone(),
+            };
 
             let existing = self.compute_state.collections.insert(object_id, collection);
             if existing.is_some() {
@@ -346,7 +403,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Remove frontier logging.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
             logger.log(ComputeEvent::ExportDropped { id });
-            if let Some(time) = collection.reported_frontier().logging_time() {
+            if let Some(time) = collection.reported_frontier.logging_time() {
                 logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
             }
         }
@@ -358,7 +415,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         //  * The collection has already advanced to the empty frontier, in which case
         //    the final `FrontierUpper` response already serves the purpose of reporting
         //    the end of the dataflow.
-        if !collection.is_subscribe() && !collection.reported_frontier().is_empty() {
+        if !collection.is_subscribe() && !collection.reported_frontier.is_empty() {
             self.compute_state.dropped_collections.push(id);
         }
     }
@@ -369,7 +426,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             panic!("dataflow server has already initialized logging");
         }
 
-        let (logger, traces) = logging::initialize(self.timely_worker, self.compute_state, config);
+        let worker_id = self.timely_worker.index();
+        let metrics = self.compute_state.metrics.for_logging(worker_id);
+
+        let (logger, traces) = logging::initialize(self.timely_worker, config, metrics);
 
         // Install traces as maintained indexes
         for (log, trace) in traces {
@@ -378,12 +438,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
 
         // Initialize compute and logging state for each logging index.
-        let worker_id = self.timely_worker.index();
         let index_ids = config.index_logs.values().copied();
         for id in index_ids {
-            let metrics = self.compute_state.metrics.for_collection(id, worker_id);
-            let collection = CollectionState::new(metrics);
-
+            let collection = CollectionState::new();
             let existing = self.compute_state.collections.insert(id, collection);
             if existing.is_some() {
                 error!(
@@ -427,7 +484,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 continue;
             }
 
-            match collection.reported_frontier() {
+            match &collection.reported_frontier {
                 ReportedFrontier::Reported(old_frontier) => {
                     // In steady state it is not expected for `old_frontier` to be beyond
                     // `new_frontier`. However, during reconcilation this can happen as we
@@ -447,7 +504,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             let new_reported_frontier = ReportedFrontier::Reported(new_frontier.clone());
 
             if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                if let Some(time) = collection.reported_frontier().logging_time() {
+                if let Some(time) = collection.reported_frontier.logging_time() {
                     logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                 }
                 if let Some(time) = new_reported_frontier.logging_time() {
@@ -456,7 +513,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             }
 
             new_uppers.push((id, new_frontier.clone()));
-            collection.set_reported_frontier(new_reported_frontier);
+            collection.reported_frontier = new_reported_frontier;
         }
 
         for (id, upper) in new_uppers {
@@ -532,7 +589,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     SubscribeResponse::DroppedAt(_) => Antichain::new(),
                 };
 
-                match collection.reported_frontier() {
+                match &collection.reported_frontier {
                     ReportedFrontier::Reported(old_frontier) => {
                         assert!(
                             PartialOrder::less_than(old_frontier, &new_frontier),
@@ -551,7 +608,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 let new_reported_frontier = ReportedFrontier::Reported(new_frontier);
 
                 if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-                    if let Some(time) = collection.reported_frontier().logging_time() {
+                    if let Some(time) = collection.reported_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier {
                             id: sink_id,
                             time,
@@ -567,7 +624,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     }
                 }
 
-                collection.set_reported_frontier(new_reported_frontier);
+                collection.reported_frontier = new_reported_frontier;
             } else {
                 // Presumably tracking state for this subscribe was already dropped by
                 // `drop_collection`. There is nothing left to do for logging.
@@ -648,13 +705,11 @@ impl PendingPeek {
         Some(response)
     }
 
-    /// Collects data for a known-complete peek.
+    /// Collects data for a known-complete peek from the ok stream.
     fn collect_finished_data(
         &mut self,
         max_result_size: u32,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
-        let max_result_size = usize::cast_from(max_result_size);
-        let count_byte_size = std::mem::size_of::<NonZeroUsize>();
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
@@ -678,8 +733,44 @@ impl PendingPeek {
             cursor.step_key(&storage);
         }
 
+        self.dispatch_collect_ok_finished_data(max_result_size)
+    }
+
+    /// Dispatches peek finishing of data in the ok stream according to
+    /// arrangement key-value types.
+    fn dispatch_collect_ok_finished_data(
+        &mut self,
+        max_result_size: u32,
+    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+        let peek = &mut self.peek;
+        let oks = self.trace_bundle.oks_mut();
+        match oks {
+            SpecializedTraceHandle::RowUnit(oks_handle) => {
+                Self::collect_ok_finished_data(peek, oks_handle, None, Some(&[]), max_result_size)
+            }
+            SpecializedTraceHandle::RowRow(oks_handle) => {
+                Self::collect_ok_finished_data(peek, oks_handle, None, None, max_result_size)
+            }
+        }
+    }
+
+    /// Collects data for a known-complete peek from the ok stream.
+    fn collect_ok_finished_data<K, V>(
+        peek: &mut Peek<Timestamp>,
+        oks_handle: &mut TraceRowHandle<K, V, Timestamp, Diff>,
+        key_types: Option<&[ColumnType]>,
+        val_types: Option<&[ColumnType]>,
+        max_result_size: u32,
+    ) -> Result<Vec<(Row, NonZeroUsize)>, String>
+    where
+        K: Columnation + Data + FromRowByTypes + IntoRowByTypes,
+        V: Columnation + Data + IntoRowByTypes,
+    {
+        let max_result_size = usize::cast_from(max_result_size);
+        let count_byte_size = std::mem::size_of::<NonZeroUsize>();
+
         // Cursor and bound lifetime for `Row` data in the backing trace.
-        let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
+        let (mut cursor, storage) = oks_handle.cursor();
         // Accumulated `Vec<(row, count)>` results that we are likely to return.
         let mut results = Vec::new();
         let mut total_size: usize = 0;
@@ -689,13 +780,8 @@ impl PendingPeek {
         // `order_by` field. Further limiting will happen when the results
         // are collected, so we don't need to have exactly this many results,
         // just at least those results that would have been returned.
-        let max_results = self
-            .peek
-            .finishing
-            .limit
-            .map(|l| l + self.peek.finishing.offset);
+        let max_results = peek.finishing.limit.map(|l| l + peek.finishing.offset);
 
-        use differential_dataflow::trace::Cursor;
         use mz_ore::result::ResultExt;
         use mz_repr::{DatumVec, RowArena};
 
@@ -703,14 +789,14 @@ impl PendingPeek {
         let mut datum_vec = DatumVec::new();
         let mut l_datum_vec = DatumVec::new();
         let mut r_datum_vec = DatumVec::new();
+        let mut key_buf = K::default();
 
         // We have to sort the literal constraints because cursor.seek_key can seek only forward.
-        self.peek
-            .literal_constraints
+        peek.literal_constraints
             .iter_mut()
             .for_each(|vec| vec.sort());
-        let has_literal_constraints = self.peek.literal_constraints.is_some();
-        let mut literals = self.peek.literal_constraints.iter().flat_map(|l| l);
+        let has_literal_constraints = peek.literal_constraints.is_some();
+        let mut literals = peek.literal_constraints.iter().flat_map(|l| l);
         let mut current_literal = None;
 
         while cursor.key_valid(&storage) {
@@ -722,11 +808,15 @@ impl PendingPeek {
                     match current_literal {
                         None => return Ok(results),
                         Some(current_literal) => {
-                            cursor.seek_key(&storage, current_literal);
+                            // NOTE(vmarcos): We expect the extra allocations below to be manageable
+                            // since we only perform as many of them as there are literals.
+                            let current_literal =
+                                key_buf.from_row(current_literal.clone(), key_types);
+                            cursor.seek_key(&storage, &current_literal);
                             if !cursor.key_valid(&storage) {
                                 return Ok(results);
                             }
-                            if *cursor.get_key(&storage).unwrap() == *current_literal {
+                            if *cursor.get_key(&storage).unwrap() == current_literal {
                                 // The cursor found a record whose key matches the current literal.
                                 // We break from the inner loop, and process this key.
                                 break;
@@ -745,12 +835,13 @@ impl PendingPeek {
                 // This choice is conservative, and not the end of the world
                 // from a performance perspective.
                 let arena = RowArena::new();
-                let key = cursor.key(&storage);
-                let row = cursor.val(&storage);
-                // TODO: We could unpack into a re-used allocation, except
-                // for the arena above (the allocation would not be allowed
-                // to outlive the arena above, from which it might borrow).
-                let mut borrow = datum_vec.borrow_with_many(&[key, row]);
+
+                let key = cursor.key(&storage).into_datum_iter(key_types);
+                let row = cursor.val(&storage).into_datum_iter(val_types);
+
+                let mut borrow = datum_vec.borrow();
+                borrow.extend(key);
+                borrow.extend(row);
 
                 if has_literal_constraints {
                     // The peek was created from an IndexedFilter join. We have to add those columns
@@ -761,15 +852,14 @@ impl PendingPeek {
                     // loop.
                     datum_vec.extend(current_literal.unwrap().iter());
                 }
-                if let Some(result) = self
-                    .peek
+                if let Some(result) = peek
                     .map_filter_project
                     .evaluate_into(&mut borrow, &arena, &mut row_builder)
                     .map_err_to_string_with_causes()?
                 {
                     let mut copies = 0;
                     cursor.map_times(&storage, |time, diff| {
-                        if time.less_equal(&self.peek.timestamp) {
+                        if time.less_equal(&peek.timestamp) {
                             copies += diff;
                         }
                     });
@@ -803,7 +893,7 @@ impl PendingPeek {
                         // across all of the insertions. We could tighten this, but it
                         // works for the moment.
                         if results.len() >= 2 * max_results {
-                            if self.peek.finishing.order_by.is_empty() {
+                            if peek.finishing.order_by.is_empty() {
                                 results.truncate(max_results);
                                 return Ok(results);
                             } else {
@@ -819,7 +909,7 @@ impl PendingPeek {
                                     let left_datums = l_datum_vec.borrow_with(&left.0);
                                     let right_datums = r_datum_vec.borrow_with(&right.0);
                                     mz_expr::compare_columns(
-                                        &self.peek.finishing.order_by,
+                                        &peek.finishing.order_by,
                                         &left_datums,
                                         &right_datums,
                                         || left.0.cmp(&right.0),
@@ -890,10 +980,7 @@ impl ReportedFrontier {
 /// State maintained for a compute collection.
 pub struct CollectionState {
     /// Tracks the frontier that has been reported to the controller.
-    ///
-    // TODO(#20766): Now that we explicitly track the collection's `as_of`, we might be able to
-    // simplify this to an `Antichain<Timestamp>` again.
-    reported_frontier: ReportedFrontier,
+    pub reported_frontier: ReportedFrontier,
     /// A token that should be dropped when this collection is dropped to clean up associated
     /// sink state.
     ///
@@ -903,70 +990,18 @@ pub struct CollectionState {
     ///
     /// Only `Some` if the collection is a sink and *not* a subscribe.
     pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
-    /// Probe handles for regulating the output of dataflow sources that (transitively) feed this
-    /// collection.
-    ///
-    /// Only populated if the collection is an index.
-    ///
-    /// New dataflows that depend on this index are expected to report their output frontiers
-    /// through these probe handles.
-    pub index_flow_control_probes: Vec<probe::Handle<Timestamp>>,
-    /// Metrics tracked for this collection.
-    ///
-    /// If this is `None`, no metrics are collected.
-    pub metrics: Option<CollectionMetrics>,
-    /// Time at which this collection was installed.
-    created_at: Instant,
-    /// Original as_of of this collection.
-    as_of: Antichain<Timestamp>,
 }
 
 impl CollectionState {
-    fn new(metrics: Option<CollectionMetrics>) -> Self {
+    fn new() -> Self {
         Self {
             reported_frontier: ReportedFrontier::new(),
             sink_token: None,
             sink_write_frontier: None,
-            index_flow_control_probes: Default::default(),
-            metrics,
-            created_at: Instant::now(),
-            as_of: Antichain::from_elem(Timestamp::MIN),
         }
-    }
-
-    /// Return the frontier that has been reported to the controller.
-    pub fn reported_frontier(&self) -> &ReportedFrontier {
-        &self.reported_frontier
-    }
-
-    /// Set the frontier that has been reported to the controller.
-    pub fn set_reported_frontier(&mut self, new_frontier: ReportedFrontier) {
-        self.reported_frontier = new_frontier;
-        self.observe_snapshot_produced();
     }
 
     fn is_subscribe(&self) -> bool {
         self.sink_token.is_some() && self.sink_write_frontier.is_none()
-    }
-
-    /// If the collection has produced its snapshot recently, update the collection metrics to
-    /// reflect this.
-    fn observe_snapshot_produced(&mut self) {
-        let Some(metrics) = &self.metrics else { return };
-        let ReportedFrontier::Reported(frontier) = &self.reported_frontier else {
-            return;
-        };
-
-        // If the metric value is greater than 0, that means we have already observed the snapshot
-        // and have nothing else to do.
-        let initial_output_duration = metrics.initial_output_duration_seconds.get();
-        if initial_output_duration > 0. {
-            return;
-        }
-
-        if PartialOrder::less_than(&self.as_of, frontier) {
-            let duration = self.created_at.elapsed().as_secs_f64();
-            metrics.initial_output_duration_seconds.set(duration);
-        }
     }
 }

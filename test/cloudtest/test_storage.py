@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
 from textwrap import dedent
 
 import pytest
@@ -16,6 +17,8 @@ from materialize.cloudtest.app.materialize_application import MaterializeApplica
 from materialize.cloudtest.util.cluster import cluster_pod_name, cluster_service_name
 from materialize.cloudtest.util.exists import exists, not_exists
 from materialize.cloudtest.util.wait import wait
+
+LOGGER = logging.getLogger(__name__)
 
 
 def get_value_from_label(
@@ -67,7 +70,7 @@ def test_source_creation(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
-            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
+            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE SOURCE source1
               FROM KAFKA CONNECTION kafka
@@ -104,7 +107,7 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
-            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
+            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE SOURCE resize_source
               FROM KAFKA CONNECTION kafka
@@ -158,7 +161,7 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
 @pytest.mark.parametrize("failpoint", [False, True])
 @pytest.mark.skip(reason="Failpoints mess up the Mz instance #18000")
 def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
-    print("Starting test_source_shutdown")
+    LOGGER.info("Starting test_source_shutdown")
     if failpoint:
         mz.set_environmentd_failpoints("kubernetes_drop_service=return(error)")
 
@@ -171,7 +174,7 @@ def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
-            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
+            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE SOURCE source1
               FROM KAFKA CONNECTION kafka
@@ -204,7 +207,7 @@ def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
     try:
         mz.environmentd.sql("DROP SOURCE source1")
     except InterfaceError as e:
-        print(f"Expected SQL error: {e}")
+        LOGGER.error(f"Expected SQL error: {e}")
 
     if failpoint:
         # Disable failpoint here, this should end the crash loop of environmentd
@@ -222,7 +225,7 @@ def test_sink_resizing(mz: MaterializeApplication) -> None:
             """
             > CREATE TABLE t1 (f1 int NOT NULL)
 
-            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
+            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
                 URL '${testdrive.schema-registry-url}'

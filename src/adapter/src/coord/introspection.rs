@@ -20,22 +20,23 @@
 
 use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
-use mz_sql::names::{ResolvedIds, SystemObjectId};
-use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, Plan, SubscribeFrom};
+use mz_sql::catalog::SessionCatalog;
+use mz_sql::plan::{
+    ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
+};
 use smallvec::SmallVec;
 
-use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
-use crate::catalog::Catalog;
+use crate::catalog::ConnCatalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
-use crate::{rbac, AdapterError};
+use crate::AdapterError;
+use mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER;
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
 pub fn auto_run_on_introspection<'a, 's, 'p>(
-    catalog: &'a Catalog,
+    catalog: &'a ConnCatalog<'a>,
     session: &'s Session,
     plan: &'p Plan,
 ) -> TargetCluster {
@@ -52,7 +53,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
             },
         ),
         Plan::ExplainPlan(ExplainPlanPlan {
-            explainee: Explainee::Query { raw_plan, .. },
+            explainee: Explainee::Statement(ExplaineeStatement::Query { raw_plan, .. }),
             ..
         }) => (
             raw_plan.depends_on(),
@@ -96,9 +97,11 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
         | Plan::ExplainPlan(_)
+        | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterClusterRename(_)
+        | Plan::AlterClusterSwap(_)
         | Plan::AlterClusterReplicaRename(_)
         | Plan::AlterCluster(_)
         | Plan::AlterIndexSetOptions(_)
@@ -108,6 +111,9 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::PurifiedAlterSource { .. }
         | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)
+        | Plan::AlterItemSwap(_)
+        | Plan::AlterSchemaRename(_)
+        | Plan::AlterSchemaSwap(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
         | Plan::AlterSystemReset(_)
@@ -133,6 +139,11 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::SideEffectingFunc(_) => return TargetCluster::Active,
     };
 
+    // Use transaction cluster if we're mid-transaction
+    if let Some(cluster_id) = session.transaction().cluster() {
+        return TargetCluster::Transaction(cluster_id);
+    }
+
     // Bail if the user has disabled it via the SessionVar.
     if !session.vars().auto_route_introspection_queries() {
         return TargetCluster::Active;
@@ -150,11 +161,11 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     // Make sure we only depend on the system catalog, and nothing we depend on is a
     // per-replica object, that requires being run a specific replica.
     let valid_dependencies = depends_on.all(|id| {
-        let entry = catalog.get_entry(&id);
+        let entry = catalog.state().get_entry(&id);
         let schema = &entry.name().qualifiers.schema_spec;
 
         let system_only = catalog.state().is_system_schema_specifier(schema);
-        let non_replica = catalog.introspection_dependencies(id).is_empty();
+        let non_replica = catalog.state().introspection_dependencies(id).is_empty();
 
         system_only && non_replica
     });
@@ -162,7 +173,9 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     if (has_dependencies && valid_dependencies)
         || (!has_dependencies && !could_run_expensive_function)
     {
-        let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
+        let intros_cluster = catalog
+            .state()
+            .resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
         tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
 
         // If we're running on a different cluster than the active one, notify the user.
@@ -227,126 +240,4 @@ pub fn check_cluster_restrictions(
     } else {
         Ok(())
     }
-}
-
-/// TODO(jkosh44) This function will verify the privileges for the mz_support user.
-///  All of the privileges are hard coded into this function. In the future if we ever add
-///  a more robust privileges framework, then this function should be replaced with that
-///  framework.
-pub fn user_privilege_hack(
-    catalog: &impl SessionCatalog,
-    session: &Session,
-    plan: &Plan,
-    resolved_ids: &ResolvedIds,
-) -> Result<(), AdapterError> {
-    if session.user().name != MZ_SUPPORT_ROLE.name {
-        return Ok(());
-    }
-
-    match plan {
-        // **Special Cases**
-        //
-        // Generally we want to prevent the mz_support user from being able to
-        // access user objects. But there are a few special cases where we permit
-        // limited access, which are:
-        //   * SHOW CREATE ... commands, which are very useful for debugging, see
-        //     <https://github.com/MaterializeInc/materialize/issues/18027> for more
-        //     details.
-        //
-        Plan::ShowCreate(_) | Plan::ShowColumns(_) => {
-            return Ok(());
-        }
-
-        Plan::Subscribe(_)
-        | Plan::Select(_)
-        | Plan::CopyFrom(_)
-        | Plan::ExplainPlan(_)
-        | Plan::ExplainTimestamp(_)
-        | Plan::ShowAllVariables
-        | Plan::ShowVariable(_)
-        | Plan::SetVariable(_)
-        | Plan::ResetVariable(_)
-        | Plan::SetTransaction(_)
-        | Plan::StartTransaction(_)
-        | Plan::CommitTransaction(_)
-        | Plan::AbortTransaction(_)
-        | Plan::EmptyQuery
-        | Plan::Declare(_)
-        | Plan::Fetch(_)
-        | Plan::Close(_)
-        | Plan::Prepare(_)
-        | Plan::Execute(_)
-        | Plan::Deallocate(_)
-        | Plan::SideEffectingFunc(_)
-        | Plan::ValidateConnection(_) => {}
-
-        Plan::CreateConnection(_)
-        | Plan::CreateDatabase(_)
-        | Plan::CreateSchema(_)
-        | Plan::CreateRole(_)
-        | Plan::CreateCluster(_)
-        | Plan::CreateClusterReplica(_)
-        | Plan::CreateSource(_)
-        | Plan::CreateSources(_)
-        | Plan::CreateSecret(_)
-        | Plan::CreateSink(_)
-        | Plan::CreateTable(_)
-        | Plan::CreateView(_)
-        | Plan::CreateMaterializedView(_)
-        | Plan::CreateIndex(_)
-        | Plan::CreateType(_)
-        | Plan::Comment(_)
-        | Plan::DiscardTemp
-        | Plan::DiscardAll
-        | Plan::DropObjects(_)
-        | Plan::DropOwned(_)
-        | Plan::Insert(_)
-        | Plan::AlterNoop(_)
-        | Plan::AlterClusterRename(_)
-        | Plan::AlterClusterReplicaRename(_)
-        | Plan::AlterCluster(_)
-        | Plan::AlterIndexSetOptions(_)
-        | Plan::AlterIndexResetOptions(_)
-        | Plan::AlterSetCluster(_)
-        | Plan::AlterRole(_)
-        | Plan::AlterSink(_)
-        | Plan::AlterSource(_)
-        | Plan::PurifiedAlterSource { .. }
-        | Plan::AlterItemRename(_)
-        | Plan::AlterSecret(_)
-        | Plan::AlterSystemSet(_)
-        | Plan::AlterSystemReset(_)
-        | Plan::AlterSystemResetAll(_)
-        | Plan::AlterOwner(_)
-        | Plan::InspectShard(_)
-        | Plan::ReadThenWrite(_)
-        | Plan::Raise(_)
-        | Plan::RotateKeys(_)
-        | Plan::GrantRole(_)
-        | Plan::RevokeRole(_)
-        | Plan::GrantPrivileges(_)
-        | Plan::RevokePrivileges(_)
-        | Plan::AlterDefaultPrivileges(_)
-        | Plan::ReassignOwned(_) => {
-            return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::MzSupport {
-                    action: plan.name().to_string(),
-                },
-            ))
-        }
-    }
-
-    for id in &resolved_ids.0 {
-        let item = catalog.get_item(id);
-        let full_name = catalog.resolve_full_name(item.name());
-        if !catalog.is_system_schema(&full_name.schema) {
-            let object_description =
-                ErrorMessageObjectDescription::from_id(&SystemObjectId::Object(id.into()), catalog);
-            return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::Privilege { object_description },
-            ));
-        }
-    }
-
-    Ok(())
 }

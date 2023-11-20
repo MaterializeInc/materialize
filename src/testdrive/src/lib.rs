@@ -86,6 +86,7 @@ use std::path::Path;
 use action::Run;
 use anyhow::{anyhow, Context};
 use mz_ore::error::ErrorExt;
+use tracing::debug;
 
 use crate::action::ControlFlow;
 use crate::error::{ErrorLocation, PosError};
@@ -97,7 +98,7 @@ mod format;
 mod parser;
 mod util;
 
-pub use crate::action::Config;
+pub use crate::action::{CatalogConfig, Config};
 pub use crate::error::Error;
 
 /// Runs a testdrive script stored in a file.
@@ -153,6 +154,12 @@ pub(crate) async fn run_line_reader(
     // reconnections for every file. For now it's nice to not open any
     // connections until after parsing.
     let cmds = parser::parse(line_reader)?;
+
+    if cmds.is_empty() {
+        return Err(PosError::from(anyhow!("No input provided!")));
+    } else {
+        debug!("Received {} commands to run", cmds.len());
+    }
 
     let has_kafka_cmd = cmds.iter().any(|cmd| {
         matches!(

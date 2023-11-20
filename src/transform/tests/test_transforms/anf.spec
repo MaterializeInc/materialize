@@ -13,8 +13,8 @@
 # Define t0 source
 define
 DefSource name=t0
-  - bigint
-  - bigint
+  - c0: bigint
+  - c1: bigint
 ----
 Source defined as t0
 
@@ -63,7 +63,7 @@ With
 
 # Joins.
 apply pipeline=anf
-Join on=(eq(#0, #2, #4))
+Join on=(#0 = #2 = #4)
   Get t0
   Constant <empty> // { types: "(bigint, bigint)" }
   Get t0
@@ -72,7 +72,7 @@ Return
   Get l2
 With
   cte l2 =
-    Join on=(eq(#0, #2, #4))
+    Join on=(#0 = #2 = #4)
       Get l0
       Get l1
       Get l0
@@ -126,7 +126,7 @@ With
           Get l1
     With Mutually Recursive
       cte l2 = // { types: "(bigint, bigint?)" }
-        Distinct group_by=[#0, #1]
+        Distinct project=[#0, #1]
           Union
             Filter #1 > 7
               Get l0
@@ -139,7 +139,7 @@ With
             Filter #1 > 7
               Get l2
       cte l1 = // { types: "(bigint, bigint?)" }
-        Distinct group_by=[#0, #1]
+        Distinct project=[#0, #1]
           Union
             Filter #1 > 7
               Get l0
@@ -188,7 +188,7 @@ With
           Get l14
         With
           cte l14 =
-            Distinct group_by=[#0, #1]
+            Distinct project=[#0, #1]
               Get l13
           cte l13 =
             Union
@@ -211,7 +211,7 @@ With
           Get l9
         With
           cte l9 =
-            Distinct group_by=[#0, #1]
+            Distinct project=[#0, #1]
               Get l8
           cte l8 =
             Union

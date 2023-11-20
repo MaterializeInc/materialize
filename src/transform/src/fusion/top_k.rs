@@ -21,8 +21,8 @@ pub struct TopK;
 
 impl crate::Transform for TopK {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "topk_fusion")
     )]

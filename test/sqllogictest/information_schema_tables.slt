@@ -225,6 +225,14 @@ mz_tables
 BASE TABLE
 materialize
 mz_catalog
+mz_timezone_abbreviations
+VIEW
+materialize
+mz_catalog
+mz_timezone_names
+VIEW
+materialize
+mz_catalog
 mz_types
 BASE TABLE
 materialize
@@ -239,6 +247,14 @@ materialize
 mz_internal
 mz_active_peeks_per_worker
 SOURCE
+materialize
+mz_internal
+mz_activity_log
+VIEW
+materialize
+mz_internal
+mz_activity_log_redacted
+VIEW
 materialize
 mz_internal
 mz_aggregates
@@ -289,8 +305,12 @@ mz_cluster_links
 BASE TABLE
 materialize
 mz_internal
+mz_cluster_replica_frontiers
+SOURCE
+materialize
+mz_internal
 mz_cluster_replica_heartbeats
-BASE TABLE
+SOURCE
 materialize
 mz_internal
 mz_cluster_replica_history
@@ -330,7 +350,19 @@ SOURCE
 materialize
 mz_internal
 mz_compute_dependencies
-BASE TABLE
+SOURCE
+materialize
+mz_internal
+mz_compute_error_counts
+VIEW
+materialize
+mz_internal
+mz_compute_error_counts_per_worker
+VIEW
+materialize
+mz_internal
+mz_compute_error_counts_raw
+SOURCE
 materialize
 mz_internal
 mz_compute_exports
@@ -465,8 +497,16 @@ mz_global_frontiers
 VIEW
 materialize
 mz_internal
+mz_internal_cluster_replicas
+BASE TABLE
+materialize
+mz_internal
 mz_kafka_sources
 BASE TABLE
+materialize
+mz_internal
+mz_materialization_lag
+VIEW
 materialize
 mz_internal
 mz_message_batch_counts_received_raw
@@ -526,7 +566,11 @@ BASE TABLE
 materialize
 mz_internal
 mz_prepared_statement_history
-BASE TABLE
+SOURCE
+materialize
+mz_internal
+mz_prepared_statement_history_redacted
+VIEW
 materialize
 mz_internal
 mz_records_per_dataflow
@@ -570,7 +614,7 @@ SOURCE
 materialize
 mz_internal
 mz_session_history
-BASE TABLE
+SOURCE
 materialize
 mz_internal
 mz_sessions
@@ -649,6 +693,14 @@ mz_show_schema_privileges
 VIEW
 materialize
 mz_internal
+mz_show_sinks
+VIEW
+materialize
+mz_internal
+mz_show_sources
+VIEW
+materialize
+mz_internal
 mz_show_system_privileges
 VIEW
 materialize
@@ -678,7 +730,11 @@ VIEW
 materialize
 mz_internal
 mz_statement_execution_history
-BASE TABLE
+SOURCE
+materialize
+mz_internal
+mz_statement_execution_history_redacted
+VIEW
 materialize
 mz_internal
 mz_storage_shards
@@ -697,11 +753,7 @@ mz_type_pg_metadata
 BASE TABLE
 materialize
 mz_internal
-mz_view_foreign_keys
-BASE TABLE
-materialize
-mz_internal
-mz_view_keys
+mz_webhook_sources
 BASE TABLE
 materialize
 pg_catalog
@@ -830,6 +882,14 @@ VIEW
 materialize
 pg_catalog
 pg_tablespace
+VIEW
+materialize
+pg_catalog
+pg_timezone_abbrevs
+VIEW
+materialize
+pg_catalog
+pg_timezone_names
 VIEW
 materialize
 pg_catalog

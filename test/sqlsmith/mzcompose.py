@@ -8,23 +8,22 @@
 # by the Apache License, Version 2.0.
 
 import json
-import os
 import random
 import time
 from datetime import datetime
 from threading import Thread
 from typing import Any
 
-from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.sqlsmith import known_errors
 
-if os.getenv("BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE") == "c5.2xlarge":
-    TOTAL_MEMORY = 12
-    NUM_SERVERS = 2
-else:
-    TOTAL_MEMORY = 48
-    NUM_SERVERS = 2
-
+TOTAL_MEMORY = 12
+NUM_SERVERS = 2
 MZ_SERVERS = [f"mz_{i + 1}" for i in range(NUM_SERVERS)]
 
 SERVICES = [
@@ -36,8 +35,6 @@ SERVICES = [
         restart="on-failure",
         memory=f"{TOTAL_MEMORY / len(MZ_SERVERS)}GB",
         use_default_volumes=False,
-        # TODO(def-): Remove this when #19496 is fixed
-        additional_system_parameter_defaults={"persist_stats_filter_enabled": "false"},
     )
     for mz_server in MZ_SERVERS
 ] + [
@@ -47,115 +44,6 @@ SERVICES = [
             "mzbuild": "sqlsmith",
         },
     ),
-]
-
-
-# These are only errors which have no associated issues since they are not
-# considered product bugs, but SQLsmith generating bad queries. Use ci-regexp
-# in Github issues for actual product bugs.
-known_errors = [
-    "no connection to the server",  # Expected AFTER a crash, the query before this is interesting, not the ones after
-    "failed: Connection refused",  # Expected AFTER a crash, the query before this is interesting, not the ones after
-    "canceling statement due to statement timeout",
-    "value too long for type",
-    "list_agg on char not yet supported",
-    "does not allow subqueries",
-    "function array_remove(",  # insufficient type system, parameter types have to match
-    "function array_cat(",  # insufficient type system, parameter types have to match
-    "function array_position(",  # insufficient type system, parameter types have to match
-    "function list_append(",  # insufficient type system, parameter types have to match
-    "function list_prepend(",  # insufficient type system, parameter types have to match
-    "function list_cat(",  # insufficient type system, parameter types have to match
-    "does not support implicitly casting from",
-    "aggregate functions that refer exclusively to outer columns not yet supported",  # https://github.com/MaterializeInc/materialize/issues/3720
-    "aggregate functions are not allowed in",  # https://github.com/MaterializeInc/materialize/issues/21295
-    "nested aggregate functions are not allowed",  # https://github.com/MaterializeInc/materialize/issues/21295
-    "range lower bound must be less than or equal to range upper bound",
-    "violates not-null constraint",
-    "division by zero",
-    "zero raised to a negative power is undefined",
-    "operator does not exist",  # For list types
-    "couldn't parse role id",
-    "mz_aclitem grantor cannot be PUBLIC role",
-    "unrecognized privilege type:",
-    "cannot return complex numbers",
-    "statement batch size cannot exceed",
-    "length must be nonnegative",
-    "is only defined for finite arguments",
-    "more than one record produced in subquery",
-    "invalid range bound flags",
-    "invalid input syntax for type jsonb",
-    "invalid regular expression",
-    "invalid input syntax for type date",
-    "invalid escape string",
-    "invalid hash algorithm",
-    "is defined for numbers greater than or equal to",
-    "is not defined for zero",
-    "is not defined for negative numbers",
-    "requested character too large for encoding",
-    "internal error: unrecognized configuration parameter",
-    "invalid encoding name",
-    "invalid time zone",
-    "value out of range: overflow",
-    "value out of range: underflow",
-    "LIKE pattern exceeds maximum length",
-    "negative substring length not allowed",
-    "cannot take square root of a negative number",
-    "timestamp units not yet supported",
-    "step size cannot equal zero",
-    "stride must be greater than zero",
-    "timestamp out of range",
-    "integer out of range",
-    "unterminated escape sequence in LIKE",
-    "null character not permitted",
-    "is defined for numbers between",
-    "field position must be greater than zero",
-    "array_fill on ",  # Not yet supported
-    "must not be null",  # Expected with array_fill, array_position
-    "' not recognized",  # Expected, see https://github.com/MaterializeInc/materialize/issues/17981
-    "must appear in the GROUP BY clause or be used in an aggregate function",
-    "Expected joined table, found",  # Should fix for multi table join
-    "Expected ON, or USING after JOIN, found",  # Should fix for multi table join
-    "but expression is of type",  # Should fix, but only happens rarely
-    "coalesce could not convert type map",  # Should fix, but only happens rarely
-    "operator does not exist: map",  # Should fix, but only happens rarely
-    "result exceeds max size of",  # Seems expected with huge queries
-    "expected expression, but found reserved keyword",  # Should fix, but only happens rarely with subqueries
-    "Expected right parenthesis, found left parenthesis",  # Should fix, but only happens rarely with cast+coalesce
-    "invalid selection: operation may only refer to user-defined tables",  # Seems expected when using catalog tables
-    "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
-    "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
-    "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/materialize/issues/14290
-    "string is not a valid identifier:",  # Expected in parse_ident
-    "invalid datepart",
-    "pg_cancel_backend in this position not yet supported",
-    "unrecognized configuration parameter",
-    "numeric field overflow",
-    "bigint out of range",
-    "smallint out of range",
-    "uint8 out of range",
-    "uint4 out of range",
-    "uint2 out of range",
-    "interval out of range",
-    "timezone interval must not contain months or years",
-    "not supported for type time",
-    "coalesce types text and text list cannot be matched",  # Bad typing for ||
-    "coalesce types text list and text cannot be matched",  # Bad typing for ||
-    "is out of range for type numeric: exceeds maximum precision",
-    "CAST does not support casting from ",  # TODO: Improve type system
-    "SET clause does not support casting from ",  # TODO: Improve type system
-    "coalesce types integer and interval cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)
-    "coalesce types interval and integer cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)
-    "requested length too large",
-    "number of columns must be a positive integer literal",
-    "regex_extract requires a string literal as its first argument",
-    "regex parse error",
-    "out of valid range",
-    '" does not exist',  # role does not exist
-    "csv_extract number of columns too large",
-    "coalesce types text and oid cannot be matched",  # with ACL-related functions
-    "coalesce types oid and text cannot be matched",  # with ACL-related functions
-    "Expected FOR, found WITH",  # introduced by the EXPLAIN refactor in #21383
 ]
 
 
@@ -242,7 +130,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--max-joins={args.max_joins}",
             f"--seed={seed + i}",
             "--log-json",
-            f"--target=host={MZ_SERVERS[i % len(MZ_SERVERS)]} port=6875 dbname=materialize user=materialize",
+            # we use mz_system to have access to all tables, including ones with restricted permissions
+            f"--target=host={MZ_SERVERS[i % len(MZ_SERVERS)]} port=6877 dbname=materialize user=mz_system",
         ]
         if args.exclude_catalog:
             cmd.append("--exclude-catalog")
@@ -273,10 +162,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     for frozen_key, errors in new_errors.items():
         key = dict(frozen_key)
-        occurences = f" ({len(errors)} occurences)" if len(errors) > 1 else ""
-        print(
-            f"--- [SQLsmith] {key['type']} {key['sqlstate']}: {key['message']}{occurences}"
-        )
+        occurrences = f" ({len(errors)} occurrences)" if len(errors) > 1 else ""
+        # Print out crashes differently so that we don't get notified twice in ci_logged_errors_detect
+        if "server closed the connection unexpectedly" in key["message"]:
+            print(f"--- Server crash, check panics and segfaults {occurrences}")
+        else:
+            print(
+                f"--- [SQLsmith] {key['type']} {key['sqlstate']}: {key['message']}{occurrences}"
+            )
         if len(errors) > 1:
             from_time = datetime.fromtimestamp(errors[0]["timestamp"]).strftime(
                 "%H:%M:%S"

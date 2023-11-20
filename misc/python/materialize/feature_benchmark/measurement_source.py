@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import re
+import textwrap
 import time
 from collections.abc import Callable
 
@@ -41,8 +42,8 @@ class Td(MeasurementSource):
 
     """
 
-    def __init__(self, td_str: str) -> None:
-        self._td_str = td_str
+    def __init__(self, td_str: str, dedent: bool = True) -> None:
+        self._td_str = textwrap.dedent(td_str) if dedent else td_str
         self._executor: Executor | None = None
 
     def run(
@@ -53,11 +54,12 @@ class Td(MeasurementSource):
         executor = executor or self._executor
         assert executor
 
-        td_output = executor.Td(self._td_str)
         # Print each query once so that it is easier to reproduce regressions
         # based on just the logs from CI
         if executor.add_known_fragment(self._td_str):
-            print(td_output)
+            print(self._td_str)
+
+        td_output = executor.Td(self._td_str)
 
         lines = td_output.splitlines()
         lines = [l for l in lines if l]

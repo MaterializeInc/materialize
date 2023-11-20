@@ -75,7 +75,7 @@ name         nullable  type
 objoid       false     oid
 classoid     true      oid
 objsubid     false     integer
-description  true      text
+description  false     text
 
 > SHOW COLUMNS FROM pg_attribute
 name         nullable  type
@@ -144,7 +144,7 @@ name                nullable    type
  rolsuper           true        boolean
  rolinherit         false       boolean
  rolcreaterole      true        boolean
- rolcreatedb        true        boolean
+ rolcreatedb        false        boolean
  rolcanlogin        true        boolean
  rolreplication     false       boolean
  rolbypassrls       false       boolean

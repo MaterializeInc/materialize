@@ -107,9 +107,9 @@ use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Diff, GlobalId, Row};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::errors::DataflowError;
-use mz_storage_client::types::sources::SourceData;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -307,14 +307,14 @@ struct BatchSet {
 /// This is done to avoid a clone of the underlying data so that both
 /// operators can have the collection as input.
 pub(crate) fn render<G>(
-    scope: &mut G,
+    scope: &G,
     collection_id: GlobalId,
     target: CollectionMetadata,
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
-    storage_state: &mut StorageState,
+    storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     output_index: usize,
-) -> (Stream<G, ()>, Rc<dyn Any>)
+) -> (Stream<G, ()>, Stream<G, Rc<anyhow::Error>>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
@@ -342,7 +342,7 @@ where
         storage_state,
     );
 
-    let (upper_stream, append_token) = append_batches(
+    let (upper_stream, append_errors, append_token) = append_batches(
         scope,
         collection_id.clone(),
         operator_name,
@@ -357,6 +357,7 @@ where
 
     (
         upper_stream,
+        append_errors,
         Rc::new((mint_token, write_token, append_token)),
     )
 }
@@ -370,7 +371,7 @@ where
 /// `broadcast()` to, ahem, broadcast, the one description to all downstream
 /// write operators/workers.
 fn mint_batch_descriptions<G>(
-    scope: &mut G,
+    scope: &G,
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
@@ -453,7 +454,7 @@ where
                     Diagnostics {
                         shard_name: collection_id.to_string(),
                         handle_purpose: format!(
-                            "compute::persist_sink::mint_batch_descriptions {}",
+                            "storage::persist_sink::mint_batch_descriptions {}",
                             collection_id
                         ),
                     },
@@ -548,14 +549,14 @@ where
 ///
 /// This also and updates various metrics.
 fn write_batches<G>(
-    scope: &mut G,
+    scope: &G,
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
-    storage_state: &mut StorageState,
+    storage_state: &StorageState,
 ) -> (
     Stream<G, HollowBatchAndMetadata<SourceData, (), mz_repr::Timestamp, Diff>>,
     Rc<dyn Any>,
@@ -617,7 +618,7 @@ where
                 Arc::new(UnitSchema),
                 Diagnostics {
                     shard_name: collection_id.to_string(),
-                    handle_purpose: format!("compute::persist_sink::write_batches {}", collection_id),
+                    handle_purpose: format!("storage::persist_sink::write_batches {}", collection_id),
                 },
             )
             .await
@@ -897,17 +898,17 @@ where
 /// sync with the upper of the persist shard, and updates various metrics
 /// and statistics objects.
 fn append_batches<G>(
-    scope: &mut G,
+    scope: &G,
     collection_id: GlobalId,
     operator_name: String,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     batches: &Stream<G, HollowBatchAndMetadata<SourceData, (), mz_repr::Timestamp, Diff>>,
     persist_clients: Arc<PersistClientCache>,
-    storage_state: &mut StorageState,
+    storage_state: &StorageState,
     output_index: usize,
     metrics: SourcePersistSinkMetrics,
-) -> (Stream<G, ()>, Rc<dyn Any>)
+) -> (Stream<G, ()>, Stream<G, Rc<anyhow::Error>>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
@@ -954,9 +955,8 @@ where
     // from our input frontiers that we have seen all batches for a given batch
     // description.
 
-    let shutdown_button = append_op.build(move |caps| async move {
-        let [upper_cap]: [_; 1] = caps.try_into().unwrap();
-        let mut upper_capset = CapabilitySet::from_elem(upper_cap);
+    let (shutdown_button, errors) = append_op.build_fallible(move |caps| Box::pin(async move {
+        let [upper_cap_set]: &mut [_; 1] = caps.try_into().unwrap();
 
         // This may SEEM unnecessary, but metrics contains extra
         // `DeleteOnDrop`-wrapped fields that will NOT be moved into this
@@ -988,14 +988,12 @@ where
             // The non-active workers report that they are done snapshotting.
             source_statistics
                 .initialize_snapshot_committed(&Antichain::<mz_repr::Timestamp>::new());
-            return;
+            return Ok(());
         }
 
-        // TODO(aljoscha): We need to figure out what to do with error results from these calls.
         let persist_client = persist_clients
             .open(persist_location)
-            .await
-            .expect("could not open persist client");
+            .await?;
 
         let mut write = persist_client
             .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
@@ -1007,8 +1005,7 @@ where
                     handle_purpose: format!("persist_sink::append_batches {}", collection_id)
                 },
             )
-            .await
-            .expect("could not open persist shard");
+            .await?;
 
         // Initialize this sink's `upper` to the `upper` of the persist shard we are writing
         // to. Data from the source not beyond this time will be dropped, as it has already
@@ -1018,7 +1015,7 @@ where
         // shared upper. All other workers have already cleared this
         // upper above.
         current_upper.borrow_mut().clone_from(write.upper());
-        upper_capset.downgrade(current_upper.borrow().elements());
+        upper_cap_set.downgrade(current_upper.borrow().iter());
         source_statistics.initialize_snapshot_committed(write.upper());
 
         // The current input frontiers.
@@ -1117,7 +1114,7 @@ where
                 }
                 else => {
                     // All inputs are exhausted, so we can shut down.
-                    return;
+                    return Ok(());
                 }
             };
 
@@ -1236,7 +1233,7 @@ where
                 match result {
                     Ok(()) => {
                         current_upper.borrow_mut().clone_from(&batch_upper);
-                        upper_capset.downgrade(current_upper.borrow().elements());
+                        upper_cap_set.downgrade(current_upper.borrow().iter());
                     }
                     Err(mismatch) => {
                         // _Best effort_ Clean up in case we didn't manage to append the
@@ -1244,7 +1241,8 @@ where
                         for batch in batches {
                             batch.delete().await;
                         }
-                        panic!(
+
+                        tracing::warn!(
                             "persist_sink({}): invalid upper! \
                                 Tried to append batch ({:?} -> {:?}) but upper \
                                 is {:?}. This is not a problem, it just means \
@@ -1252,11 +1250,16 @@ where
                                 again with a new batch description.",
                             collection_id, batch_lower, batch_upper, mismatch.current,
                         );
+                        anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
                     }
                 }
             }
         }
-    });
+    }));
 
-    (upper_stream, Rc::new(shutdown_button.press_on_drop()))
+    (
+        upper_stream,
+        errors,
+        Rc::new(shutdown_button.press_on_drop()),
+    )
 }

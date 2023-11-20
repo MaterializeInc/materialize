@@ -9,21 +9,20 @@
 
 //! Functionality belonging to the catalog but extracted to control file size.
 
-use std::collections::BTreeSet;
-
 use mz_audit_log::{EventDetails, EventType, VersionedEvent};
-use mz_controller::clusters::ClusterId;
+use mz_catalog::durable::Transaction;
+use mz_catalog::memory::error::{Error, ErrorKind};
+use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem as SqlCatalogItem;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Ident, RawClusterName, Statement};
-use mz_storage_client::types::sources::IngestionDescription;
+use mz_storage_types::sources::IngestionDescription;
 
-use crate::catalog::storage::Transaction;
 use crate::catalog::{
     catalog_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogEntry, CatalogItem,
-    CatalogState, DataSourceDesc, Error, ErrorKind, Index, MaterializedView, Sink, Source,
+    CatalogState, DataSourceDesc, Index, MaterializedView, Sink, Source,
 };
 use crate::coord::ConnMeta;
 use crate::AdapterError;
@@ -35,7 +34,6 @@ impl Catalog {
         tx: &mut Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         oracle_write_ts: Timestamp,
-        drop_ids: &BTreeSet<GlobalId>,
         audit_events: &mut Vec<VersionedEvent>,
         session: Option<&ConnMeta>,
         id: GlobalId,
@@ -86,7 +84,8 @@ impl Catalog {
             _ => coord_bail!("object {id} does not have an associated cluster"),
         };
         let old_cluster = entry.cluster_id();
-        *stmt_in_cluster = Some(RawClusterName::Unresolved(Ident::new(cluster.name.clone())));
+        let cluster_name = Ident::new(cluster.name.clone())?;
+        *stmt_in_cluster = Some(RawClusterName::Unresolved(cluster_name));
 
         // Update catalog item with new cluster.
         let create_sql = stmt.to_ast_string_stable();
@@ -138,7 +137,7 @@ impl Catalog {
             ..entry.clone()
         };
 
-        tx.update_item(id, &new_entry)?;
+        tx.update_item(id, new_entry.into())?;
 
         state.add_to_audit_log(
             oracle_write_ts,
@@ -161,6 +160,6 @@ impl Catalog {
         let to_name = entry.name().clone();
         builtin_table_updates.extend(state.pack_item_update(id, -1));
         state.move_item(id, cluster_id);
-        Self::update_item(state, builtin_table_updates, id, to_name, item, drop_ids)
+        Self::update_item(state, builtin_table_updates, id, to_name, item)
     }
 }

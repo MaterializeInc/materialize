@@ -139,7 +139,7 @@ where
                 ScalarType::String => Ok(Datum::from(
                     temp_storage.push_string(mz_lowertest::unquote(litval)),
                 )),
-                ScalarType::Timestamp => {
+                ScalarType::Timestamp { .. } => {
                     let datetime = if litval.contains('.') {
                         NaiveDateTime::parse_from_str(litval, "\"%Y-%m-%d %H:%M:%S%.f\"")
                     } else {

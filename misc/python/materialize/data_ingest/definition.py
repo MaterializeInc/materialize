@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import random
 from collections.abc import Iterator
 from enum import Enum
 
@@ -15,10 +16,13 @@ from materialize.data_ingest.field import Field
 from materialize.data_ingest.row import Operation, Row
 from materialize.data_ingest.rowlist import RowList
 
+rng = random.Random()
+
 
 class Records(Enum):
     ALL = 0  #  Only applies to DELETE operations
     ONE = 1
+    HUNDRED = 100
     SOME = 1_000
     MANY = 1_000_000
 
@@ -66,7 +70,7 @@ class Insert(Definition):
             values = [
                 field.data_type.numeric_value(self.current_key)
                 if field.is_key
-                else field.data_type.random_value(self.record_size)
+                else field.data_type.random_value(rng, self.record_size)
                 for field in fields
             ]
             self.current_key += 1
@@ -98,7 +102,7 @@ class Upsert(Definition):
             values = [
                 field.data_type.numeric_value(0)
                 if field.is_key
-                else field.data_type.random_value(self.record_size)
+                else field.data_type.random_value(rng, self.record_size)
                 for field in fields
             ]
 
@@ -128,7 +132,7 @@ class Delete(Definition):
 
         if self.number_of_records == Records.ONE:
             values = [
-                field.data_type.random_value(self.record_size)
+                field.data_type.random_value(rng, self.record_size)
                 for field in fields
                 if field.is_key
             ]
@@ -136,7 +140,7 @@ class Delete(Definition):
         elif self.number_of_records in (Records.SOME, Records.MANY):
             for i in range(self.number_of_records.value):
                 values = [
-                    field.data_type.random_value(self.record_size)
+                    field.data_type.random_value(rng, self.record_size)
                     for field in fields
                     if field.is_key
                 ]

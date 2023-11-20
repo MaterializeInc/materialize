@@ -27,18 +27,18 @@
 # Define t0 source
 define
 DefSource name=t0
-  - bigint
-  - bigint?
-  - text
+  - c0: bigint
+  - c1: bigint?
+  - c2: text
 ----
 Source defined as t0
 
 # Define t1 source
 define
 DefSource name=t1
-  - text
-  - bigint
-  - boolean
+  - c0: text
+  - c1: bigint
+  - c2: boolean
 ----
 Source defined as t1
 
@@ -353,7 +353,7 @@ expected Bool?
 ############################################################################
 
 typecheck
-Join on=(eq(#0, #3))
+Join on=(#0 = #3)
   Get t0
   Get t0
 ----
@@ -361,7 +361,7 @@ Join on=(eq(#0, #3))
 
 # TODO(mgree): should narrow to non-null with typechecker improvements
 typecheck
-Join on=(eq(#0, #1, #3, #4))
+Join on=(#0 = #1 = #3 = #4)
   Get t0
   Get t0
 ----
@@ -425,7 +425,7 @@ Distinct monotonic
 ()
 
 typecheck
-Distinct group_by=[#0, #1] exp_group_size=4
+Distinct project=[#0, #1] exp_group_size=4
   Constant // { types: "(text, bigint)" }
     - ("a", 2)
     - ("a", 4)

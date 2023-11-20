@@ -24,7 +24,7 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 
 # Sources do not have indexes automatically created
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -279,7 +279,7 @@ DROP INDEX sys_ind
 ALTER SYSTEM SET enable_rbac_checks TO false
 
 # Test that creating indexes on objects in the mz_internal schema fails
-! CREATE INDEX illegal_sys_ind ON mz_internal.mz_view_keys (object_id)
+! CREATE INDEX illegal_sys_ind ON mz_internal.mz_comments (id)
 contains:cannot create index with unstable dependencies
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
@@ -293,27 +293,37 @@ mz_arrangement_sharing_raw_s2_primary_idx                   mz_arrangement_shari
 mz_arrangement_heap_capacity_raw_s2_primary_idx             mz_arrangement_heap_capacity_raw             mz_introspection    {operator_id,worker_id}
 mz_arrangement_heap_allocations_raw_s2_primary_idx          mz_arrangement_heap_allocations_raw          mz_introspection    {operator_id,worker_id}
 mz_arrangement_heap_size_raw_s2_primary_idx                 mz_arrangement_heap_size_raw                 mz_introspection    {operator_id,worker_id}
+mz_cluster_links_ind                                        mz_cluster_links                             mz_introspection    {cluster_id}
+mz_cluster_replica_history_ind                              mz_cluster_replica_history                   mz_introspection    {dropped_at}
 mz_cluster_replica_metrics_ind                              mz_cluster_replica_metrics                   mz_introspection    {replica_id}
 mz_cluster_replica_sizes_ind                                mz_cluster_replica_sizes                     mz_introspection    {size}
 mz_cluster_replica_statuses_ind                             mz_cluster_replica_statuses                  mz_introspection    {replica_id}
 mz_cluster_replicas_ind                                     mz_cluster_replicas                          mz_introspection    {id}
 mz_clusters_ind                                             mz_clusters                                  mz_introspection    {id}
 mz_compute_delays_histogram_raw_s2_primary_idx              mz_compute_delays_histogram_raw              mz_introspection    {export_id,import_id,worker_id,delay_ns}
+mz_compute_dependencies_ind                                 mz_compute_dependencies                      mz_introspection    {dependency_id}
+mz_compute_error_counts_raw_s2_primary_idx                  mz_compute_error_counts_raw                  mz_introspection    {export_id,worker_id}
 mz_compute_exports_per_worker_s2_primary_idx                mz_compute_exports_per_worker                mz_introspection    {export_id,worker_id}
-mz_compute_frontiers_per_worker_s2_primary_idx              mz_compute_frontiers_per_worker              mz_introspection    {export_id,worker_id,time}
-mz_compute_import_frontiers_per_worker_s2_primary_idx       mz_compute_import_frontiers_per_worker       mz_introspection    {export_id,import_id,worker_id,time}
+mz_compute_frontiers_per_worker_s2_primary_idx              mz_compute_frontiers_per_worker              mz_introspection    {export_id,worker_id}
+mz_compute_import_frontiers_per_worker_s2_primary_idx       mz_compute_import_frontiers_per_worker       mz_introspection    {export_id,import_id,worker_id}
 mz_compute_operator_durations_histogram_raw_s2_primary_idx  mz_compute_operator_durations_histogram_raw  mz_introspection    {id,worker_id,duration_ns}
 mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresses_per_worker             mz_introspection    {id,worker_id}
 mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_introspection    {id,worker_id}
 mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_introspection    {address,port,worker_id,update_type,time}
 mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_introspection    {id,worker_id}
 mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx mz_dataflow_shutdown_durations_histogram_raw mz_introspection    {worker_id,duration_ns}
+mz_frontiers_ind                                            mz_frontiers                                 mz_introspection    {object_id}
+mz_indexes_ind                                              mz_indexes                                   mz_introspection    {id}
+mz_materialized_views_ind                                   mz_materialized_views                        mz_introspection    {id}
 mz_message_batch_counts_received_raw_s2_primary_idx         mz_message_batch_counts_received_raw         mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_batch_counts_sent_raw_s2_primary_idx             mz_message_batch_counts_sent_raw             mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_received_raw               mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_introspection    {channel_id,from_worker_id,to_worker_id}
+mz_object_dependencies_ind                                  mz_object_dependencies                       mz_introspection    {object_id}
 mz_object_lifetimes_ind                                     mz_object_lifetimes                          mz_introspection    {id}
+mz_object_transitive_dependencies_ind                       mz_object_transitive_dependencies            mz_introspection    {object_id}
 mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_introspection    {worker_id,duration_ns}
+mz_roles_ind                                                mz_roles                                     mz_introspection    {id}
 mz_scheduling_elapsed_raw_s2_primary_idx                    mz_scheduling_elapsed_raw                    mz_introspection    {id,worker_id}
 mz_scheduling_parks_histogram_raw_s2_primary_idx            mz_scheduling_parks_histogram_raw            mz_introspection    {worker_id,slept_for_ns,requested_ns}
 mz_show_all_objects_ind                                     mz_objects                                   mz_introspection    {schema_id}
@@ -326,14 +336,16 @@ mz_show_indexes_ind                                         mz_show_indexes     
 mz_show_materialized_views_ind                              mz_show_materialized_views                   mz_introspection    {schema_id}
 mz_show_schemas_ind                                         mz_schemas                                   mz_introspection    {database_id}
 mz_show_secrets_ind                                         mz_secrets                                   mz_introspection    {schema_id}
-mz_show_sinks_ind                                           mz_sinks                                     mz_introspection    {schema_id}
-mz_show_sources_ind                                         mz_sources                                   mz_introspection    {schema_id}
+mz_show_sinks_ind                                           mz_show_sinks                                mz_introspection    {schema_id}
+mz_show_sources_ind                                         mz_show_sources                              mz_introspection    {schema_id}
 mz_show_tables_ind                                          mz_tables                                    mz_introspection    {schema_id}
 mz_show_types_ind                                           mz_types                                     mz_introspection    {schema_id}
 mz_show_views_ind                                           mz_views                                     mz_introspection    {schema_id}
 mz_sink_statistics_ind                                      mz_sink_statistics                           mz_introspection    {id}
 mz_sink_status_history_ind                                  mz_sink_status_history                       mz_introspection    {sink_id}
 mz_sink_statuses_ind                                        mz_sink_statuses                             mz_introspection    {id}
+mz_sinks_ind                                                mz_sinks                                     mz_introspection    {id}
 mz_source_statistics_ind                                    mz_source_statistics                         mz_introspection    {id}
 mz_source_status_history_ind                                mz_source_status_history                     mz_introspection    {source_id}
 mz_source_statuses_ind                                      mz_source_statuses                           mz_introspection    {id}
+mz_sources_ind                                              mz_sources                                   mz_introspection    {id}

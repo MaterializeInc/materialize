@@ -32,19 +32,13 @@ pub struct RunArgs {
 
 /// Creates an interactive SQL shell connection to the profile context environment.
 /// The SQL shell command is running `psql` behind the scenes.
-pub async fn run(
-    cx: &mut RegionContext,
-    RunArgs { cluster, psql_args }: RunArgs,
-) -> Result<(), Error> {
+pub async fn run(cx: &RegionContext, RunArgs { cluster, psql_args }: RunArgs) -> Result<(), Error> {
     let sql_client = cx.sql_client();
     let claims = cx.admin_client().claims();
     let region_info = cx.get_region_info().await?;
     let email = claims.await?.email;
 
-    eprintln!(
-        "Authenticated using profile '{}'.",
-        cx.config_file().profile()
-    );
+    eprintln!("Authenticated using profile '{}'.", cx.get_profile());
     if let Some(cluster) = cluster.clone() {
         eprintln!("Connected to cluster '{}'.", cluster);
     } else {

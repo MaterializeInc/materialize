@@ -70,7 +70,7 @@ pub fn try_parse_def(catalog: &TestCatalog, s: &str) -> Result<Def, String> {
 mod relation {
     use std::collections::BTreeMap;
 
-    use mz_expr::{Id, JoinImplementation, LocalId, MirRelationExpr};
+    use mz_expr::{AccessStrategy, Id, JoinImplementation, LocalId, MirRelationExpr};
     use mz_repr::{Diff, RelationType, Row, ScalarType};
 
     use super::*;
@@ -170,13 +170,15 @@ mod relation {
 
         let ident = input.parse::<syn::Ident>()?;
         match ctx.catalog.get(&ident.to_string()) {
-            Some((id, typ)) => Ok(MirRelationExpr::Get {
+            Some((id, _cols, typ)) => Ok(MirRelationExpr::Get {
                 id: Id::Global(*id),
                 typ: typ.clone(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             }),
             None => Ok(MirRelationExpr::Get {
                 id: Id::Local(parse_local_id(ident)?),
                 typ: RelationType::empty(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             }),
         }
     }
@@ -214,6 +216,7 @@ mod relation {
                     let get_cte = MirRelationExpr::Get {
                         id: Id::Local(id),
                         typ: typ.clone(),
+                        access_strategy: AccessStrategy::UnknownOrLocal,
                     };
                     // Do not use the `union` smart constructor here!
                     MirRelationExpr::Union {
@@ -383,7 +386,7 @@ mod relation {
     fn parse_distinct(ctx: CtxRef, input: ParseStream) -> Result {
         let reduce = input.parse::<kw::Distinct>()?;
 
-        let group_key = if input.eat(kw::group_by) {
+        let group_key = if input.eat(kw::project) {
             input.parse::<syn::Token![=]>()?;
             let inner;
             syn::bracketed!(inner in input);
@@ -607,7 +610,7 @@ mod relation {
                     let MirRelationExpr::Union { base, mut inputs } = value.take_dangerous() else {
                         unreachable!("ensured by construction");
                     };
-                    let MirRelationExpr::Get { id: _, typ } = *base else {
+                    let MirRelationExpr::Get { id: _, typ, .. } = *base else {
                         unreachable!("ensured by construction");
                     };
                     if let Some(prior_typ) = ctx.env.insert(id.clone(), typ) {
@@ -629,6 +632,7 @@ mod relation {
             MirRelationExpr::Get {
                 id: Id::Local(id),
                 typ,
+                ..
             } => {
                 let env_typ = match ctx.env.get(&*id) {
                     Some(env_typ) => env_typ,
@@ -652,7 +656,7 @@ mod relation {
 
 /// Support for parsing [mz_expr::MirScalarExpr].
 mod scalar {
-    use mz_expr::{ColumnOrder, MirScalarExpr};
+    use mz_expr::{BinaryFunc, ColumnOrder, MirScalarExpr};
     use mz_repr::{AsColumnType, Datum, Row};
 
     use super::*;
@@ -1016,16 +1020,31 @@ mod scalar {
     pub fn parse_join_equivalences(input: ParseStream) -> syn::Result<Vec<Vec<MirScalarExpr>>> {
         let mut equivalences = vec![];
         while !input.is_empty() {
-            if input.eat(kw::eq) {
-                let inner;
-                syn::parenthesized!(inner in input);
-                equivalences.push(inner.parse_comma_sep(parse_expr)?);
-            } else {
-                let lhs = parse_operand(input)?;
-                input.parse::<syn::Token![=]>()?;
-                let rhs = parse_operand(input)?;
-                equivalences.push(vec![lhs, rhs]);
+            let mut equivalence = vec![];
+            loop {
+                let mut worklist = vec![parse_operand(input)?];
+                while let Some(operand) = worklist.pop() {
+                    // Be more lenient and support parenthesized equivalences,
+                    // e.g. `... AND (x = u + v = z + 1) AND ...`.
+                    if let MirScalarExpr::CallBinary {
+                        func: BinaryFunc::Eq,
+                        expr1,
+                        expr2,
+                    } = operand
+                    {
+                        // We reverse the order in the worklist in order to get
+                        // the correct order in the equivalence class.
+                        worklist.push(*expr2);
+                        worklist.push(*expr1);
+                    } else {
+                        equivalence.push(operand);
+                    }
+                }
+                if !input.eat(syn::Token![=]) {
+                    break;
+                }
             }
+            equivalences.push(equivalence);
             input.eat(kw::AND);
         }
         Ok(equivalences)
@@ -1232,6 +1251,7 @@ mod attributes {
 pub enum Def {
     Source {
         name: String,
+        cols: Vec<String>,
         typ: mz_repr::RelationType,
     },
 }
@@ -1268,16 +1288,31 @@ mod def {
         };
 
         let parse_inputs = ParseChildren::new(input, reduce.span().start());
-        let column_types = parse_inputs.parse_many(ctx, parse_def_source_column)?;
+        let (cols, column_types) = {
+            let source_columns = parse_inputs.parse_many(ctx, parse_def_source_column)?;
+            let mut column_names = vec![];
+            let mut column_types = vec![];
+            for (column_name, column_type) in source_columns {
+                column_names.push(column_name);
+                column_types.push(column_type);
+            }
+            (column_names, column_types)
+        };
 
         let typ = RelationType { column_types, keys };
 
-        Ok(Def::Source { name, typ })
+        Ok(Def::Source { name, cols, typ })
     }
 
-    fn parse_def_source_column(_ctx: CtxRef, input: ParseStream) -> syn::Result<ColumnType> {
+    fn parse_def_source_column(
+        _ctx: CtxRef,
+        input: ParseStream,
+    ) -> syn::Result<(String, ColumnType)> {
         input.parse::<syn::Token![-]>()?;
-        attributes::parse_column_type(input)
+        let column_name = input.parse::<syn::Ident>()?.to_string();
+        input.parse::<syn::Token![:]>()?;
+        let column_type = attributes::parse_column_type(input)?;
+        Ok((column_name, column_type))
     }
 
     syn::custom_keyword!(DefSource);
@@ -1471,6 +1506,7 @@ mod kw {
     syn::custom_keyword!(on);
     syn::custom_keyword!(OR);
     syn::custom_keyword!(order_by);
+    syn::custom_keyword!(project);
     syn::custom_keyword!(Project);
     syn::custom_keyword!(Recursive);
     syn::custom_keyword!(Reduce);

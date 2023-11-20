@@ -16,7 +16,7 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 # Unset existing flags because several linker-specific ones don't play nicely with WASM targets
-export RUSTFLAGS=
+export RUSTFLAGS="--cfg=tokio_unstable"
 
 if [[ $# -lt 1 ]]
 then

@@ -13,19 +13,29 @@
 /.devcontainer                      @mjibson
 /.github                            @benesch
 /bin
-/ci                                 @MaterializeInc/qa
+/bin/lint-versions                  @MaterializeInc/testing
+/ci                                 @MaterializeInc/testing
+/ci/test/lint-deps.toml             @danhhz @benesch
 /doc/user                           @MaterializeInc/docs
 /doc/developer/reference/compute    @MaterializeInc/compute
 /doc/developer/reference/storage    @MaterializeInc/storage
 /misc/dbt-materialize               @MaterializeInc/devex
 /src/adapter                        @MaterializeInc/adapter
-/src/adapter/src/flags.rs
+/src/adapter-types                  @MaterializeInc/adapter
+/src/adapter/src/optimizer          @MaterializeInc/compute
+/src/adapter/src/coord/dataflows.rs @MaterializeInc/compute
+# to track changes to feature flags
+/src/adapter/src/coord/ddl.rs       @MaterializeInc/testing
+# to track changes to feature flags
+/src/adapter/src/flags.rs           @MaterializeInc/testing
 /src/alloc                          @benesch
 /src/audit-log                      @MaterializeInc/adapter
 /src/avro                           @umanwizard
 /src/avro-derive                    @umanwizard
 /src/build-id                       @umanwizard
 /src/build-info                     @benesch
+/src/catalog                        @MaterializeInc/adapter
+/src/catalog-debug                  @MaterializeInc/adapter
 /src/ccsr                           @benesch
 /src/cloud-resources                @MaterializeInc/cloud
 /src/cluster                        @MaterializeInc/compute @MaterializeInc/storage
@@ -33,7 +43,9 @@
 /src/clusterd                       @MaterializeInc/compute @MaterializeInc/storage
 /src/compute                        @MaterializeInc/compute
 /src/compute-client                 @MaterializeInc/compute
+/src/compute-types                  @MaterializeInc/compute
 /src/controller                     @MaterializeInc/compute @MaterializeInc/storage
+/src/controller-types               @MaterializeInc/compute @MaterializeInc/storage
 /src/environmentd                   @MaterializeInc/adapter
 /src/expr                           @MaterializeInc/compute
 /src/expr-test-util                 @MaterializeInc/compute
@@ -44,7 +56,7 @@
 /src/lowertest                      @MaterializeInc/compute
 /src/lowertest-derive               @MaterializeInc/compute
 /src/metabase                       @benesch
-/src/mz                             @MaterializeInc/adapter @MaterializeInc/devex
+/src/mz                             @MaterializeInc/devex
 /src/npm                            @benesch
 /src/orchestrator                   @benesch
 /src/orchestrator-kubernetes        @benesch
@@ -91,11 +103,14 @@
 /src/stash-debug                    @MaterializeInc/adapter
 /src/storage                        @MaterializeInc/storage
 /src/storage-client                 @MaterializeInc/storage
-/src/test-macro                     @MaterializeInc/qa
-/src/testdrive                      @MaterializeInc/qa
+/src/storage-controller             @MaterializeInc/storage
+/src/storage-operators              @MaterializeInc/storage
+/src/storage-types                  @MaterializeInc/storage
+/src/test-macro                     @MaterializeInc/testing
+/src/testdrive                      @MaterializeInc/testing
 /src/timely-util                    @MaterializeInc/compute
 /src/transform                      @MaterializeInc/compute
 /src/walkabout                      @benesch
 /src/workspace-hack                 @benesch
 /test
-/misc/python/materialize/cloudtest  @MaterializeInc/cloud @MaterializeInc/qa
+/misc/python/materialize/cloudtest  @MaterializeInc/cloud @MaterializeInc/testing

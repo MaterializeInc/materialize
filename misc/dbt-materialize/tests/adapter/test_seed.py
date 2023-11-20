@@ -14,7 +14,9 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.adapter.simple_seed.test_seed import SeedConfigBase
+from dbt.tests.adapter.simple_seed.test_seed import (
+    SeedConfigBase,
+)
 from dbt.tests.adapter.simple_seed.test_seed_type_override import (
     BaseSimpleSeedColumnOverride,
 )
@@ -55,7 +57,7 @@ seeds:
   - name: a_date
     tests:
     - column_type:
-        type: timestamp
+        type: timestamp without time zone
   - name: looks_like_a_date
     tests:
     - column_type:

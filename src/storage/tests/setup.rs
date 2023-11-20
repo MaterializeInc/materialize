@@ -101,8 +101,8 @@ use mz_storage::source::metrics::SourceBaseMetrics;
 use mz_storage::source::testscript::ScriptCommand;
 use mz_storage::source::types::SourceRender;
 use mz_storage::DecodeMetrics;
-use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{
+use mz_storage_types::sources::encoding::SourceDataEncoding;
+use mz_storage_types::sources::{
     GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope, SourceTimestamp,
     TestScriptSourceConnection,
 };
@@ -122,7 +122,6 @@ pub fn run_script_source(
         }),
         encoding,
         envelope,
-        metadata_columns: vec![],
         timestamp_interval,
     };
 
@@ -200,7 +199,9 @@ where
             let decode_metrics = DecodeMetrics::register_with(&metrics_registry);
 
             let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
-            persistcfg.reader_lease_duration = std::time::Duration::from_secs(60 * 15);
+            persistcfg
+                .dynamic
+                .set_reader_lease_duration(Duration::from_secs(60 * 15));
             persistcfg.now = SYSTEM_TIME.clone();
 
             let persist_location = mz_persist_client::PersistLocation {
@@ -223,10 +224,9 @@ where
 
             let persist_clients = Arc::new(persist_cache);
 
-            let connection_context =
-                mz_storage_client::types::connections::ConnectionContext::for_tests(Arc::new(
-                    mz_secrets::InMemorySecretsController::new(),
-                ));
+            let connection_context = mz_storage_types::connections::ConnectionContext::for_tests(
+                Arc::new(mz_secrets::InMemorySecretsController::new()),
+            );
 
             let (_fake_tx, fake_rx) = crossbeam_channel::bounded(1);
 
@@ -251,7 +251,7 @@ where
                 )
             };
 
-            let collection_metadata = mz_storage_client::controller::CollectionMetadata {
+            let collection_metadata = mz_storage_types::controller::CollectionMetadata {
                 persist_location,
                 remap_shard: Some(mz_persist_client::ShardId::new()),
                 data_shard: mz_persist_client::ShardId::new(),
@@ -259,12 +259,13 @@ where
                 // TODO(guswynn|danhhz): replace this with a real desc when persist requires a
                 // schema.
                 relation_desc: RelationDesc::empty(),
+                txns_shard: None,
             };
             let data_shard = collection_metadata.data_shard.clone();
             let id = GlobalId::User(1);
             let source_exports = BTreeMap::from([(
                 id,
-                mz_storage_client::types::sources::SourceExport {
+                mz_storage_types::sources::SourceExport {
                     storage_metadata: collection_metadata.clone(),
                     output_index: 0,
                 },
@@ -298,22 +299,18 @@ where
                     &mut async_storage_worker.borrow_mut(),
                     InternalStorageCommand::CreateIngestionDataflow {
                         id,
-                        ingestion_description:
-                            mz_storage_client::types::sources::IngestionDescription {
-                                desc: desc.clone(),
-                                ingestion_metadata: collection_metadata,
-                                source_exports,
-                                // Only used for Debezium
-                                source_imports: BTreeMap::new(),
-                                instance_id:
-                                    mz_storage_client::types::instances::StorageInstanceId::User(
-                                        100,
-                                    ),
-                                // This id is only used to fill in the
-                                // collection metadata, which we're filling in
-                                // elsewhere, so this value is unused.
-                                remap_collection_id: GlobalId::User(99),
-                            },
+                        ingestion_description: mz_storage_types::sources::IngestionDescription {
+                            desc: desc.clone(),
+                            ingestion_metadata: collection_metadata,
+                            source_exports,
+                            // Only used for Debezium
+                            source_imports: BTreeMap::new(),
+                            instance_id: mz_storage_types::instances::StorageInstanceId::User(100),
+                            // This id is only used to fill in the
+                            // collection metadata, which we're filling in
+                            // elsewhere, so this value is unused.
+                            remap_collection_id: GlobalId::User(99),
+                        },
                         // TODO: test resumption as well!
                         as_of: Antichain::from_elem(Timestamp::minimum()),
                         resume_uppers,

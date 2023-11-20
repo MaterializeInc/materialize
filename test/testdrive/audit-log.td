@@ -14,14 +14,14 @@ $ set-regex match=u\d+ replacement=<GID>
 $ kafka-create-topic topic=test
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE kafka_src
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
 
-> SELECT event_type, object_type, details - 'replica_id', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
+> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
 create  cluster "{\"id\":\"<GID>\",\"name\":\"materialize_public_kafka_src\"}"  materialize
 create  cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"materialize_public_kafka_src\",\"disk\":false,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}" materialize
 create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"size\":\"${arg.default-storage-size}\",\"type\":\"kafka\"}"  materialize
@@ -29,7 +29,9 @@ create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka
 > CREATE SOURCE counter_src
   FROM LOAD GENERATOR COUNTER;
 
-> SELECT event_type, object_type, details - 'replica_id', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
+> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
 create  cluster "{\"id\":\"<GID>\",\"name\":\"materialize_public_counter_src\"}"  materialize
 create  cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"materialize_public_counter_src\",\"disk\":false,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}" materialize
 create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"size\":\"${arg.default-storage-size}\",\"type\":\"load-generator\"}"  materialize
+
+> DROP SOURCE counter_src

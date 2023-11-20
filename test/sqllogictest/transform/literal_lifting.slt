@@ -38,16 +38,16 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Map (42) // { arity: 2 }
-        Distinct group_by=[#0] // { arity: 1 }
+        Distinct project=[#0] // { arity: 1 }
           Union // { arity: 1 }
-            Distinct group_by=[#0] // { arity: 1 }
+            Distinct project=[#0] // { arity: 1 }
               Union // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Get l0 // { arity: 2 }
                 Project (#0) // { arity: 1 }
-                  Get materialize.public.t1 // { arity: 2 }
+                  ReadStorage materialize.public.t1 // { arity: 2 }
             Project (#1) // { arity: 1 }
-              Get materialize.public.t1 // { arity: 2 }
+              ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 
@@ -76,17 +76,17 @@ Explained Query:
   With Mutually Recursive
     cte l1 =
       Map (42) // { arity: 2 }
-        Distinct group_by=[#0] // { arity: 1 }
+        Distinct project=[#0] // { arity: 1 }
           Union // { arity: 1 }
             Get l0 // { arity: 1 }
             Project (#0) // { arity: 1 }
               Get l1 // { arity: 2 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         Union // { arity: 1 }
           Project (#0) // { arity: 1 }
-            Get materialize.public.t1 // { arity: 2 }
+            ReadStorage materialize.public.t1 // { arity: 2 }
           Project (#1) // { arity: 1 }
-            Get materialize.public.t1 // { arity: 2 }
+            ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF

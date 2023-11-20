@@ -24,8 +24,14 @@ $ kafka-ingest format=avro topic=data schema=${schema}
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${testdrive.schema-registry-url}';
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  FOR KAFKA BROKER 'kafka:9092';
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
+    BROKER '${testdrive.kafka-addr}',
+    SECURITY PROTOCOL PLAINTEXT
+  )
+
+>[version<7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
+    BROKER '${testdrive.kafka-addr}'
+  )
 
 > CREATE SOURCE data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')

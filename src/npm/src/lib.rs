@@ -162,9 +162,9 @@ const NPM_PACKAGES: &[NpmPackage] = &[
         )),
     },
     NpmPackage {
-        name: "babel-standalone",
-        version: "6.26.0",
-        digest: hex!("2a6dc2f1acc2893e53cb53192eee2dfc6a09d86ef7620dcb6323c4d624f99d92"),
+        name: "@babel/standalone",
+        version: "7.23.3",
+        digest: hex!("0f7b0deb19f1d0d77ff5dd05205be5063a930f2a6a56a6df92a6ed1e0cb73440"),
         css_file: None,
         js_prod_file: "babel.min.js",
         js_dev_file: "babel.js",

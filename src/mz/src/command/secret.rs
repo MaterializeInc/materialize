@@ -41,7 +41,7 @@ pub struct CreateArgs<'a> {
 /// Behind the scenes this command uses the `psql` to run
 /// the SQL commands.
 pub async fn create(
-    cx: &mut RegionContext,
+    cx: &RegionContext,
     CreateArgs {
         database,
         schema,

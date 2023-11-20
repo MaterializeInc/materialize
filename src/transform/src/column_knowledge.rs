@@ -47,8 +47,8 @@ impl CheckedRecursion for ColumnKnowledge {
 impl crate::Transform for ColumnKnowledge {
     /// Transforms an expression through accumulated knowledge.
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "column_knowledge")
     )]
@@ -81,7 +81,7 @@ impl ColumnKnowledge {
                 MirRelationExpr::ArrangeBy { input, .. } => {
                     self.harvest(input, knowledge, knowledge_stack)
                 }
-                MirRelationExpr::Get { id, typ } => {
+                MirRelationExpr::Get { id, typ, .. } => {
                     Ok(knowledge.get(id).cloned().unwrap_or_else(|| {
                         typ.column_types.iter().map(DatumKnowledge::from).collect()
                     }))

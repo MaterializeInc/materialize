@@ -69,12 +69,16 @@ where
 /// Describes the context in which to print an AST.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FormatMode {
-    // Simple is the normal way of printing for human consumption. Identifiers are quoted only if
-    // necessary.
+    /// Simple is the normal way of printing for human consumption. Identifiers are quoted only if
+    /// necessary.
     Simple,
-    // Stable prints out the AST in a form more suitable for persistence. All identifiers are
-    // quoted, even if not necessary. This mode is used when persisting table information to the
-    // catalog.
+    /// SimpleRedacted is like Simple, but strips out string and number literals.
+    /// This makes SQL queries be "usage data", rather than "customer data" according to our
+    /// data management policy, allowing us to introspect it.
+    SimpleRedacted,
+    /// Stable prints out the AST in a form more suitable for persistence. All identifiers are
+    /// quoted, even if not necessary. This mode is used when persisting table information to the
+    /// catalog.
     Stable,
 }
 
@@ -103,6 +107,11 @@ where
         self.mode == FormatMode::Stable
     }
 
+    /// Whether the AST should be printed in redacted form
+    pub fn redacted(&self) -> bool {
+        self.mode == FormatMode::SimpleRedacted
+    }
+
     pub fn new(buf: W, mode: FormatMode) -> Self {
         AstFormatter { buf, mode }
     }
@@ -125,6 +134,13 @@ pub trait AstDisplay {
     fn to_ast_string_stable(&self) -> String {
         let mut buf = String::new();
         let mut f = AstFormatter::new(&mut buf, FormatMode::Stable);
+        self.fmt(&mut f);
+        buf
+    }
+
+    fn to_ast_string_redacted(&self) -> String {
+        let mut buf = String::new();
+        let mut f = AstFormatter::new(&mut buf, FormatMode::SimpleRedacted);
         self.fmt(&mut f);
         buf
     }

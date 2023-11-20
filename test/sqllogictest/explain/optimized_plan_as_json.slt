@@ -148,6 +148,9 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
       "plan": {
         "PeekExisting": [
           {
+            "User": 1
+          },
+          {
             "User": 4
           },
           null,
@@ -311,7 +314,8 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                           }
                         ],
                         "keys": []
-                      }
+                      },
+                      "access_strategy": "Persist"
                     }
                   },
                   "scalars": [
@@ -428,7 +432,9 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 8
+      },
       "op": {
         "expressions": [],
         "predicates": [
@@ -562,6 +568,16 @@ SELECT generate_series(a, b) from t
                       }
                     ],
                     "keys": []
+                  },
+                  "access_strategy": {
+                    "Index": [
+                      [
+                        {
+                          "User": 4
+                        },
+                        "FullScan"
+                      ]
+                    ]
                   }
                 }
               },
@@ -639,6 +655,16 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                               }
                             ],
                             "keys": []
+                          },
+                          "access_strategy": {
+                            "Index": [
+                              [
+                                {
+                                  "User": 4
+                                },
+                                "FullScan"
+                              ]
+                            ]
                           }
                         }
                       },
@@ -683,7 +709,8 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                                     }
                                   ],
                                   "keys": []
-                                }
+                                },
+                                "access_strategy": "Persist"
                               }
                             },
                             "outputs": [
@@ -748,6 +775,16 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                           }
                         ],
                         "keys": []
+                      },
+                      "access_strategy": {
+                        "Index": [
+                          [
+                            {
+                              "User": 4
+                            },
+                            "FullScan"
+                          ]
+                        ]
                       }
                     }
                   },
@@ -780,7 +817,8 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                 }
                               ],
                               "keys": []
-                            }
+                            },
+                            "access_strategy": "Persist"
                           }
                         },
                         "outputs": [
@@ -831,6 +869,16 @@ SELECT * FROM ov
                   }
                 ],
                 "keys": []
+              },
+              "access_strategy": {
+                "Index": [
+                  [
+                    {
+                      "User": 4
+                    },
+                    "FullScan"
+                  ]
+                ]
               }
             }
           },
@@ -870,6 +918,9 @@ SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
       "id": "Explained Query (fast path)",
       "plan": {
         "PeekExisting": [
+          {
+            "User": 1
+          },
           {
             "User": 4
           },
@@ -928,6 +979,16 @@ SELECT abs(min(a) - max(a)) FROM t
                           }
                         ],
                         "keys": []
+                      },
+                      "access_strategy": {
+                        "Index": [
+                          [
+                            {
+                              "User": 4
+                            },
+                            "FullScan"
+                          ]
+                        ]
                       }
                     }
                   },
@@ -982,7 +1043,8 @@ SELECT abs(min(a) - max(a)) FROM t
                             "keys": [
                               []
                             ]
-                          }
+                          },
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       "inputs": [
@@ -1013,7 +1075,8 @@ SELECT abs(min(a) - max(a)) FROM t
                                               "keys": [
                                                 []
                                               ]
-                                            }
+                                            },
+                                            "access_strategy": "UnknownOrLocal"
                                           }
                                         },
                                         "outputs": []
@@ -1149,6 +1212,16 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                           }
                         ],
                         "keys": []
+                      },
+                      "access_strategy": {
+                        "Index": [
+                          [
+                            {
+                              "User": 4
+                            },
+                            "FullScan"
+                          ]
+                        ]
                       }
                     }
                   },
@@ -1248,6 +1321,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 4
+                                  },
+                                  "DifferentialJoin"
+                                ]
+                              ]
                             }
                           }
                         },
@@ -1296,6 +1379,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                               }
                                                             ],
                                                             "keys": []
+                                                          },
+                                                          "access_strategy": {
+                                                            "Index": [
+                                                              [
+                                                                {
+                                                                  "User": 4
+                                                                },
+                                                                "FullScan"
+                                                              ]
+                                                            ]
                                                           }
                                                         }
                                                       },
@@ -1342,7 +1435,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                           }
                                                         ],
                                                         "keys": []
-                                                      }
+                                                      },
+                                                      "access_strategy": "Persist"
                                                     }
                                                   },
                                                   "outputs": [
@@ -1533,7 +1627,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                 }
                               ],
                               "keys": []
-                            }
+                            },
+                            "access_strategy": "UnknownOrLocal"
                           }
                         },
                         "keys": [
@@ -1579,7 +1674,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                               }
                                                             ],
                                                             "keys": []
-                                                          }
+                                                          },
+                                                          "access_strategy": "UnknownOrLocal"
                                                         }
                                                       },
                                                       "outputs": [
@@ -1625,7 +1721,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                           }
                                                         ],
                                                         "keys": []
-                                                      }
+                                                      },
+                                                      "access_strategy": "Persist"
                                                     }
                                                   },
                                                   "outputs": [
@@ -1833,6 +1930,16 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                       }
                     ],
                     "keys": []
+                  },
+                  "access_strategy": {
+                    "Index": [
+                      [
+                        {
+                          "User": 4
+                        },
+                        "FullScan"
+                      ]
+                    ]
                   }
                 }
               },
@@ -1859,7 +1966,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                           }
                         ],
                         "keys": []
-                      }
+                      },
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   "group_key": [
@@ -1894,7 +2002,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                 0
                               ]
                             ]
-                          }
+                          },
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       "keys": [
@@ -1935,7 +2044,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                   0
                                                 ]
                                               ]
-                                            }
+                                            },
+                                            "access_strategy": "UnknownOrLocal"
                                           }
                                         },
                                         {
@@ -1961,6 +2071,16 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                         }
                                                       ],
                                                       "keys": []
+                                                    },
+                                                    "access_strategy": {
+                                                      "Index": [
+                                                        [
+                                                          {
+                                                            "User": 7
+                                                          },
+                                                          "FullScan"
+                                                        ]
+                                                      ]
                                                     }
                                                   }
                                                 },
@@ -2123,7 +2243,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                       0
                                                     ]
                                                   ]
-                                                }
+                                                },
+                                                "access_strategy": "UnknownOrLocal"
                                               }
                                             },
                                             {
@@ -2149,7 +2270,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                             }
                                                           ],
                                                           "keys": []
-                                                        }
+                                                        },
+                                                        "access_strategy": "Persist"
                                                       }
                                                     },
                                                     "predicates": [
@@ -2302,7 +2424,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                 }
                                               ],
                                               "keys": []
-                                            }
+                                            },
+                                            "access_strategy": "UnknownOrLocal"
                                           }
                                         },
                                         "keys": [
@@ -2339,7 +2462,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                       0
                                                     ]
                                                   ]
-                                                }
+                                                },
+                                                "access_strategy": "UnknownOrLocal"
                                               }
                                             },
                                             "inputs": [
@@ -2372,7 +2496,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                                         0
                                                                       ]
                                                                     ]
-                                                                  }
+                                                                  },
+                                                                  "access_strategy": "UnknownOrLocal"
                                                                 }
                                                               },
                                                               "outputs": [
@@ -2400,7 +2525,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                                   0
                                                                 ]
                                                               ]
-                                                            }
+                                                            },
+                                                            "access_strategy": "UnknownOrLocal"
                                                           }
                                                         }
                                                       ]
@@ -2462,7 +2588,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                       0
                                                     ]
                                                   ]
-                                                }
+                                                },
+                                                "access_strategy": "UnknownOrLocal"
                                               }
                                             },
                                             "inputs": [
@@ -2495,7 +2622,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                                         0
                                                                       ]
                                                                     ]
-                                                                  }
+                                                                  },
+                                                                  "access_strategy": "UnknownOrLocal"
                                                                 }
                                                               },
                                                               "outputs": [
@@ -2523,7 +2651,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                                   0
                                                                 ]
                                                               ]
-                                                            }
+                                                            },
+                                                            "access_strategy": "UnknownOrLocal"
                                                           }
                                                         }
                                                       ]
@@ -2738,7 +2867,9 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 8
+      },
       "op": {
         "expressions": [],
         "predicates": [
@@ -2810,6 +2941,16 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                       }
                     ],
                     "keys": []
+                  },
+                  "access_strategy": {
+                    "Index": [
+                      [
+                        {
+                          "User": 4
+                        },
+                        "FullScan"
+                      ]
+                    ]
                   }
                 }
               },
@@ -2856,7 +2997,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                           }
                         ],
                         "keys": []
-                      }
+                      },
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   "keys": [
@@ -2893,7 +3035,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     }
                                   ],
                                   "keys": []
-                                }
+                                },
+                                "access_strategy": "UnknownOrLocal"
                               }
                             },
                             {
@@ -2913,7 +3056,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     }
                                   ],
                                   "keys": []
-                                }
+                                },
+                                "access_strategy": "UnknownOrLocal"
                               }
                             },
                             {
@@ -2937,7 +3081,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             }
                                           ],
                                           "keys": []
-                                        }
+                                        },
+                                        "access_strategy": "UnknownOrLocal"
                                       }
                                     },
                                     "outputs": [
@@ -3155,6 +3300,16 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                             }
                                                           ],
                                                           "keys": []
+                                                        },
+                                                        "access_strategy": {
+                                                          "Index": [
+                                                            [
+                                                              {
+                                                                "User": 4
+                                                              },
+                                                              "FullScan"
+                                                            ]
+                                                          ]
                                                         }
                                                       }
                                                     },
@@ -3199,7 +3354,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                                 }
                                                               ],
                                                               "keys": []
-                                                            }
+                                                            },
+                                                            "access_strategy": "UnknownOrLocal"
                                                           }
                                                         },
                                                         "outputs": [
@@ -3316,6 +3472,16 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             }
                                           ],
                                           "keys": []
+                                        },
+                                        "access_strategy": {
+                                          "Index": [
+                                            [
+                                              {
+                                                "User": 4
+                                              },
+                                              "FullScan"
+                                            ]
+                                          ]
                                         }
                                       }
                                     },
@@ -3383,7 +3549,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     }
                                   ],
                                   "keys": []
-                                }
+                                },
+                                "access_strategy": "UnknownOrLocal"
                               }
                             },
                             "outputs": [
@@ -3458,6 +3625,16 @@ FROM
                       }
                     ],
                     "keys": []
+                  },
+                  "access_strategy": {
+                    "Index": [
+                      [
+                        {
+                          "User": 4
+                        },
+                        "FullScan"
+                      ]
+                    ]
                   }
                 }
               },
@@ -3484,7 +3661,8 @@ FROM
                           }
                         ],
                         "keys": []
-                      }
+                      },
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   "keys": [
@@ -3523,6 +3701,16 @@ FROM
                                             }
                                           ],
                                           "keys": []
+                                        },
+                                        "access_strategy": {
+                                          "Index": [
+                                            [
+                                              {
+                                                "User": 4
+                                              },
+                                              "DifferentialJoin"
+                                            ]
+                                          ]
                                         }
                                       }
                                     },
@@ -3559,7 +3747,8 @@ FROM
                                                               }
                                                             ],
                                                             "keys": []
-                                                          }
+                                                          },
+                                                          "access_strategy": "UnknownOrLocal"
                                                         }
                                                       },
                                                       "group_key": [
@@ -3590,7 +3779,8 @@ FROM
                                                       }
                                                     ],
                                                     "keys": []
-                                                  }
+                                                  },
+                                                  "access_strategy": "UnknownOrLocal"
                                                 }
                                               }
                                             ],
@@ -3789,7 +3979,8 @@ FROM
                                             }
                                           ],
                                           "keys": []
-                                        }
+                                        },
+                                        "access_strategy": "UnknownOrLocal"
                                       }
                                     },
                                     "keys": [
@@ -3835,7 +4026,8 @@ FROM
                                                                   }
                                                                 ],
                                                                 "keys": []
-                                                              }
+                                                              },
+                                                              "access_strategy": "UnknownOrLocal"
                                                             }
                                                           },
                                                           "outputs": [
@@ -3871,7 +4063,8 @@ FROM
                                                       }
                                                     ],
                                                     "keys": []
-                                                  }
+                                                  },
+                                                  "access_strategy": "UnknownOrLocal"
                                                 }
                                               }
                                             ],
@@ -4088,6 +4281,16 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                           }
                         ],
                         "keys": []
+                      },
+                      "access_strategy": {
+                        "Index": [
+                          [
+                            {
+                              "User": 4
+                            },
+                            "FullScan"
+                          ]
+                        ]
                       }
                     }
                   },
@@ -4117,7 +4320,8 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                         }
                       ],
                       "keys": []
-                    }
+                    },
+                    "access_strategy": "UnknownOrLocal"
                   }
                 },
                 {
@@ -4133,7 +4337,8 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                         }
                       ],
                       "keys": []
-                    }
+                    },
+                    "access_strategy": "UnknownOrLocal"
                   }
                 }
               ],
@@ -4228,6 +4433,16 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                       }
                     ],
                     "keys": []
+                  },
+                  "access_strategy": {
+                    "Index": [
+                      [
+                        {
+                          "User": 4
+                        },
+                        "FullScan"
+                      ]
+                    ]
                   }
                 }
               },
@@ -4274,7 +4489,8 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                           }
                         ],
                         "keys": []
-                      }
+                      },
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   "keys": [
@@ -4308,7 +4524,8 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 }
                               ],
                               "keys": []
-                            }
+                            },
+                            "access_strategy": "UnknownOrLocal"
                           }
                         },
                         {
@@ -4328,7 +4545,8 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 }
                               ],
                               "keys": []
-                            }
+                            },
+                            "access_strategy": "UnknownOrLocal"
                           }
                         },
                         {
@@ -4352,7 +4570,8 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                         }
                                       ],
                                       "keys": []
-                                    }
+                                    },
+                                    "access_strategy": "UnknownOrLocal"
                                   }
                                 },
                                 "outputs": [
@@ -4593,6 +4812,16 @@ WHERE a = c and d = e and b = f
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 4
+                                  },
+                                  "DifferentialJoin"
+                                ]
+                              ]
                             }
                           }
                         },
@@ -4626,6 +4855,16 @@ WHERE a = c and d = e and b = f
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 9
+                                  },
+                                  "DifferentialJoin"
+                                ]
+                              ]
                             }
                           }
                         },
@@ -4661,6 +4900,16 @@ WHERE a = c and d = e and b = f
                                     }
                                   ],
                                   "keys": []
+                                },
+                                "access_strategy": {
+                                  "Index": [
+                                    [
+                                      {
+                                        "User": 11
+                                      },
+                                      "FullScan"
+                                    ]
+                                  ]
                                 }
                               }
                             },
@@ -4933,6 +5182,18 @@ WHERE b = c and d = e
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 12
+                                  },
+                                  {
+                                    "DeltaJoin": true
+                                  }
+                                ]
+                              ]
                             }
                           }
                         },
@@ -4966,6 +5227,26 @@ WHERE b = c and d = e
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 9
+                                  },
+                                  {
+                                    "DeltaJoin": false
+                                  }
+                                ],
+                                [
+                                  {
+                                    "User": 10
+                                  },
+                                  {
+                                    "DeltaJoin": false
+                                  }
+                                ]
+                              ]
                             }
                           }
                         },
@@ -5004,6 +5285,18 @@ WHERE b = c and d = e
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 11
+                                  },
+                                  {
+                                    "DeltaJoin": false
+                                  }
+                                ]
+                              ]
                             }
                           }
                         },
@@ -5277,7 +5570,8 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
                       }
                     ],
                     "keys": []
-                  }
+                  },
+                  "access_strategy": "Persist"
                 }
               },
               "predicates": [
@@ -5306,7 +5600,9 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
   ],
   "sources": [
     {
-      "id": "materialize.public.t2",
+      "id": {
+        "User": 13
+      },
       "op": {
         "expressions": [],
         "predicates": [

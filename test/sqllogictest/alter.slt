@@ -29,7 +29,7 @@ query error cannot ALTER this type of source
 ALTER SOURCE mz_internal.mz_storage_shards RESET (size);
 
 statement ok
-CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SHOW CONNECTIONS

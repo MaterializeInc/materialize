@@ -13,7 +13,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-use chrono::DurationRound;
+use futures::future::LocalBoxFuture;
+use futures::FutureExt;
+use mz_adapter_types::connection::ConnectionId;
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
@@ -22,89 +24,124 @@ use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
+use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::client::ConnectionId;
-use crate::command::{Command, ExecuteResponse};
+use crate::command::Command;
 use crate::coord::appends::Deferred;
+use crate::coord::sequencer::old_optimizer_api::{PeekStageDeprecated, PeekStageFinishDeprecated};
 use crate::coord::{
     Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
-    SinkConnectionReady,
 };
 use crate::session::Session;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
-    pub(crate) async fn handle_message(&mut self, msg: Message) {
-        match msg {
-            Message::Command(cmd) => self.message_command(cmd).await,
-            Message::ControllerReady => {
-                if let Some(m) = self
-                    .controller
-                    .process()
-                    .await
-                    .expect("`process` never returns an error")
-                {
-                    self.message_controller(m).await
+    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
+    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
+    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    pub(crate) fn handle_message<'a>(&'a mut self, msg: Message) -> LocalBoxFuture<'a, ()> {
+        async move {
+            match msg {
+                Message::Command(cmd) => self.message_command(cmd).await,
+                Message::ControllerReady => {
+                    if let Some(m) = self
+                        .controller
+                        .process()
+                        .await
+                        .expect("`process` never returns an error")
+                    {
+                        self.message_controller(m).await
+                    }
+                }
+                Message::PurifiedStatementReady(ready) => {
+                    self.message_purified_statement_ready(ready).await
+                }
+                Message::CreateConnectionValidationReady(ready) => {
+                    self.message_create_connection_validation_ready(ready).await
+                }
+                Message::WriteLockGrant(write_lock_guard) => {
+                    self.message_write_lock_grant(write_lock_guard).await;
+                }
+                Message::GroupCommitInitiate(span, permit) => {
+                    // Add an OpenTelemetry link to our current span.
+                    tracing::Span::current().add_link(span.context().span().span_context().clone());
+                    self.try_group_commit(permit).instrument(span).await
+                }
+                Message::GroupCommitApply(
+                    timestamp,
+                    responses,
+                    write_lock_guard,
+                    notifies,
+                    permit,
+                ) => {
+                    self.group_commit_apply(
+                        timestamp,
+                        responses,
+                        write_lock_guard,
+                        notifies,
+                        permit,
+                    )
+                    .await;
+                }
+                Message::AdvanceTimelines => {
+                    self.advance_timelines().await;
+                }
+                Message::ClusterEvent(event) => self.message_cluster_event(event).await,
+                // Processing this message DOES NOT send a response to the client;
+                // in any situation where you use it, you must also have a code
+                // path that responds to the client (e.g. reporting an error).
+                Message::RemovePendingPeeks { conn_id } => {
+                    self.cancel_pending_peeks(&conn_id);
+                }
+                Message::LinearizeReads(pending_read_txns) => {
+                    self.message_linearize_reads(pending_read_txns).await;
+                }
+                Message::StorageUsageFetch => {
+                    self.storage_usage_fetch().await;
+                }
+                Message::StorageUsageUpdate(sizes) => {
+                    self.storage_usage_update(sizes).await;
+                }
+                Message::RealTimeRecencyTimestamp {
+                    conn_id,
+                    real_time_recency_ts,
+                    validity,
+                } => {
+                    self.message_real_time_recency_timestamp(
+                        conn_id,
+                        real_time_recency_ts,
+                        validity,
+                    )
+                    .await;
+                }
+                Message::RetireExecute { data, reason } => {
+                    self.retire_execution(reason, data);
+                }
+                Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
+                    self.sequence_execute_single_statement_transaction(ctx, stmt, params)
+                        .await;
+                }
+                Message::PeekStageReady { ctx, stage } => {
+                    self.sequence_peek_stage(ctx, stage).await;
+                }
+                Message::PeekStageDeprecatedReady { ctx, stage } => {
+                    // Allow while the introduction of the new optimizer API in
+                    // #20569 is in progress.
+                    #[allow(deprecated)]
+                    self.sequence_peek_stage_deprecated(ctx, stage).await;
+                }
+                Message::DrainStatementLog => {
+                    self.drain_statement_log().await;
                 }
             }
-            Message::PurifiedStatementReady(ready) => {
-                self.message_purified_statement_ready(ready).await
-            }
-            Message::CreateConnectionValidationReady(ready) => {
-                self.message_create_connection_validation_ready(ready).await
-            }
-            Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
-            Message::WriteLockGrant(write_lock_guard) => {
-                self.message_write_lock_grant(write_lock_guard).await;
-            }
-            Message::GroupCommitInitiate(span) => self.try_group_commit().instrument(span).await,
-            Message::GroupCommitApply(timestamp, responses, write_lock_guard) => {
-                self.group_commit_apply(timestamp, responses, write_lock_guard)
-                    .await;
-            }
-            Message::AdvanceTimelines => {
-                self.advance_timelines().await;
-            }
-            Message::ClusterEvent(event) => self.message_cluster_event(event).await,
-            // Processing this message DOES NOT send a response to the client;
-            // in any situation where you use it, you must also have a code
-            // path that responds to the client (e.g. reporting an error).
-            Message::RemovePendingPeeks { conn_id } => {
-                self.cancel_pending_peeks(&conn_id);
-            }
-            Message::LinearizeReads(pending_read_txns) => {
-                self.message_linearize_reads(pending_read_txns).await;
-            }
-            Message::StorageUsageFetch => {
-                self.storage_usage_fetch().await;
-            }
-            Message::StorageUsageUpdate(sizes) => {
-                self.storage_usage_update(sizes).await;
-            }
-            Message::RealTimeRecencyTimestamp {
-                conn_id,
-                real_time_recency_ts,
-                validity,
-            } => {
-                self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, validity)
-                    .await;
-            }
-            Message::RetireExecute { data, reason } => {
-                self.retire_execution(reason, data);
-            }
-            Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
-                self.sequence_execute_single_statement_transaction(ctx, stmt, params)
-                    .await;
-            }
-            Message::PeekStageReady { ctx, stage } => {
-                self.sequence_peek_stage(ctx, stage).await;
-            }
         }
+        .boxed_local()
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -134,6 +171,7 @@ impl Coordinator {
                     // `mz_storage_usage_by_shard` table.
                     persist_location: _,
                     relation_desc: _,
+                    txns_shard: _,
                 } = &collection.collection_metadata;
                 [*remap_shard, *status_shard, Some(*data_shard)].into_iter()
             })
@@ -180,10 +218,10 @@ impl Coordinator {
         if let Err(err) = self.catalog_transact(None::<&Session>, ops).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
-        self.schedule_storage_usage_collection();
+        self.schedule_storage_usage_collection().await;
     }
 
-    pub fn schedule_storage_usage_collection(&self) {
+    pub async fn schedule_storage_usage_collection(&self) {
         // Instead of using an `tokio::timer::Interval`, we calculate the time until the next
         // usage collection and wait for that amount of time. This is so we can keep the intervals
         // consistent even across restarts. If collection takes too long, it is possible that
@@ -211,7 +249,7 @@ impl Coordinator {
                 .expect("storage usage collection interval must fit into u64");
         let offset =
             rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
-        let now_ts: EpochMillis = self.peek_local_write_ts().into();
+        let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
 
         // 2) Determine the amount of ms between now and the next collection time.
         let previous_collection_ts =
@@ -262,40 +300,6 @@ impl Coordinator {
                     }
                 }
             }
-            ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
-                let replica_status_interval = chrono::Duration::seconds(60);
-                let new = when
-                    .duration_trunc(replica_status_interval)
-                    .expect("Time coarsening should not fail");
-                let hb = match self
-                    .transient_replica_metadata
-                    .entry(replica_id)
-                    .or_insert_with(|| Some(Default::default()))
-                {
-                    // `None` is the tombstone for a removed replica
-                    None => return,
-                    Some(md) => &mut md.last_heartbeat,
-                };
-                let old = std::mem::replace(hb, Some(new));
-
-                if old.as_ref() != Some(&new) {
-                    let retraction = old.map(|old| {
-                        self.catalog()
-                            .state()
-                            .pack_replica_heartbeat_update(replica_id, old, -1)
-                    });
-                    let insertion = self
-                        .catalog()
-                        .state()
-                        .pack_replica_heartbeat_update(replica_id, new, 1);
-                    let updates = if let Some(retraction) = retraction {
-                        vec![retraction, insertion]
-                    } else {
-                        vec![insertion]
-                    };
-                    self.buffer_builtin_table_updates(updates);
-                }
-            }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {
                 let m = match self
                     .transient_replica_metadata
@@ -327,18 +331,6 @@ impl Coordinator {
                     };
                     self.buffer_builtin_table_updates(updates);
                 }
-            }
-            ControllerResponse::ComputeDependencyUpdate {
-                id,
-                dependencies,
-                diff,
-            } => {
-                let state = self.catalog().state();
-                let updates = dependencies
-                    .into_iter()
-                    .map(|dep_id| state.pack_compute_dependency_update(id, dep_id, diff))
-                    .collect();
-                self.buffer_builtin_table_updates(updates);
             }
         }
     }
@@ -379,7 +371,7 @@ impl Coordinator {
             Err(e) => return ctx.retire(Err(e)),
         };
 
-        let mut plans: Vec<CreateSourcePlans> = vec![];
+        let mut create_source_plans: Vec<CreateSourcePlans> = vec![];
         let mut id_allocation = BTreeMap::new();
 
         // First we'll allocate global ids for each subsource and plan them
@@ -402,7 +394,7 @@ impl Coordinator {
                 Err(e) => return ctx.retire(Err(e)),
             };
             id_allocation.insert(transient_id, source_id);
-            plans.push(CreateSourcePlans {
+            create_source_plans.push(CreateSourcePlans {
                 source_id,
                 plan,
                 resolved_ids,
@@ -425,7 +417,7 @@ impl Coordinator {
                     Err(e) => return ctx.retire(Err(e.into())),
                 };
 
-                plans.push(CreateSourcePlans {
+                create_source_plans.push(CreateSourcePlans {
                     source_id,
                     plan,
                     resolved_ids,
@@ -434,7 +426,7 @@ impl Coordinator {
                 // Finally, sequence all plans in one go
                 self.sequence_plan(
                     ctx,
-                    Plan::CreateSources(plans),
+                    Plan::CreateSources(create_source_plans),
                     ResolvedIds(BTreeSet::new()),
                 )
                 .await;
@@ -444,7 +436,7 @@ impl Coordinator {
                     ctx,
                     Plan::PurifiedAlterSource {
                         alter_source,
-                        subsources: plans,
+                        subsources: create_source_plans,
                     },
                     ResolvedIds(BTreeSet::new()),
                 )
@@ -453,6 +445,14 @@ impl Coordinator {
             Ok(plan @ Plan::AlterNoop(..)) => {
                 self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
                     .await
+            }
+            Ok(plan @ Plan::CreateSink(_)) => {
+                assert!(
+                    create_source_plans.is_empty(),
+                    "CREATE SINK does not generate source plans"
+                );
+
+                self.sequence_plan(ctx, plan, resolved_ids).await
             }
             Ok(p) => {
                 unreachable!("{:?} is not purified", p)
@@ -503,79 +503,6 @@ impl Coordinator {
         ctx.retire(result);
     }
 
-    #[tracing::instrument(level = "debug", skip(self, ctx))]
-    async fn message_sink_connection_ready(
-        &mut self,
-        SinkConnectionReady {
-            ctx,
-            id,
-            oid,
-            create_export_token,
-            result,
-        }: SinkConnectionReady,
-    ) {
-        match result {
-            Ok(connection) => {
-                // NOTE: we must not fail from here on out. We have a
-                // connection, which means there is external state (like
-                // a Kafka topic) that's been created on our behalf. If
-                // we fail now, we'll leak that external state.
-                if self.catalog().try_get_entry(&id).is_some() {
-                    // TODO(benesch): this `expect` here is possibly scary, but
-                    // no better solution presents itself. Possibly sinks should
-                    // have an error bit, and an error here would set the error
-                    // bit on the sink.
-                    self.handle_sink_connection_ready(
-                        id,
-                        oid,
-                        connection,
-                        create_export_token,
-                        ctx.as_ref().map(|ctx| ctx.session()),
-                    )
-                    .await
-                    // XXX(chae): I really don't like this -- especially as we're now doing cross
-                    // process calls to start a sink.
-                    .expect("sinks should be validated by sequence_create_sink");
-                } else {
-                    // Another session dropped the sink while we were
-                    // creating the connection. Report to the client that
-                    // we created the sink, because from their
-                    // perspective we did, as there is state (e.g. a
-                    // Kafka topic) they need to clean up.
-                }
-                if let Some(ctx) = ctx {
-                    ctx.retire(Ok(ExecuteResponse::CreatedSink));
-                }
-            }
-            Err(e) => {
-                // Drop the placeholder sink if still present.
-                if self.catalog().try_get_entry(&id).is_some() {
-                    let ops = self
-                        .catalog()
-                        .item_dependents(id)
-                        .into_iter()
-                        .map(catalog::Op::DropObject)
-                        .collect();
-                    self.catalog_transact(ctx.as_ref().map(|ctx| ctx.session()), ops)
-                        .await
-                        .expect("deleting placeholder sink cannot fail");
-                } else {
-                    // Another session may have dropped the placeholder sink while we were
-                    // attempting to create the connection, in which case we don't need to do
-                    // anything.
-                }
-                // Drop the placeholder sink in the storage controller
-                let () = self
-                    .controller
-                    .storage
-                    .cancel_prepare_export(create_export_token);
-                if let Some(ctx) = ctx {
-                    ctx.retire(Err(e));
-                }
-            }
-        }
-    }
-
     #[tracing::instrument(level = "debug", skip_all)]
     async fn message_write_lock_grant(
         &mut self,
@@ -597,7 +524,10 @@ impl Coordinator {
                             .await;
                     }
                 }
-                Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
+                Deferred::GroupCommit => {
+                    self.group_commit_initiate(Some(write_lock_guard), None)
+                        .await
+                }
             }
         }
         // N.B. if no deferred plans, write lock is released by drop
@@ -613,7 +543,7 @@ impl Coordinator {
         let Some(cluster) = self.catalog().try_get_cluster(event.cluster_id) else {
             return;
         };
-        let Some(replica) = cluster.replicas_by_id.get(&event.replica_id) else {
+        let Some(replica) = cluster.replica(event.replica_id) else {
             return;
         };
 
@@ -630,7 +560,7 @@ impl Coordinator {
             .unwrap_or_terminate("updating cluster status cannot fail");
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
-            let replica = &cluster.replicas_by_id[&event.replica_id];
+            let replica = cluster.replica(event.replica_id).expect("Replica exists");
             let new_status = replica.status();
 
             if old_status != new_status {
@@ -658,8 +588,8 @@ impl Coordinator {
             if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
                 read_txn.txn.timestamp_context()
             {
-                let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
-                let read_ts = timestamp_oracle.read_ts();
+                let timestamp_oracle = self.get_timestamp_oracle(&timeline);
+                let read_ts = timestamp_oracle.read_ts().await;
                 if timestamp <= read_ts {
                     ready_txns.push(read_txn);
                 } else {
@@ -743,17 +673,47 @@ impl Coordinator {
                 optimized_plan,
                 id_bundle,
             } => {
-                let result = self.sequence_explain_timestamp_finish(
-                    &mut ctx,
-                    format,
-                    cluster_id,
-                    optimized_plan,
-                    id_bundle,
-                    Some(real_time_recency_ts),
-                );
+                let result = self
+                    .sequence_explain_timestamp_finish(
+                        &mut ctx,
+                        format,
+                        cluster_id,
+                        optimized_plan,
+                        id_bundle,
+                        Some(real_time_recency_ts),
+                    )
+                    .await;
                 ctx.retire(result);
             }
             RealTimeRecencyContext::Peek {
+                ctx,
+                copy_to,
+                when,
+                target_replica,
+                timeline_context,
+                source_ids,
+                in_immediate_multi_stmt_txn: _,
+                optimizer,
+                global_mir_plan,
+            } => {
+                self.sequence_peek_stage(
+                    ctx,
+                    PeekStage::Finish(PeekStageFinish {
+                        validity,
+                        copy_to,
+                        id_bundle: None,
+                        when,
+                        target_replica,
+                        timeline_context,
+                        source_ids,
+                        real_time_recency_ts: Some(real_time_recency_ts),
+                        optimizer,
+                        global_mir_plan,
+                    }),
+                )
+                .await;
+            }
+            RealTimeRecencyContext::PeekDeprecated {
                 ctx,
                 finishing,
                 copy_to,
@@ -770,9 +730,12 @@ impl Coordinator {
                 typ,
                 dataflow_metainfo,
             } => {
-                self.sequence_peek_stage(
+                // Allow while the introduction of the new optimizer API in
+                // #20569 is in progress.
+                #[allow(deprecated)]
+                self.sequence_peek_stage_deprecated(
                     ctx,
-                    PeekStage::Finish(PeekStageFinish {
+                    PeekStageDeprecated::Finish(PeekStageFinishDeprecated {
                         validity,
                         finishing,
                         copy_to,

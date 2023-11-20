@@ -10,16 +10,14 @@
 from pathlib import Path
 
 from materialize import ci_util
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Kafka,
-    Localstack,
-    Materialized,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -59,6 +57,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--replicas", type=int, default=1, help="use multiple replicas")
 
     parser.add_argument(
+        "--default-timeout",
+        type=str,
+        help="set the default timeout for Testdrive",
+    )
+
+    parser.add_argument(
         "files",
         nargs="*",
         default=["*.td"],
@@ -79,7 +83,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
         aws_region=args.aws_region,
-        validate_postgres_stash="materialized",
+        postgres_stash="materialized",
+        validate_catalog_store="shadow",
+        default_timeout=args.default_timeout,
+        volumes_extra=["mzdata:/mzdata"],
     )
 
     materialized = Materialized(
@@ -109,14 +116,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         junit_report = ci_util.junit_report_filename(c.name)
 
         try:
-            c.run(
-                "testdrive",
-                f"--junit-report={junit_report}",
-                f"--var=replicas={args.replicas}",
-                f"--var=default-replica-size={materialized.default_replica_size}",
-                f"--var=default-storage-size={materialized.default_storage_size}",
-                *args.files,
-            )
+            junit_report = ci_util.junit_report_filename(c.name)
+            for file in args.files:
+                c.run(
+                    "testdrive",
+                    f"--junit-report={junit_report}",
+                    f"--var=replicas={args.replicas}",
+                    f"--var=default-replica-size={materialized.default_replica_size}",
+                    f"--var=default-storage-size={materialized.default_storage_size}",
+                    file,
+                )
+                c.sanity_restart_mz()
         finally:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report

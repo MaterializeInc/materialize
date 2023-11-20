@@ -15,14 +15,14 @@ use crate::util::postgres::postgres_client;
 
 pub async fn run_execute(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let connection = cmd.args.string("connection")?;
     cmd.args.done()?;
 
     let client;
     let client = if connection.starts_with("postgres://") {
-        let (client_inner, _) = postgres_client(&connection).await?;
+        let (client_inner, _) = postgres_client(&connection, state.default_timeout).await?;
         client = client_inner;
         &client
     } else {

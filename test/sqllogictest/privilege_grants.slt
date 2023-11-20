@@ -18,11 +18,6 @@ ALTER SYSTEM SET enable_rbac_checks TO true;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO true;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_connection_validation_syntax TO true;
 ----
 COMPLETE 0
@@ -95,11 +90,14 @@ mz_system         mz_system=UC/mz_system
 mz_system         mz_support=U/mz_system
 
 ### The materialize privilege comes from the views created above
+### The mz_support privilege comes from the `_redacted`
+### statement logging views.
 query T
 SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'view' OR type = 'materialized view' OR type = 'source'
 ----
 =r/mz_system
 mz_system=r/mz_system
+mz_support=r/mz_system
 materialize=r/materialize
 
 query T
@@ -176,7 +174,7 @@ SELECT name, privilege FROM item_privileges WHERE name = 'se'
 se  materialize=U/materialize
 
 statement ok
-CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'conn'
@@ -1220,7 +1218,7 @@ ty  =U/materialize
 ty  materialize=U/materialize
 
 query B
-SELECT has_type_privilege('joe', 'ty', 'SELECT')
+SELECT has_type_privilege('joe', 'ty', 'USAGE')
 ----
 true
 
@@ -2262,17 +2260,17 @@ mz_system=RBN/mz_system
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
 ----
-true
+false
 
 query B
 SELECT has_system_privilege('child', 'CREATEDB')
 ----
-true
+false
 
 query B
 SELECT has_system_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'CREATEDB')
 ----
-true
+false
 
 ### Duplicate revokes have no effect
 simple conn=mz_system,user=mz_system
@@ -3523,22 +3521,22 @@ CREATE SECRET d2.s2.se4 AS decode('c2VjcmV0Cg==', 'base64');
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d1.s1.conn1 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d1.s1.conn1 TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d1.s1.conn2 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d1.s1.conn2 TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d2.s2.conn3 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s2.conn3 TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION d2.s2.conn4 TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION d2.s2.conn4 TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -4710,8 +4708,13 @@ materialize,materialize,materialize,public,t,UPDATE,NO,NO
 materialize,materialize,materialize,public,s,SELECT,NO,YES
 materialize,materialize,materialize,public,t,SELECT,NO,YES
 materialize,materialize,materialize,public,v,SELECT,NO,YES
+materialize,mz_support,materialize,public,s_progress,SELECT,NO,YES
 materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
-COMPLETE 13
+mz_system,mz_support,materialize,mz_internal,mz_session_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_prepared_statement_history_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
+COMPLETE 18
 
 simple conn=mz_system,user=mz_system
 SELECT COUNT(*) >= 166 FROM information_schema.table_privileges WHERE grantee = 'PUBLIC'
@@ -4752,8 +4755,13 @@ materialize,materialize,materialize,public,t,UPDATE,NO,NO
 materialize,materialize,materialize,public,s,SELECT,NO,YES
 materialize,materialize,materialize,public,t,SELECT,NO,YES
 materialize,materialize,materialize,public,v,SELECT,NO,YES
+materialize,mz_support,materialize,public,s_progress,SELECT,NO,YES
 materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
-COMPLETE 13
+mz_system,mz_support,materialize,mz_internal,mz_session_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_prepared_statement_history_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
+COMPLETE 18
 
 simple conn=mz_system,user=mz_system
 SELECT COUNT(*) >= 166 FROM information_schema.role_table_grants WHERE grantee = 'PUBLIC'
@@ -4771,10 +4779,5 @@ COMPLETE 1
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
 ----
 COMPLETE 0

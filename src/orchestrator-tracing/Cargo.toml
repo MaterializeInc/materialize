@@ -29,6 +29,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 mz-ore = { path = "../ore", features = ["network", "test"] }
 
 [features]
+default = ["tokio-console"]
 tokio-console = ["mz-ore/tokio-console", "mz-repr", "humantime"]
 
 [package.metadata.cargo-udeps.ignore]

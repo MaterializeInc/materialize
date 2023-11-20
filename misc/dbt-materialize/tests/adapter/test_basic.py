@@ -51,7 +51,6 @@ class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
     # Custom base test that removes the incremental portion and overrides the expected relations
 
     def test_base(self, project):
-
         # seed command
         results = run_dbt(["seed"])
         # seed result length
@@ -65,13 +64,13 @@ class TestSimpleMaterializationsMaterialize(BaseSimpleMaterializations):
         # names exist in result nodes
         check_result_nodes_by_name(results, ["view_model", "table_model", "swappable"])
 
+        # check relation types
         expected = {
-            "base": "materializedview",
+            "base": "table",
             "view_model": "view",
-            "table_model": "materializedview",
-            "swappable": "materializedview",
+            "table_model": "materialized_view",
+            "swappable": "materialized_view",
         }
-
         check_relation_types(project.adapter, expected)
 
         # base table rowcount
@@ -170,9 +169,9 @@ class TestDocsGenerateMaterialize(BaseDocsGenerate):
             role="materialize",
             id_type="integer",
             text_type="text",
-            time_type="timestamp",
+            time_type="timestamp without time zone",
             view_type="view",
-            table_type="materializedview",
+            table_type="table",
             model_stats=no_stats(),
         )
 
@@ -180,14 +179,20 @@ class TestDocsGenerateMaterialize(BaseDocsGenerate):
 class TestDocsGenReferencesMaterialize(BaseDocsGenReferences):
     @pytest.fixture(scope="class")
     def expected_catalog(self, project, profile_user):
-        return expected_references_catalog(
+        catalog = expected_references_catalog(
             project,
             role="materialize",
             id_type="integer",
             text_type="text",
-            time_type="timestamp",
+            time_type="timestamp without time zone",
             bigint_type="bigint",
             view_type="view",
-            table_type="materializedview",
+            table_type="table",
             model_stats=no_stats(),
         )
+        # We set `table_type="table"` above because seeds use tables, but table
+        # materializations still use materialized views.
+        catalog["nodes"]["model.test.ephemeral_summary"]["metadata"][
+            "type"
+        ] = "materialized_view"
+        return catalog

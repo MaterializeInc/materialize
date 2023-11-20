@@ -93,12 +93,12 @@
 //! [TxnsHandle]: crate::txns::TxnsHandle
 //!
 //! Benefits of these txns:
-//! - _Key_: A transactional write costs in proportion to the total size of data
-//!   written, and the number of data shards involved (plus one for the txn
-//!   shard).
-//! - _Key_: The upper of every data shard is logically (but not physically)
-//!   advanced en masse with a single write to the txn shard. (Data writes may
-//!   also be bundled into this, if necessary.)
+//! - _Key idea_: A transactional write costs in proportion to the total size of
+//!   data written, and the number of data shards involved (plus one for the
+//!   txns shard).
+//! - _Key idea_: As time progresses, the upper of every data shard is logically
+//!   (but not physically) advanced en masse with a single write to the txns
+//!   shard. (Data writes may also be bundled into this, if desired.)
 //! - Transactions are write-only, but read-then-write transactions can be built
 //!   on top by using read and write timestamps selected to have no possible
 //!   writes in between (e.g. `write_ts/commit_ts = read_ts + 1`).
@@ -113,7 +113,7 @@
 //!   strict-serializable isolation on top of this interface via write and read
 //!   timestamp selections (see [#Isolation](#isolation) below for details).
 //! - It is possible to serialize and communicate an uncommitted [Txn] between
-//!   processes and also to combine uncommitted [Txn]s, if necessary (e.g.
+//!   processes and also to merge uncommitted [Txn]s, if necessary (e.g.
 //!   consolidating all monitoring collections, statement logging, etc into the
 //!   periodic timestamp advancement). This is not initially implemented, but
 //!   could be.
@@ -122,87 +122,86 @@
 //!
 //! Restrictions:
 //! - Data shards must all use the same codecs for `K, V, T, D`. However, each
-//!   data shard may have a independent `K` and `V` schemas. The txn shard
+//!   data shard may have a independent `K` and `V` schemas. The txns shard
 //!   inherits the `T` codec from the data shards (and uses its own `K, V, D`
 //!   ones).
-//! - All txns are linearized through the txn shard, so there is some limit to
-//!   horizontal and geographical scale out.
+//! - All txn writes are linearized through the txns shard, so there is some
+//!   limit to horizontal and geographical scale out.
 //! - Performance has been tuned for _throughput_ and _un-contended latency_.
-//!   Latency on contended workloads will likely be quite bad (TBD some more
-//!   precise description, also ideally some guarantee that a contended txn
-//!   eventually commits). At a high level, if N txns are run concurrently, 1
-//!   will commit and N-1 will have to retry. (However, note that it is also
-//!   possible to combine and commit multiple txns at the same timestamp, as
-//!   mentioned above, which gives us some amount of knobs for doing something
-//!   different here.)
+//!   Latency on contended workloads will likely be quite bad. At a high level,
+//!   if N txns are run concurrently, 1 will commit and N-1 will have to
+//!   (usually cheaply) retry. (However, note that it is also possible to
+//!   combine and commit multiple txns at the same timestamp, as mentioned
+//!   above, which gives us some amount of knobs for doing something different
+//!   here.)
 //!
 //! # Intuition and Jargon
 //!
-//! - A _txns shard_ is the source of truth for what has (and has not) committed
-//!   to a set of _data shards_.
+//! - The _txns shard_ is the source of truth for what has (and has not)
+//!   committed to a set of _data shards_.
 //! - Each data shard must be _registered_ at some `register_ts` before being
 //!   used in transactions. Registration is for bookkeeping only, there is no
 //!   particular meaning to the timestamp other than it being a lower bound on
 //!   when txns using this data shard can commit. Registration only needs to be
 //!   run once-ever per data shard, but it is idempotent, so can also be run
 //!   at-least-once.
-//! - A txn is broken into two phases:
+//! - A txn is broken into three phases:
 //!   - (Elided: A pre-txn phase where MZ might perform reads for
 //!     read-then-write txns or might buffer writes.)
 //!   - _commit_: The txn is committed by writing lightweight pointers to
-//!     (potentially large) batches of data as updates in txn_shard with a
+//!     (potentially large) batches of data as updates in txns_shard with a
 //!     timestamp of `commit_ts`. Feel free to think of this as a WAL. This
 //!     makes the txn durable (thus "definite") and also advances the _logical
 //!     upper_ of every data shard registered at a timestamp before commit_ts,
-//!     including those not involved in the txn. However, it is not yet possible
-//!     to read at the commit ts.
+//!     including those not involved in the txn. However, at this point, it is
+//!     not yet possible to read at the commit ts.
 //!   - _apply_: We could serve reads of data shards from the information in the
-//!     txns shard, but instead we serve them from the physical data shard
-//!     itself so that we may reuse existing persist infrastructure (e.g.
+//!     txns shard, but instead we choose to serve them from the physical data
+//!     shard itself so that we may reuse existing persist infrastructure (e.g.
 //!     multi-worker persist-source). This means we must take the batch pointers
 //!     written to the txns shard and, in commit_ts order, "denormalize" them
-//!     into each data shard with compare_and_append. We call this process
+//!     into each data shard with `compare_and_append`. We call this process
 //!     applying the txn. Feel free to think of this as applying the WAL.
 //!
 //!     (Note that this means each data shard's _physical upper_ reflects the
 //!     last committed txn touching that shard, and so the _logical upper_ may
 //!     be greater than this. See [TxnsCache] for more details.)
+//!   - _tidy_: After a committed txn has been applied, the updates for that txn
+//!     are retracted from the txns shard. (To handle races, both application
+//!     and retraction are written to be idempotent.) This prevents the txns
+//!     shard from growing unboundedly and also means that, at any given time,
+//!     the txns shard contains the set of txns that need to be applied (as well
+//!     as the set of registered data shards).
 //!
-//!     After a committed txn has been applied, the updates for that txn are
-//!     retracted from the txns shard. (To handle races, both application and
-//!     retraction are written to be idempotent.) This prevents the txns shard
-//!     from growing unboundedly and also means that, at any given time, the
-//!     contents of the txns shard is exactly the set of txns that need to be
-//!     applied.
-//!
-//! [TxnsCache]: crate::txn_read::TxnsCache
+//! [TxnsCache]: crate::txn_cache::TxnsCache
 //!
 //! # Usage
 //!
 //! ```
 //! # use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+//! # use mz_persist_txn::operator::DataSubscribe;
 //! # use mz_persist_txn::txns::TxnsHandle;
-//! # use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
+//! # use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 //! #
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
-//! # let c = PersistClient::new_for_tests().await;
+//! # let client = PersistClient::new_for_tests().await;
 //! # mz_ore::test::init_logging();
 //! // Open a txn shard, initializing it if necessary.
-//! # let client = c.clone();
-//! let mut txns = TxnsHandle::<Vec<u8>, (), u64, i64>::open(
-//!     0u64, client, ShardId::new(), VecU8Schema.into(), UnitSchema.into()
+//! let txns_id = ShardId::new();
+//! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
+//!     0u64, client.clone(), txns_id, StringSchema.into(), UnitSchema.into()
 //! ).await;
 //!
 //! // Register data shards to the txn set.
 //! let (d0, d1) = (ShardId::new(), ShardId::new());
-//! # let d0_write = c.open_writer(
-//! #    d0, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests()
+//! # let d0_write = client.open_writer(
+//! #    d0, StringSchema.into(), UnitSchema.into(), Diagnostics::for_tests()
 //! # ).await.unwrap();
-//! # let d1_write = c.open_writer(
-//! #    d1, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests()
+//! # let d1_write = client.open_writer(
+//! #    d1, StringSchema.into(), UnitSchema.into(), Diagnostics::for_tests()
 //! # ).await.unwrap();
-//! txns.register(1u64, d0_write).await.expect("not previously initialized");
-//! txns.register(2u64, d1_write).await.expect("not previously initialized");
+//! txns.register(1u64, [d0_write]).await.expect("not previously initialized");
+//! txns.register(2u64, [d1_write]).await.expect("not previously initialized");
 //!
 //! // Commit a txn. This is durable if/when the `commit_at` succeeds, but reads
 //! // at the commit ts will _block_ until after the txn is applied. Users are
@@ -211,29 +210,29 @@
 //! // but in the event of a crash, neither correctness nor liveness depend on
 //! // it.
 //! let mut txn = txns.begin();
-//! txn.write(&d0, vec![0], (), 1);
-//! txn.write(&d1, vec![1], (), -1);
-//! txn.commit_at(&mut txns, 3).await.expect("ts 3 available")
-//!     // And make it available to reads by applying it.
+//! txn.write(&d0, "0".into(), (), 1);
+//! txn.write(&d1, "1".into(), (), -1);
+//! let tidy = txn.commit_at(&mut txns, 3).await.expect("ts 3 available")
+//!     // Make it available to reads by applying it.
 //!     .apply(&mut txns).await;
 //!
 //! // Commit a contended txn at a higher timestamp. Note that the upper of `d1`
-//! // is also advanced by this.
+//! // is also advanced by this. At the same time clean up after our last commit
+//! // (the tidy).
 //! let mut txn = txns.begin();
-//! txn.write(&d0, vec![2], (), 1);
+//! txn.write(&d0, "2".into(), (), 1);
+//! txn.tidy(tidy);
 //! txn.commit_at(&mut txns, 3).await.expect_err("ts 3 not available");
-//! txn.commit_at(&mut txns, 4).await.expect("ts 4 available")
+//! let _tidy = txn.commit_at(&mut txns, 4).await.expect("ts 4 available")
 //!     .apply(&mut txns).await;
 //!
 //! // Read data shard(s) at some `read_ts`.
-//! //
-//! // TODO(txn): Replace this with the timely operator once it's added.
-//! # let mut d1_read = c.open_leased_reader::<Vec<u8>, (), u64, i64>(
-//! #     d1, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests(),
-//! # ).await.unwrap();
-//! let updates = d1_read.snapshot_and_fetch(
-//!     vec![txns.read_cache().to_data_inclusive(&d1, 4).unwrap()].into()
-//! ).await.unwrap();
+//! let mut subscribe = DataSubscribe::new("example", client, txns_id, d1, 4);
+//! while subscribe.progress() <= 4 {
+//!     subscribe.step();
+//! #   tokio::task::yield_now().await;
+//! }
+//! let updates = subscribe.output();
 //! # })
 //! ```
 //!
@@ -266,42 +265,115 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 use std::fmt::Debug;
+use std::fmt::Write;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
+use mz_persist_client::batch::ProtoBatch;
+use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
+use mz_persist_client::stats::PartStats;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_client::{ShardId, ShardIdSchema};
+use mz_persist_types::codec_impls::VecU8Schema;
+use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
+use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::debug;
+use tracing::{debug, error, instrument};
 
-pub mod error;
+pub mod operator;
+pub mod txn_cache;
 pub mod txn_read;
 pub mod txn_write;
 pub mod txns;
 
-// TODO(txn):
-// - Figure out the mod and struct naming.
-// - Add frontier advancement operator.
-// - Closing/deleting data shards.
-// - Hold a critical since capability for each registered shard?
-// - Unit tests.
-// - Use Row to store the remap shard contents so we can debug it with SQL.
-// - Figure out the compaction story for both txn and data shard.
+/// The in-mem representation of an update in the txns shard.
+#[derive(Debug)]
+pub enum TxnsEntry {
+    /// A data shard register operation.
+    Register(ShardId),
+    /// A batch written to a data shard in a txn.
+    Append(ShardId, Vec<u8>),
+}
 
-/// Advance a timestamp by the least amount possible such that
-/// `ts.less_than(ts.step_forward())` is true.
+impl TxnsEntry {
+    fn data_id(&self) -> &ShardId {
+        match self {
+            TxnsEntry::Register(data_id) => data_id,
+            TxnsEntry::Append(data_id, _) => data_id,
+        }
+    }
+}
+
+/// An abstraction over the encoding format of [TxnsEntry].
 ///
-/// TODO(txn): Unify this with repr's TimestampManipulation.
-pub trait StepForward {
-    /// Advance a timestamp by the least amount possible such that
-    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
-    fn step_forward(&self) -> Self;
+/// This enables users of this crate to control how data is written to the txns
+/// shard (which will allow mz to present it as a normal introspection source).
+pub trait TxnsCodec: Debug {
+    /// The `K` type used in the txns shard.
+    type Key: Debug + Codec;
+    /// The `V` type used in the txns shard.
+    type Val: Debug + Codec;
+
+    /// Returns the Schemas to use with [Self::Key] and [Self::Val].
+    fn schemas() -> (<Self::Key as Codec>::Schema, <Self::Val as Codec>::Schema);
+    /// Encodes a [TxnsEntry] in the format persisted in the txns shard.
+    fn encode(e: TxnsEntry) -> (Self::Key, Self::Val);
+    /// Decodes a [TxnsEntry] from the format persisted in the txns shard.
+    ///
+    /// Implementations should panic if the values are invalid.
+    fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry;
+
+    /// Returns if a part might include the given data shard based on pushdown
+    /// stats.
+    ///
+    /// False positives are okay (needless fetches) but false negatives are not
+    /// (incorrectness). Returns an Option to make `?` convenient, `None` is
+    /// treated the same as `Some(true)`.
+    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool>;
+}
+
+/// A reasonable default implementation of [TxnsCodec].
+///
+/// This uses the "native" Codecs for `ShardId` and `Vec<u8>`, with the latter
+/// empty for [TxnsEntry::Register] and non-empty for [TxnsEntry::Append].
+#[derive(Debug)]
+pub struct TxnsCodecDefault;
+
+impl TxnsCodec for TxnsCodecDefault {
+    type Key = ShardId;
+    type Val = Vec<u8>;
+    fn schemas() -> (<Self::Key as Codec>::Schema, <Self::Val as Codec>::Schema) {
+        (ShardIdSchema, VecU8Schema)
+    }
+    fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
+        match e {
+            TxnsEntry::Register(data_id) => (data_id, Vec::new()),
+            TxnsEntry::Append(data_id, batch) => (data_id, batch),
+        }
+    }
+    fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry {
+        if val.is_empty() {
+            TxnsEntry::Register(key)
+        } else {
+            TxnsEntry::Append(key, val)
+        }
+    }
+    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
+        let stats = stats
+            .key
+            .col::<String>("")
+            .map_err(|err| error!("unexpected stats type: {}", err))
+            .ok()??;
+        let data_id_str = data_id.to_string();
+        Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
+    }
 }
 
 /// Helper for common logging for compare_and_append-ing a small amount of data.
+#[instrument(level = "debug", skip_all, fields(shard=%txns_or_data_write.shard_id(), ts=?new_upper))]
 pub(crate) async fn small_caa<S, F, K, V, T, D>(
     name: F,
     txns_or_data_write: &mut WriteHandle<K, V, T, D>,
@@ -318,7 +390,10 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn debug_sep<'a, T: Debug + 'a>(sep: &str, xs: impl IntoIterator<Item = &'a T>) -> String {
-        xs.into_iter().map(|x| format!("{}{:?}", sep, x)).collect()
+        xs.into_iter().fold(String::new(), |mut output, x| {
+            let _ = write!(output, "{}{:?}", sep, x);
+            output
+        })
     }
     debug!(
         "CaA {} [{:?},{:?}){}",
@@ -381,10 +456,9 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     let name = name();
     let empty: &[((&K, &V), &T, D)] = &[];
     let mut upper = txns_or_data_write
-        .upper()
-        .as_option()
-        .expect("shard should not be closed")
-        .clone();
+        .shared_upper()
+        .into_option()
+        .expect("shard should not be closed");
     loop {
         if init_ts < upper {
             return;
@@ -414,26 +488,23 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 /// the work must have already been done by someone else. (Think how our compute
 /// replicas race to compute some MATERIALIZED VIEW, but they're all guaranteed
 /// to get the same answer.)
-///
-/// Returns true if this call was the one to apply it.
+#[instrument(level = "debug", skip_all, fields(shard=%data_write.shard_id(), ts=?commit_ts))]
 async fn apply_caa<K, V, T, D>(
     data_write: &mut WriteHandle<K, V, T, D>,
-    batch_raw: &str,
+    batch_raw: &[u8],
     commit_ts: T,
-) -> bool
-where
+) where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    let batch = serde_json::from_str(batch_raw).expect("valid batch");
+    let batch = ProtoBatch::decode(batch_raw).expect("valid batch");
     let mut batch = data_write.batch_from_transmittable_batch(batch);
     let mut upper = data_write
-        .upper()
-        .as_option()
-        .expect("data shard should not be closed")
-        .clone();
+        .shared_upper()
+        .into_option()
+        .expect("data shard should not be closed");
     loop {
         if commit_ts < upper {
             debug!(
@@ -443,7 +514,7 @@ where
             );
             // Mark the batch as consumed, so we don't get warnings in the logs.
             batch.into_hollow_batch();
-            return false;
+            return;
         }
         debug!(
             "CaA data {:.9} apply b={} t={:?} [{:?},{:?})",
@@ -472,7 +543,7 @@ where
                     upper,
                     commit_ts.step_forward(),
                 );
-                return true;
+                return;
             }
             Err(UpperMismatch { current, .. }) => {
                 let current = current.into_option().expect("data should not be closed");
@@ -491,33 +562,270 @@ where
     }
 }
 
-impl StepForward for u64 {
-    fn step_forward(&self) -> Self {
-        self.checked_add(1).unwrap()
+#[instrument(level = "debug", skip_all, fields(shard=%txns_since.shard_id(), ts=?new_since_ts))]
+pub(crate) async fn cads<T, O, C>(
+    txns_since: &mut SinceHandle<C::Key, C::Val, T, i64, O>,
+    new_since_ts: T,
+) where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    O: Opaque + Debug + Codec64,
+    C: TxnsCodec,
+{
+    // Fast-path, don't bother trying to CaDS if we're already past that
+    // since.
+    if !txns_since.since().less_than(&new_since_ts) {
+        return;
+    }
+    let token = txns_since.opaque().clone();
+    let res = txns_since
+        .compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(new_since_ts)))
+        .await;
+    match res {
+        Ok(_) => {}
+        Err(actual) => {
+            mz_ore::halt!("fenced by another process @ {actual:?}. ours = {token:?}")
+        }
     }
 }
 
 #[cfg(test)]
 pub mod tests {
     use std::sync::Arc;
+    use std::sync::Mutex;
 
+    use crossbeam_channel::{Receiver, Sender, TryRecvError};
+    use differential_dataflow::consolidation::consolidate_updates;
+    use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-    use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
+    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+
+    use crate::operator::DataSubscribe;
+    use crate::txn_write::Txn;
 
     use super::*;
+
+    /// A test helper for collecting committed writes and later comparing them
+    /// to reads for correctness.
+    #[derive(Debug, Clone)]
+    pub struct CommitLog {
+        client: PersistClient,
+        txns_id: ShardId,
+        writes: Arc<Mutex<Vec<(ShardId, String, u64, i64)>>>,
+        tx: Sender<(ShardId, String, u64, i64)>,
+        rx: Receiver<(ShardId, String, u64, i64)>,
+    }
+
+    impl CommitLog {
+        pub fn new(client: PersistClient, txns_id: ShardId) -> Self {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            CommitLog {
+                client,
+                txns_id,
+                writes: Arc::new(Mutex::new(Vec::new())),
+                tx,
+                rx,
+            }
+        }
+
+        pub fn record(&self, update: (ShardId, String, u64, i64)) {
+            let () = self.tx.send(update).unwrap();
+        }
+
+        pub fn record_txn(&self, commit_ts: u64, txn: &Txn<String, (), i64>) {
+            for (data_id, writes) in txn.writes.iter() {
+                for (k, (), d) in writes.iter() {
+                    self.record((*data_id, k.clone(), commit_ts, *d));
+                }
+            }
+        }
+
+        #[track_caller]
+        pub fn assert_eq(
+            &self,
+            data_id: ShardId,
+            as_of: u64,
+            until: u64,
+            actual: impl IntoIterator<Item = (String, u64, i64)>,
+        ) {
+            // First read everything off the channel.
+            let mut expected = {
+                let mut writes = self.writes.lock().unwrap();
+                loop {
+                    match self.rx.try_recv() {
+                        Ok(x) => writes.push(x),
+                        Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+                    }
+                }
+                writes
+                    .iter()
+                    .flat_map(|(id, key, ts, diff)| {
+                        if id != &data_id {
+                            return None;
+                        }
+                        let mut ts = *ts;
+                        if ts < as_of {
+                            ts = as_of;
+                        }
+                        if until <= ts {
+                            None
+                        } else {
+                            Some((key.clone(), ts, *diff))
+                        }
+                    })
+                    .collect()
+            };
+            consolidate_updates(&mut expected);
+            let mut actual = actual.into_iter().filter(|(_, t, _)| t < &until).collect();
+            consolidate_updates(&mut actual);
+            // NB: Extra spaces after actual are so it lines up with expected.
+            tracing::debug!(
+                "{:.9} as_of={} until={} actual  ={:?}",
+                data_id,
+                as_of,
+                until,
+                actual
+            );
+            tracing::debug!(
+                "{:.9} as_of={} until={} expected={:?}",
+                data_id,
+                as_of,
+                until,
+                expected
+            );
+            assert_eq!(actual, expected)
+        }
+
+        #[allow(ungated_async_fn_track_caller)]
+        #[track_caller]
+        pub async fn assert_snapshot(&self, data_id: ShardId, as_of: u64) {
+            self.assert_subscribe(data_id, as_of, as_of + 1).await;
+        }
+
+        #[allow(ungated_async_fn_track_caller)]
+        #[track_caller]
+        pub async fn assert_subscribe(&self, data_id: ShardId, as_of: u64, until: u64) {
+            let mut data_subscribe =
+                DataSubscribe::new("test", self.client.clone(), self.txns_id, data_id, as_of);
+            data_subscribe.step_past(until - 1).await;
+            self.assert_eq(data_id, as_of, until, data_subscribe.output().clone());
+        }
+    }
 
     pub(crate) async fn writer(
         client: &PersistClient,
         data_id: ShardId,
-    ) -> WriteHandle<Vec<u8>, (), u64, i64> {
+    ) -> WriteHandle<String, (), u64, i64> {
         client
             .open_writer(
                 data_id,
-                Arc::new(VecU8Schema),
+                Arc::new(StringSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::for_tests(),
             )
             .await
             .expect("codecs should not change")
+    }
+
+    pub(crate) async fn reader(
+        client: &PersistClient,
+        data_id: ShardId,
+    ) -> ReadHandle<String, (), u64, i64> {
+        client
+            .open_leased_reader(
+                data_id,
+                Arc::new(StringSchema),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("codecs should not change")
+    }
+
+    pub(crate) async fn write_directly(
+        ts: u64,
+        data_write: &mut WriteHandle<String, (), u64, i64>,
+        keys: &[&str],
+        log: &CommitLog,
+    ) {
+        let data_id = data_write.shard_id();
+        let keys = keys.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
+        let updates = keys.iter().map(|k| ((k, &()), &ts, 1)).collect::<Vec<_>>();
+        let mut current = data_write.shared_upper().into_option().unwrap();
+        loop {
+            let res = crate::small_caa(
+                || format!("data {:.9} directly", data_id),
+                data_write,
+                &updates,
+                current,
+                ts + 1,
+            )
+            .await;
+            match res {
+                Ok(()) => {
+                    for ((k, ()), t, d) in updates {
+                        log.record((data_id, k.to_owned(), *t, d));
+                    }
+                    return;
+                }
+                Err(new_current) => current = new_current,
+            }
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn commit_log() {
+        let (d0, d1) = (ShardId::new(), ShardId::new());
+        let log0 = CommitLog::new(PersistClient::new_for_tests().await, ShardId::new());
+
+        // Send before cloning into another handle.
+        log0.record((d0, "0".into(), 0, 1));
+
+        // Send after cloning into another handle. Also push duplicate (which
+        // gets consolidated).
+        let log1 = log0.clone();
+        log0.record((d0, "2".into(), 2, 1));
+        log1.record((d0, "2".into(), 2, 1));
+
+        // Send retraction.
+        log0.record((d0, "3".into(), 3, 1));
+        log1.record((d0, "3".into(), 4, -1));
+
+        // Send out of order.
+        log0.record((d0, "1".into(), 1, 1));
+
+        // Send to a different shard.
+        log1.record((d1, "5".into(), 5, 1));
+
+        // Assert_eq with no advancement or truncation.
+        log0.assert_eq(
+            d0,
+            0,
+            6,
+            vec![
+                ("0".into(), 0, 1),
+                ("1".into(), 1, 1),
+                ("2".into(), 2, 2),
+                ("3".into(), 3, 1),
+                ("3".into(), 4, -1),
+            ],
+        );
+        log0.assert_eq(d1, 0, 6, vec![("5".into(), 5, 1)]);
+
+        // Assert_eq with advancement.
+        log0.assert_eq(
+            d0,
+            4,
+            6,
+            vec![("0".into(), 4, 1), ("1".into(), 4, 1), ("2".into(), 4, 2)],
+        );
+
+        // Assert_eq with truncation.
+        log0.assert_eq(
+            d0,
+            0,
+            3,
+            vec![("0".into(), 0, 1), ("1".into(), 1, 1), ("2".into(), 2, 2)],
+        );
     }
 }

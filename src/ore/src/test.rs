@@ -42,7 +42,7 @@ pub fn init_logging() {
 /// not run tests in any particular order, each must call `init_logging`.
 pub fn init_logging_default(level: &str) {
     LOG_INIT.call_once(|| {
-        let filter = EnvFilter::try_from_env("MZ_LOG_FILTER")
+        let filter = EnvFilter::try_from_env("MZ_TEST_LOG_FILTER")
             .or_else(|_| EnvFilter::try_new(level))
             .unwrap();
         FmtSubscriber::builder()

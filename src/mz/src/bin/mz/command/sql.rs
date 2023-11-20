@@ -19,13 +19,9 @@ use mz::command::sql::RunArgs;
 use mz::context::Context;
 use mz::error::Error;
 
-use crate::mixin::ProfileArg;
-
 #[derive(Debug, clap::Args)]
 #[clap(trailing_var_arg = true)]
 pub struct SqlCommand {
-    #[clap(flatten)]
-    profile: ProfileArg,
     #[clap(long, env = "MZ_CLUSTER")]
     /// Use the specified cluster
     cluster: Option<String>,
@@ -34,11 +30,9 @@ pub struct SqlCommand {
 }
 
 pub async fn run(cx: Context, cmd: SqlCommand) -> Result<(), Error> {
-    let mut cx = cx
-        .activate_profile(cmd.profile.profile)?
-        .activate_region()?;
+    let cx = cx.activate_profile()?.activate_region()?;
     mz::command::sql::run(
-        &mut cx,
+        &cx,
         RunArgs {
             cluster: cmd.cluster,
             psql_args: cmd.psql_args,

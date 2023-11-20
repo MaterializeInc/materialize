@@ -26,7 +26,7 @@ SELECT * FROM t1, (SELECT DISTINCT f1 % 2 AS F FROM t1) T WHERE t1.f1 % 2 = t.f;
 Explained Query:
   Filter (#0) IS NOT NULL // { arity: 3 }
     Map ((#0 % 2)) // { arity: 3 }
-      Get materialize.public.t1 // { arity: 2 }
+      ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -40,7 +40,7 @@ SELECT * FROM v1, (SELECT DISTINCT (v1.t1).f1 as f1 FROM v1) Y WHERE (v1.t1).f1 
 Explained Query (fast path):
   Filter (#1) IS NOT NULL
     Map (record_get[0](#0))
-      ReadExistingIndex materialize.public.v1_primary_idx
+      ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.v1_primary_idx (*** full scan ***)
@@ -67,11 +67,11 @@ Explained Query:
     Get l0 // { arity: 3 }
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0..=#2] // { arity: 3 }
+      Distinct project=[#0..=#2] // { arity: 3 }
         Union // { arity: 3 }
           Get l0 // { arity: 3 }
           Map ((#0 % 2)) // { arity: 3 }
-            Get materialize.public.t2 // { arity: 2 }
+            ReadStorage materialize.public.t2 // { arity: 2 }
 
 EOF
 
@@ -94,12 +94,12 @@ Explained Query:
     Get l0 // { arity: 3 }
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0..=#2] // { arity: 3 }
+      Distinct project=[#0..=#2] // { arity: 3 }
         Union // { arity: 3 }
           Get l0 // { arity: 3 }
           Filter (#0) IS NOT NULL // { arity: 3 }
             Map ((#0 % 2)) // { arity: 3 }
-              Get materialize.public.t1 // { arity: 2 }
+              ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -139,9 +139,9 @@ Explained Query:
           Get l0 // { arity: 1 }
   With Mutually Recursive
     cte l1 =
-      Distinct group_by=[#0..=#2] // { arity: 3 }
+      Distinct project=[#0..=#2] // { arity: 3 }
         Union // { arity: 3 }
-          Distinct group_by=[#0..=#2] // { arity: 3 }
+          Distinct project=[#0..=#2] // { arity: 3 }
             Union // { arity: 3 }
               Get l1 // { arity: 3 }
               Project (#0, #0, #0) // { arity: 3 }
@@ -150,12 +150,12 @@ Explained Query:
             implementation
               %1:l0[#0]UK » %0:t2[(#0 % 2)]K
             ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
-              Get materialize.public.t2 // { arity: 2 }
+              ReadStorage materialize.public.t2 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Get l0 // { arity: 1 }
     cte l0 =
-      Distinct group_by=[(#0 % 2)] // { arity: 1 }
+      Distinct project=[(#0 % 2)] // { arity: 1 }
         Project (#0) // { arity: 1 }
-          Get materialize.public.t2 // { arity: 2 }
+          ReadStorage materialize.public.t2 // { arity: 2 }
 
 EOF

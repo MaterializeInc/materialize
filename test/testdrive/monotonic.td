@@ -33,7 +33,7 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
 {"a": 2, "b": 4}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE non_dbz_data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
@@ -85,6 +85,7 @@ Explained Query:
       Get::PassArrangements materialize.public.i1
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        types=[bigint]
 
 Used Indexes:
   - materialize.public.i1_primary_idx (*** full scan ***)
@@ -109,6 +110,7 @@ Explained Query:
       Get::PassArrangements materialize.public.non_dbz_data_indexed
         raw=false
         arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+        types=[bigint, bigint]
 
 Used Indexes:
   - materialize.public.non_dbz_data_indexed_primary_idx (*** full scan ***)
@@ -129,6 +131,7 @@ Explained Query:
       Get::PassArrangements materialize.public.i4
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        types=[bigint]
 
 Used Indexes:
   - materialize.public.i4_primary_idx (*** full scan ***)
@@ -149,6 +152,7 @@ Explained Query:
       Get::PassArrangements materialize.public.i6
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        types=[bigint]
 
 Used Indexes:
   - materialize.public.i6_primary_idx (*** full scan ***)
@@ -172,6 +176,7 @@ Explained Query:
       Get::PassArrangements materialize.public.i9
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        types=[bigint]
 
 Used Indexes:
   - materialize.public.i9_primary_idx (*** full scan ***)
@@ -185,21 +190,21 @@ Used Indexes:
 > SET cluster_replica = r1
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"ArrangeBy[[Column(0), Column(1)]]"
+"ArrangeBy[[Column(0), Column(1)]] [val: empty]"
 "ArrangeBy[[Column(0), Column(1)]]-errors"
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
+"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]] [val: empty]"
 ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(0)]]-errors
-ArrangeMonotonic
-ArrangeMonotonic
-ArrangeMonotonic
+"ArrangeMonotonic [val: empty]"
+"ArrangeMonotonic [val: empty]"
+"ArrangeMonotonic [val: empty]"
 "Arranged TopK input"
 ReduceMonotonic
 ReduceMonotonic

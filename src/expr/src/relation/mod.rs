@@ -26,11 +26,14 @@ use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::text::text_string_at;
-use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
+use mz_repr::explain::{
+    DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
+};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::explain::HumanizedExpr;
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::visit::{Visit, VisitChildren};
 use crate::Id::Local;
@@ -100,6 +103,13 @@ pub enum MirRelationExpr {
         id: Id,
         /// Schema of the collection.
         typ: RelationType,
+        /// If this is a global Get, this will indicate whether we are going to read from Persist or
+        /// from an index, or from a different object in `objects_to_build`. If it's an index, then
+        /// how downstream dataflow operations will use this index is also recorded. This is filled
+        /// by `prune_and_annotate_dataflow_index_imports`. Note that this is not used by the
+        /// lowering to LIR, but is used only by EXPLAIN.
+        #[mzreflect(ignore)]
+        access_strategy: AccessStrategy,
     },
     /// Introduce a temporary dataflow.
     ///
@@ -839,6 +849,7 @@ impl MirRelationExpr {
                 if let MirRelationExpr::Get {
                     id: first_id,
                     typ: _,
+                    ..
                 } = base_with_project_stripped
                 {
                     if inputs.len() == 1 {
@@ -849,6 +860,7 @@ impl MirRelationExpr {
                                         if let MirRelationExpr::Get {
                                             id: second_id,
                                             typ: _,
+                                            ..
                                         } = input
                                         {
                                             if first_id == second_id {
@@ -1063,6 +1075,7 @@ impl MirRelationExpr {
         MirRelationExpr::Get {
             id: Id::Global(id),
             typ,
+            access_strategy: AccessStrategy::UnknownOrLocal,
         }
     }
 
@@ -1449,9 +1462,9 @@ impl MirRelationExpr {
     }
 
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> super::MirRelationExpr
+    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> MirRelationExpr
     where
-        Body: FnOnce(&mut IdGen, MirRelationExpr) -> super::MirRelationExpr,
+        Body: FnOnce(&mut IdGen, MirRelationExpr) -> MirRelationExpr,
     {
         if let MirRelationExpr::Get { .. } = self {
             // already done
@@ -1461,6 +1474,7 @@ impl MirRelationExpr {
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
                 typ: self.typ(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             };
             let body = (body)(id_gen, get);
             MirRelationExpr::Let {
@@ -1488,6 +1502,7 @@ impl MirRelationExpr {
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
                 typ: self.typ(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             };
             let body = (body)(id_gen, get)?;
             Ok(MirRelationExpr::Let {
@@ -1623,7 +1638,7 @@ impl MirRelationExpr {
                             }
                         }
                     }
-                    JoinImplementation::IndexedFilter(_, index_key, _) => {
+                    JoinImplementation::IndexedFilter(_coll_id, _idx_id, index_key, _) => {
                         for k in index_key {
                             f(k)?;
                         }
@@ -2043,7 +2058,7 @@ pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
 }
 
 impl CollectionPlan for MirRelationExpr {
-    // !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
+    // !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
     // should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         if let MirRelationExpr::Get {
@@ -2256,13 +2271,19 @@ impl RustType<ProtoColumnOrder> for ColumnOrder {
 
 impl fmt::Display for ColumnOrder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        HumanizedExpr::new(self, None).fmt(f)
+    }
+}
+
+impl<'a> fmt::Display for HumanizedExpr<'a, ColumnOrder> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // If you modify this, then please also attend to Display for ColumnOrderWithExpr!
         write!(
             f,
-            "#{} {} {}",
-            self.column,
-            if self.desc { "desc" } else { "asc" },
-            if self.nulls_last {
+            "{} {} {}",
+            self.child(&self.expr.column),
+            if self.expr.desc { "desc" } else { "asc" },
+            if self.expr.nulls_last {
                 "nulls_last"
             } else {
                 "nulls_first"
@@ -2602,6 +2623,65 @@ impl AggregateExpr {
                 }
             }
 
+            // The input type for window aggs is a ((OriginalRow, InputValue), OrderByExprs...)
+            // See an example MIR in `window_func_applied_to`.
+            AggregateFunc::WindowAggregate {
+                wrapped_aggregate,
+                window_frame,
+                ..
+            } => {
+                // TODO: deduplicate code between the various window function cases.
+
+                let tuple = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Get the overall return type
+                let return_type = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+                let window_agg_return_type = return_type.unwrap_record_element_type()[0].clone();
+
+                // Extract the original row
+                let original_row = tuple
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the input value
+                let expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+
+                // If the window frame includes the current (single) row, evaluate the aggregate on
+                // that row. Otherwise, return the default value for the aggregate.
+                let value = if window_frame.includes_current_row() {
+                    AggregateExpr {
+                        func: (**wrapped_aggregate).clone(),
+                        expr,
+                        distinct: false, // We have just one input element; DISTINCT doesn't matter.
+                    }
+                    .on_unique(input_type)
+                } else {
+                    MirScalarExpr::literal_ok(wrapped_aggregate.default(), window_agg_return_type)
+                };
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from("?window_agg?"),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![value, original_row],
+                    }],
+                }
+            }
+
             // All other variants should return the argument to the aggregation.
             AggregateFunc::MaxNumeric
             | AggregateFunc::MaxInt16
@@ -2744,8 +2824,13 @@ pub enum JoinImplementation {
     /// This gets translated to a Differential join during MIR -> LIR lowering, but we still want
     /// to represent it in MIR, because the fast path detection wants to match on this.
     ///
-    /// Consists of (`<view id>`, `<keys of index>`, `<constants>`)
-    IndexedFilter(GlobalId, Vec<MirScalarExpr>, #[mzreflect(ignore)] Vec<Row>),
+    /// Consists of (`<coll_id>`, `<index_id>`, `<index_key>`, `<constants>`)
+    IndexedFilter(
+        GlobalId,
+        GlobalId,
+        Vec<MirScalarExpr>,
+        #[mzreflect(ignore)] Vec<Row>,
+    ),
     /// No implementation yet selected.
     Unimplemented,
 }
@@ -2950,31 +3035,40 @@ impl RowSetFinishing {
 
         let limit = self.limit.unwrap_or(usize::MAX);
 
-        // Count how many rows we'd expand into, returning early from the whole function
-        // if we don't have enough memory to expand the result, or break early from the
-        // iteration once we pass our limit.
-        let mut num_rows = 0;
-        let mut num_bytes: usize = 0;
-        for (row, count) in &rows[offset_nth_row..] {
-            num_rows += count.get();
-            num_bytes = num_bytes.saturating_add(count.get().saturating_mul(row.byte_len()));
+        // The code below is logically equivalent to:
+        //
+        // let mut total = 0;
+        // for (_, count) in &rows[offset_nth_row..] {
+        //     total += count.get();
+        // }
+        // let return_size = std::cmp::min(total, limit);
+        //
+        // but it breaks early if the limit is reached, instead of scanning the entire code.
+        let return_row_count = rows[offset_nth_row..]
+            .iter()
+            .try_fold(0, |sum: usize, (_, count)| {
+                let new_sum = sum.saturating_add(count.get());
+                if new_sum > limit {
+                    None
+                } else {
+                    Some(new_sum)
+                }
+            })
+            .unwrap_or(limit);
 
-            // Check that result fits into max_result_size.
-            if num_bytes > max_result_size {
-                return Err(format!(
-                    "result exceeds max size of {}",
-                    ByteSize::b(u64::cast_from(max_result_size))
-                ));
-            }
-
-            // Stop iterating if we've passed limit.
-            if num_rows > limit {
-                break;
-            }
+        // Check that the bytes allocated in the Vec below will be less than the minimum possible
+        // byte limit (i.e., if zero rows spill to heap). We still have to check each row below
+        // because they could spill to heap and end up using more memory.
+        const MINIMUM_ROW_BYTES: usize = std::mem::size_of::<Row>();
+        let bytes_to_be_allocated = MINIMUM_ROW_BYTES.saturating_mul(return_row_count);
+        if bytes_to_be_allocated > max_result_size {
+            return Err(format!(
+                "result exceeds max size of {}",
+                ByteSize::b(u64::cast_from(max_result_size))
+            ));
         }
-        let return_size = std::cmp::min(num_rows, limit);
 
-        let mut ret = Vec::with_capacity(return_size);
+        let mut ret = Vec::with_capacity(return_row_count);
         let mut remaining = limit;
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
@@ -3307,6 +3401,23 @@ impl Display for LetRecLimit {
         }
         write!(f, "]")
     }
+}
+
+/// For a global Get, this indicates whether we are going to read from Persist or from an index.
+/// (See comment in MirRelationExpr::Get.)
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+pub enum AccessStrategy {
+    /// It's either a local Get (a CTE), or unknown at the time.
+    /// `prune_and_annotate_dataflow_index_imports` decides it for global Gets, and thus switches to
+    /// one of the other variants.
+    UnknownOrLocal,
+    /// The Get will read from Persist.
+    Persist,
+    /// The Get will read from an index or indexes: (index id, how the index will be used).
+    Index(Vec<(GlobalId, IndexUsageType)>),
+    /// The Get will read a collection that is computed by the same dataflow, but in a different
+    /// `BuildDesc` in `objects_to_build`.
+    SameDataflow,
 }
 
 #[cfg(test)]

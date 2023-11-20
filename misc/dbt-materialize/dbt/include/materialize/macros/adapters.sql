@@ -22,7 +22,7 @@
   create view {{ relation }}
     {% set contract_config = config.get('contract') %}
     {% if contract_config.enforced %}
-      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
+      {{ get_assert_columns_equivalent(sql) }}
     {%- endif %}
   as (
     {{ sql }}
@@ -33,13 +33,38 @@
   {%- set cluster = config.get('cluster', target.cluster) -%}
 
   create materialized view {{ relation }}
-    {% set contract_config = config.get('contract') %}
-    {% if contract_config.enforced %}
-      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
-    {%- endif %}
   {% if cluster %}
     in cluster {{ cluster }}
   {% endif %}
+
+  -- Contracts and constraints
+  {% set contract_config = config.get('contract') %}
+  {% if contract_config.enforced %}
+    {{ get_assert_columns_equivalent(sql) }}
+
+    {% set ns = namespace(c_constraints=False, m_constraints=False) %}
+    -- Column-level constraints
+    {% set raw_columns = model['columns'] %}
+    {% for c_id, c_details in raw_columns.items() if c_details['constraints'] != [] %}
+      {% set ns.c_constraints = True %}
+    {%- endfor %}
+
+    -- Model-level constraints
+
+    -- NOTE(morsapaes): not_null constraints are not originally supported in
+    -- dbt-core at model-level, since model-level constraints are intended for
+    -- multi-columns constraints. Any model-level constraint is ignored in
+    -- dbt-materialize, albeit silently.
+    {% if model['constraints'] != [] %}
+      {% set ns.m_constraints = True %}
+    {%- endif %}
+
+    {% if ns.c_constraints %}
+      with
+        {{ get_table_columns_and_constraints() }}
+    {%- endif %}
+  {%- endif %}
+
   as (
     {{ sql }}
   );
@@ -48,7 +73,7 @@
 {% macro materialize__create_arbitrary_object(sql) -%}
     {% set contract_config = config.get('contract') %}
     {% if contract_config.enforced %}
-      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
+      {{exceptions.warn("Model contracts cannot be enforced for custom materializations (see dbt-core #7213)")}}
     {%- endif %}
     {{ sql }}
 {%- endmacro %}
@@ -68,7 +93,7 @@
   {% call statement('drop_relation') -%}
     {% if relation.type == 'view' %}
       drop view if exists {{ relation }} cascade
-    {% elif relation.type == 'materializedview' %}
+    {% elif relation.is_materialized_view %}
       drop materialized view if exists {{ relation }} cascade
     {% elif relation.type == 'sink' %}
       drop sink if exists {{ relation }}
@@ -77,6 +102,12 @@
     {% elif relation.type == 'index' %}
       drop index if exists {{ relation }}
     {% endif %}
+  {%- endcall %}
+{% endmacro %}
+
+{% macro materialize__truncate_relation(relation) -%}
+  {% call statement('truncate_relation') -%}
+    delete from {{ relation }}
   {%- endcall %}
 {% endmacro %}
 
@@ -100,6 +131,40 @@
     {%- endif %};
 {%- endmacro %}
 
+{% macro materialize__persist_docs(relation, model, for_relation, for_columns) -%}
+  {% if for_relation and config.persist_relation_docs() and model.description %}
+    {% do run_query(alter_relation_comment(relation, model.description)) %}
+  {% endif %}
+
+  {% if for_columns and config.persist_column_docs() and model.columns %}
+    {% set existing_columns = adapter.get_columns_in_relation(relation) | map(attribute="name") | list %}
+    {% set column_dict = model.columns %}
+    -- Materialize does not support running multiple COMMENT ON commands in a
+    -- transaction, so we work around that by forcing a transaction per comment
+    -- instead
+    -- See: https://github.com/MaterializeInc/materialize/issues/22379
+    {% for column_name in column_dict if (column_name in existing_columns) %}
+      {% set comment = column_dict[column_name]['description'] %}
+      {% set quote = column_dict[column_name]['quote'] %}
+      {% do run_query(materialize__alter_column_comment_single(relation, column_name, quote, comment)) %}
+    {% endfor %}
+  {% endif %}
+{% endmacro %}
+
+{% macro materialize__alter_column_comment_single(relation, column_name, quote, comment) %}
+  {% set escaped_comment = postgres_escape_comment(comment) %}
+  comment on column {{ relation }}.{{ adapter.quote(column_name) if quote else column_name }} is {{ escaped_comment }};
+{% endmacro %}
+
+{% macro materialize__alter_relation_comment(relation, comment) -%}
+  {% set escaped_comment = postgres_escape_comment(comment) %}
+  {% if relation.is_materialized_view -%}
+    {% set relation_type = "materialized view" %}
+  {%- else -%}
+    {%- set relation_type = relation.type -%}
+  {%- endif -%}
+  comment on {{ relation_type }} {{ relation }} is {{ escaped_comment }};
+{% endmacro %}
 
 -- In the dbt-adapter we extend the Relation class to include sinks and indexes
 {% macro materialize__list_relations_without_caching(schema_relation) %}
@@ -108,7 +173,7 @@
         d.name as database,
         s.name as schema,
         o.name,
-        case when o.type = 'materialized-view' then 'materializedview'
+        case when o.type = 'materialized-view' then 'materialized_view'
              else o.type
         end as type
     from mz_objects o

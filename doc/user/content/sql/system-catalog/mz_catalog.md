@@ -45,6 +45,8 @@ Field           | Type                         | Meaning
 
 ### `mz_aws_privatelink_connections`
 
+{{< public-preview />}}
+
 The `mz_aws_privatelink_connections` table contains a row for each AWS PrivateLink connection in the system.
 
 <!-- RELATION_SPEC mz_catalog.mz_aws_privatelink_connections -->
@@ -88,7 +90,7 @@ The `mz_clusters` table contains a row for each cluster in the system.
 | `name`               | [`text`]             | The name of the cluster.                                                                                                                 |
 | `owner_id`           | [`text`]             | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).                       |
 | `privileges`         | [`mz_aclitem array`] | The privileges belonging to the cluster.                                                                                                 |
-| `managed`            | [`boolean`]          | Whether the cluster is a [managed cluster](/sql/create-cluster/#managed-clusters) with automatically managed replicas.                   |
+| `managed`            | [`boolean`]          | Whether the cluster is a [managed cluster](/sql/create-cluster/) with automatically managed replicas.                   |
 | `size`               | [`text`]             | If the cluster is managed, the desired size of the cluster's replicas. `NULL` for unmanaged clusters.                                    |
 | `replication_factor` | [`uint4`]            | If the cluster is managed, the desired number of replicas of the cluster. `NULL` for unmanaged clusters.                                 |
 | `disk`               | [`boolean`]          | **Unstable** If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.                   |
@@ -244,6 +246,7 @@ Field        | Type     | Meaning
 -------------|----------|--------
 `id`         | [`text`] | The ID of the list type.
 `element_id` | [`text`] | The IID of the list's element type.
+`element_modifiers` | [`int8 list`] | The element type modifiers, or `NULL` if none.
 
 ### `mz_map_types`
 
@@ -255,6 +258,8 @@ Field          | Type       | Meaning
 `id`           | [`text`]   | The ID of the map type.
 `key_id `      | [`text`]   | The ID of the map's key type.
 `value_id`     | [`text`]   | The ID of the map's value type.
+`key_modifiers` | [`int8 list`] | The key type modifiers, or `NULL` if none.
+`value_modifiers` | [`int8 list`] | The value type modifiers, or `NULL` if none.
 
 ### `mz_materialized_views`
 
@@ -288,7 +293,7 @@ Field       | Type                 | Meaning
 `oid`       | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the object.
 `schema_id` | [`text`]             | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`      | [`text`]             | The name of the object.
-`type`      | [`text`]             | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+`type`      | [`text`]             | The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
 `owner_id`  | [`text`]             | The role ID of the owner of the object. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`| [`mz_aclitem array`] | The privileges belonging to the object.
 
@@ -453,6 +458,32 @@ Field        | Type                 | Meaning
 `owner_id`   | [`text`]             | The role ID of the owner of the table. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges` | [`mz_aclitem array`] | The privileges belonging to the table.
 
+### `mz_timezone_abbreviations`
+
+The `mz_timezone_abbreviations` view contains a row for each supported timezone abbreviation.
+A "fixed" abbreviation does not change its offset or daylight status based on the current time.
+A non-"fixed" abbreviation is dependent on the current time for its offset, and must use the [`timezone_offset`](/sql/functions/#timezone_offset) function to find its properties.
+These correspond to the `pg_catalog.pg_timezone_abbrevs` table, but can be materialized as they do not depend on the current time.
+
+<!-- RELATION_SPEC mz_catalog.mz_timezone_abbreviations -->
+Field           | Type         | Meaning
+----------------|--------------|----------
+`abbreviation`  | [`text`]     | The timezone abbreviation.
+`utc_offset`    | [`interval`] | The UTC offset of the timezone or `NULL` if fixed.
+`dst`           | [`boolean`]  | Whether the timezone is in daylight savings or `NULL` if fixed.
+`timezone_name` | [`text`]     | The full name of the non-fixed timezone or `NULL` if not fixed.
+
+### `mz_timezone_names`
+
+The `mz_timezone_names` view contains a row for each supported timezone.
+Use the [`timezone_offset`](/sql/functions/#timezone_offset) function for properties of a timezone at a certain timestamp.
+These correspond to the `pg_catalog.pg_timezone_names` table, but can be materialized as they do not depend on the current time.
+
+<!-- RELATION_SPEC mz_catalog.mz_timezone_names -->
+Field        | Type                 | Meaning
+-------------|----------------------|----------
+`name`       | [`text`]             | The timezone name.
+
 ### `mz_types`
 
 The `mz_types` table contains a row for each type in the system.
@@ -495,5 +526,6 @@ Field          | Type                 | Meaning
 [`uint8`]: /sql/types/uint8
 [`uint4`]: /sql/types/uint4
 [`mz_aclitem array`]: /sql/types/mz_aclitem
+[`interval`]: /sql/types/interval
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_operators -->

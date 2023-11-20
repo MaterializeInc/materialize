@@ -10,6 +10,7 @@
 use std::borrow::ToOwned;
 use std::collections::{btree_map, BTreeMap};
 use std::error::Error;
+use std::fmt::Write;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context};
@@ -327,8 +328,10 @@ fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosErro
         .inner
         .lines()
         .take_while(|l| !is_sigil(l.chars().next()))
-        .map(|l| format!("{}\n", l))
-        .collect();
+        .fold(String::new(), |mut output, l| {
+            let _ = write!(output, "{}\n", l);
+            output
+        });
     slurp_all(line_reader);
     while expected_output.ends_with("\n\n") {
         expected_output.pop();
@@ -527,7 +530,8 @@ impl<'a> Iterator for LineReader<'a> {
         if self.inner.is_empty() {
             return None;
         }
-        let mut fold_newlines = is_sigil(self.inner.chars().next());
+        let mut fold_newlines = is_non_sql_sigil(self.inner.chars().next());
+        let mut handle_newlines = is_sql_sigil(self.inner.chars().next());
         let mut line = String::new();
         let mut chars = self.inner.char_indices().fuse().peekable();
         while let Some((i, c)) = chars.next() {
@@ -535,13 +539,25 @@ impl<'a> Iterator for LineReader<'a> {
                 self.src_line += 1;
                 if fold_newlines && self.inner.get(i + 1..i + 3) == Some("  ") {
                     // Chomp the newline and one space. This ensures a SQL query
-                    // that is split over two lines does not become invalid.
+                    // that is split over two lines does not become invalid. For $ commands the
+                    // newline should not be removed so that the argument parser can handle the
+                    // arguments correctly.
                     chars.next();
                     self.pos_map.insert(self.pos + i, (self.src_line, 2));
                     continue;
+                } else if handle_newlines && self.inner.get(i + 1..i + 3) == Some("  ") {
+                    // Chomp the two spaces after newline. This ensures a SQL query
+                    // that is split over two lines does not become invalid, and keeping the
+                    // newline ensures that comments don't remove the following lines.
+                    line.push(c);
+                    chars.next();
+                    chars.next();
+                    self.pos_map.insert(self.pos + i + 1, (self.src_line, 2));
+                    continue;
                 } else if line.chars().all(char::is_whitespace) {
                     line.clear();
-                    fold_newlines = is_sigil(chars.peek().map(|c| c.1));
+                    fold_newlines = is_non_sql_sigil(chars.peek().map(|c| c.1));
+                    handle_newlines = is_sql_sigil(chars.peek().map(|c| c.1));
                     self.pos_map.insert(self.pos, (self.src_line, 1));
                     continue;
                 }
@@ -563,7 +579,15 @@ impl<'a> Iterator for LineReader<'a> {
 }
 
 fn is_sigil(c: Option<char>) -> bool {
-    matches!(c, Some('$') | Some('>') | Some('!') | Some('?'))
+    is_sql_sigil(c) || is_non_sql_sigil(c)
+}
+
+fn is_sql_sigil(c: Option<char>) -> bool {
+    matches!(c, Some('>') | Some('!') | Some('?'))
+}
+
+fn is_non_sql_sigil(c: Option<char>) -> bool {
+    matches!(c, Some('$'))
 }
 
 struct BuiltinReader<'a> {

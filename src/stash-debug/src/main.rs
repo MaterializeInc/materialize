@@ -81,25 +81,32 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::pin;
 use std::process;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
-use mz_adapter::catalog::storage::{self as catalog, BootstrapArgs};
-use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
+use futures::StreamExt;
+use once_cell::sync::Lazy;
+use tracing_subscriber::filter::EnvFilter;
+
+use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, StateConfig};
 use mz_build_info::{build_info, BuildInfo};
+use mz_catalog::durable::{
+    self as catalog, BootstrapArgs, OpenableDurableCatalogState, StashConfig,
+};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_secrets::InMemorySecretsController;
+use mz_ore::retry::Retry;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
-use mz_storage_client::controller as storage;
-use once_cell::sync::Lazy;
+use mz_storage_controller as storage;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
@@ -112,6 +119,12 @@ pub struct Args {
 
     #[clap(subcommand)]
     action: Action,
+
+    /// Which log messages to emit.
+    ///
+    /// See environmentd's `--log-filter` option for details.
+    #[clap(long, env = "LOG_FILTER", value_name = "FILTER", default_value = "off")]
+    log_filter: EnvFilter,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -163,7 +176,12 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
-    let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
+    tracing_subscriber::fmt()
+        .with_env_filter(args.log_filter)
+        .with_writer(io::stdout)
+        .init();
+
+    let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(
         &args.postgres_url,
     )?)?;
     let factory = StashFactory::new(&MetricsRegistry::new());
@@ -171,6 +189,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .open_readonly(args.postgres_url.clone(), None, tls.clone())
         .await?;
     let usage = Usage::from_stash(&mut stash).await?;
+    let schema = None;
 
     match args.action {
         Action::Dump { target } => {
@@ -187,24 +206,32 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             value,
         } => {
             // edit needs a mutable stash, so reconnect.
-            let stash = factory.open(args.postgres_url, None, tls).await?;
+            let stash = factory.open(args.postgres_url, schema, tls).await?;
             edit(stash, usage, collection, key, value).await
         }
         Action::Delete { collection, key } => {
             // delete needs a mutable stash, so reconnect.
-            let stash = factory.open(args.postgres_url, None, tls).await?;
+            let stash = factory.open(args.postgres_url, schema, tls).await?;
             delete(stash, usage, collection, key).await
         }
         Action::UpgradeCheck {
             cluster_replica_sizes,
         } => {
-            // upgrade needs fake writes, so use a savepoint.
-            let stash = factory.open_savepoint(args.postgres_url, tls).await?;
             let cluster_replica_sizes: ClusterReplicaSizeMap = match cluster_replica_sizes {
                 None => Default::default(),
                 Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
             };
-            upgrade_check(stash, usage, cluster_replica_sizes).await
+            upgrade_check(
+                StashConfig {
+                    stash_factory: factory,
+                    stash_url: args.postgres_url,
+                    schema,
+                    tls,
+                },
+                usage,
+                cluster_replica_sizes,
+            )
+            .await
         }
     }
 }
@@ -237,11 +264,13 @@ async fn dump(mut stash: Stash, usage: Usage, mut target: impl Write) -> Result<
     Ok(())
 }
 async fn upgrade_check(
-    stash: Stash,
+    stash_config: StashConfig,
     usage: Usage,
     cluster_replica_sizes: ClusterReplicaSizeMap,
 ) -> Result<(), anyhow::Error> {
-    let msg = usage.upgrade_check(stash, cluster_replica_sizes).await?;
+    let msg = usage
+        .upgrade_check(stash_config, cluster_replica_sizes)
+        .await?;
     println!("{msg}");
     Ok(())
 }
@@ -254,7 +283,7 @@ macro_rules! for_collections {
                 $macro!(catalog::CLUSTER_COLLECTION);
                 $macro!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
                 $macro!(catalog::CLUSTER_REPLICA_COLLECTION);
-                $macro!(catalog::CONFIG_COLLECTION);
+                $macro!(catalog::COMMENTS_COLLECTION);
                 $macro!(catalog::CONFIG_COLLECTION);
                 $macro!(catalog::DATABASES_COLLECTION);
                 $macro!(catalog::DEFAULT_PRIVILEGES_COLLECTION);
@@ -358,7 +387,7 @@ impl Usage {
     fn names(&self) -> BTreeSet<String> {
         BTreeSet::from_iter(
             match self {
-                Self::Catalog => catalog::ALL_COLLECTIONS,
+                Self::Catalog => mz_catalog::durable::ALL_COLLECTIONS,
                 Self::Storage => storage::ALL_COLLECTIONS,
             }
             .iter()
@@ -459,58 +488,77 @@ impl Usage {
 
     async fn upgrade_check(
         &self,
-        stash: Stash,
+        stash_config: StashConfig,
         cluster_replica_sizes: ClusterReplicaSizeMap,
     ) -> Result<String, anyhow::Error> {
         if !matches!(self, Self::Catalog) {
             anyhow::bail!("upgrade_check expected Catalog stash, found {:?}", self);
         }
 
-        let metrics_registry = &MetricsRegistry::new();
-        let now = SYSTEM_TIME.clone();
-        let storage = mz_adapter::catalog::storage::Connection::open(
-            stash,
-            now.clone(),
-            &BootstrapArgs {
-                default_cluster_replica_size: "1".into(),
-                builtin_cluster_replica_size: "1".into(),
-                bootstrap_role: None,
-            },
-            None,
-        )
-        .await?;
-        let secrets_reader = Arc::new(InMemorySecretsController::new());
+        let retry = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .into_retry_stream();
+        let mut retry = pin::pin!(retry);
 
-        let (_catalog, _, _, last_catalog_version) = Catalog::open(Config {
-            storage,
-            unsafe_mode: true,
-            all_features: false,
-            build_info: &BUILD_INFO,
-            environment_id: EnvironmentId::for_tests(),
-            now,
-            skip_migrations: false,
-            metrics_registry,
-            cluster_replica_sizes,
-            default_storage_cluster_size: None,
-            system_parameter_defaults: Default::default(),
-            availability_zones: vec![],
-            secrets_reader,
-            egress_ips: vec![],
-            aws_principal_context: None,
-            aws_privatelink_availability_zones: None,
-            system_parameter_sync_config: None,
-            storage_usage_retention_period: None,
-            http_host_name: None,
-            connection_context: None,
-            active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
-        })
-        .await?;
+        loop {
+            let now = SYSTEM_TIME.clone();
+            let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
+                stash_config.clone(),
+            ));
+            let mut storage = openable_storage
+                .open_savepoint(
+                    now(),
+                    &BootstrapArgs {
+                        default_cluster_replica_size: "1".into(),
+                        bootstrap_role: None,
+                    },
+                    None,
+                )
+                .await?;
 
-        Ok(format!(
-            "catalog upgrade from {} to {} would succeed",
-            last_catalog_version,
-            BUILD_INFO.human_version(),
-        ))
+            match Catalog::initialize_state(
+                StateConfig {
+                    unsafe_mode: true,
+                    all_features: false,
+                    build_info: &BUILD_INFO,
+                    environment_id: EnvironmentId::for_tests(),
+                    now,
+                    skip_migrations: false,
+                    cluster_replica_sizes: cluster_replica_sizes.clone(),
+                    default_storage_cluster_size: None,
+                    builtin_cluster_replica_size: "1".into(),
+                    system_parameter_defaults: Default::default(),
+                    availability_zones: vec![],
+                    egress_ips: vec![],
+                    aws_principal_context: None,
+                    aws_privatelink_availability_zones: None,
+                    system_parameter_sync_config: None,
+                    http_host_name: None,
+                    connection_context: None,
+                    active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
+                },
+                &mut storage,
+            )
+            .await
+            {
+                Ok((_, _, _, last_catalog_version)) => {
+                    storage.expire().await;
+                    return Ok(format!(
+                        "catalog upgrade from {} to {} would succeed",
+                        last_catalog_version,
+                        BUILD_INFO.human_version(),
+                    ));
+                }
+                Err(e) => {
+                    if retry.next().await.is_none() {
+                        tracing::error!(?e, "Could not open catalog, and out of retries.");
+                        return Err(e.into());
+                    }
+                    tracing::warn!(?e, "Could not open catalog. Retrying...");
+                }
+            }
+        }
     }
 }
 

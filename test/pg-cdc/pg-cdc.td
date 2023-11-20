@@ -12,6 +12,16 @@
 # pg_hba.conf if you modify the existing user names or add new ones.
 
 > CREATE SECRET pgpass AS 'postgres'
+
+! CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass,
+    BROKER '${testdrive.kafka-addr}'
+  )
+contains:POSTGRES connections do not support BROKER values
+
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
@@ -82,6 +92,7 @@ INSERT INTO "таблица" VALUES ('стойност');
 CREATE TABLE """literal_quotes""" (a TEXT);
 ALTER TABLE """literal_quotes""" REPLICA IDENTITY FULL;
 INSERT INTO """literal_quotes""" VALUES ('v');
+ALTER TABLE """literal_quotes""" REPLICA IDENTITY FULL;
 
 CREATE TABLE "create" (a TEXT);
 ALTER TABLE "create" REPLICA IDENTITY FULL;
@@ -103,6 +114,7 @@ ALTER TABLE conflict_schema.conflict_table REPLICA IDENTITY FULL;
 INSERT INTO conflict_schema.conflict_table VALUES ('234');
 
 CREATE TABLE "space table" ("space column" INTEGER);
+ALTER TABLE "space table" REPLICA IDENTITY FULL;
 
 CREATE TYPE an_enum AS ENUM ('var0', 'var1');
 CREATE TABLE enum_table (a an_enum);
@@ -115,7 +127,6 @@ INSERT INTO another_enum_table VALUES ('var2'), ('var3');
 ALTER TABLE another_enum_table REPLICA IDENTITY FULL;
 
 CREATE TABLE conflict_schema.another_enum_table ("колона" another_enum);
-ALTER TABLE conflict_schema.another_enum_table REPLICA IDENTITY FULL;
 INSERT INTO conflict_schema.another_enum_table VALUES ('var2'), ('var3');
 ALTER TABLE conflict_schema.another_enum_table REPLICA IDENTITY FULL;
 
@@ -138,6 +149,11 @@ CREATE PUBLICATION another_publication FOR TABLE another_schema.another_table;
 #
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
+# Sneak in a test for pg_source_snapshot_statement_timeout
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 1000
+
 > CREATE SOURCE "test_slot_source"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES ("pk_table");
@@ -151,6 +167,9 @@ test_slot_source_progress progress
 > DROP SOURCE test_slot_source
 
 $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 0
 
 #
 # Error checking
@@ -201,14 +220,14 @@ contains:database "no_such_dbname" does not exist
 ! CREATE SOURCE "no_such_publication"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'no_such_publication');
 # TODO: assert on `detail` here.
-exact:failed to connect to PostgreSQL database
+contains:failed to connect to PostgreSQL database
 
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (
     "enum_table"
   );
-regex: the following columns contain unsupported types:\npostgres.public.enum_table.a \(OID \d+\)
+contains:referenced tables use unsupported types
 
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
@@ -216,7 +235,7 @@ regex: the following columns contain unsupported types:\npostgres.public.enum_ta
     "enum_table",
     public.another_enum_table
   );
-regex: the following columns contain unsupported types:\npostgres\.public\.another_enum_table\."колона" \(OID \d+\)\npostgres\.public\.enum_table\.a \(OID \d+\)
+contains:referenced tables use unsupported types
 
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (
@@ -226,7 +245,16 @@ regex: the following columns contain unsupported types:\npostgres\.public\.anoth
   FOR TABLES (
     pk_table
   );
-contains: must not specify DETAILS option in CREATE SOURCE
+contains: CREATE SOURCE specifies DETAILS option
+
+! CREATE SOURCE "mz_source"
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (
+    "no_replica_identity",
+    "pk_table"
+  );
+contains:referenced items not tables with REPLICA IDENTITY FULL
+detail:referenced items: no_replica_identity
 
 #
 # Establish direct replication
@@ -235,11 +263,9 @@ contains: must not specify DETAILS option in CREATE SOURCE
 # Note: This implicitly tests that enum_table being part of the publication does not
 # prevent us from using other tables as subsources.
 #
-# TODO: This should produce an error because we included the `no_replica_identity` table
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (
-    "no_replica_identity",
     "pk_table",
     "nonpk_table",
     "types_table",
@@ -259,31 +285,30 @@ contains: must not specify DETAILS option in CREATE SOURCE
   );
 
 > SHOW SOURCES
-array_types_table     subsource <null>
-conflict_table        subsource <null>
-create                subsource <null>
-escaped_text_table    subsource <null>
-large_text            subsource <null>
-multipart_pk          subsource <null>
-mz_source             postgres  ${arg.default-storage-size}
-mz_source_progress    progress  <null>
-no_replica_identity   subsource <null>
-nonpk_table           subsource <null>
-nulls_table           subsource <null>
-pk_table              subsource <null>
-"space table"         subsource <null>
-trailing_space_nopk   subsource <null>
-trailing_space_pk     subsource <null>
-"\"literal_quotes\""  subsource <null>
-types_table           subsource <null>
-utf8_table            subsource <null>
-таблица               subsource <null>
+array_types_table     subsource <null>  <null>
+conflict_table        subsource <null>  <null>
+create                subsource <null>  <null>
+escaped_text_table    subsource <null>  <null>
+large_text            subsource <null>  <null>
+multipart_pk          subsource <null>  <null>
+mz_source             postgres  ${arg.default-storage-size}  materialize_public_mz_source
+mz_source_progress    progress  <null>  <null>
+nonpk_table           subsource <null>  <null>
+nulls_table           subsource <null>  <null>
+pk_table              subsource <null>  <null>
+"space table"         subsource <null>  <null>
+trailing_space_nopk   subsource <null>  <null>
+trailing_space_pk     subsource <null>  <null>
+"\"literal_quotes\""  subsource <null>  <null>
+types_table           subsource <null>  <null>
+utf8_table            subsource <null>  <null>
+таблица               subsource <null>  <null>
 
 > SELECT lsn > 0 FROM mz_source_progress
 true
 
 # Ensure we report the write frontier of the progress subsource
-$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
@@ -302,10 +327,6 @@ contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER 
 
 ! DROP SOURCE conflict_table CASCADE
 contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
-
-> SELECT * FROM no_replica_identity;
-1
-2
 
 #
 # Perform sanity checks of the initial snapshot
@@ -515,8 +536,7 @@ true
 2 two_two
 5 five
 
-# TODO: should only be 'running' w/ resolution of #20666
-> SELECT status = 'starting' OR status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_pk_table';
+> SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_pk_table';
 true
 
 > DROP SOURCE large_cluster;
@@ -588,6 +608,17 @@ DELETE FROM conflict_schema.conflict_table;
   );
 contains: invalid TEXT COLUMNS option value: column "pk_table.col_dne" does not exist
 
+! CREATE SOURCE case_sensitive_names
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [pk_table."F2"]
+  )
+  FOR TABLES (
+    "enum_table"
+  );
+contains: invalid TEXT COLUMNS option value: column "pk_table.F2" does not exist
+hint: The similarly named column "pk_table.f2" does exist.
+
 ! CREATE SOURCE enum_source
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source',
@@ -615,7 +646,7 @@ contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguo
     PUBLICATION 'mz_source',
     TEXT COLUMNS [foo]
   )
-  FOR SCHEMAS (public);
+  FOR TABLES (pk_table);
 contains: invalid TEXT COLUMNS option value: column name 'foo' must have at least a table qualification
 
 ! CREATE SOURCE enum_source
@@ -623,7 +654,7 @@ contains: invalid TEXT COLUMNS option value: column name 'foo' must have at leas
     PUBLICATION 'mz_source',
     TEXT COLUMNS [foo.bar.qux.qax.foo]
   )
-  FOR SCHEMAS (public);
+  FOR TABLES (pk_table);
 contains: invalid TEXT COLUMNS option value: qualified name did not have between 1 and 3 components: foo.bar.qux.qax
 
 ! CREATE SOURCE enum_source
@@ -631,7 +662,7 @@ contains: invalid TEXT COLUMNS option value: qualified name did not have between
     PUBLICATION 'mz_source',
     TEXT COLUMNS [enum_table.a, enum_table.a]
   )
-  FOR SCHEMAS (public);
+  FOR TABLES (enum_table);
 contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.enum_table.a
 
 # utf8_table is not part of mz_source_narrow publication
@@ -640,7 +671,7 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
     PUBLICATION 'mz_source_narrow',
     TEXT COLUMNS [enum_table.a, utf8_table.f1]
   )
-  FOR SCHEMAS (public);
+  FOR TABLES (enum_table);
 contains: invalid TEXT COLUMNS option value: table utf8_table not found in source
 
 # n.b includes a reference to pk_table, which is not a table that's part of the
@@ -659,7 +690,7 @@ contains: invalid TEXT COLUMNS option value: table utf8_table not found in sourc
     "enum_table",
     public.another_enum_table
   );
-contains:TEXT COLUMNS can only refer to tables being added to source
+contains:TEXT COLUMNS refers to table not currently being added
 
 > CREATE SOURCE enum_source
   FROM POSTGRES CONNECTION pg (
@@ -675,10 +706,10 @@ contains:TEXT COLUMNS can only refer to tables being added to source
   );
 
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
-another_enum_table      subsource <null>
-enum_source             postgres  ${arg.default-storage-size}
-enum_source_progress    progress  <null>
-enum_table              subsource <null>
+another_enum_table      subsource <null> <null>
+enum_source             postgres  ${arg.default-storage-size} materialize_public_enum_source
+enum_source_progress    progress  <null> <null>
+enum_table              subsource <null> <null>
 
 > SELECT * FROM enum_table
 var0
@@ -702,8 +733,8 @@ INSERT INTO pk_table VALUES (99999);
 # should be "materialize.public.pk_table"
 
 > SELECT error FROM mz_internal.mz_source_statuses where name in ('enum_source', 'mz_source');
-"publication \"mz_source\" does not exist"
-"publication \"mz_source\" does not exist"
+"postgres: publication \"mz_source\" does not exist"
+"postgres: publication \"mz_source\" does not exist"
 
 > DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;
@@ -720,9 +751,9 @@ INSERT INTO pk_table VALUES (99999);
   );
 
 > SHOW SOURCES
-another_source          postgres  ${arg.default-storage-size}
-another_source_progress progress  <null>
-another_table           subsource <null>
+another_source          postgres  ${arg.default-storage-size} materialize_public_another_source
+another_source_progress progress  <null> <null>
+another_table           subsource <null> <null>
 
 > DROP SOURCE another_source
 

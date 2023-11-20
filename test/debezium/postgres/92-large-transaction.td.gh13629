@@ -27,7 +27,8 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "database.history.kafka.topic": "schema-changes.history",
   "truncate.handling.mode": "include",
   "provide.transaction.metadata": "true",
-  "decimal.handling.mode": "precise"
+  "decimal.handling.mode": "precise",
+  "topic.prefix": "postgres"
 }
 
 # PUT requests do not take effect immediately, we need to sleep
@@ -57,7 +58,7 @@ $ schema-registry-wait subject=postgres.public.large_same_rows-value
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE postgres_tx_metadata
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.transaction')
@@ -121,7 +122,8 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "database.history.kafka.bootstrap.servers": "kafka:9092",
   "database.history.kafka.topic": "schema-changes.history",
   "truncate.handling.mode": "include",
-  "decimal.handling.mode": "precise"
+  "decimal.handling.mode": "precise",
+  "topic.prefix": "postgres"
 }
 
 > SELECT mz_internal.mz_sleep(10)

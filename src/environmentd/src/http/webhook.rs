@@ -17,7 +17,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::{ColumnType, Datum, Row, ScalarType};
 use mz_sql::plan::{WebhookHeaderFilters, WebhookHeaders};
-use mz_storage_client::controller::StorageError;
+use mz_storage_types::controller::StorageError;
 
 use anyhow::Context;
 use axum::extract::{Path, State};
@@ -25,13 +25,6 @@ use axum::response::IntoResponse;
 use bytes::Bytes;
 use http::StatusCode;
 use thiserror::Error;
-
-/// The number of concurrent requests we allow at once for webhook sources.
-///
-/// TODO(parkmycar): Make this configurable via LaunchDarkly and/or as a setting on each webhook
-/// source. The blocker for doing this today is an `axum` layer that allows us to __reduce__ the
-/// concurrency limit, the current one only allows you to increase it.
-pub const CONCURRENCY_LIMIT: usize = 250;
 
 pub async fn handle_webhook(
     State(client): State<mz_adapter::Client>,
@@ -283,7 +276,7 @@ mod tests {
     use mz_adapter::AdapterError;
     use mz_repr::{ColumnType, GlobalId, ScalarType};
     use mz_sql::plan::{WebhookHeaderFilters, WebhookHeaders};
-    use mz_storage_client::controller::StorageError;
+    use mz_storage_types::controller::StorageError;
     use proptest::prelude::*;
 
     use super::{filter_headers, pack_row, WebhookError};

@@ -27,7 +27,7 @@ $ kafka-ingest format=avro topic=re-created schema=${schema} repeat=10
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE re_created
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-re-created-${testdrive.seed}')

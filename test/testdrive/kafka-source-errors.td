@@ -9,7 +9,7 @@
 
 # Test that Kafka sources with no format are disallowed.
 
-> CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE SOURCE s
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -22,20 +22,16 @@ contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport 
 
 ! CREATE CONNECTION fawlty_kafka_conn
   TO KAFKA (BROKER 'non-existent-broker:9092');
-contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
+contains:Failed to resolve hostname
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS fawlty_csr_conn TO CONFLUENT SCHEMA REGISTRY (
+! CREATE CONNECTION IF NOT EXISTS fawlty_csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://non-existent-csr:8081'
   );
-
-! CREATE SOURCE fawlty_csr_source
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fawlty-csr-source-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION fawlty_csr_conn
-contains: failed to fetch schema subject
+contains:failed to lookup address information
 
 # Check that for all tables clause is rejected
 ! CREATE SOURCE bad_definition1

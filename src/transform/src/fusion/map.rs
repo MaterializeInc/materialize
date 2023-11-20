@@ -30,8 +30,8 @@ pub struct Map;
 
 impl crate::Transform for Map {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "map_fusion")
     )]

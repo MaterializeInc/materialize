@@ -24,7 +24,7 @@ message Message2 {}
   );
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE SOURCE fail FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-too-few-${testdrive.seed}')

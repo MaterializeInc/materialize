@@ -17,10 +17,13 @@ use anyhow::anyhow;
 use tracing::warn;
 use url::Url;
 
+use mz_postgres_client::metrics::PostgresClientMetrics;
+use mz_postgres_client::PostgresClientKnobs;
+
 use crate::file::{FileBlob, FileBlobConfig};
-use crate::location::{Blob, Consensus, ExternalError};
+use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
-use crate::metrics::{PostgresConsensusMetrics, S3BlobMetrics};
+use crate::metrics::S3BlobMetrics;
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3Blob, S3BlobConfig};
 
@@ -33,7 +36,7 @@ pub enum BlobConfig {
     S3(S3BlobConfig),
     /// Config for [MemBlob], only available in testing to prevent
     /// footguns.
-    Mem,
+    Mem(bool),
 }
 
 /// Configuration knobs for [Blob].
@@ -54,7 +57,9 @@ impl BlobConfig {
         match self {
             BlobConfig::File(config) => Ok(Arc::new(FileBlob::open(config).await?)),
             BlobConfig::S3(config) => Ok(Arc::new(S3Blob::open(config).await?)),
-            BlobConfig::Mem => Ok(Arc::new(MemBlob::open(MemBlobConfig::default()))),
+            BlobConfig::Mem(tombstone) => {
+                Ok(Arc::new(MemBlob::open(MemBlobConfig::new(tombstone))))
+            }
         }
     }
 
@@ -70,7 +75,10 @@ impl BlobConfig {
 
         let config = match url.scheme() {
             "file" => {
-                let config = FileBlobConfig::from(url.path());
+                let mut config = FileBlobConfig::from(url.path());
+                if query_params.remove("tombstone").is_some() {
+                    config.tombstone = true;
+                }
                 Ok(BlobConfig::File(config))
             }
             "s3" => {
@@ -110,8 +118,15 @@ impl BlobConfig {
                 if !cfg!(debug_assertions) {
                     warn!("persist unexpectedly using in-mem blob in a release binary");
                 }
+                let tombstone = match query_params.remove("tombstone").as_deref() {
+                    None | Some("true") => true,
+                    Some("false") => false,
+                    Some(other) => Err(Determinate::new(anyhow!(
+                        "invalid tombstone param value: {other}"
+                    )))?,
+                };
                 query_params.clear();
-                Ok(BlobConfig::Mem)
+                Ok(BlobConfig::Mem(tombstone))
             }
             p => Err(anyhow!(
                 "unknown persist blob scheme {}: {}",
@@ -145,22 +160,6 @@ pub enum ConsensusConfig {
     Mem,
 }
 
-/// Configuration knobs for [Consensus].
-pub trait ConsensusKnobs: std::fmt::Debug + Send + Sync {
-    /// Maximum number of connections allowed in a pool.
-    fn connection_pool_max_size(&self) -> usize;
-    /// Minimum TTL of a connection. It is expected that connections are
-    /// routinely culled to balance load to the backing store of [Consensus].
-    fn connection_pool_ttl(&self) -> Duration;
-    /// Minimum time between TTLing connections. Helps stagger reconnections
-    /// to avoid stampeding the backing store of [Consensus].
-    fn connection_pool_ttl_stagger(&self) -> Duration;
-    /// Time to wait for a connection to be made before trying.
-    fn connect_timeout(&self) -> Duration;
-    /// TCP user timeout for connection to [Consensus].
-    fn tcp_user_timeout(&self) -> Duration;
-}
-
 impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
     pub async fn open(self) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
@@ -175,8 +174,8 @@ impl ConsensusConfig {
     /// Parses a [Consensus] config from a uri string.
     pub fn try_from(
         value: &str,
-        knobs: Box<dyn ConsensusKnobs>,
-        metrics: PostgresConsensusMetrics,
+        knobs: Box<dyn PostgresClientKnobs>,
+        metrics: PostgresClientMetrics,
     ) -> Result<Self, ExternalError> {
         let url = Url::parse(value).map_err(|err| {
             anyhow!(

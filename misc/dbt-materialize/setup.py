@@ -19,17 +19,19 @@ from pathlib import Path
 
 from setuptools import find_packages
 
+README = Path(__file__).parent / "README.md"
+
 setup(
     name="dbt-materialize",
     # This adapter's minor version should match the required dbt-postgres version,
     # but patch versions may differ.
     # If you bump this version, bump it in __version__.py too.
-    version="1.5.1",
+    version="1.7.0",
     description="The Materialize adapter plugin for dbt.",
     long_description=(Path(__file__).parent / "README.md").open().read(),
     long_description_content_type="text/markdown",
     author="Materialize, Inc.",
-    author_email="support@materialize.com",
+    author_email="devex@materialize.com",
     url="https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize",
     packages=find_packages(),
     package_data={
@@ -39,8 +41,8 @@ setup(
             "include/materialize/macros/**/*.sql",
         ]
     },
-    install_requires=["dbt-postgres~=1.5.0"],
+    install_requires=["dbt-postgres~=1.7.0"],
     extras_require={
-        "dev": ["dbt-tests-adapter~=1.5.0"],
+        "dev": ["dbt-tests-adapter~=1.7.0"],
     },
 )

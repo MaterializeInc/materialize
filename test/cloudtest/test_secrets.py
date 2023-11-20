@@ -166,7 +166,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             ! CREATE SOURCE some_kafka_source
               FROM KAFKA CONNECTION kafka_conn_with_deleted_secret
               (TOPIC 'foo')
-            contains: NotFound
+            contains:failed to create and connect Kafka consumer
             """
         ),
         no_reset=True,
@@ -200,7 +200,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             ! CREATE SOURCE some_kafka_source
               FROM KAFKA CONNECTION kafka_conn_with_deleted_secret
               (TOPIC 'foo')
-            contains: NotFound
+            contains:failed to create and connect Kafka consumer
 
             > SELECT error like '%NotFound%'
               FROM mz_internal.mz_source_statuses
@@ -235,7 +235,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             ! CREATE SOURCE some_kafka_source
               FROM KAFKA CONNECTION kafka_conn_with_deleted_secret
               (TOPIC 'foo')
-            contains: NotFound
+            contains:failed to create and connect Kafka consumer
 
             > SELECT error like '%NotFound%'
               FROM mz_internal.mz_source_statuses

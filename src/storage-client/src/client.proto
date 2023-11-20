@@ -7,15 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
+
 syntax = "proto3";
 
 import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "cluster-client/src/client.proto";
-import "storage-client/src/types/parameters.proto";
-import "storage-client/src/types/sources.proto";
-import "storage-client/src/types/sinks.proto";
+import "storage-types/src/parameters.proto";
+import "storage-types/src/sources.proto";
+import "storage-types/src/sinks.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -36,7 +38,7 @@ message ProtoAllowCompaction {
 
 message ProtoRunIngestionCommand {
     mz_repr.global_id.ProtoGlobalId id = 1;
-    mz_storage_client.types.sources.ProtoIngestionDescription description = 2;
+    mz_storage_types.sources.ProtoIngestionDescription description = 2;
     bool update = 3;
 }
 
@@ -46,7 +48,7 @@ message ProtoCreateSources {
 
 message ProtoCreateSinkCommand {
     mz_repr.global_id.ProtoGlobalId id = 1;
-    mz_storage_client.types.sinks.ProtoStorageSinkDesc description = 2;
+    mz_storage_types.sinks.ProtoStorageSinkDesc description = 2;
 }
 
 message ProtoCreateSinks {
@@ -74,7 +76,7 @@ message ProtoStorageCommand {
         ProtoAllowCompaction allow_compaction = 2;
         google.protobuf.Empty initialization_complete = 3;
         ProtoCreateSinks create_sinks = 4;
-        mz_storage_client.types.parameters.ProtoStorageParameters update_configuration = 5;
+        mz_storage_types.parameters.ProtoStorageParameters update_configuration = 5;
     }
 }
 

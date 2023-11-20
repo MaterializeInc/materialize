@@ -26,6 +26,11 @@ class SelectStar(Operation):
         return "SELECT * FROM t1;"
 
 
+class SelectLimit(Operation):
+    def sql_statement(self) -> str:
+        return "SELECT * FROM t1 LIMIT 1;"
+
+
 class SelectCount(Operation):
     def sql_statement(self) -> str:
         return "SELECT COUNT(*) FROM t1;"

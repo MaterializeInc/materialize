@@ -17,11 +17,6 @@ ALTER SYSTEM SET enable_rbac_checks TO true;
 ----
 COMPLETE 0
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO true;
-----
-COMPLETE 0
-
 # Test mz_aclitem type and functions
 
 statement ok
@@ -178,6 +173,16 @@ SELECT mz_internal.mz_acl_item_contains_privilege(NULL, NULL)
 ----
 NULL
 
+query B
+SELECT mz_internal.mz_acl_item_contains_privilege(mz_internal.make_mz_aclitem('u1', 'u2', 'USAGE'), 'CREATE');
+----
+false
+
+query B
+SELECT mz_internal.mz_acl_item_contains_privilege(mz_internal.make_mz_aclitem('u1', 'u2', 'USAGE'), 'USAGE');
+----
+true
+
 # Test aclitem type and functions
 
 statement ok
@@ -290,6 +295,9 @@ SELECT aclexplode(ARRAY[makeaclitem(1, 2, 'SELECT, INSERT, DELETE', false), make
 (2,1,INSERT,f)
 (2,1,SELECT,f)
 
+query error ACL arrays must not contain null values
+SELECT aclexplode(array[null]::aclitem[]);
+
 # mz_aclexplode
 
 query T
@@ -299,6 +307,9 @@ SELECT mz_internal.mz_aclexplode(ARRAY[mz_internal.make_mz_aclitem('u1', 'u2', '
 (u2,u1,DELETE,f)
 (u2,u1,INSERT,f)
 (u2,u1,SELECT,f)
+
+query error MZ_ACL arrays must not contain null values
+SELECT mz_internal.mz_aclexplode(array[null]::mz_aclitem[]);
 
 # Test casting to/from aclitem and mz_aclitem
 
@@ -356,10 +367,5 @@ NULL
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
 ----
 COMPLETE 0

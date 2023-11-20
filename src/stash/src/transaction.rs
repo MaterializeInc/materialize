@@ -16,17 +16,16 @@ use futures::{
     future::{self, try_join, try_join3, try_join_all, BoxFuture},
     TryFutureExt,
 };
+use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::{cast::CastFrom, collections::CollectionExt};
+use mz_stash_types::{InternalStashError, StashError};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio::sync::mpsc;
 use tokio_postgres::{types::ToSql, Client};
 
 use crate::postgres::{ConsolidateRequest, CountedStatements};
-use crate::{
-    AntichainFormatter, AppendBatch, Data, Diff, Id, InternalStashError, Stash, StashCollection,
-    StashError, Timestamp,
-};
+use crate::{AntichainFormatter, AppendBatch, Data, Diff, Id, Stash, StashCollection, Timestamp};
 
 /// The limit AFTER which to split an update batch (that is, we will ship an update that
 /// exceeds this number, but then start another batch).
@@ -156,9 +155,12 @@ impl<'a> Transaction<'a> {
             return Ok(StashCollection::new(*id));
         }
 
+        let (statement, histogram) = self.stmts.collection();
         let collection_id_opt: Option<_> = self
             .client
-            .query_one(self.stmts.collection(), &[&name])
+            .query_one(statement, &[&name])
+            .wall_time()
+            .observe(histogram)
             .await
             .map(|row| row.get("collection_id"))
             .ok();
@@ -234,9 +236,12 @@ impl<'a> Transaction<'a> {
         if let Some(entry) = self.uppers.lock().unwrap().get(&collection_id) {
             return Ok(entry.clone());
         }
+        let (statement, histogram) = self.stmts.upper();
         let upper: Option<Timestamp> = self
             .client
-            .query_one(self.stmts.upper(), &[&collection_id])
+            .query_one(statement, &[&collection_id])
+            .wall_time()
+            .observe(histogram)
             .await?
             .get("upper");
         let upper = Antichain::from_iter(upper);
@@ -253,9 +258,12 @@ impl<'a> Transaction<'a> {
         if let Some(entry) = self.sinces.lock().unwrap().get(&collection_id) {
             return Ok(entry.clone());
         }
+        let (statement, histogram) = self.stmts.since();
         let since: Option<Timestamp> = self
             .client
-            .query_one(self.stmts.since(), &[&collection_id])
+            .query_one(statement, &[&collection_id])
+            .wall_time()
+            .observe(histogram)
             .await?
             .get("since");
         let since = Antichain::from_iter(since);
@@ -265,7 +273,7 @@ impl<'a> Transaction<'a> {
 
     /// Iterates over a collection.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn iter<K, V>(
+    pub async fn iter<K, V>(
         &self,
         collection: StashCollection<K, V>,
     ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError>
@@ -304,9 +312,12 @@ impl<'a> Transaction<'a> {
                 ));
             }
         };
+        let (statement, histogram) = self.stmts.iter();
         let rows = self
             .client
-            .query(self.stmts.iter(), &[&id])
+            .query(statement, &[&id])
+            .wall_time()
+            .observe(histogram)
             .await?
             .into_iter()
             .map(move |row| {
@@ -331,11 +342,14 @@ impl<'a> Transaction<'a> {
         V: Data,
     {
         let key = key.encode_to_vec();
+        let (statement, histogram) = self.stmts.iter_key();
         let (since, rows) = future::try_join(
             self.since(collection.id),
             self.client
-                .query(self.stmts.iter_key(), &[&collection.id, &key])
-                .map_err(|err| err.into()),
+                .query(statement, &[&collection.id, &key])
+                .map_err(|err| err.into())
+                .wall_time()
+                .observe(histogram),
         )
         .await?;
         let since = match since.into_option() {
@@ -714,9 +728,12 @@ impl<'a> Transaction<'a> {
         .await?;
 
         // If successful, execute the change in the txn.
+        let (statement, histogram) = self.stmts.compact();
         self.client
-            .execute(self.stmts.compact(), &[&new_since.as_option(), &id])
+            .execute(statement, &[&new_since.as_option(), &id])
             .map_err(StashError::from)
+            .wall_time()
+            .observe(histogram)
             .await?;
         maybe_update_antichain(&self.sinces, id, new_since.clone());
         Ok(())
@@ -743,9 +760,12 @@ impl<'a> Transaction<'a> {
             )));
         }
 
+        let (statement, histogram) = self.stmts.seal();
         self.client
-            .execute(self.stmts.seal(), &[&new_upper.as_option(), &id])
+            .execute(statement, &[&new_upper.as_option(), &id])
             .map_err(StashError::from)
+            .wall_time()
+            .observe(histogram)
             .await?;
         maybe_update_antichain(&self.uppers, id, new_upper);
         Ok(())

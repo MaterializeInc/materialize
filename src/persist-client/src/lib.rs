@@ -126,6 +126,7 @@ pub mod cfg;
 pub mod cli {
     //! Persist command-line utilities
     pub mod admin;
+    pub mod args;
     pub mod inspect;
 }
 pub mod critical;
@@ -140,6 +141,7 @@ pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
     pub mod shard_source;
 }
+pub mod iter;
 pub mod read;
 pub mod rpc;
 pub mod stats;
@@ -156,6 +158,7 @@ mod internal {
     pub mod maintenance;
     pub mod metrics;
     pub mod paths;
+    pub mod restore;
     pub mod service;
     pub mod state;
     pub mod state_diff;
@@ -385,7 +388,7 @@ impl PersistClient {
         ))
     }
 
-    /// [Self::open], but returning only a [/eadHandle].
+    /// [Self::open], but returning only a [ReadHandle].
     ///
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [WriteHandle].
@@ -432,7 +435,7 @@ impl PersistClient {
             .register_leased_reader(
                 &reader_id,
                 &diagnostics.handle_purpose,
-                self.cfg.reader_lease_duration,
+                self.cfg.dynamic.reader_lease_duration(),
                 heartbeat_ts,
             )
             .await;
@@ -647,31 +650,16 @@ impl PersistClient {
             key: key_schema,
             val: val_schema,
         };
-        let compact = self.cfg.compaction_enabled.then(|| {
-            Compactor::new(
-                self.cfg.clone(),
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.isolated_runtime),
-                writer_id.clone(),
-                schemas.clone(),
-                gc.clone(),
-            )
-        });
-        let upper = machine.applier.clone_upper();
         let writer = WriteHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
             machine,
             gc,
-            compact,
             Arc::clone(&self.blob),
-            Arc::clone(&self.isolated_runtime),
             writer_id,
             &diagnostics.handle_purpose,
             schemas,
-            upper,
-        )
-        .await;
+        );
         Ok(writer)
     }
 
@@ -780,6 +768,7 @@ impl Schema<ShardId> for ShardIdSchema {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
+    use std::mem;
     use std::pin::Pin;
     use std::str::FromStr;
     use std::task::Context;
@@ -1971,7 +1960,10 @@ mod tests {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
         // shut down cleanly after the handle is expired.
         let mut cache = new_test_client_cache();
-        cache.cfg.reader_lease_duration = Duration::from_millis(1);
+        cache
+            .cfg
+            .dynamic
+            .set_reader_lease_duration(Duration::from_millis(1));
         cache.cfg.writer_lease_duration = Duration::from_millis(1);
         let (_write, mut read) = cache
             .open(PersistLocation::new_in_mem())
@@ -1979,14 +1971,16 @@ mod tests {
             .expect("client construction failed")
             .expect_open::<(), (), u64, i64>(ShardId::new())
             .await;
-        let read_heartbeat_task = read
-            .heartbeat_task
+        let mut read_unexpired_state = read
+            .unexpired_state
             .take()
-            .expect("handle should have heartbeat task");
+            .expect("handle should have unexpired state");
         read.expire().await;
-        let () = read_heartbeat_task
-            .await
-            .expect("task should shutdown cleanly");
+        for read_heartbeat_task in mem::take(&mut read_unexpired_state.heartbeat_tasks) {
+            let () = read_heartbeat_task
+                .await
+                .expect("task should shutdown cleanly");
+        }
     }
 
     /// Regression test for 16743, where the nightly tests found that calling

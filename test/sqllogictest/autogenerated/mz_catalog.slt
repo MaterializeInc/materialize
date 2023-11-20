@@ -177,6 +177,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 ----
 1  id  text
 2  element_id  text
+3  element_modifiers  list
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_map_types' ORDER BY position
@@ -184,6 +185,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 1  id  text
 2  key_id   text
 3  value_id  text
+4  key_modifiers  list
+5  value_modifiers  list
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_materialized_views' ORDER BY position
@@ -318,6 +321,19 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 6  privileges  mz_aclitem[]
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_timezone_abbreviations' ORDER BY position
+----
+1  abbreviation  text
+2  utc_offset  interval
+3  dst  boolean
+4  timezone_name  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_timezone_names' ORDER BY position
+----
+1  name  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_types' ORDER BY position
 ----
 1  id  text
@@ -375,5 +391,7 @@ mz_ssh_tunnel_connections
 mz_storage_usage
 mz_system_privileges
 mz_tables
+mz_timezone_abbreviations
+mz_timezone_names
 mz_types
 mz_views

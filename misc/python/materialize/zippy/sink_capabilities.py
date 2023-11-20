@@ -23,8 +23,15 @@ class SinkExists(Capability):
         return "sink_{}"
 
     def __init__(
-        self, name: str, source_view: ViewExists, dest_view: ViewExists
+        self,
+        name: str,
+        source_view: ViewExists,
+        dest_view: ViewExists,
+        cluster_name_out: str,
+        cluster_name_in: str,
     ) -> None:
         self.name = name
         self.source_view = source_view
         self.dest_view = dest_view
+        self.cluster_name_out = cluster_name_out
+        self.cluster_name_in = cluster_name_in

@@ -54,8 +54,8 @@ name
 t
 
 > SHOW SOURCES;
-name    type  size
-------------------
+name    type  size  cluster
+---------------------------
 
 > SHOW INDEXES ON t;
 
@@ -103,7 +103,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"id": "valid1", "a": 2, "b": 1}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -248,8 +248,8 @@ v
 v
 
 > SHOW SOURCES;
-name    type   size
--------------------
+name    type   size   cluster
+-----------------------------
 
 > CREATE TABLE t (a int, b text NOT NULL)
 

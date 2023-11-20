@@ -84,10 +84,10 @@ plan:
 EXPLAIN SELECT state, name FROM ...
 ```
 ```nofmt
-%0 =
-| Get materialize.public.cities (u1)
-| TopK group=(#1) order=(#2 desc) limit=3 offset=0
-| Project (#1, #0)
+Explained Query:
+  Project (#1, #0)
+    TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3
+      ReadStorage materialize.public.cities
 ```
 
 ## Top 1 using `DISTINCT ON`
@@ -100,3 +100,30 @@ FROM cities
 ORDER BY state, pop DESC;
 ```
 Note that the `ORDER BY` clause should start with the expressions that are in the `DISTINCT ON`.
+
+## Group size hints
+
+When using either the above `LATERAL` subquery pattern or `DISTINCT ON`, we recommend
+specifying [query hints](/sql/select/#query-hints) to improve memory usage. For example:
+
+```sql
+SELECT state, name FROM
+    (SELECT DISTINCT state FROM cities) grp,
+    LATERAL (
+        SELECT name FROM cities
+        WHERE state = grp.state
+        OPTIONS (LIMIT INPUT GROUP SIZE = 1000)
+        ORDER BY pop DESC LIMIT 3
+    );
+```
+
+or
+
+```sql
+SELECT DISTINCT ON(state) state, name
+FROM cities
+OPTIONS (DISTINCT ON INPUT GROUP SIZE = 1000)
+ORDER BY state, pop DESC;
+```
+
+To learn more about how to set the values for the query hints above, see the [Optimization](/transform-data/optimization/#query-hints) page.

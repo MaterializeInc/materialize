@@ -77,6 +77,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
+use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fs::Permissions;
 use std::future::Future;
@@ -99,8 +100,8 @@ use itertools::Itertools;
 use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
 use mz_orchestrator::{
-    NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent,
-    ServiceProcessMetrics, ServiceStatus,
+    CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
+    ServiceEvent, ServiceProcessMetrics, ServiceStatus,
 };
 use mz_ore::cast::{CastFrom, ReinterpretCast, TryCastFrom};
 use mz_ore::error::ErrorExt;
@@ -192,6 +193,84 @@ pub struct ProcessOrchestrator {
     propagate_crashes: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
     scratch_directory: PathBuf,
+    launch_spec: LaunchSpec,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LaunchSpec {
+    /// Directly execute the provided binary
+    Direct,
+    /// Use Systemd to start the binary
+    Systemd,
+}
+
+impl LaunchSpec {
+    fn determine_implementation() -> Result<Self, anyhow::Error> {
+        // According to https://www.freedesktop.org/software/systemd/man/latest/sd_booted.html
+        // checking for `/run/systemd/system/` is the canonical way to determine if the system
+        // was booted up with systemd.
+        match Path::new("/run/systemd/system/").try_exists()? {
+            true => Ok(Self::Systemd),
+            false => Ok(Self::Direct),
+        }
+    }
+
+    fn refine_command(
+        &self,
+        image: impl AsRef<OsStr>,
+        args: &[impl AsRef<OsStr>],
+        wrapper: &[String],
+        full_id: &str,
+        listen_addrs: &BTreeMap<String, String>,
+        memory_limit: Option<&MemoryLimit>,
+        cpu_limit: Option<&CpuLimit>,
+    ) -> Command {
+        let wrapper_parts = || {
+            (
+                &wrapper[0],
+                wrapper[1..]
+                    .iter()
+                    .map(|part| interpolate_command(part, full_id, listen_addrs)),
+            )
+        };
+
+        let mut cmd = match self {
+            Self::Direct => {
+                if wrapper.is_empty() {
+                    Command::new(image)
+                } else {
+                    let (program, wrapper_args) = wrapper_parts();
+                    let mut cmd = Command::new(program);
+                    cmd.args(wrapper_args);
+                    cmd.arg(image);
+                    cmd
+                }
+            }
+            Self::Systemd => {
+                let mut cmd = Command::new("systemd-run");
+                cmd.args(["--user", "--scope"]);
+                if let Some(memory_limit) = memory_limit {
+                    let memory_limit = memory_limit.0.as_u64();
+                    cmd.args(["-p", &format!("MemoryMax={memory_limit}")]);
+                    // TODO: We could set `-p MemorySwapMax=0` here to disable regular swap.
+                }
+                if let Some(cpu_limit) = cpu_limit {
+                    let cpu_limit = (cpu_limit.as_millicpus() + 9) / 10;
+                    cmd.args(["-p", &format!("CPUQuota={cpu_limit}%")]);
+                }
+
+                if !wrapper.is_empty() {
+                    let (program, wrapper_args) = wrapper_parts();
+                    cmd.arg(program);
+                    cmd.args(wrapper_args);
+                };
+                cmd.arg(image);
+                cmd
+            }
+        };
+        cmd.args(args);
+        cmd
+    }
 }
 
 impl ProcessOrchestrator {
@@ -227,6 +306,9 @@ impl ProcessOrchestrator {
                 .context("creating prometheus directory")?;
         }
 
+        let launch_spec = LaunchSpec::determine_implementation()?;
+        info!(driver = ?launch_spec, "Process orchestrator launch spec");
+
         Ok(ProcessOrchestrator {
             image_dir: fs::canonicalize(image_dir).await?,
             suppress_output,
@@ -237,6 +319,7 @@ impl ProcessOrchestrator {
             propagate_crashes,
             tcp_proxy,
             scratch_directory,
+            launch_spec,
         })
     }
 }
@@ -258,6 +341,7 @@ impl Orchestrator for ProcessOrchestrator {
                 propagate_crashes: self.propagate_crashes,
                 tcp_proxy: self.tcp_proxy.clone(),
                 scratch_directory: self.scratch_directory.clone(),
+                launch_spec: self.launch_spec,
             })
         }))
     }
@@ -276,6 +360,7 @@ struct NamespacedProcessOrchestrator {
     propagate_crashes: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
     scratch_directory: PathBuf,
+    launch_spec: LaunchSpec,
 }
 
 #[async_trait]
@@ -305,11 +390,11 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                             // Justification for `unwrap`:
                             //
                             // `u64::try_cast_from(f: f64)`
-                            // will always succeed if 0 <= f <= 2^53.
+                            // will always succeed if 0 <= f < 2^64.
                             // Since the max value of `process.cpu_usage()` is
                             // 100.0 * num_of_cores, this will be true whenever there
-                            // are less than 2^53 / 10^9 logical cores, or about
-                            // 9 million.
+                            // are less than 2^64 / 10^9 logical cores, or about
+                            // 18 billion.
                             let cpu = u64::try_cast_from(
                                 (f64::from(process.cpu_usage()) * 10_000_000.0).trunc(),
                             )
@@ -338,8 +423,8 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             init_container_image: _,
             args,
             ports: ports_in,
-            memory_limit: _,
-            cpu_limit: _,
+            memory_limit,
+            cpu_limit,
             scale,
             labels,
             // Scheduling constraints are entirely ignored by the process orchestrator.
@@ -409,7 +494,10 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         image: image.clone(),
                         args,
                         ports,
+                        memory_limit,
+                        cpu_limit,
                         disk,
+                        launch_spec: self.launch_spec,
                     }),
                 );
 
@@ -492,7 +580,10 @@ impl NamespacedProcessOrchestrator {
             image,
             args,
             ports,
+            memory_limit,
+            cpu_limit,
             disk,
+            launch_spec,
         }: ServiceProcessConfig,
     ) -> impl Future<Output = ()> {
         let suppress_output = self.suppress_output;
@@ -573,21 +664,15 @@ impl NamespacedProcessOrchestrator {
             supervise_existing_process(&state_updater, &pid_file).await;
 
             loop {
-                let mut cmd = if command_wrapper.is_empty() {
-                    let mut cmd = Command::new(&image);
-                    cmd.args(&args);
-                    cmd
-                } else {
-                    let mut cmd = Command::new(&command_wrapper[0]);
-                    cmd.args(
-                        command_wrapper[1..]
-                            .iter()
-                            .map(|part| interpolate_command(part, &full_id, &listen_addrs)),
-                    );
-                    cmd.arg(&image);
-                    cmd.args(&args);
-                    cmd
-                };
+                let mut cmd = launch_spec.refine_command(
+                    &image,
+                    &args,
+                    &command_wrapper,
+                    &full_id,
+                    &listen_addrs,
+                    memory_limit.as_ref(),
+                    cpu_limit.as_ref(),
+                );
                 info!(
                     "launching {full_id}-{i} via {} {}...",
                     cmd.as_std().get_program().to_string_lossy(),
@@ -677,6 +762,9 @@ struct ServiceProcessConfig<'a> {
     args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
     ports: Vec<ServiceProcessPort>,
     disk: bool,
+    memory_limit: Option<MemoryLimit>,
+    cpu_limit: Option<CpuLimit>,
+    launch_spec: LaunchSpec,
 }
 
 struct ServiceProcessPort {

@@ -29,7 +29,7 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
     On Linux, use:
 
     ```
-    curl -fL https://dl.k8s.io/release/v1.24.3/bin/linux/amd64/kubectl > kubectl
+    curl -fL https://dl.k8s.io/release/v1.26.6/bin/linux/amd64/kubectl > kubectl
     chmod +x kubectl
     sudo mv kubectl /usr/local/bin
     ```
@@ -136,7 +136,7 @@ cluster to become ready:
 
 See the examples in `test/clustertest/test_smoke.py`.
 
-The tests folow pytest conventions:
+The tests follow pytest conventions:
 
 ```python
 from materialize.cloudtest.app.materialize_application import MaterializeApplication

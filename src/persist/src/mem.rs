@@ -15,12 +15,15 @@ use std::sync::{Arc, Mutex};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::{stream, StreamExt};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
+use tokio::task::yield_now;
 
 use crate::error::Error;
 use crate::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream,
+    SeqNo, VersionedData,
 };
 
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
@@ -29,14 +32,16 @@ use crate::location::{
 #[derive(Debug)]
 pub struct MemMultiRegistry {
     blob_by_path: BTreeMap<String, Arc<tokio::sync::Mutex<MemBlobCore>>>,
+    tombstone: bool,
 }
 
 #[cfg(test)]
 impl MemMultiRegistry {
     /// Constructs a new, empty [MemMultiRegistry].
-    pub fn new() -> Self {
+    pub fn new(tombstone: bool) -> Self {
         MemMultiRegistry {
             blob_by_path: BTreeMap::new(),
+            tombstone,
         }
     }
 
@@ -50,7 +55,10 @@ impl MemMultiRegistry {
                 core: Arc::clone(blob),
             })
         } else {
-            let blob = Arc::new(tokio::sync::Mutex::new(MemBlobCore::default()));
+            let blob = Arc::new(tokio::sync::Mutex::new(MemBlobCore {
+                dataz: Default::default(),
+                tombstone: self.tombstone,
+            }));
             self.blob_by_path
                 .insert(path.to_string(), Arc::clone(&blob));
             MemBlob::open(MemBlobConfig { core: blob })
@@ -60,16 +68,20 @@ impl MemMultiRegistry {
 
 #[derive(Debug, Default)]
 struct MemBlobCore {
-    dataz: BTreeMap<String, Bytes>,
+    dataz: BTreeMap<String, (Bytes, bool)>,
+    tombstone: bool,
 }
 
 impl MemBlobCore {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        Ok(self.dataz.get(key).map(|x| x.to_vec()))
+        Ok(self
+            .dataz
+            .get(key)
+            .and_then(|(x, exists)| exists.then(|| x.to_vec())))
     }
 
     fn set(&mut self, key: &str, value: Bytes) -> Result<(), ExternalError> {
-        self.dataz.insert(key.to_owned(), value);
+        self.dataz.insert(key.to_owned(), (value, true));
         Ok(())
     }
 
@@ -78,8 +90,8 @@ impl MemBlobCore {
         key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
-        for (key, value) in &self.dataz {
-            if !key.starts_with(key_prefix) {
+        for (key, (value, exists)) in &self.dataz {
+            if !*exists || !key.starts_with(key_prefix) {
                 continue;
             }
 
@@ -93,8 +105,28 @@ impl MemBlobCore {
     }
 
     fn delete(&mut self, key: &str) -> Result<Option<usize>, ExternalError> {
-        let bytes = self.dataz.remove(key).map(|x| x.len());
+        let bytes = if self.tombstone {
+            self.dataz.get_mut(key).and_then(|(x, exists)| {
+                let deleted_size = exists.then(|| x.len());
+                *exists = false;
+                deleted_size
+            })
+        } else {
+            self.dataz.remove(key).map(|(x, _)| x.len())
+        };
         Ok(bytes)
+    }
+
+    fn restore(&mut self, key: &str) -> Result<(), ExternalError> {
+        match self.dataz.get_mut(key) {
+            None => Err(
+                Determinate::new(anyhow!("unable to restore {key} from in-memory state")).into(),
+            ),
+            Some((_, exists)) => {
+                *exists = true;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -102,6 +134,18 @@ impl MemBlobCore {
 #[derive(Debug, Default)]
 pub struct MemBlobConfig {
     core: Arc<tokio::sync::Mutex<MemBlobCore>>,
+}
+
+impl MemBlobConfig {
+    /// Create a new instance.
+    pub fn new(tombstone: bool) -> Self {
+        Self {
+            core: Arc::new(tokio::sync::Mutex::new(MemBlobCore {
+                dataz: Default::default(),
+                tombstone,
+            })),
+        }
+    }
 }
 
 /// An in-memory implementation of [Blob].
@@ -120,6 +164,8 @@ impl MemBlob {
 #[async_trait]
 impl Blob for MemBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         let maybe_bytes = self.core.lock().await.get(key)?;
         Ok(maybe_bytes.map(SegmentedBytes::from))
     }
@@ -129,16 +175,28 @@ impl Blob for MemBlob {
         key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         self.core.lock().await.list_keys_and_metadata(key_prefix, f)
     }
 
     async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         // NB: This is always atomic, so we're free to ignore the atomic param.
         self.core.lock().await.set(key, value)
     }
 
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         self.core.lock().await.delete(key)
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
+        self.core.lock().await.restore(key)
     }
 }
 
@@ -179,7 +237,16 @@ impl MemConsensus {
 
 #[async_trait]
 impl Consensus for MemConsensus {
+    fn list_keys(&self) -> ResultStream<String> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let store = self.data.lock().expect("lock poisoned");
+        let keys: Vec<_> = store.keys().cloned().collect();
+        Box::pin(stream::iter(keys).map(Ok))
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         let store = self.data.lock().map_err(Error::from)?;
         let values = match store.get(key) {
             None => return Ok(None),
@@ -195,6 +262,8 @@ impl Consensus for MemConsensus {
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(ExternalError::from(
@@ -233,11 +302,15 @@ impl Consensus for MemConsensus {
         from: SeqNo,
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         let store = self.data.lock().map_err(Error::from)?;
         Self::scan_store(&store, key, from, limit)
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         let current = self.head(key).await?;
         if current.map_or(true, |data| data.seqno < seqno) {
             return Err(ExternalError::from(anyhow!(
@@ -266,17 +339,29 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn mem_blob() -> Result<(), ExternalError> {
-        let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new()));
+        let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new(false)));
         blob_impl_test(move |path| {
             let path = path.to_owned();
             let registry = Arc::clone(&registry);
             async move { Ok(registry.lock().await.blob(&path)) }
         })
-        .await
+        .await?;
+
+        let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new(true)));
+        blob_impl_test(move |path| {
+            let path = path.to_owned();
+            let registry = Arc::clone(&registry);
+            async move { Ok(registry.lock().await.blob(&path)) }
+        })
+        .await?;
+
+        Ok(())
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn mem_consensus() -> Result<(), ExternalError> {
         consensus_impl_test(|| async { Ok(MemConsensus::default()) }).await
     }

@@ -118,11 +118,11 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": -1, "b": 7, "json": "[1, 2, 3]", "c": "FileNotFound", "d": "True", "e": null, "f": null}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > SHOW SOURCES
-name    type   size
--------------------
+name    type   size   cluster
+-----------------------------
 
 # [btv] uncomment if we bring back classic debezium mode
 # ! CREATE SOURCE fast_forwarded
@@ -161,13 +161,6 @@ a b
 2 3
 
 # test INCLUDE metadata
-
-! CREATE SOURCE non_dbz_data_metadata
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
-  INCLUDE TOPIC
-  ENVELOPE NONE
-contains:INCLUDE TOPIC not yet supported
 
 > CREATE SOURCE non_dbz_data_metadata
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')

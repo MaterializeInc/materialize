@@ -189,7 +189,8 @@ Explained Query:
         key_plan
           project=()
         FlatMap generate_series(1, #0, 1)
-          project=(#1, #2)
+          mfp_after
+            project=(#1, #2)
           Get::PassArrangements materialize.public.t
             raw=true
 
@@ -331,6 +332,7 @@ Explained Query:
           ArrangeBy
             raw=false
             arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+            types=[integer, integer?]
             Union consolidate_output=true
               Get::Collection materialize.public.t
                 filter=((1 = (#0 % 2)))
@@ -422,13 +424,16 @@ Explained Query:
           Get::PassArrangements l0
             raw=false
             arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+            types=[integer?, integer?]
           Get::PassArrangements l0
             raw=false
             arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+            types=[integer?, integer?]
     cte l0 =
       Get::PassArrangements materialize.public.t
         raw=false
         arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+        types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_idx (differential join)
@@ -519,6 +524,7 @@ Explained Query:
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0], permutation=id, thinning=() }
+            types=[integer]
             Get::Collection materialize.public.t
               project=(#1)
               filter=((#0 = 5) AND (1 = (#0 % 2)) AND (#1) IS NOT NULL)
@@ -526,6 +532,7 @@ Explained Query:
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0], permutation=id, thinning=() }
+            types=[integer]
             Get::Collection materialize.public.t
               project=(#1)
               filter=((#0 = 5) AND (#1) IS NOT NULL)
@@ -746,7 +753,8 @@ Explained Query:
         key_plan
           project=()
         FlatMap generate_series(1, #1, 1)
-          project=(#0, #2)
+          mfp_after
+            project=(#0, #2)
           Union
             Get::Collection l0
               project=(#0, #1)

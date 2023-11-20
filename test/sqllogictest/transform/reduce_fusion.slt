@@ -14,8 +14,8 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT * FROM t GROUP BY f1, f2, f0
 ----
 Explained Query:
-  Distinct group_by=[#0..=#2] // { arity: 3 }
-    Get materialize.public.t // { arity: 3 }
+  Distinct project=[#0..=#2] // { arity: 3 }
+    ReadStorage materialize.public.t // { arity: 3 }
 
 EOF
 
@@ -23,9 +23,9 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT r0 FROM (SELECT DISTINCT f1 + 1 as r0, f0 FROM t)
 ----
 Explained Query:
-  Distinct group_by=[(#0 + 1)] // { arity: 1 }
+  Distinct project=[(#0 + 1)] // { arity: 1 }
     Project (#1) // { arity: 1 }
-      Get materialize.public.t // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 3 }
 
 EOF
 
@@ -33,9 +33,9 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 FROM (SELECT DISTINCT f0, f1 FROM t)
 ----
 Explained Query:
-  Distinct group_by=[#0] // { arity: 1 }
+  Distinct project=[#0] // { arity: 1 }
     Project (#1) // { arity: 1 }
-      Get materialize.public.t // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 3 }
 
 EOF
 
@@ -43,9 +43,9 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT FROM (SELECT DISTINCT f0, f1 FROM t)
 ----
 Explained Query:
-  Distinct // { arity: 0 }
+  Distinct project=[] // { arity: 0 }
     Project () // { arity: 0 }
-      Get materialize.public.t // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 3 }
 
 EOF
 
@@ -53,9 +53,9 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT DISTINCT FROM (SELECT DISTINCT f0 FROM (SELECT DISTINCT f0, f1 FROM t));
 ----
 Explained Query:
-  Distinct // { arity: 0 }
+  Distinct project=[] // { arity: 0 }
     Project () // { arity: 0 }
-      Get materialize.public.t // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 3 }
 
 EOF
 
@@ -63,9 +63,9 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT f0 FROM (SELECT f0 FROM t GROUP BY f1 / 10, f0) GROUP BY f0;
 ----
 Explained Query:
-  Distinct group_by=[#0] // { arity: 1 }
+  Distinct project=[#0] // { arity: 1 }
     Project (#0) // { arity: 1 }
-      Get materialize.public.t // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 3 }
 
 EOF
 
@@ -73,8 +73,8 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT f0 / 20 FROM (SELECT f0 / 10 AS f0 FROM t GROUP BY f0 / 10) GROUP BY f0 / 20;
 ----
 Explained Query:
-  Distinct group_by=[((#0 / 10) / 20)] // { arity: 1 }
+  Distinct project=[((#0 / 10) / 20)] // { arity: 1 }
     Project (#0) // { arity: 1 }
-      Get materialize.public.t // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 3 }
 
 EOF

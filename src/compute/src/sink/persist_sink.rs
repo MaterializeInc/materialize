@@ -16,7 +16,7 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
-use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
@@ -24,11 +24,10 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::errors::DataflowError;
-use mz_storage_client::types::sources::SourceData;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
-use mz_timely_util::probe::{self, ProbeNotify};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{
@@ -54,7 +53,6 @@ where
         as_of: Antichain<Timestamp>,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-        probes: Vec<probe::Handle<Timestamp>>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -72,7 +70,6 @@ where
             desired_collection,
             as_of,
             compute_state,
-            probes,
         )
     }
 }
@@ -83,7 +80,6 @@ pub(crate) fn persist_sink<G>(
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
-    probes: Vec<probe::Handle<Timestamp>>,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -93,7 +89,7 @@ where
     // `persist_source` to select an appropriate `as_of`. We only care about times beyond the
     // current shard upper anyway.
     let source_as_of = None;
-    let (ok_stream, err_stream, token) = mz_storage_client::source::persist_source::persist_source(
+    let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source(
         &mut desired_collection.scope(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),
@@ -102,8 +98,6 @@ where
         Antichain::new(), // we want all updates
         None,             // no MFP
         None,             // no flow control
-        // Copy the logic in DeltaJoin/Get/Join to start.
-        |_timer, count| count > 1_000_000,
     );
     use differential_dataflow::AsCollection;
     let persist_collection = ok_stream
@@ -119,7 +113,6 @@ where
             persist_collection,
             as_of,
             compute_state,
-            probes,
         ),
         token,
     )))
@@ -159,7 +152,6 @@ fn install_desired_into_persist<G>(
     persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut crate::compute_state::ComputeState,
-    probes: Vec<probe::Handle<Timestamp>>,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -220,8 +212,6 @@ where
     );
 
     append_frontier_stream.connect_loop(persist_feedback_handle);
-
-    append_frontier_stream.probe_notify_with(probes);
 
     let token = Rc::new((mint_token, write_token, append_token));
 

@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use bytesize::ByteSize;
 use mz_build_info::BuildInfo;
+use mz_catalog;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
 use mz_orchestrator::MemoryLimit;
@@ -25,14 +26,24 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::storage;
 use crate::config::SystemParameterSyncConfig;
 
 /// Configures a catalog.
 #[derive(Debug)]
 pub struct Config<'a> {
     /// The connection to the stash.
-    pub storage: storage::Connection,
+    pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    /// The registry that catalog uses to report metrics.
+    pub metrics_registry: &'a MetricsRegistry,
+    /// A handle to a secrets manager that can only read secrets.
+    pub secrets_reader: Arc<dyn SecretsReader>,
+    /// How long to retain storage usage records
+    pub storage_usage_retention_period: Option<Duration>,
+    pub state: StateConfig,
+}
+
+#[derive(Debug)]
+pub struct StateConfig {
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether the build is a local dev build.
@@ -45,18 +56,16 @@ pub struct Config<'a> {
     pub now: mz_ore::now::NowFn,
     /// Whether or not to skip catalog migrations.
     pub skip_migrations: bool,
-    /// The registry that catalog uses to report metrics.
-    pub metrics_registry: &'a MetricsRegistry,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Default storage cluster size. Must be a key from cluster_replica_sizes.
     pub default_storage_cluster_size: Option<String>,
+    /// Builtin cluster replica size.
+    pub builtin_cluster_replica_size: String,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
-    /// A handle to a secrets manager that can only read secrets.
-    pub secrets_reader: Arc<dyn SecretsReader>,
     /// IP Addresses which will be used for egress.
     pub egress_ips: Vec<Ipv4Addr>,
     /// Context for generating an AWS Principal.
@@ -67,8 +76,6 @@ pub struct Config<'a> {
     /// Catalog::open. A `None` value indicates that the initial sync should be
     /// skipped.
     pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
-    /// How long to retain storage usage records
-    pub storage_usage_retention_period: Option<Duration>,
     /// Host name or URL for connecting to the HTTP server of this instance.
     pub http_host_name: Option<String>,
     /// Needed only for migrating PG source column metadata. If `None`, will
@@ -77,13 +84,20 @@ pub struct Config<'a> {
     ///
     /// TODO(migration): delete in version v.51 (released in v0.49 + 1
     /// additional release)
-    pub connection_context: Option<mz_storage_client::types::connections::ConnectionContext>,
+    pub connection_context: Option<mz_storage_types::connections::ConnectionContext>,
     /// Global connection limit and count
     pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
+
+impl ClusterReplicaSizeMap {
+    /// Iterate all enabled (not disabled) replica allocations, with their name.
+    pub fn enabled_allocations(&self) -> impl Iterator<Item = (&String, &ReplicaAllocation)> {
+        self.0.iter().filter(|(_, a)| !a.disabled)
+    }
+}
 
 impl Default for ClusterReplicaSizeMap {
     // Used for testing and local purposes. This default value should not be used in production.
@@ -113,19 +127,29 @@ impl Default for ClusterReplicaSizeMap {
         //     "mem-16": { "memory_limit": 16Gb },
         // }
         let mut inner = (0..=5)
-            .map(|i| {
+            .flat_map(|i| {
                 let workers: u8 = 1 << i;
-                (
-                    workers.to_string(),
-                    ReplicaAllocation {
-                        memory_limit: None,
-                        cpu_limit: None,
-                        disk_limit: None,
-                        scale: 1,
-                        workers: workers.into(),
-                        credits_per_hour: 1.into(),
-                    },
-                )
+                [
+                    (workers.to_string(), None),
+                    (format!("{workers}-4G"), Some(4)),
+                    (format!("{workers}-8G"), Some(8)),
+                    (format!("{workers}-16G"), Some(16)),
+                    (format!("{workers}-32G"), Some(32)),
+                ]
+                .map(|(name, memory_limit)| {
+                    (
+                        name,
+                        ReplicaAllocation {
+                            memory_limit: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
+                            cpu_limit: None,
+                            disk_limit: None,
+                            scale: 1,
+                            workers: workers.into(),
+                            credits_per_hour: 1.into(),
+                            disabled: false,
+                        },
+                    )
+                })
             })
             .collect::<BTreeMap<_, _>>();
 
@@ -140,6 +164,7 @@ impl Default for ClusterReplicaSizeMap {
                     scale,
                     workers: 1,
                     credits_per_hour: scale.into(),
+                    disabled: false,
                 },
             );
 
@@ -152,6 +177,7 @@ impl Default for ClusterReplicaSizeMap {
                     scale,
                     workers: scale.into(),
                     credits_per_hour: scale.into(),
+                    disabled: false,
                 },
             );
 
@@ -164,6 +190,7 @@ impl Default for ClusterReplicaSizeMap {
                     scale: 1,
                     workers: 8,
                     credits_per_hour: 1.into(),
+                    disabled: false,
                 },
             );
         }
@@ -177,6 +204,20 @@ impl Default for ClusterReplicaSizeMap {
                 scale: 2,
                 workers: 4,
                 credits_per_hour: 2.into(),
+                disabled: false,
+            },
+        );
+
+        inner.insert(
+            "free".to_string(),
+            ReplicaAllocation {
+                memory_limit: None,
+                cpu_limit: None,
+                disk_limit: None,
+                scale: 0,
+                workers: 0,
+                credits_per_hour: 0.into(),
+                disabled: true,
             },
         );
         Self(inner)

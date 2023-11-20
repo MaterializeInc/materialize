@@ -9,7 +9,8 @@
 
 from textwrap import dedent
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 
@@ -19,7 +20,7 @@ class PeekCancellation(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning}
+        return {BalancerdIsRunning, MzIsRunning}
 
     def run(self, c: Composition) -> None:
         c.testdrive(

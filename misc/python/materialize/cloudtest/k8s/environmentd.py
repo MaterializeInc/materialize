@@ -33,7 +33,7 @@ from kubernetes.client import (
 )
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
-from materialize.mzcompose.services import DEFAULT_SYSTEM_PARAMETERS
+from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 
 try:
     from semver.version import Version
@@ -50,13 +50,14 @@ class EnvironmentdService(K8sService):
         service_port = V1ServicePort(name="sql", port=6875)
         http_port = V1ServicePort(name="http", port=6876)
         internal_port = V1ServicePort(name="internal", port=6877)
+        internal_http_port = V1ServicePort(name="internalhttp", port=6878)
         self.service = V1Service(
             api_version="v1",
             kind="Service",
             metadata=V1ObjectMeta(name="environmentd", labels={"app": "environmentd"}),
             spec=V1ServiceSpec(
                 type="NodePort",
-                ports=[service_port, internal_port, http_port],
+                ports=[service_port, internal_port, http_port, internal_http_port],
                 selector={"app": "environmentd"},
             ),
         )
@@ -184,14 +185,13 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             f"--adapter-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
             f"--storage-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=storage",
             "--internal-sql-listen-addr=0.0.0.0:6877",
+            "--internal-http-listen-addr=0.0.0.0:6878",
             "--unsafe-mode",
             # cloudtest may be called upon to spin up older versions of
             # Materialize too! If you are adding a command-line option that is
             # only supported on newer releases, do not add it here. Add it as a
             # version-gated argument below, using `self._meets_minimum_version`.
         ]
-        if self.log_filter:
-            args += [f"--system-parameter-default=log_filter={self.log_filter}"]
         if self._meets_minimum_version("0.38.0"):
             args += [
                 "--clusterd-image",
@@ -233,12 +233,25 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             ]
         if self._meets_minimum_version("0.63.0-dev"):
             args += ["--secrets-controller=kubernetes"]
-        if self._meets_maximum_version("0.63.99"):
-            args += ["--system-parameter-default=enable_managed_clusters=true"]
 
         return args
 
     def env_vars(self) -> list[V1EnvVar]:
+
+        system_parameter_defaults = DEFAULT_SYSTEM_PARAMETERS
+
+        if self.log_filter:
+            system_parameter_defaults["log_filter"] = self.log_filter
+        if self._meets_maximum_version("0.63.99"):
+            system_parameter_defaults["enable_managed_clusters"] = "true"
+
+        # Before #22790, enable_specialized_arrangements would cause
+        # panicked at 'Invalid combination of type specializations: key types differ!
+        if self._meets_minimum_version("0.74.0") and self._meets_maximum_version(
+            "0.74.99"
+        ):
+            system_parameter_defaults["enable_specialized_arrangements"] = "off"
+
         value_from = V1EnvVarSource(
             field_ref=V1ObjectFieldSelector(field_path="metadata.name")
         )
@@ -262,7 +275,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 value=";".join(
                     [
                         f"{key}={value}"
-                        for key, value in DEFAULT_SYSTEM_PARAMETERS.items()
+                        for key, value in system_parameter_defaults.items()
                     ]
                 ),
             ),

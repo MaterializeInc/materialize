@@ -9,10 +9,10 @@
 
 //! Rendering of `MirRelationExpr::Join` operators, and supporting types.
 //!
-//! Consult [mz_compute_client::plan::join::JoinPlan] documentation for details.
+//! Consult [mz_compute_types::plan::join::JoinPlan] documentation for details.
 
 mod delta_join;
 mod linear_join;
 mod mz_join_core;
 
-pub use linear_join::LinearJoinImpl;
+pub use linear_join::{LinearJoinImpl, LinearJoinSpec};

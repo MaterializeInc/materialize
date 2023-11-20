@@ -271,6 +271,7 @@ parts=1 len=4
 fetch-batch input=b0 stats=lower
 ----
 <part 0>
+<key lower=a>
 d 0 1
 a 0 1
 b 0 1
@@ -294,15 +295,19 @@ parts=4 len=8
 fetch-batch input=b0 stats=lower
 ----
 <part 0>
+<key lower=y>
 y 0 1
 z 0 1
 <part 1>
+<key lower=m>
 n 0 1
 m 0 1
 <part 2>
+<key lower=a>
 a 0 1
 a 0 1
 <part 3>
+<key lower=a>
 a 0 1
 a 0 1
 <run 0>

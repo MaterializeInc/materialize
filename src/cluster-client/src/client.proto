@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
+
 syntax = "proto3";
 
 package mz_cluster_client.client;
@@ -21,4 +23,5 @@ message ProtoTimelyConfig {
     uint64 process = 2;
     repeated string addresses = 3;
     uint32 idle_arrangement_merge_effort = 4;
+    uint32 arrangement_exert_proportionality = 5;
 }

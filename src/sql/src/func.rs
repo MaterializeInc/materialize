@@ -36,7 +36,7 @@ use crate::plan::scope::Scope;
 use crate::plan::side_effecting_func::PG_CATALOG_SEF_BUILTINS;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
-use crate::session::vars;
+use crate::session::vars::{self, ENABLE_TIME_AT_TIME_ZONE};
 
 /// A specifier for a function or an operator.
 #[derive(Clone, Copy, Debug)]
@@ -80,8 +80,8 @@ impl TypeCategory {
             | ScalarType::MzAclItem => Self::UserDefined,
             ScalarType::Date
             | ScalarType::Time
-            | ScalarType::Timestamp
-            | ScalarType::TimestampTz => Self::DateTime,
+            | ScalarType::Timestamp { .. }
+            | ScalarType::TimestampTz { .. } => Self::DateTime,
             ScalarType::Float32
             | ScalarType::Float64
             | ScalarType::Int16
@@ -127,6 +127,7 @@ impl TypeCategory {
             | ParamType::ListElementAnyCompatible
             | ParamType::Internal
             | ParamType::NonVecAny
+            | ParamType::NonVecAnyCompatible
             | ParamType::MapAny
             | ParamType::MapAnyCompatible
             | ParamType::RecordAny => Self::Pseudo,
@@ -203,7 +204,7 @@ impl TypeCategory {
             | Self::Unknown
             | Self::UserDefined => None,
             Self::Boolean => Some(ScalarType::Bool),
-            Self::DateTime => Some(ScalarType::TimestampTz),
+            Self::DateTime => Some(ScalarType::TimestampTz { precision: None }),
             Self::Numeric => Some(ScalarType::Float64),
             Self::String => Some(ScalarType::String),
             Self::Timespan => Some(ScalarType::Interval),
@@ -702,6 +703,10 @@ pub enum ParamType {
     /// `ScalarType::Array`, requiring other "Any"-type
     /// parameters to be of the same type.
     NonVecAny,
+    /// A pseudotype permitting any type except `ScalarType::List` and
+    /// `ScalarType::Array`, requiring other "Compatibility"-type
+    /// parameters to be of the same type.
+    NonVecAnyCompatible,
     /// A standard parameter that accepts arguments that match its embedded
     /// `ScalarType`.
     Plain(ScalarType),
@@ -735,7 +740,7 @@ impl ParamType {
             ListAny | ListAnyCompatible => matches!(t, List { .. }),
             MapAny | MapAnyCompatible => matches!(t, Map { .. }),
             RangeAny | RangeAnyCompatible => matches!(t, Range { .. }),
-            NonVecAny => !t.is_vec(),
+            NonVecAny | NonVecAnyCompatible => !t.is_vec(),
             Internal => false,
             Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t, to),
             RecordAny => matches!(t, Record { .. }),
@@ -784,6 +789,7 @@ impl ParamType {
             | MapAny
             | MapAnyCompatible
             | NonVecAny
+            | NonVecAnyCompatible
             // In PG, RecordAny isn't polymorphic even though it offers
             // polymorphic behavior. For more detail, see
             // `PolymorphicCompatClass::StructuralEq`.
@@ -816,6 +822,7 @@ impl ParamType {
             ParamType::MapAny => "map",
             ParamType::MapAnyCompatible => "anycompatiblemap",
             ParamType::NonVecAny => "anynonarray",
+            ParamType::NonVecAnyCompatible => "anycompatiblenonarray",
             ParamType::RecordAny => "record",
             ParamType::RangeAny => "anyrange",
             ParamType::RangeAnyCompatible => "anycompatiblerange",
@@ -865,8 +872,8 @@ impl From<ScalarBaseType> for ParamType {
             Numeric => ScalarType::Numeric { max_scale: None },
             Date => ScalarType::Date,
             Time => ScalarType::Time,
-            Timestamp => ScalarType::Timestamp,
-            TimestampTz => ScalarType::TimestampTz,
+            Timestamp => ScalarType::Timestamp { precision: None },
+            TimestampTz => ScalarType::TimestampTz { precision: None },
             Interval => ScalarType::Interval,
             Bytes => ScalarType::Bytes,
             String => ScalarType::String,
@@ -1304,7 +1311,7 @@ impl TryFrom<&ParamType> for PolymorphicCompatClass {
             AnyElement | ArrayAny | ListAny | MapAny | NonVecAny | RangeAny => {
                 PolymorphicCompatClass::Any
             }
-            ArrayAnyCompatible | AnyCompatible | RangeAnyCompatible => {
+            ArrayAnyCompatible | AnyCompatible | RangeAnyCompatible | NonVecAnyCompatible => {
                 PolymorphicCompatClass::BestCommonAny
             }
             ListAnyCompatible | ListElementAnyCompatible => PolymorphicCompatClass::BestCommonList,
@@ -1686,46 +1693,50 @@ macro_rules! catalog_name_only {
 /// Generates an (OID, OID, TEXT) SQL implementation for has_X_privilege style functions.
 macro_rules! privilege_fn {
     ( $fn_name:expr, $catalog_tbl:expr ) => {
-        &format!(
-            "
-                CASE
-                -- We need to validate the privileges to return a proper error before anything
-                -- else.
-                WHEN NOT mz_internal.mz_validate_privileges($3)
-                OR $1 IS NULL
-                OR $2 IS NULL
-                OR $3 IS NULL
-                OR $1 NOT IN (SELECT oid FROM mz_roles)
-                OR $2 NOT IN (SELECT oid FROM {})
-                THEN NULL
-                ELSE COALESCE(
-                    (
-                        SELECT
-                            bool_or(
-                                mz_internal.mz_acl_item_contains_privilege(privilege, $3)
-                            )
-                                AS {}
-                        FROM
-                            (
-                                SELECT
-                                    unnest(privileges)
-                                FROM
-                                    {}
-                                WHERE
-                                    {}.oid = $2
-                            )
-                                AS user_privs (privilege)
-                            LEFT JOIN mz_roles ON
-                                    mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
-                        WHERE
-                            mz_internal.mz_aclitem_grantee(privilege) = '{}' OR pg_has_role($1, mz_roles.oid, 'USAGE')
-                    ),
-                    false
-                )
-                END
-            ",
-            $catalog_tbl, $fn_name, $catalog_tbl, $catalog_tbl, RoleId::Public,
-        )
+        {
+            let fn_name = $fn_name;
+            let catalog_tbl = $catalog_tbl;
+            let public_role = RoleId::Public;
+            &format!(
+                "
+                    CASE
+                    -- We need to validate the privileges to return a proper error before anything
+                    -- else.
+                    WHEN NOT mz_internal.mz_validate_privileges($3)
+                    OR $1 IS NULL
+                    OR $2 IS NULL
+                    OR $3 IS NULL
+                    OR $1 NOT IN (SELECT oid FROM mz_roles)
+                    OR $2 NOT IN (SELECT oid FROM {catalog_tbl})
+                    THEN NULL
+                    ELSE COALESCE(
+                        (
+                            SELECT
+                                bool_or(
+                                    mz_internal.mz_acl_item_contains_privilege(privilege, $3)
+                                )
+                                    AS {fn_name}
+                            FROM
+                                (
+                                    SELECT
+                                        unnest(privileges)
+                                    FROM
+                                        {catalog_tbl}
+                                    WHERE
+                                        {catalog_tbl}.oid = $2
+                                )
+                                    AS user_privs (privilege)
+                                LEFT JOIN mz_roles ON
+                                        mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
+                            WHERE
+                                mz_internal.mz_aclitem_grantee(privilege) = '{public_role}' OR pg_has_role($1, mz_roles.oid, 'USAGE')
+                        ),
+                        false
+                    )
+                    END
+                ",
+            )
+    }
     };
 }
 
@@ -1799,10 +1810,6 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
 
                 Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::ArrayFill { elem_type }, exprs })
             }) => ArrayAny, 1286;
-        },
-        "array_in" => Scalar {
-            params!(String, Oid, Int32) =>
-                Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAny, 750;
         },
         "array_length" => Scalar {
             params![ArrayAny, Int64] => BinaryFunc::ArrayLength => Int32, 2176;
@@ -2015,8 +2022,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float64) => UnaryFunc::Degrees(func::Degrees) => Float64, 1608;
         },
         "digest" => Scalar {
-            params!(String, String) => BinaryFunc::DigestString => Bytes, 44154;
-            params!(Bytes, String) => BinaryFunc::DigestBytes => Bytes, 44155;
+            params!(String, String) => BinaryFunc::DigestString => Bytes, oid::FUNC_PG_DIGEST_STRING;
+            params!(Bytes, String) => BinaryFunc::DigestBytes => Bytes, oid::FUNC_PG_DIGEST_BYTES;
         },
         "exp" => Scalar {
             params!(Float64) => UnaryFunc::Exp(func::Exp) => Float64, 1347;
@@ -2031,6 +2038,11 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Oid, Int32) => sql_impl_func(
                 "CASE
                         WHEN $1 IS NULL THEN NULL
+                        -- timestamp and timestamptz have the typmod in
+                        -- a nonstandard location that requires special
+                        -- handling.
+                        WHEN $1 = 1114 AND $2 >= 0 THEN 'timestamp(' || $2 || ') without time zone'
+                        WHEN $1 = 1184 AND $2 >= 0 THEN 'timestamp(' || $2 || ') with time zone'
                         ELSE coalesce((SELECT pg_catalog.concat(coalesce(mz_internal.mz_type_name($1), name), mz_internal.mz_render_typmod($1, $2)) FROM mz_catalog.mz_types WHERE oid = $1), '???')
                     END"
             ) => String, 1081;
@@ -2067,8 +2079,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Oid, String) => sql_impl_func("has_table_privilege(current_user, $1, $2)") => Bool, 1927;
         },
         "hmac" => Scalar {
-            params!(String, String, String) => VariadicFunc::HmacString => Bytes, 44156;
-            params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes => Bytes, 44157;
+            params!(String, String, String) => VariadicFunc::HmacString => Bytes, oid::FUNC_PG_HMAC_STRING;
+            params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes => Bytes, oid::FUNC_PG_HMAC_BYTES;
         },
         "int4range" => Scalar {
             params!(Int32, Int32) => Operation::variadic(|_ecx, mut exprs| {
@@ -2595,7 +2607,21 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp => TimestampTz, 2069;
             params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz => Timestamp, 1159;
             // PG defines this as `text timetz`
-            params!(String, Time) => Operation::binary(|_ecx, lhs, rhs| {
+            params!(String, Time) => Operation::binary(|ecx, lhs, rhs| {
+                // NOTE: this overload is wrong. It should take and return a
+                // `timetz`, which is a type we don't support because it has
+                // inscrutable semantics (timezones are meaningless without a
+                // date). This implementation attempted to extend those already
+                // inscrutable semantics to the `time` type, which makes matters
+                // even worse.
+                //
+                // This feature flag ensures we don't get *new* uses of this
+                // function. At some point in the future, we should either
+                // remove this overload entirely, after validating there are no
+                // catalogs in production that rely on this overload, or we
+                // should properly support the `timetz` type and adjust this
+                // overload accordingly.
+                ecx.require_feature_flag(&ENABLE_TIME_AT_TIME_ZONE)?;
                 Ok(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::TimezoneTime,
                     exprs: vec![
@@ -2649,31 +2675,31 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Timestamp, Timestamp) => Operation::variadic(|_ecx, mut exprs| {
                 exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
                 Ok(HirScalarExpr::CallVariadic {
-                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp },
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp {precision: None}},
                     exprs
                 })
-            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::Timestamp)}, 3933;
+            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::Timestamp { precision: None})}, 3933;
             params!(Timestamp, Timestamp, String) => Operation::variadic(|_ecx, exprs| {
                 Ok(HirScalarExpr::CallVariadic {
-                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp },
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp {precision: None}},
                     exprs
                 })
-            }) => ScalarType::Range { element_type: Box::new(ScalarType::Timestamp)}, 3934;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Timestamp { precision: None})}, 3934;
         },
         "tstzrange" => Scalar {
             params!(TimestampTz, TimestampTz) => Operation::variadic(|_ecx, mut exprs| {
                 exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
                 Ok(HirScalarExpr::CallVariadic {
-                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz },
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz {precision: None}},
                     exprs
                 })
-            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz)}, 3937;
+            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz { precision: None})}, 3937;
             params!(TimestampTz, TimestampTz, String) => Operation::variadic(|_ecx, exprs| {
                 Ok(HirScalarExpr::CallVariadic {
-                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz },
+                    func: VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz {precision: None}},
                     exprs
                 })
-            }) => ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz)}, 3938;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz { precision: None})}, 3938;
         },
         "upper" => Scalar {
             params!(String) => UnaryFunc::Upper(func::Upper) => String, 871;
@@ -2723,6 +2749,124 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
 
         // Internal conversion stubs.
+        "aclitemin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("aclitemin")) => AclItem, 1031;
+        },
+        "any_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("any_in")) => Any, 2294;
+        },
+        "anyarray_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anyarray_in")) => ArrayAny, 2296;
+        },
+        "anycompatible_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anycompatible_in")) => AnyCompatible, 5086;
+        },
+        "anycompatiblearray_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anycompatiblearray_in")) => ArrayAnyCompatible, 5088;
+        },
+        "anycompatiblenonarray_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anycompatiblenonarray_in")) => NonVecAnyCompatible, 5092;
+        },
+        "anycompatiblerange_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anycompatiblerange_in")) => RangeAnyCompatible, 5094;
+        },
+        "anyelement_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anyelement_in")) => AnyElement, 2312;
+        },
+        "anynonarray_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anynonarray_in")) => NonVecAny, 2777;
+        },
+        "anyrange_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anyrange_in")) => RangeAny, 3832;
+        },
+        "array_in" => Scalar {
+            params!(String, Oid, Int32) =>
+                Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAny, 750;
+        },
+        "boolin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("boolin")) => Bool, 1242;
+        },
+        "bpcharin" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("bpcharin")) => Char, 1044;
+        },
+        "byteain" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("byteain")) => Bytes, 1244;
+        },
+        "charin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("charin")) => PgLegacyChar, 1245;
+        },
+        "date_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("date_in")) => Date, 1084;
+        },
+        "float4in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("float4in")) => Float32, 200;
+        },
+        "float8in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("float8in")) => Float64, 214;
+        },
+        "int2in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("int2in")) => Int16, 38;
+        },
+        "int2vectorin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("int2vectorin")) => Int2Vector, 40;
+        },
+        "int4in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("int4in")) => Int32, 42;
+        },
+        "int8in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("int8in")) => Int64, 460;
+        },
+        "internal_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("internal_in")) => Internal, 2304;
+        },
+        "interval_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("interval_in")) => Interval, 1160;
+        },
+        "jsonb_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("jsonb_in")) => Jsonb, 3806;
+        },
+        "namein" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("namein")) => PgLegacyName, 34;
+        },
+        "numeric_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("numeric_in")) => Numeric, 1701;
+        },
+        "oidin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("oidin")) => Oid, 1798;
+        },
+        "range_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("range_in")) => RangeAny, 3834;
+        },
+        "record_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("record_in")) => RecordAny, 2290;
+        },
+        "regclassin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("regclassin")) => RegClass, 2218;
+        },
+        "regprocin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("regprocin")) => RegProc, 44;
+        },
+        "regtypein" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("regtypein")) => RegType, 2220;
+        },
+        "textin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("textin")) => String, 46;
+        },
+        "time_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("time_in")) => Time, 1143;
+        },
+        "timestamp_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("timestamp_in")) => Timestamp, 1312;
+        },
+        "timestamptz_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("timestamptz_in")) => TimestampTz, 1150;
+        },
+        "varcharin" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("varcharin")) => VarChar, 1046;
+        },
+        "uuid_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("uuid_in")) => Uuid, 2952;
+        },
         "boolrecv" => Scalar {
             params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("boolrecv")) => Bool, 2436;
         },
@@ -2941,7 +3085,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 };
                 Ok((e, AggregateFunc::StringAgg { order_by }))
             }) => String, 3538;
-            params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg")) => Bytes, 3545;
+            params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg on BYTEA")) => Bytes, 3545;
         },
         "sum" => Aggregate {
             params!(Int16) => AggregateFunc::SumInt16 => Int64, 2109;
@@ -3208,6 +3352,24 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "decode" => Scalar {
             params!(String, String) => BinaryFunc::Decode => Bytes, 1947;
+        },
+        "regexp_split_to_array" => Scalar {
+            params!(String, String) => VariadicFunc::RegexpSplitToArray => ScalarType::Array(Box::new(ScalarType::String)), 2767;
+            params!(String, String, String) => VariadicFunc::RegexpSplitToArray => ScalarType::Array(Box::new(ScalarType::String)), 2768;
+        },
+        "regexp_split_to_table" => Table {
+            params!(String, String) => sql_impl_table_func("
+                SELECT unnest(regexp_split_to_array($1, $2))
+            ") => ReturnType::set_of(String.into()), 2765;
+            params!(String, String, String) => sql_impl_table_func("
+                SELECT unnest(regexp_split_to_array($1, $2, $3))
+            ") => ReturnType::set_of(String.into()), 2766;
+        },
+        "regexp_replace" => Scalar {
+            params!(String, String, String) => VariadicFunc::RegexpReplace => String, 2284;
+            params!(String, String, String, String) => VariadicFunc::RegexpReplace => String, 2285;
+            // TODO: PostgreSQL supports additional five and six argument forms of this function which
+            // allow controlling where to start the replacement and how many replacements to make.
         }
     };
 
@@ -3261,6 +3423,10 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
+        "constant_time_eq" => Scalar {
+            params!(Bytes, Bytes) => BinaryFunc::ConstantTimeEqBytes => Bool, oid::FUNC_CONSTANT_TIME_EQ_BYTES_OID;
+            params!(String, String) => BinaryFunc::ConstantTimeEqString => Bool, oid::FUNC_CONSTANT_TIME_EQ_STRING_OID;
+        },
         // Note: this is the original version of the AVG(...) function, as it existed prior to
         // v0.66. We updated the internal type promotion used when summing values to increase
         // precision, but objects (e.g. materialized views) that already used the AVG(...) function
@@ -3281,23 +3447,24 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "csv_extract" => Table {
             params!(Int64, String) => Operation::binary(move |_ecx, ncols, input| {
+                const MAX_EXTRACT_COLUMNS: i64 = 8192;
+                const TOO_MANY_EXTRACT_COLUMNS: i64 = MAX_EXTRACT_COLUMNS + 1;
+
                 let ncols = match ncols.into_literal_int64() {
                     None | Some(i64::MIN..=0) => {
                         sql_bail!("csv_extract number of columns must be a positive integer literal");
                     },
-                    Some(ncols) => ncols,
+                    Some(ncols @ 1..=MAX_EXTRACT_COLUMNS) => ncols,
+                    Some(ncols @ TOO_MANY_EXTRACT_COLUMNS..) => {
+                        return Err(PlanError::TooManyColumns {
+                            max_num_columns: usize::try_from(MAX_EXTRACT_COLUMNS).unwrap_or(usize::MAX),
+                            req_num_columns: usize::try_from(ncols).unwrap_or(usize::MAX),
+                        });
+                    },
                 };
                 let ncols = usize::try_from(ncols).expect("known to be greater than zero");
 
-                // Prevent OOMing if the user requests some extremely large number of columns.
-                let mut column_names = Vec::new();
-                if let Err(_) = column_names.try_reserve(ncols) {
-                    sql_bail!("csv_extract number of columns too large");
-                };
-                for i in 1..=ncols {
-                    column_names.push(format!("column{}", i).into());
-                }
-
+                let column_names = (1..=ncols).map(|i| format!("column{}", i).into()).collect();
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
                         func: TableFunc::CsvExtract(ncols),
@@ -3480,6 +3647,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "mz_environment_id" => Scalar {
             params!() => UnmaterializableFunc::MzEnvironmentId => String, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
         },
+        "mz_is_superuser" => Scalar {
+            params!() => UnmaterializableFunc::MzIsSuperuser => ScalarType::Bool, oid::FUNC_MZ_IS_SUPERUSER;
+        },
         "mz_logical_timestamp" => Scalar {
             params!() => Operation::nullary(|_ecx| sql_bail!("mz_logical_timestamp() has been renamed to mz_now()")) => MzTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
         },
@@ -3528,6 +3698,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 })
             }) => ReturnType::none(true), oid::FUNC_REPEAT_OID;
         },
+        "timezone_offset" => Scalar {
+            params!(String, TimestampTz) => BinaryFunc::TimezoneOffset => RecordAny, oid::FUNC_TIMEZONE_OFFSET;
+        },
         "try_parse_monotonic_iso8601_timestamp" => Scalar {
             params!(String) => Operation::unary(move |ecx, e| {
                 ecx.require_feature_flag(&crate::session::vars::ENABLE_TRY_PARSE_MONOTONIC_ISO8601_TIMESTAMP)?;
@@ -3574,7 +3747,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             params!(AclItem) => UnaryFunc::AclItemGrantee(func::AclItemGrantee) => Oid, oid::FUNC_ACL_ITEM_GRANTEE_OID;
         },
         "aclitem_privileges" => Scalar {
-            params!(AclItem) => UnaryFunc::AclItemPrivileges(func::AclItemPrivileges) => Oid, oid::FUNC_ACL_ITEM_PRIVILEGES_OID;
+            params!(AclItem) => UnaryFunc::AclItemPrivileges(func::AclItemPrivileges) => String, oid::FUNC_ACL_ITEM_PRIVILEGES_OID;
         },
         "is_rbac_enabled" => Scalar {
             params!() => UnmaterializableFunc::IsRbacEnabled => Bool, oid::FUNC_IS_RBAC_ENABLED_OID;
@@ -3786,9 +3959,6 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 )
                 END
             ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
-        },
-        "mz_is_superuser" => Scalar {
-            params!() => UnmaterializableFunc::MzIsSuperuser => ScalarType::Bool, oid::FUNC_MZ_IS_SUPERUSER;
         },
         "mz_normalize_object_name" => Scalar {
             params!(String) => sql_impl_func("
@@ -4233,12 +4403,11 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(ListElementAnyCompatible, ListAnyCompatible) => ElementListConcat => ListAnyCompatible, oid::OP_CONCAT_ELEMENY_LIST_OID;
         },
 
-        //JSON, MAP, RANGE
+        // JSON, MAP, RANGE
         "->" => Scalar {
             params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false } => Jsonb, 3212;
             params!(Jsonb, String) => JsonbGetString { stringify: false } => Jsonb, 3211;
             params!(MapAny, String) => MapGetValue => Any, oid::OP_GET_VALUE_MAP_OID;
-            params!(MapAny, ScalarType::Array(Box::new(ScalarType::String))) => MapGetValues => ArrayAnyCompatible, oid::OP_GET_VALUES_MAP_OID;
         },
         "->>" => Scalar {
             params!(Jsonb, Int64) => JsonbGetInt64 { stringify: true } => String, 3481;

@@ -70,15 +70,24 @@ git_files() {
 # try COMMAND [ARGS...]
 #
 # Runs COMMAND with the specified ARGS without aborting the script if the
-# command fails. See also try_last_failed and try_finish.
+# command fails. See also try_last_failed and try_status_report.
 try() {
-    try_last_failed=false
-    if ! run "$@"; then
-        try_failed=true
+    ci_collapsed_heading "$@"
+
+    # Try the command.
+    if "$@"; then
+        try_last_failed=false
+        ((++ci_try_passed))
+    else
         try_last_failed=true
+        # The command failed. Tell Buildkite to uncollapse this log section, so
+        # that the errors are immediately visible.
+        in_ci && ci_uncollapse_current_section
+        echo "^^^ 🚨 Failed: $*"
     fi
+    ((++ci_try_total))
 }
-try_failed=false
+try_last_failed=false
 
 # try_last_failed
 #
@@ -87,15 +96,16 @@ try_last_failed() {
     $try_last_failed
 }
 
-# try_finish
+# try_status_report
 #
 # Exits the script with a code that reflects whether all commands executed with
 # `try` were successful.
-try_finish() {
-    if $try_failed; then
+try_status_report() {
+    ci_uncollapsed_heading "Status report"
+    echo "$ci_try_passed/$ci_try_total commands passed"
+    if ((ci_try_passed != ci_try_total)); then
         exit 1
     fi
-    exit 0
 }
 
 ci_unimportant_heading() {
@@ -111,33 +121,13 @@ ci_uncollapsed_heading() {
 }
 
 ci_uncollapse_current_section() {
-    echo "^^^ +++" >&2
+    if in_ci; then
+        echo "^^^ +++" >&2
+    fi
 }
 
 ci_try_passed=0
 ci_try_total=0
-
-ci_try() {
-    ci_collapsed_heading "$@"
-
-    # Try the command.
-    if "$@"; then
-        ((++ci_try_passed))
-    else
-        # The command failed. Tell Buildkite to uncollapse this log section, so
-        # that the errors are immediately visible.
-        [[ "${SHLIB_NOT_IN_CI-}" ]] || ci_uncollapse_current_section
-    fi
-    ((++ci_try_total))
-}
-
-ci_status_report() {
-    ci_uncollapsed_heading "Status report"
-    echo "$ci_try_passed/$ci_try_total commands passed"
-    if ((ci_try_passed != ci_try_total)); then
-        exit 1
-    fi
-}
 
 # read_list PREFIX
 #
@@ -210,4 +200,12 @@ arch_go() {
 # Prints the provided text in red.
 red() {
     echo -ne "\e[31m$*\e[0m"
+}
+
+# in_ci
+#
+# Returns 1 if in CI and 0 otherwise
+in_ci() {
+    [ -z "${BUILDKITE-}" ] && return 1
+    return 0
 }

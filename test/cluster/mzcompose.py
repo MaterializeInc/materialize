@@ -8,29 +8,33 @@
 # by the Apache License, Version 2.0.
 
 import json
+import os
 import re
 import time
-from datetime import datetime
+from collections.abc import Callable
+from copy import copy
+from datetime import datetime, timedelta
+from statistics import quantiles
 from textwrap import dedent
 from threading import Thread
 
+import requests
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Cockroach,
-    Kafka,
-    Localstack,
-    Materialized,
-    Postgres,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Toxiproxy,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -42,8 +46,13 @@ SERVICES = [
     Clusterd(name="clusterd2"),
     Clusterd(name="clusterd3"),
     Clusterd(name="clusterd4"),
-    # We use mz_panic() in some test scenarios, so environmentd must stay up.
-    Materialized(propagate_crashes=False, external_cockroach=True),
+    Materialized(
+        # We use mz_panic() in some test scenarios, so environmentd must stay up.
+        propagate_crashes=False,
+        external_cockroach=True,
+        # Kills make the shadow catalog not work properly
+        catalog_store="stash",
+    ),
     Redpanda(),
     Toxiproxy(),
     Testdrive(
@@ -55,39 +64,21 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in [
-        "test-smoke",
-        "test-github-12251",
-        "test-github-15531",
-        "test-github-15535",
-        "test-github-15799",
-        "test-github-15930",
-        "test-github-15496",
-        "test-github-17177",
-        "test-github-17510",
-        "test-github-17509",
-        "test-github-19610",
-        "test-single-time-monotonicity-enforcers",
-        "test-remote-storage",
-        "test-drop-default-cluster",
-        "test-upsert",
-        "test-resource-limits",
-        "test-invalid-compute-reuse",
-        "pg-snapshot-resumption",
-        "pg-snapshot-partial-failure",
-        "test-system-table-indexes",
-        "test-replica-targeted-subscribe-abort",
-        "test-compute-reconciliation-reuse",
-        "test-compute-reconciliation-no-errors",
-        "test-mz-subscriptions",
-        "test-mv-source-sink",
-        "test-query-without-default-cluster",
-        "test-clusterd-death-detection",
-        "test-replica-metrics",
-        "test-metrics-retention-across-restart",
-    ]:
-        with c.test_case(name):
-            c.workflow(name)
+    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
+    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+
+    if shard:
+        shard = int(shard)
+    if shard_count:
+        shard_count = int(shard_count)
+
+    for i, name in enumerate(c.workflows):
+        # incident-70 requires more memory, runs in separate CI step
+        if name in ("default", "test-incident-70"):
+            continue
+        if shard is None or shard_count is None or i % int(shard_count) == shard:
+            with c.test_case(name):
+                c.workflow(name)
 
 
 def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -220,7 +211,7 @@ def workflow_test_github_12251(c: Composition) -> None:
         SET statement_timeout = '1 s';
         CREATE TABLE IF NOT EXISTS log_table (f1 TEXT);
         CREATE TABLE IF NOT EXISTS panic_table (f1 TEXT);
-        INSERT INTO panic_table VALUES ('panic!');
+        INSERT INTO panic_table VALUES ('forced panic');
         -- Crash loop the cluster with the table's index
         INSERT INTO log_table SELECT mz_internal.mz_panic(f1) FROM panic_table;
         """
@@ -663,7 +654,7 @@ def workflow_test_github_15496(c: Composition) -> None:
             -- generating a SQL-level error, given the partial fix to bucketed
             -- aggregates introduced in PR #17918.
             CREATE MATERIALIZED VIEW sum_and_max AS
-            SELECT SUM(data), MAX(data) FROM data OPTIONS (EXPECTED GROUP SIZE = 1);
+            SELECT SUM(data), MAX(data) FROM data OPTIONS (AGGREGATE INPUT GROUP SIZE = 1);
             """
         )
         c.testdrive(
@@ -934,8 +925,9 @@ def workflow_test_github_17509(c: Composition) -> None:
     assertions are turned off.
 
     This is a partial regression test for https://github.com/MaterializeInc/materialize/issues/17509.
-    It is still possible to trigger the behavior described in the issue by opting into
-    a smaller group size with a query hint (e.g., OPTIONS (EXPECTED GROUP SIZE = 1)).
+    The checks here are extended by opting into a smaller group size with a query hint (e.g.,
+    OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)) in workflow test-github-15496. This scenario was
+    initially not covered, but eventually got supported as well.
     """
 
     c.down(destroy_volumes=True)
@@ -1122,6 +1114,95 @@ def workflow_test_github_19610(c: Composition) -> None:
             > FETCH ALL cur;
             1 2
             > COMMIT;
+            """
+            )
+        )
+
+
+def workflow_test_github_22778(c: Composition) -> None:
+    """
+    Regression test to ensure that a panic is not triggered if type capture in
+    environmentd falls out-of-sync with type usage for specialization in clusterd.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+        c.up("testdrive", persistent=True)
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_specialized_arrangements = false;",
+            port=6877,
+            user="mz_system",
+        )
+
+        # Set up scenario where empty-value specialization kicks in.
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
+            -- table for fast-path peeks
+            CREATE TABLE t (a int);
+            CREATE VIEW v AS SELECT a + 1 AS a FROM t;
+            CREATE INDEX i ON v (a);
+            """
+        )
+
+        # Change the flag and cycle clusterd.
+        c.sql(
+            "ALTER SYSTEM SET enable_specialized_arrangements = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.kill("clusterd1")
+        c.up("clusterd1")
+
+        # Verify that no arrangement specialization took place.
+        c.testdrive(
+            dedent(
+                """
+            > SET cluster = cluster1;
+
+            > SELECT name
+              FROM mz_internal.mz_arrangement_sizes
+                   JOIN mz_internal.mz_dataflow_operator_dataflows ON operator_id = id
+              WHERE name LIKE '%ArrangeBy%]';
+            ArrangeBy[[Column(0)]]
+            """
+            )
+        )
+
+        # Now, cycle environmentd.
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Verify that arrangement specialization now took place.
+        c.testdrive(
+            dedent(
+                """
+            > SET cluster = cluster1;
+
+            > SELECT name
+              FROM mz_internal.mz_arrangement_sizes
+                   JOIN mz_internal.mz_dataflow_operator_dataflows ON operator_id = id
+              WHERE name LIKE '%ArrangeBy%]';
+            "ArrangeBy[[Column(0)]] [val: empty]"
             """
             )
         )
@@ -1395,7 +1476,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         Testdrive(no_reset=True),
         Materialized(
             options=[
-                "--system-var-default=allowed_cluster_replica_sizes='1', '2', 'oops'"
+                "--system-parameter-default=allowed_cluster_replica_sizes='1', '2', 'oops'"
             ],
         ),
     ):
@@ -1406,9 +1487,9 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True),
         Materialized(
-            environment_extra=[
-                """ MZ_SYSTEM_PARAMETER_DEFAULT=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
-            ],
+            additional_system_parameter_defaults={
+                "allowed_cluster_replica_sizes": "'1', '2', 'oops'"
+            },
         ),
     ):
         c.up("materialized")
@@ -1541,6 +1622,91 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
         assert "target replica failed or was dropped" in e.args[0]["M"], e
     else:
         assert False, "SUBSCRIBE didn't return the expected error"
+
+    killer.join()
+
+
+def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
+    """
+    Test that a replica-targeted SELECT is aborted when the target
+    replica disconnects.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+    c.up("clusterd2")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+        CREATE CLUSTER cluster1 REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 2
+            ),
+            replica2 (
+                STORAGECTL ADDRESSES ['clusterd2:2100'],
+                STORAGE ADDRESSES ['clusterd2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                COMPUTE ADDRESSES ['clusterd2:2102'],
+                WORKERS 2
+            )
+        );
+        CREATE TABLE t (a int);
+        """
+    )
+
+    def drop_replica_with_delay() -> None:
+        time.sleep(2)
+        c.sql("DROP CLUSTER REPLICA cluster1.replica1;")
+
+    dropper = Thread(target=drop_replica_with_delay)
+    dropper.start()
+
+    try:
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SET cluster_replica = replica1;
+            SELECT * FROM t AS OF 18446744073709551615;
+            """
+        )
+    except ProgrammingError as e:
+        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    else:
+        assert False, "SELECT didn't return the expected error"
+
+    dropper.join()
+
+    def kill_replica_with_delay() -> None:
+        time.sleep(2)
+        c.kill("clusterd2")
+
+    killer = Thread(target=kill_replica_with_delay)
+    killer.start()
+
+    try:
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SET cluster_replica = replica2;
+            SELECT * FROM t AS OF 18446744073709551615;
+            """
+        )
+    except ProgrammingError as e:
+        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    else:
+        assert False, "SELECT didn't return the expected error"
 
     killer.join()
 
@@ -2026,6 +2192,13 @@ class Metrics:
             key, value = line.split(maxsplit=1)
             self.metrics[key] = value
 
+    def for_instance(self, id: str) -> "Metrics":
+        new = copy(self)
+        new.metrics = {
+            k: v for k, v in self.metrics.items() if f'instance_id="{id}"' in k
+        }
+        return new
+
     def with_name(self, metric_name: str) -> dict[str, float]:
         items = {}
         for key, value in self.metrics.items():
@@ -2039,6 +2212,54 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
+    def get_command_count(self, metric: str, command_type: str) -> float:
+        metrics = self.with_name(metric)
+        values = [
+            v for k, v in metrics.items() if f'command_type="{command_type}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
+    def get_response_count(self, metric: str, response_type: str) -> float:
+        metrics = self.with_name(metric)
+        values = [
+            v for k, v in metrics.items() if f'response_type="{response_type}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
+    def get_replica_history_command_count(self, command_type: str) -> float:
+        return self.get_command_count(
+            "mz_compute_replica_history_command_count", command_type
+        )
+
+    def get_controller_history_command_count(self, command_type: str) -> float:
+        return self.get_command_count(
+            "mz_compute_controller_history_command_count", command_type
+        )
+
+    def get_commands_total(self, command_type: str) -> float:
+        return self.get_command_count("mz_compute_commands_total", command_type)
+
+    def get_command_bytes_total(self, command_type: str) -> float:
+        return self.get_command_count(
+            "mz_compute_command_message_bytes_total", command_type
+        )
+
+    def get_responses_total(self, response_type: str) -> float:
+        return self.get_response_count("mz_compute_responses_total", response_type)
+
+    def get_response_bytes_total(self, response_type: str) -> float:
+        return self.get_response_count(
+            "mz_compute_response_message_bytes_total", response_type
+        )
+
+    def get_peeks_total(self, result: str) -> float:
+        metrics = self.with_name("mz_compute_peeks_total")
+        values = [v for k, v in metrics.items() if f'result="{result}"' in k]
+        assert len(values) == 1
+        return values[0]
+
     def get_initial_output_duration(self, collection_id: str) -> float | None:
         metrics = self.with_name("mz_dataflow_initial_output_duration_seconds")
         values = [
@@ -2046,14 +2267,6 @@ class Metrics:
         ]
         assert len(values) <= 1
         return next(iter(values), None)
-
-    def get_command_count(self, command_type: str) -> float:
-        metrics = self.with_name("mz_compute_replica_history_command_count")
-        values = [
-            v for k, v in metrics.items() if f'command_type="{command_type}"' in k
-        ]
-        assert len(values) <= 1
-        return values[0]
 
 
 def workflow_test_replica_metrics(c: Composition) -> None:
@@ -2098,39 +2311,169 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         """
     )
 
+    # Check that expected metrics exist and have sensible values.
+    metrics = fetch_metrics()
+
+    count = metrics.get_replica_history_command_count("create_timely")
+    assert count == 0, f"unexpected create_timely count: {count}"
+    count = metrics.get_replica_history_command_count("create_instance")
+    assert count == 1, f"unexpected create_instance count: {count}"
+    count = metrics.get_replica_history_command_count("allow_compaction")
+    assert count > 0, f"unexpected allow_compaction count: {count}"
+    count = metrics.get_replica_history_command_count("create_dataflow")
+    assert count > 0, f"unexpected create_dataflow count: {count}"
+    count = metrics.get_replica_history_command_count("peek")
+    assert count <= 2, f"unexpected peek count: {count}"
+    count = metrics.get_replica_history_command_count("cancel_peek")
+    assert count <= 2, f"unexpected cancel_peek count: {count}"
+    count = metrics.get_replica_history_command_count("initialization_complete")
+    assert count == 0, f"unexpected initialization_complete count: {count}"
+    count = metrics.get_replica_history_command_count("update_configuration")
+    assert count == 1, f"unexpected update_configuration count: {count}"
+
+    count = metrics.get_value("mz_compute_replica_history_dataflow_count")
+    assert count >= 2, f"unexpected dataflow count: {count}"
+
+    maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
+    assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
+    delayed_time = metrics.get_value("mz_dataflow_delayed_time_seconds_total")
+    assert delayed_time < 1, f"unexpected delayed time: {delayed_time}"
+
+
+def workflow_test_compute_controller_metrics(c: Composition) -> None:
+    """Test metrics exposed by the compute controller."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp).for_instance("u2")
+
+    # Set up a cluster with a couple dataflows.
+    c.sql(
+        """
+        CREATE CLUSTER test MANAGED, SIZE '1';
+        SET cluster = test;
+
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 10);
+
+        CREATE INDEX idx ON t (a);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+
+        SELECT * FROM t;
+        SELECT * FROM mv;
+        """
+    )
+
     index_id = c.sql_query("SELECT id FROM mz_indexes WHERE name = 'idx'")[0][0]
     mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
 
     # Check that expected metrics exist and have sensible values.
     metrics = fetch_metrics()
 
-    count = metrics.get_command_count("create_timely")
-    assert count == 0, f"unexpected create_timely count: {count}"
-    count = metrics.get_command_count("create_instance")
-    assert count == 1, f"unexpected create_instance count: {count}"
-    count = metrics.get_command_count("allow_compaction")
-    assert count > 0, f"unexpected allow_compaction count: {count}"
-    count = metrics.get_command_count("create_dataflow")
-    assert count > 0, f"unexpected create_dataflow count: {count}"
-    count = metrics.get_command_count("peek")
-    assert count <= 2, f"unexpected peek count: {count}"
-    count = metrics.get_command_count("cancel_peek")
-    assert count == 0, f"unexpected cancel_peek count: {count}"
-    count = metrics.get_command_count("initialization_complete")
-    assert count == 0, f"unexpected initialization_complete count: {count}"
-    count = metrics.get_command_count("update_configuration")
-    assert count == 1, f"unexpected update_configuration count: {count}"
+    # mz_compute_commands_total
+    count = metrics.get_commands_total("create_timely")
+    assert count == 1, f"got {count}"
+    count = metrics.get_commands_total("create_instance")
+    assert count == 1, f"got {count}"
+    count = metrics.get_commands_total("allow_compaction")
+    assert count > 0, f"got {count}"
+    count = metrics.get_commands_total("create_dataflow")
+    assert count == 3, f"got {count}"
+    count = metrics.get_commands_total("peek")
+    assert count == 2, f"got {count}"
+    count = metrics.get_commands_total("cancel_peek")
+    assert count == 2, f"got {count}"
+    count = metrics.get_commands_total("initialization_complete")
+    assert count == 1, f"got {count}"
+    count = metrics.get_commands_total("update_configuration")
+    assert count == 1, f"got {count}"
 
-    count = metrics.get_value("mz_compute_replica_history_dataflow_count")
-    assert count >= 2, f"unexpected dataflow count: {count}"
+    # mz_compute_command_message_bytes_total
+    count = metrics.get_command_bytes_total("create_timely")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("create_instance")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("allow_compaction")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("create_dataflow")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("peek")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("cancel_peek")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("initialization_complete")
+    assert count > 0, f"got {count}"
+    count = metrics.get_command_bytes_total("update_configuration")
+    assert count > 0, f"got {count}"
 
-    index_iod = metrics.get_initial_output_duration(index_id)
-    assert index_iod, f"unexpected index iod: {index_iod}"
-    mv_iod = metrics.get_initial_output_duration(mv_id)
-    assert mv_iod, f"unexpected mv iod: {mv_iod}"
+    # mz_compute_responses_total
+    count = metrics.get_responses_total("frontier_upper")
+    assert count > 0, f"got {count}"
+    count = metrics.get_responses_total("peek_response")
+    assert count == 2, f"got {count}"
+    count = metrics.get_responses_total("subscribe_response")
+    assert count == 0, f"got {count}"
 
-    maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
-    assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
+    # mz_compute_response_message_bytes_total
+    count = metrics.get_response_bytes_total("frontier_upper")
+    assert count > 0, f"got {count}"
+    count = metrics.get_response_bytes_total("peek_response")
+    assert count > 0, f"got {count}"
+    count = metrics.get_response_bytes_total("subscribe_response")
+    assert count == 0, f"got {count}"
+
+    count = metrics.get_value("mz_compute_controller_replica_count")
+    assert count == 1, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_collection_count")
+    assert count > 0, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_peek_count")
+    assert count == 0, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_subscribe_count")
+    assert count == 0, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_command_queue_size")
+    assert count < 10, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_response_queue_size")
+    assert count < 10, f"got {count}"
+
+    # mz_compute_controller_history_command_count
+    count = metrics.get_controller_history_command_count("create_timely")
+    assert count == 1, f"got {count}"
+    count = metrics.get_controller_history_command_count("create_instance")
+    assert count == 1, f"got {count}"
+    count = metrics.get_controller_history_command_count("allow_compaction")
+    assert count > 0, f"got {count}"
+    count = metrics.get_controller_history_command_count("create_dataflow")
+    assert count > 0, f"got {count}"
+    count = metrics.get_controller_history_command_count("peek")
+    assert count <= 2, f"got {count}"
+    count = metrics.get_controller_history_command_count("cancel_peek")
+    assert count <= 2, f"got {count}"
+    count = metrics.get_controller_history_command_count("initialization_complete")
+    assert count == 1, f"got {count}"
+    count = metrics.get_controller_history_command_count("update_configuration")
+    assert count == 1, f"got {count}"
+
+    count = metrics.get_value("mz_compute_controller_history_dataflow_count")
+    assert count >= 2, f"got {count}"
+
+    # mz_compute_peeks_total
+    count = metrics.get_peeks_total("rows")
+    assert count == 2, f"got {count}"
+    count = metrics.get_peeks_total("error")
+    assert count == 0, f"got {count}"
+    count = metrics.get_peeks_total("canceled")
+    assert count == 0, f"got {count}"
+
+    # mz_dataflow_initial_output_duration_seconds
+    duration = metrics.get_initial_output_duration(index_id)
+    assert duration, f"got {duration}"
+    duration = metrics.get_initial_output_duration(mv_id)
+    assert duration, f"got {duration}"
 
     # Drop the dataflows.
     c.sql(
@@ -2140,10 +2483,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         """
     )
 
-    # Wait for the drop commands to reach the replica.
-    time.sleep(1)
-
-    # Check that the dataflow metrics have been cleaned up.
+    # Check that the per-collection metrics have been cleaned up.
     metrics = fetch_metrics()
     assert metrics.get_initial_output_duration(index_id) is None
     assert metrics.get_initial_output_duration(mv_id) is None
@@ -2190,8 +2530,9 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
         dt = datetime.fromtimestamp(since / 1000.0)
         diff = now - dt
 
+        # This env was just created, so the since should be recent.
         assert (
-            diff.days >= 30
+            diff.days < 30
         ), f"{name} greater than expected (since={since}, diff={diff})"
 
     c.down(destroy_volumes=True)
@@ -2205,6 +2546,347 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     c.kill("materialized")
     c.up("materialized")
 
+    # The env has been up for less than 30d, so the since should not have
+    # changed.
     table_since2, index_since2 = collect_sinces()
-    validate_since(table_since2, "table_since2")
-    validate_since(index_since2, "index_since2")
+    assert (
+        table_since1 == table_since2
+    ), f"table sinces did not match {table_since1} vs {table_since2})"
+    assert (
+        index_since1 == index_since2
+    ), f"index sinces did not match {index_since1} vs {index_since2})"
+
+
+def workflow_test_concurrent_connections(c: Composition) -> None:
+    """
+    Run many concurrent connections, measure their p50 and p99 latency, make
+    sure #21782 does not regress.
+    """
+    num_conns = 2000
+    p50_limit = 10.0
+    p99_limit = 20.0
+
+    runtimes: list[float] = [float("inf")] * num_conns
+
+    def worker(c: Composition, i: int) -> None:
+        start_time = time.time()
+        c.sql("SELECT 1")
+        end_time = time.time()
+        runtimes[i] = end_time - start_time
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.sql(
+        f"ALTER SYSTEM SET max_connections = {num_conns + 4};",
+        port=6877,
+        user="mz_system",
+    )
+
+    for i in range(3):
+        threads = []
+        for j in range(num_conns):
+            thread = Thread(name=f"worker_{j}", target=worker, args=(c, j))
+            threads.append(thread)
+
+        for thread in threads:
+            thread.start()
+
+        for thread in threads:
+            thread.join()
+
+        p = quantiles(runtimes, n=100)
+        print(
+            f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
+        )
+
+        p50 = p[49]
+        p99 = p[98]
+        if p50 < p50_limit and p99 < p99_limit:
+            return
+        if i < 2:
+            print("retry...")
+            continue
+        assert (
+            p50 < p50_limit
+        ), f"p50 is {p50:.2f}s, should be less than {p50_limit:.2f}s"
+        assert (
+            p99 < p99_limit
+        ), f"p99 is {p99:.2f}s, should be less than {p99_limit:.2f}s"
+
+
+def workflow_test_profile_fetch(c: Composition) -> None:
+    """
+    Test fetching memory and CPU profiles via the internal HTTP
+    endpoint.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+
+    envd_port = c.port("materialized", 6878)
+    envd_url = f"http://localhost:{envd_port}/prof/"
+    clusterd_port = c.port("clusterd1", 6878)
+    clusterd_url = f"http://localhost:{clusterd_port}/"
+
+    def test_post(data: dict[str, str], check: Callable[[int, str], None]) -> None:
+        resp = requests.post(envd_url, data=data)
+        check(resp.status_code, resp.text)
+
+        resp = requests.post(clusterd_url, data=data)
+        check(resp.status_code, resp.text)
+
+    def test_get(path: str, check: Callable[[int, str], None]) -> None:
+        resp = requests.get(envd_url + path)
+        check(resp.status_code, resp.text)
+
+        resp = requests.get(clusterd_url + path)
+        check(resp.status_code, resp.text)
+
+    def make_check(code: int, contents: str) -> Callable[[int, str], None]:
+        def check(code_: int, text: str) -> None:
+            assert code_ == code, f"expected {code}, got {code_}"
+            assert contents in text, f"'{contents}' not found in text: {text}"
+
+        return check
+
+    def make_ok_check(contents: str) -> Callable[[int, str], None]:
+        return make_check(200, contents)
+
+    def check_profiling_disabled(code: int, text: str) -> None:
+        check = make_check(403, "heap profiling not activated")
+        check(code, text)
+
+    # Test fetching CPU profiles.
+    test_post(
+        {"action": "time_fg", "time_secs": "1", "hz": "1"},
+        make_ok_check(
+            "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
+        ),
+    )
+
+    # Activate memory profiling.
+    test_post({"action": "activate"}, make_ok_check("Jemalloc profiling active"))
+
+    # Test fetching heap profiles.
+    test_post({"action": "dump_jeheap"}, make_ok_check("heap_v2/"))
+    test_post(
+        {"action": "dump_sym_mzfg"}, make_ok_check("mz_fg_version: 1\nAllocated:")
+    )
+    test_post(
+        {"action": "mem_fg"},
+        make_ok_check("mz_fg_version: 1\\ndisplay_bytes: 1\\nAllocated:"),
+    )
+    test_get("heap", make_ok_check(""))
+
+    # Deactivate memory profiling.
+    test_post(
+        {"action": "deactivate"},
+        make_ok_check("Jemalloc profiling enabled but inactive"),
+    )
+
+    # Test that fetching heap profiles is forbidden.
+    test_post({"action": "dump_jeheap"}, check_profiling_disabled)
+    test_post({"action": "dump_sym_mzfg"}, check_profiling_disabled)
+    test_post({"action": "mem_fg"}, check_profiling_disabled)
+    test_get("heap", check_profiling_disabled)
+
+    # Test toggling profiling via feature flag.
+    c.sql(
+        "ALTER SYSTEM SET enable_jemalloc_profiling = true;",
+        port=6877,
+        user="mz_system",
+    )
+    code = requests.get(envd_url + "heap").status_code
+    assert code == 200, f"expected 200, got {code}"
+
+    c.sql(
+        "ALTER SYSTEM SET enable_jemalloc_profiling = false;",
+        port=6877,
+        user="mz_system",
+    )
+    code = requests.get(envd_url + "heap").status_code
+    assert code == 403, f"expected 403, got {code}"
+
+
+def workflow_test_incident_70(c: Composition) -> None:
+    """
+    Test incident-70.
+    """
+    num_conns = 1
+    mv_count = 50
+    persist_reader_lease_duration_in_sec = 10
+    data_scale_factor = 10
+
+    with c.override(
+        Materialized(
+            external_cockroach=True,
+            external_minio=True,
+            sanity_restart=False,
+        ),
+        Minio(setup_materialize=True),
+    ):
+        c.down(destroy_volumes=True)
+        c.up("minio", "materialized")
+
+        c.sql(
+            f"ALTER SYSTEM SET max_connections = {num_conns + 5};",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            f"ALTER SYSTEM SET persist_reader_lease_duration = '{persist_reader_lease_duration_in_sec}s';",
+            port=6877,
+            user="mz_system",
+        )
+
+        mz_view_create_statements = []
+
+        for i in range(mv_count):
+            mz_view_create_statements.append(
+                f"CREATE MATERIALIZED VIEW mv_lineitem_count_{i + 1} AS SELECT count(*) FROM lineitem;"
+            )
+
+        mz_view_create_statements_sql = "\n".join(mz_view_create_statements)
+
+        c.sql(
+            dedent(
+                f"""
+                CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor}) FOR ALL TABLES;
+
+                {mz_view_create_statements_sql}
+                """
+            )
+        )
+
+        start_time = datetime.now()
+        end_time = start_time + timedelta(seconds=600)
+
+        def worker(c: Composition, worker_index: int) -> None:
+            print(f"Thread {worker_index} tries to acquire a cursor")
+            cursor = c.sql_cursor()
+            print(f"Thread {worker_index} got a cursor")
+
+            iteration = 1
+            while datetime.now() < end_time:
+                if iteration % 20 == 0:
+                    print(f"Thread {worker_index}, iteration {iteration}")
+                cursor.execute("SELECT * FROM mv_lineitem_count_1;")
+                iteration += 1
+            print(f"Thread {worker_index} terminates before iteration {iteration}")
+
+        threads = []
+        for worker_index in range(num_conns):
+            thread = Thread(
+                name=f"worker_{worker_index}", target=worker, args=(c, worker_index)
+            )
+            threads.append(thread)
+
+        for thread in threads:
+            thread.start()
+            # this is because of #22038
+            time.sleep(0.2)
+
+        for thread in threads:
+            thread.join()
+
+
+def workflow_test_index_source_stuck(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Inspired by incident 78, test that selecting an index of a materialized
+    view still works when the source is stuck, for example because it's busy or
+    it has no replicas."""
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(),
+        Clusterd(name="clusterd1"),
+        Clusterd(name="clusterd2"),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+        c.up("clusterd2")
+        c.run("testdrive", "index-source-stuck/run.td")
+
+
+def workflow_test_github_cloud_7998(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Regression test for MaterializeInc/cloud#7998."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(name="clusterd1"),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+
+        c.run("testdrive", "github-cloud-7998/setup.td")
+
+        # Make the compute cluster unavailable.
+        c.kill("clusterd1")
+        c.run("testdrive", "github-cloud-7998/check.td")
+
+        # Trigger an environment bootstrap.
+        c.kill("materialized")
+        c.up("materialized")
+        c.run("testdrive", "github-cloud-7998/check.td")
+
+        # Run a second bootstrap check, just to be sure.
+        c.kill("materialized")
+        c.up("materialized")
+        c.run("testdrive", "github-cloud-7998/check.td")
+
+
+def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Regression test for #23246."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+
+        # Create an MV reading from an index. Make sure it doesn't produce its
+        # snapshot by installing it in a cluster without replicas.
+        c.sql(
+            """
+            CREATE CLUSTER test SIZE '1', REPLICATION FACTOR 0;
+            SET cluster = test;
+
+            CREATE TABLE t (a int);
+            INSERT INTO t VALUES (1);
+
+            CREATE DEFAULT INDEX ON t;
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            """
+        )
+
+        # Verify that the MV's upper is zero, which is what caused the bug.
+        # This ensures that the test doesn't break in the future because we
+        # start initializing frontiers differently.
+        c.testdrive(
+            input=dedent(
+                """
+                > SELECT write_frontier
+                  FROM mz_internal.mz_frontiers
+                  JOIN mz_materialized_views ON (object_id = id)
+                  WHERE name = 'mv'
+                0
+                """
+            )
+        )
+
+        # Trigger an environment bootstrap, and see if envd comes up without
+        # panicking.
+        c.kill("materialized")
+        c.up("materialized")

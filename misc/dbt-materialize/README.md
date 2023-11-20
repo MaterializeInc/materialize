@@ -2,12 +2,13 @@
 
 [dbt] adapter for [Materialize].
 
-For a complete step-by-step guide on how to use dbt and Materialize, check the [documentation](https://materialize.com/docs/guides/dbt/).
+For a complete step-by-step guide on how to use dbt and Materialize, check the
+[documentation](https://materialize.com/docs/guides/dbt/).
 
 ## Installation
 
-`dbt-materialize` is available on [PyPI]. To install the latest version via `pip` (optionally using a virtual environment),
-run:
+`dbt-materialize` is available on [PyPI]. To install the latest version via
+`pip` (optionally using a virtual environment), run:
 
 ```nofmt
 python3 -m venv dbt-venv         # create the virtual environment
@@ -18,12 +19,12 @@ pip install dbt-materialize      # install the adapter
 ## Requirements
 
 <!-- If you update this, bump the constraint in connections.py too. -->
-`dbt-materialize` requires Materialize v0.49.0+.
+`dbt-materialize` requires Materialize v0.68.0+.
 
 ## Configuring your profile
 
-To connect to a Materialize instance, use the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize) in your
-connection profile:
+To connect to a Materialize instance, use the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize)
+in your connection profile:
 
 ```yml
 dbt-materialize:
@@ -52,19 +53,22 @@ Complete sample profiles can be found in [sample_profiles.yml](dbt/include/mater
 
 ### Materializations
 
-Type               | Supported? | Details
--------------------|------------|--------
-`source`           | YES        | Creates a [source].
-`view`             | YES        | Creates a [view].
-`materializedview` | YES        | Creates a [materialized view].
-`table`            | YES        | Creates a [materialized view]. (Actual table support pending [#5266].)
-`sink`             | YES        | Creates a [sink].
-`ephemeral`        | YES        | Executes queries using CTEs.
-`incremental`      | NO         | Use the `materializedview` materialization instead! dbt's incremental models are valuable because they only spend your time and money transforming your new data as it arrives. Luckily, this is exactly what Materialize's materialized views were built to do! Better yet, our materialized views will always return up-to-date results without manual or configured refreshes. For more information, check out [our documentation](https://materialize.com/docs/).
+Type                | Supported? | Details
+--------------------|------------|--------
+`source`            | YES        | Creates a [source].
+`view`              | YES        | Creates a [view].
+`materializedview`  | YES        | (Deprecated) Creates a [materialized view].
+`materialized_view` | YES        | Creates a [materialized view]. The `materializedview` legacy materialization name is supported for backwards compatibility.
+`table`             | YES        | Creates a [materialized view]. (Actual table support pending [#5266].)
+`sink`              | YES        | Creates a [sink].
+`ephemeral`         | YES        | Executes queries using CTEs.
+`incremental`       | NO         | Use the `materialized_view` materialization instead! dbt's incremental models are valuable because they only spend your time and money transforming your new data as it arrives. Luckily, this is exactly what Materialize's materialized views were built to do! Better yet, our materialized views will always return up-to-date results without manual or configured refreshes. For more information, check out [our documentation](https://materialize.com/docs/).
 
 ### Indexes
 
-Use the indexes option to define a list of [indexes](/sql/create-index/) on `source`, `view`, `table` or `materialized view` materializations. Each Materialize index can have the following components:
+Use the indexes option to define a list of [indexes](/sql/create-index/) on
+`source`, `view`, `table` or `materialized view` materializations. Each
+Materialize index can have the following components:
 
 Component                            | Value     | Description
 -------------------------------------|-----------|--------------------------------------------------
@@ -75,36 +79,45 @@ Component                            | Value     | Description
 
 ### Additional macros
 
-We provide a `materialize-dbt-utils` package with Materialize-specific implementations of dispatched macros from `dbt-utils`. To use this package in your dbt project, check the latest installation instructions in [dbt Hub](https://hub.getdbt.com/materializeinc/materialize_dbt_utils/latest/).
-
-### Seeds
-
-[`dbt seed`](https://docs.getdbt.com/reference/commands/seed/) will create a
-static materialized view from a CSV file. You will not be able to add to or
-update this view after it has been created.
+We provide a `materialize-dbt-utils` package with Materialize-specific
+implementations of dispatched macros from `dbt-utils`. To use this package in
+your dbt project, check the latest installation instructions in [dbt Hub](https://hub.getdbt.com/materializeinc/materialize_dbt_utils/latest/).
 
 ### Hooks
 
-Not tested.
+Supported.
 
 ### Custom Schemas
 
-Not tested.
+Supported. Custom schemas in dbt might behave differently than you'd expect, so
+make sure to read the [documentation](https://docs.getdbt.com/docs/build/custom-schemas)!
 
 ### Sources
 
-You can instruct dbt to create a [`dbt source`](https://docs.getdbt.com/docs/build/sources) in Materialize using the custom [source] materialization, which allows for injecting the complete source statement into your .sql file.
+You can instruct dbt to create a [`dbt source`](https://docs.getdbt.com/docs/build/sources)
+in Materialize using the custom [source] materialization, which allows for
+injecting the complete source statement into your .sql file.
 
-`source freshness` is not supported because using Materialize, your sources will always be fresh.
+`source freshness` is not supported because using Materialize, your sources will
+always be fresh.
 
 ### Documentation
-[`dbt docs`](https://docs.getdbt.com/reference/commands/cmd-docs) is supported.
+
+[`dbt docs`](https://docs.getdbt.com/reference/commands/cmd-docs) is supported,
+as well as [`--persist-docs`](https://docs.getdbt.com/reference/resource-configs/persist_docs).
 
 ### Testing
+
 [`dbt test`](https://docs.getdbt.com/reference/commands/test) is supported.
 
-If you set the optional `--store-failures` flag or [`store-failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures), dbt will save the results of a test query to a `materializedview`.
-These will be created in a schema suffixed or named `dbt_test__audit` by default. Change this value by setting a `schema` config.
+If you set the optional [`--store-failures` flag or `store-failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures),
+dbt will save the results of a test query to a `materialized_view`. To use a
+`view` instead, use the [`store_failures_as` config](https://docs.getdbt.com/reference/resource-configs/store_failures_as).
+
+These objects will be created in a schema suffixed or named `dbt_test__audit` by
+default. Change this value by setting a `schema` config. If both
+[`store_failures`](https://docs.getdbt.com/reference/resource-configs/store_failures) and
+`store_failures_as` are specified, `store_failures_as` takes precedence.
 
 ### Snapshots
 
@@ -113,7 +126,7 @@ Not supported. Support is not planned for the near term.
 ## Contributors
 
 A huge thank you to [Josh Wills](https://github.com/jwills), who created the
-original version of this adapter.
+original version of this adapter. 🤠
 
 [#5266]: https://github.com/MaterializeInc/materialize/issues/5266
 [dbt]: https://www.getdbt.com/

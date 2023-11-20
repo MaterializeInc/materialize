@@ -14,13 +14,7 @@ from typing import Any
 
 import pg8000
 
-from materialize.data_ingest.data_type import (
-    DoubleType,
-    FloatType,
-    IntType,
-    LongType,
-    StringType,
-)
+from materialize.data_ingest.data_type import DATA_TYPES_FOR_AVRO
 from materialize.data_ingest.definition import (
     Delete,
     Insert,
@@ -37,11 +31,15 @@ from materialize.data_ingest.transaction_def import (
     TransactionDef,
     TransactionSize,
 )
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
+from materialize.util import all_subclasses
 
 
 class Workload:
     cycle: list[TransactionDef]
+
+    def __init__(self, composition: Composition | None) -> None:
+        raise NotImplementedError
 
     def generate(self, fields: list[Field]) -> Iterator[Transaction]:
         while True:
@@ -52,7 +50,7 @@ class Workload:
 
 
 class SingleSensorUpdating(Workload):
-    def __init__(self, composition: Composition) -> None:
+    def __init__(self, composition: Composition | None) -> None:
         self.cycle = [
             TransactionDef(
                 [
@@ -67,7 +65,7 @@ class SingleSensorUpdating(Workload):
 
 
 class SingleSensorUpdatingDisruptions(Workload):
-    def __init__(self, composition: Composition) -> None:
+    def __init__(self, composition: Composition | None) -> None:
         self.cycle = [
             TransactionDef(
                 [
@@ -78,12 +76,13 @@ class SingleSensorUpdatingDisruptions(Workload):
                     ),
                 ]
             ),
-            RestartMz(composition, probability=0.1),
         ]
+        if composition:
+            self.cycle.append(RestartMz(composition, probability=0.1))
 
 
 class DeleteDataAtEndOfDay(Workload):
-    def __init__(self, composition: Composition) -> None:
+    def __init__(self, composition: Composition | None) -> None:
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -109,7 +108,7 @@ class DeleteDataAtEndOfDay(Workload):
 
 
 class DeleteDataAtEndOfDayDisruptions(Workload):
-    def __init__(self, composition: Composition) -> None:
+    def __init__(self, composition: Composition | None) -> None:
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -131,8 +130,10 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
         self.cycle = [
             insert_phase,
             delete_phase,
-            RestartMz(composition, probability=0.1),
         ]
+
+        if composition:
+            self.cycle.append(RestartMz(composition, probability=0.1))
 
 
 # TODO: Implement
@@ -140,6 +141,9 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
 #    def __init__(self) -> None:
 #        self.cycle: list[Definition] = [
 #        ]
+
+
+WORKLOADS = all_subclasses(Workload)
 
 
 def execute_workload(
@@ -152,16 +156,14 @@ def execute_workload(
 ) -> None:
     fields = []
 
-    types = (StringType, IntType, LongType, FloatType, DoubleType)
-
     for i in range(random.randint(1, 10)):
-        fields.append(Field(f"key{i}", random.choice(types), True))
+        fields.append(Field(f"key{i}", random.choice(DATA_TYPES_FOR_AVRO), True))
     for i in range(random.randint(0, 20)):
-        fields.append(Field(f"value{i}", random.choice(types), False))
+        fields.append(Field(f"value{i}", random.choice(DATA_TYPES_FOR_AVRO), False))
     print(f"With fields: {fields}")
 
     executors = [
-        executor_class(num, ports, fields)
+        executor_class(num, ports, fields, "materialize")
         for executor_class in [PgExecutor] + executor_classes
     ]
     pg_executor = executors[0]
@@ -169,6 +171,8 @@ def execute_workload(
     start = time.time()
 
     run_executors = ([PrintExecutor(ports)] if verbose else []) + executors
+    for exe in run_executors:
+        exe.create()
     for i, transaction in enumerate(workload.generate(fields)):
         duration = time.time() - start
         if duration > runtime:
@@ -205,7 +209,9 @@ def execute_workload(
             if actual_result == expected_result:
                 if correct_once:
                     break
-                print("Check for correctness again to make sure the result is stable")
+                print(
+                    "Results match. Check for correctness again to make sure the result is stable"
+                )
                 correct_once = True
                 time.sleep(sleep_time)
                 continue

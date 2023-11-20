@@ -19,7 +19,7 @@ use mz_ore::now::NowFn;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::{Datum, Row};
-use mz_storage_client::types::sources::{Generator, MzOffset};
+use mz_storage_types::sources::{Generator, MzOffset};
 use once_cell::sync::Lazy;
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
@@ -61,6 +61,7 @@ impl Generator for Tpch {
             cx: numeric::cx_datum(),
             // TODO: Use a text generator closer to the spec.
             text_string_source: Alphanumeric.sample_string(&mut rng, 3 << 20),
+            row_buffer: Row::default(),
         };
 
         let count_nation: i64 = NATIONS.len().try_into().unwrap();
@@ -84,6 +85,7 @@ impl Generator for Tpch {
         let mut active_orders = Vec::new();
 
         let mut offset = 0;
+        let mut row = Row::default();
         Box::new(iter::from_fn(move || {
             if let Some(pending) = pending.pop_front() {
                 return Some(pending);
@@ -93,7 +95,7 @@ impl Generator for Tpch {
                 let row = match output {
                     SUPPLIER_OUTPUT => {
                         let nation = rng.gen_range(0..count_nation);
-                        Row::pack_slice(&[
+                        row.packer().extend([
                             Datum::Int64(key),
                             Datum::String(&pad_nine("Supplier", key)),
                             Datum::String(&v_string(&mut rng, 10, 40)), // address
@@ -102,7 +104,8 @@ impl Generator for Tpch {
                             Datum::Numeric(decimal(&mut rng, &mut ctx.cx, -999_99, 9_999_99, 100)), // acctbal
                             // TODO: add customer complaints and recommends, see 4.2.3.
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 25, 100)),
-                        ])
+                        ]);
+                        row.clone()
                     }
                     PART_OUTPUT => {
                         let name: String = PARTNAMES
@@ -119,7 +122,7 @@ impl Generator for Tpch {
                                         + (key - 1) / ctx.tpch.count_supplier)))
                                 % ctx.tpch.count_supplier
                                 + 1;
-                            let row = Row::pack_slice(&[
+                            row.packer().extend([
                                 Datum::Int64(key),
                                 Datum::Int64(suppkey),
                                 Datum::Int32(rng.gen_range(1..=9_999)), // availqty
@@ -133,10 +136,10 @@ impl Generator for Tpch {
                             ]);
                             pending.push_back((
                                 PARTSUPP_OUTPUT,
-                                Event::Message(MzOffset::from(offset), (row, 1)),
+                                Event::Message(MzOffset::from(offset), (row.clone(), 1)),
                             ));
                         }
-                        Row::pack_slice(&[
+                        row.packer().extend([
                             Datum::Int64(key),
                             Datum::String(&name),
                             Datum::String(&format!("Manufacturer#{m}")),
@@ -146,11 +149,12 @@ impl Generator for Tpch {
                             Datum::String(&syllables(&mut rng, CONTAINERS)),
                             Datum::Numeric(partkey_retailprice(key)),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 49, 198)),
-                        ])
+                        ]);
+                        row.clone()
                     }
                     CUSTOMER_OUTPUT => {
                         let nation = rng.gen_range(0..count_nation);
-                        Row::pack_slice(&[
+                        row.packer().extend([
                             Datum::Int64(key),
                             Datum::String(&pad_nine("Customer", key)),
                             Datum::String(&v_string(&mut rng, 10, 40)), // address
@@ -159,7 +163,8 @@ impl Generator for Tpch {
                             Datum::Numeric(decimal(&mut rng, &mut ctx.cx, -999_99, 9_999_99, 100)), // acctbal
                             Datum::String(SEGMENTS.choose(&mut rng).unwrap()),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 29, 116)),
-                        ])
+                        ]);
+                        row.clone()
                     }
                     ORDERS_OUTPUT => {
                         let seed = rng.gen();
@@ -177,18 +182,22 @@ impl Generator for Tpch {
                     }
                     NATION_OUTPUT => {
                         let (name, region) = NATIONS[key_usize];
-                        Row::pack_slice(&[
+                        row.packer().extend([
                             Datum::Int64(key),
                             Datum::String(name),
                             Datum::Int64(region),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 114)),
-                        ])
+                        ]);
+                        row.clone()
                     }
-                    REGION_OUTPUT => Row::pack_slice(&[
-                        Datum::Int64(key),
-                        Datum::String(REGIONS[key_usize]),
-                        Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 115)),
-                    ]),
+                    REGION_OUTPUT => {
+                        row.packer().extend([
+                            Datum::Int64(key),
+                            Datum::String(REGIONS[key_usize]),
+                            Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 115)),
+                        ]);
+                        row.clone()
+                    }
                     _ => unreachable!("{output}"),
                 };
 
@@ -244,6 +253,7 @@ struct Context {
     decimal_neg_one: Numeric,
     cx: DecimalContext<Numeric>,
     text_string_source: String,
+    row_buffer: Row,
 }
 
 impl Context {
@@ -281,7 +291,7 @@ impl Context {
             let shipdate = date(&mut rng, &orderdate, 1..=121);
             let receiptdate = date(&mut rng, &shipdate, 1..=30);
             let linestatus = if shipdate > *CURRENT_DATE { "O" } else { "F" };
-            let row = Row::pack_slice(&[
+            self.row_buffer.packer().extend([
                 Datum::Int64(key),
                 Datum::Int64(partkey),
                 Datum::Int64(suppkey),
@@ -303,6 +313,7 @@ impl Context {
                 Datum::String(MODES.choose(&mut rng).unwrap()),
                 Datum::String(text_string(&mut rng, &self.text_string_source, 10, 43)),
             ]);
+            let row = self.row_buffer.clone();
             // totalprice += extendedprice * (1.0 + tax) * (1.0 - discount)
             self.cx.add(&mut tax.0, &self.decimal_one);
             self.cx.sub(&mut discount.0, &self.decimal_neg_one);
@@ -320,7 +331,7 @@ impl Context {
             lineitems.push(row);
         }
 
-        let order = Row::pack_slice(&[
+        self.row_buffer.packer().extend([
             Datum::Int64(key),
             Datum::Int64(custkey),
             Datum::String(orderstatus.unwrap()),
@@ -331,7 +342,7 @@ impl Context {
             Datum::Int32(0), // shippriority
             Datum::String(text_string(&mut rng, &self.text_string_source, 19, 78)),
         ]);
-
+        let order = self.row_buffer.clone();
         (order, lineitems)
     }
 }

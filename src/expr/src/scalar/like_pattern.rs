@@ -99,49 +99,60 @@ pub fn normalize_pattern(pattern: &str, escape: EscapeBehavior) -> Result<String
 // That said, regular expressions aren't that efficient. For most patterns
 // we can do better using built-in string matching.
 
-/// An object that can test whether a string matches a LIKE or ILIKE pattern.
-#[derive(Debug, Clone, Deserialize, Serialize, Derivative, MzReflect)]
-#[derivative(Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Matcher {
-    pub pattern: String,
-    pub case_insensitive: bool,
-    #[derivative(
-        PartialEq = "ignore",
-        Hash = "ignore",
-        Ord = "ignore",
-        PartialOrd = "ignore"
-    )]
-    matcher_impl: MatcherImpl,
-}
+pub use matcher::Matcher;
+use matcher::MatcherImpl;
 
-impl Matcher {
-    pub fn is_match(&self, text: &str) -> bool {
-        match &self.matcher_impl {
-            MatcherImpl::String(subpatterns) => is_match_subpatterns(subpatterns, text),
-            MatcherImpl::Regex(r) => r.is_match(text),
+// This lint interacts poorly with `derivative` here; we are confident it generates
+// compatible `PartialOrd` and `Ord` impls. Unfortunately it also requires we introduce
+// this module to allow it.
+#[allow(clippy::incorrect_partial_ord_impl_on_ord_type)]
+mod matcher {
+    use super::*;
+
+    /// An object that can test whether a string matches a LIKE or ILIKE pattern.
+    #[derive(Debug, Clone, Deserialize, Serialize, Derivative, MzReflect)]
+    #[derivative(Eq, PartialEq, Ord, PartialOrd, Hash)]
+    pub struct Matcher {
+        pub pattern: String,
+        pub case_insensitive: bool,
+        #[derivative(
+            PartialEq = "ignore",
+            Hash = "ignore",
+            Ord = "ignore",
+            PartialOrd = "ignore"
+        )]
+        pub(super) matcher_impl: MatcherImpl,
+    }
+
+    impl Matcher {
+        pub fn is_match(&self, text: &str) -> bool {
+            match &self.matcher_impl {
+                MatcherImpl::String(subpatterns) => is_match_subpatterns(subpatterns, text),
+                MatcherImpl::Regex(r) => r.is_match(text),
+            }
         }
     }
-}
 
-impl RustType<ProtoMatcher> for Matcher {
-    fn into_proto(&self) -> ProtoMatcher {
-        ProtoMatcher {
-            pattern: self.pattern.clone(),
-            case_insensitive: self.case_insensitive,
+    impl RustType<ProtoMatcher> for Matcher {
+        fn into_proto(&self) -> ProtoMatcher {
+            ProtoMatcher {
+                pattern: self.pattern.clone(),
+                case_insensitive: self.case_insensitive,
+            }
+        }
+
+        fn from_proto(proto: ProtoMatcher) -> Result<Self, TryFromProtoError> {
+            compile(proto.pattern.as_str(), proto.case_insensitive).map_err(|eval_err| {
+                TryFromProtoError::LikePatternDeserializationError(eval_err.to_string())
+            })
         }
     }
 
-    fn from_proto(proto: ProtoMatcher) -> Result<Self, TryFromProtoError> {
-        compile(proto.pattern.as_str(), proto.case_insensitive).map_err(|eval_err| {
-            TryFromProtoError::LikePatternDeserializationError(eval_err.to_string())
-        })
+    #[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
+    pub(super) enum MatcherImpl {
+        String(Vec<Subpattern>),
+        Regex(#[serde(with = "serde_regex")] Regex),
     }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
-enum MatcherImpl {
-    String(Vec<Subpattern>),
-    Regex(#[serde(with = "serde_regex")] Regex),
 }
 
 /// Builds a Matcher that matches a SQL LIKE pattern.

@@ -48,6 +48,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 use tracing::warn;
 
@@ -209,8 +210,12 @@ fn validate_schema_2(
         SchemaPiece::Float => ScalarType::Float32,
         SchemaPiece::Double => ScalarType::Float64,
         SchemaPiece::Date => ScalarType::Date,
-        SchemaPiece::TimestampMilli => ScalarType::Timestamp,
-        SchemaPiece::TimestampMicro => ScalarType::Timestamp,
+        SchemaPiece::TimestampMilli => ScalarType::Timestamp {
+            precision: Some(TimestampPrecision::try_from(3).unwrap()),
+        },
+        SchemaPiece::TimestampMicro => ScalarType::Timestamp {
+            precision: Some(TimestampPrecision::try_from(6).unwrap()),
+        },
         SchemaPiece::Decimal {
             precision, scale, ..
         } => {
@@ -313,7 +318,7 @@ impl ConfluentAvroResolver {
     pub async fn resolve<'a, 'b>(
         &'a mut self,
         mut bytes: &'b [u8],
-    ) -> anyhow::Result<(&'b [u8], &'a Schema, Option<i32>)> {
+    ) -> anyhow::Result<anyhow::Result<(&'b [u8], &'a Schema, Option<i32>)>> {
         let (resolved_schema, schema_id) = match &mut self.writer_schemas {
             Some(cache) => {
                 debug_assert!(
@@ -322,14 +327,21 @@ impl ConfluentAvroResolver {
                      that can lead to this branch"
                 );
                 // XXX(guswynn): use destructuring assignments when they are stable
-                let (schema_id, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
+                let (schema_id, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes)
+                {
+                    Ok(ok) => ok,
+                    Err(err) => return Ok(Err(err)),
+                };
                 bytes = adjusted_bytes;
-                let schema = cache
+                let result = cache
                     .get(schema_id, &self.reader_schema)
-                    .await
-                    .with_context(|| {
-                        format!("failed to resolve Avro schema (id = {})", schema_id)
-                    })?;
+                    // The outer Result describes transient errors so use ? here to propagate
+                    .await?
+                    .with_context(|| format!("failed to resolve Avro schema (id = {})", schema_id));
+                let schema = match result {
+                    Ok(schema) => schema,
+                    Err(err) => return Ok(Err(err)),
+                };
                 (schema, Some(schema_id))
             }
 
@@ -339,13 +351,16 @@ impl ConfluentAvroResolver {
             None => {
                 if self.confluent_wire_format {
                     // validate and just move the bytes buffer ahead
-                    let (_, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
+                    let (_, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes) {
+                        Ok(ok) => ok,
+                        Err(err) => return Ok(Err(err)),
+                    };
                     bytes = adjusted_bytes;
                 }
                 (&self.reader_schema, None)
             }
         };
-        Ok((bytes, resolved_schema, schema_id))
+        Ok(Ok((bytes, resolved_schema, schema_id)))
     }
 }
 
@@ -384,7 +399,11 @@ impl SchemaCache {
     /// that this schema cache was initialized with, returns the schema directly.
     /// If not, performs schema resolution on the reader and writer and
     /// returns the result.
-    async fn get(&mut self, id: i32, reader_schema: &Schema) -> anyhow::Result<&Schema> {
+    async fn get(
+        &mut self,
+        id: i32,
+        reader_schema: &Schema,
+    ) -> anyhow::Result<anyhow::Result<&Schema>> {
         let entry = match self.cache.entry(id) {
             Entry::Occupied(o) => o.into_mut(),
             Entry::Vacant(v) => {
@@ -422,6 +441,6 @@ impl SchemaCache {
                 v.insert(result)
             }
         };
-        entry.as_ref().map_err(|e| anyhow::Error::new(e.clone()))
+        Ok(entry.as_ref().map_err(|e| anyhow::Error::new(e.clone())))
     }
 }

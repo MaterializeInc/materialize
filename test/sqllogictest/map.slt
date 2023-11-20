@@ -33,9 +33,6 @@ CREATE TYPE tbl_map AS MAP (KEY TYPE = pg_enum, VALUE TYPE = text)
 query error VALUE TYPE must be of class type, but received pg_catalog.pg_enum which is of class view
 CREATE TYPE tbl_map AS MAP (KEY TYPE = text, VALUE TYPE = pg_enum)
 
-query error CREATE TYPE ... AS MAP option VALUE TYPE cannot accept type modifier on pg_catalog.numeric, you must use the default type
-CREATE TYPE typ_mod_map AS MAP (KEY TYPE = text, VALUE TYPE = numeric(38,0))
-
 query error CREATE TYPE ... AS MAP option VALUE TYPE can only use named data types, but found unnamed data type pg_catalog.int4 list. Use CREATE TYPE to create a named type first
 CREATE TYPE unnamed_element_map AS MAP (KEY TYPE = text, VALUE TYPE = int4 list)
 
@@ -176,6 +173,11 @@ query T
 SELECT '{""=>1}'::map[text=>int] ? ''
 ----
 true
+
+query T
+SELECT '{"1" => NULL}'::map[text=>text] ? ''
+----
+false
 
 query T
 SELECT '{hello=>{world=>false}}'::map[text=>map[text=>bool]] -> 'hello'::text ? 'world'::text
@@ -425,31 +427,6 @@ SELECT '{a=>true, b=>false}'::map[text=>bool] -> 'b'
 false
 
 query T
-SELECT ('{a=>true, b=>false}'::map[text=>bool] -> ARRAY[]::text[])::text
-----
-{}
-
-query T
-SELECT ('{a=>true, b=>false}'::map[text=>bool] -> ARRAY['']::text[])::text
-----
-{NULL}
-
-query T
-SELECT ('{a=>1, b=>2}'::map[text=>int] -> ARRAY['a'])::text
-----
-{1}
-
-query T
-SELECT ('{a=>1, b=>2}'::map[text=>int] -> ARRAY['b', 'a'])::text
-----
-{2,1}
-
-query T
-SELECT ('{a=>1, b=>2}'::map[text=>int] -> ARRAY['b', 'a', 'c'])::text
-----
-{2,1,NULL}
-
-query T
 SELECT ('{hello=>{world=>nested}, another=>{map=>here}}'::map[text=>map[text=>text]] -> 'missing'::text)::text
 ----
 NULL
@@ -466,9 +443,6 @@ nested
 
 query error operator is not unique: unknown \-> text
 SELECT NULL -> 'hello'::text
-
-query error could not determine polymorphic type because input has type unknown
-SELECT NULL -> '{a}'::text[]
 
 # 🔬 CREATE TYPE .. AS MAP
 

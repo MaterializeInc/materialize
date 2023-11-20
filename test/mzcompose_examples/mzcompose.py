@@ -7,15 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    Minio,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 versioned_mz = [
     Materialized(
@@ -46,10 +44,11 @@ def workflow_default(c: Composition) -> None:
 
     This workflow just runs all the other ones
     """
-    c.workflow("start-confluents")
-    c.workflow("versioned-mz")
-    c.workflow("two-mz")
-    c.workflow("mz-with-options")
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def workflow_start_confluents(c: Composition) -> None:

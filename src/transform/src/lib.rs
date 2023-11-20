@@ -90,7 +90,7 @@
 #![warn(missing_debug_implementations)]
 
 use std::error::Error;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::{fmt, iter};
 
 use mz_expr::visit::Visit;
@@ -134,9 +134,6 @@ pub mod union_cancel;
 use crate::dataflow::DataflowMetainfo;
 pub use dataflow::optimize_dataflow;
 use mz_ore::soft_assert;
-
-#[macro_use]
-extern crate num_derive;
 
 /// Compute the conjunction of a variadic number of expressions.
 #[macro_export]
@@ -253,9 +250,7 @@ pub trait IndexOracle: fmt::Debug {
     // you need only allocate when you actually look for an index. Can we do
     // better somehow? Making the entire optimizer generic over this iterator
     // type doesn't presently seem worthwhile.
-    fn indexes_on(&self, id: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_>;
-    /// Like `indexes_on`, but also returns the ids of indexes.
-    fn indexes_with_id_on(
+    fn indexes_on(
         &self,
         id: GlobalId,
     ) -> Box<dyn Iterator<Item = (GlobalId, &[MirScalarExpr])> + '_>;
@@ -266,11 +261,7 @@ pub trait IndexOracle: fmt::Debug {
 pub struct EmptyIndexOracle;
 
 impl IndexOracle for EmptyIndexOracle {
-    fn indexes_on(&self, _: GlobalId) -> Box<dyn Iterator<Item = &[MirScalarExpr]> + '_> {
-        Box::new(iter::empty())
-    }
-
-    fn indexes_with_id_on(
+    fn indexes_on(
         &self,
         _id: GlobalId,
     ) -> Box<dyn Iterator<Item = (GlobalId, &[MirScalarExpr])> + '_> {
@@ -306,8 +297,8 @@ pub struct Fixpoint {
 
 impl Transform for Fixpoint {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = self.name)
     )]
@@ -330,9 +321,9 @@ impl Transform for Fixpoint {
                 let original = relation.clone();
 
                 let span = tracing::span!(
-                    tracing::Level::TRACE,
+                    target: "optimizer",
+                    tracing::Level::DEBUG,
                     "iteration",
-                    target = "optimizer",
                     path.segment = format!("{:04}", i)
                 );
                 span.in_scope(|| -> Result<(), TransformError> {
@@ -396,11 +387,6 @@ impl Default for FuseAndCollapse {
                 // Removes redundant inputs from joins.
                 // Note that this eliminates one redundant input per join,
                 // so it is necessary to run this section in a loop.
-                // TODO: (#6748) Predicate pushdown unlocks the ability to
-                // remove some redundant joins but also prevents other
-                // redundant joins from being removed. When predicate pushdown
-                // no longer works against redundant join, check if it is still
-                // necessary to run RedundantJoin here.
                 Box::new(crate::redundant_join::RedundantJoin::default()),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a
@@ -414,8 +400,8 @@ impl Default for FuseAndCollapse {
 
 impl Transform for FuseAndCollapse {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "fuse_and_collapse")
     )]
@@ -468,7 +454,7 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).strict_join_equivalences()),
+            Box::new(crate::typecheck::Typecheck::new(Arc::clone(ctx)).strict_join_equivalences()),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(crate::non_null_requirements::NonNullRequirements::default()),
@@ -523,7 +509,7 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                crate::typecheck::Typecheck::new(Arc::clone(ctx))
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
@@ -544,7 +530,7 @@ impl Optimizer {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             Box::new(
-                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                crate::typecheck::Typecheck::new(Arc::clone(ctx))
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
@@ -608,7 +594,7 @@ impl Optimizer {
             // (For example, `FoldConstants` can break the normalized form by removing all
             // references to a Let, see https://github.com/MaterializeInc/materialize/issues/21175)
             Box::new(crate::normalize_lets::NormalizeLets::new(false)),
-            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals()),
+            Box::new(crate::typecheck::Typecheck::new(Arc::clone(ctx)).disallow_new_globals()),
         ];
         Self {
             name: "physical",
@@ -627,7 +613,7 @@ impl Optimizer {
         allow_new_globals: bool,
     ) -> Self {
         let mut typechecker =
-            crate::typecheck::Typecheck::new(Rc::clone(ctx)).strict_join_equivalences();
+            crate::typecheck::Typecheck::new(Arc::clone(ctx)).strict_join_equivalences();
 
         if !allow_new_globals {
             typechecker = typechecker.disallow_new_globals();
@@ -660,7 +646,7 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                crate::typecheck::Typecheck::new(Arc::clone(ctx))
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),

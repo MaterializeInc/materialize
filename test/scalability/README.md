@@ -68,6 +68,24 @@ In both of those cases, Materialize, CRDB and Python will run within the same ma
 ./mzcompose run default --target=remote \--materialize-url="postgres://user:password@host:6875/materialize?sslmode=require" --cluster-name= ...
 ```
 
+### Against the common ancestor
+
+This resolves to the commit of the merge base of the current branch.
+* In Buildkite, this is the last shared commit of the current branch and the merge target. When not in a pull request,
+`latest` will be used.
+* When running locally, this is the lasat shared commit of the current branch and the `main` branch.
+
+```
+./mzcompose run default --target common-ancestor ...
+```
+
+## Detecting regressions
+A regression is defined as a deterioration in performance (transactions per seconds) of more than a configurable
+threshold (default: 20%) for a given workload and count factor compared to the baseline.
+
+To detect a regression, add the parameter `--regression-against` and specify a target. The specified target will be
+added to the `--target`s if it is not already present.
+
 ## Specifying the concurrencies to be benchmarked
 
 The framework uses an exponential function to determine what concurrencies to test. By default, exponent base of 2 is used, with a default
@@ -84,6 +102,33 @@ The framework will run `--count=256` operations for concurrency=1 and then multi
 This way, a larger number of operations will be performed for the higher concurrencies, leading to more stable results. If `--count`
 operations was used when benchmarking concurrency 256, the test would complete in a second, leading to unstable results.
 
+# Interpreting the diagrams
+
+## Transactions per second (tps)
+
+This diagram show the transactions per second per concurrency. Higher values are better.
+
+## Duration per transaction
+
+These plots show the duration of the individual statements per concurrency. They provide information about the mean
+duration of an operation and their timing reliability. Lower values are better.
+Violin plots are used by default, boxplots are available as alternative.
+
+### How to interpret the violin plots
+The violin plots show the distribution of the data.
+The dark blue bar shows the interquartile range, which contains 75% of the measurements.
+The horizontal dark blue line shows the median.
+
+See also: https://en.wikipedia.org/wiki/Violin_plot
+
+### How to interpret a boxplot
+The most important things in a nutshell:
+* 50% of the measurements are within the box.
+* The colored line in the box represents the median value.
+* The whiskers range until the last data point within the 1.5 times of the interquartile range (size of the box).
+* Dots are outliers.
+
+See also: https://en.wikipedia.org/wiki/Box_plot
 
 # Accuracy
 

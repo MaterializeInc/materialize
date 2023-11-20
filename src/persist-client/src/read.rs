@@ -12,15 +12,14 @@
 use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::{FuturesUnordered, StreamExt};
-use futures::{FutureExt, Stream};
+use differential_dataflow::trace::Description;
+use futures::Stream;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, SeqNo};
@@ -31,19 +30,23 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{debug, debug_span, instrument, trace_span, warn, Instrument};
+use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
+use crate::cfg::{PersistFeatureFlag, RetryParameters};
 use crate::fetch::{
-    fetch_leased_part, BatchFetcher, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
-    SerdeLeasedBatchPartMetadata,
+    fetch_leased_part, BatchFetcher, FetchBatchFilter, FetchedPart, LeasedBatchPart,
+    SerdeLeasedBatchPart, SerdeLeasedBatchPartMetadata,
 };
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
-use crate::internal::metrics::{Metrics, MetricsRetryStream};
-use crate::internal::state::{HollowBatch, Since};
+use crate::internal::metrics::Metrics;
+use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::watch::StateWatch;
+use crate::iter::Consolidator;
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
+
+pub use crate::internal::state::Since;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -129,14 +132,18 @@ where
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
     #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn next(&mut self) -> Vec<ListenEvent<T, LeasedBatchPart<T>>> {
+    pub async fn next(
+        &mut self,
+        // If Some, an override for the default listen sleep retry parameters.
+        listen_retry: Option<RetryParameters>,
+    ) -> Vec<ListenEvent<T, LeasedBatchPart<T>>> {
         // This is odd, but we move our handle into a `Listen`.
         self.listen.handle.maybe_heartbeat_reader().await;
 
         match self.snapshot.take() {
             Some(parts) => vec![ListenEvent::Updates(parts)],
             None => {
-                let (parts, upper) = self.listen.next().await;
+                let (parts, upper) = self.listen.next(listen_retry).await;
                 vec![ListenEvent::Updates(parts), ListenEvent::Progress(upper)]
             }
         }
@@ -148,7 +155,7 @@ where
     pub async fn fetch_next(
         &mut self,
     ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
-        let events = self.next().await;
+        let events = self.next(None).await;
         let new_len = events
             .iter()
             .map(|event| match event {
@@ -172,6 +179,11 @@ where
             }
         }
         ret
+    }
+
+    /// Fetches the contents of `part` and returns its lease.
+    pub async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
+        self.listen.fetch_batch_part(part).await
     }
 
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
@@ -290,10 +302,20 @@ where
     ///
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
-    pub async fn next(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
+    pub async fn next(
+        &mut self,
+        // If Some, an override for the default listen sleep retry parameters.
+        retry: Option<RetryParameters>,
+    ) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
         let batch = self
             .handle
-            .next_listen_batch(&self.frontier, &mut self.watch)
+            .machine
+            .next_listen_batch(
+                &self.frontier,
+                &mut self.watch,
+                Some(&self.handle.reader_id),
+                retry,
+            )
             .await;
 
         // A lot of things across mz have to line up to hold the following
@@ -384,7 +406,7 @@ where
     pub async fn fetch_next(
         &mut self,
     ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
-        let (parts, progress) = self.next().await;
+        let (parts, progress) = self.next(None).await;
         let mut ret = Vec::with_capacity(parts.len() + 1);
         for part in parts {
             let fetched_part = self.fetch_batch_part(part).await;
@@ -534,10 +556,8 @@ where
 
     since: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
-    explicitly_expired: bool,
     lease_returner: SubscriptionLeaseReturner,
-
-    pub(crate) heartbeat_task: Option<JoinHandle<()>>,
+    pub(crate) unexpired_state: Option<UnexpiredReadHandleState>,
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -568,13 +588,14 @@ where
             schemas,
             since,
             last_heartbeat,
-            explicitly_expired: false,
             lease_returner: SubscriptionLeaseReturner {
                 leased_seqnos: Arc::new(Mutex::new(BTreeMap::new())),
                 reader_id: reader_id.clone(),
                 metrics,
             },
-            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id, gc).await),
+            unexpired_state: Some(UnexpiredReadHandleState {
+                heartbeat_tasks: machine.start_reader_heartbeat_tasks(reader_id, gc).await,
+            }),
         }
     }
 
@@ -730,23 +751,36 @@ where
         Ok(Subscribe::new(snapshot_parts, listen))
     }
 
-    fn lease_batch_parts(
+    fn lease_batch_part(
         &mut self,
-        batch: HollowBatch<T>,
+        desc: Description<T>,
+        part: HollowBatchPart,
         metadata: SerdeLeasedBatchPartMetadata,
-    ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
-        batch.parts.into_iter().map(move |part| LeasedBatchPart {
+    ) -> LeasedBatchPart<T> {
+        LeasedBatchPart {
             metrics: Arc::clone(&self.metrics),
             shard_id: self.machine.shard_id(),
             reader_id: self.reader_id.clone(),
-            metadata: metadata.clone(),
-            desc: batch.desc.clone(),
+            metadata,
+            desc,
             key: part.key,
             stats: part.stats,
             encoded_size_bytes: part.encoded_size_bytes,
             leased_seqno: Some(self.lease_seqno()),
             filter_pushdown_audit: false,
-        })
+            key_lower: part.key_lower,
+        }
+    }
+
+    fn lease_batch_parts(
+        &mut self,
+        batch: HollowBatch<T>,
+        metadata: SerdeLeasedBatchPartMetadata,
+    ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
+        batch
+            .parts
+            .into_iter()
+            .map(move |part| self.lease_batch_part(batch.desc.clone(), part, metadata.clone()))
     }
 
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
@@ -779,7 +813,7 @@ where
     /// # Panics
     /// - If `self` does not have record of issuing the [`LeasedBatchPart`], e.g.
     ///   it originated from from another `ReadHandle`.
-    pub(crate) fn process_returned_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
+    pub fn process_returned_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
         self.lease_returner.return_leased_part(leased_part)
     }
 
@@ -795,7 +829,7 @@ where
             .register_leased_reader(
                 &new_reader_id,
                 purpose,
-                self.cfg.reader_lease_duration,
+                self.cfg.dynamic.reader_lease_duration(),
                 heartbeat_ts,
             )
             .await;
@@ -831,7 +865,7 @@ where
         // NB: min_elapsed is intentionally smaller than the one in
         // maybe_heartbeat_reader (this is the preferential treatment mentioned
         // above).
-        let min_elapsed = self.cfg.reader_lease_duration / 4;
+        let min_elapsed = self.cfg.dynamic.reader_lease_duration() / 4;
         let elapsed_since_last_heartbeat =
             Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
@@ -846,12 +880,14 @@ where
     /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
     pub(crate) async fn maybe_heartbeat_reader(&mut self) {
-        let min_elapsed = self.cfg.reader_lease_duration / 2;
+        let min_elapsed = self.cfg.dynamic.reader_lease_duration() / 2;
         let heartbeat_ts = (self.cfg.now)();
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > self.machine.applier.cfg.reader_lease_duration {
+            if elapsed_since_last_heartbeat
+                > self.machine.applier.cfg.dynamic.reader_lease_duration()
+            {
                 warn!(
                     "reader ({}) of shard ({}) went {}s between heartbeats",
                     self.reader_id,
@@ -892,112 +928,14 @@ where
     /// happens.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
+        // We drop the unexpired state before expiring the reader to ensure the
+        // heartbeat tasks can never observe the expired state. This doesn't
+        // matter for correctness, but avoids confusing log output if the
+        // heartbeat task were to discover that its lease has been expired.
+        self.unexpired_state = None;
+
         let (_, maintenance) = self.machine.expire_leased_reader(&self.reader_id).await;
         maintenance.start_performing(&self.machine, &self.gc);
-        self.explicitly_expired = true;
-    }
-
-    async fn next_listen_batch(
-        &mut self,
-        frontier: &Antichain<T>,
-        watch: &mut StateWatch<K, V, T, D>,
-    ) -> HollowBatch<T> {
-        let mut seqno = match self.machine.next_listen_batch(frontier) {
-            Ok(b) => return b,
-            Err(seqno) => seqno,
-        };
-
-        // The latest state still doesn't have a new frontier for us:
-        // watch+sleep in a loop until it does.
-        let sleeps = self.metrics.retries.next_listen_batch.stream(
-            self.cfg
-                .dynamic
-                .next_listen_batch_retry_params()
-                .into_retry(SystemTime::now())
-                .into_retry_stream(),
-        );
-
-        enum Wake<'a, K, V, T, D> {
-            Watch(&'a mut StateWatch<K, V, T, D>),
-            Sleep(MetricsRetryStream),
-        }
-        let mut wakes = FuturesUnordered::<
-            std::pin::Pin<Box<dyn Future<Output = Wake<K, V, T, D>> + Send + Sync>>,
-        >::new();
-        wakes.push(Box::pin(
-            watch
-                .wait_for_seqno_ge(seqno.next())
-                .map(Wake::Watch)
-                .instrument(trace_span!("snapshot::watch")),
-        ));
-        wakes.push(Box::pin(
-            sleeps
-                .sleep()
-                .map(Wake::Sleep)
-                .instrument(trace_span!("snapshot::sleep")),
-        ));
-
-        loop {
-            assert_eq!(wakes.len(), 2);
-            let wake = wakes.next().await.expect("wakes should be non-empty");
-            // Note that we don't need to fetch in the Watch case, because the
-            // Watch wakeup is a signal that the shared state has already been
-            // updated.
-            match &wake {
-                Wake::Watch(_) => self.metrics.watch.listen_woken_via_watch.inc(),
-                Wake::Sleep(_) => {
-                    self.metrics.watch.listen_woken_via_sleep.inc();
-                    self.machine
-                        .applier
-                        .fetch_and_update_state(Some(seqno))
-                        .await;
-                }
-            }
-
-            seqno = match self.machine.next_listen_batch(frontier) {
-                Ok(b) => {
-                    match &wake {
-                        Wake::Watch(_) => self.metrics.watch.listen_resolved_via_watch.inc(),
-                        Wake::Sleep(_) => self.metrics.watch.listen_resolved_via_sleep.inc(),
-                    }
-                    return b;
-                }
-                Err(seqno) => seqno,
-            };
-
-            // There might be some holdup in the next batch being
-            // produced. Perhaps we've quiesced a table or maybe a
-            // dataflow is taking a long time to start up because it has
-            // to read a lot of data. Heartbeat ourself so we don't
-            // accidentally lose our lease while we wait for things to
-            // resume.
-            self.maybe_heartbeat_reader().await;
-
-            // Wait a bit and try again. Intentionally don't ever log
-            // this at info level.
-            match wake {
-                Wake::Watch(watch) => wakes.push(Box::pin(
-                    async move {
-                        watch.wait_for_seqno_ge(seqno.next()).await;
-                        Wake::Watch(watch)
-                    }
-                    .instrument(trace_span!("snapshot::watch")),
-                )),
-                Wake::Sleep(sleeps) => {
-                    debug!(
-                        "{}: next_listen_batch didn't find new data, retrying in {:?}",
-                        self.reader_id,
-                        sleeps.next_sleep()
-                    );
-                    wakes.push(Box::pin(
-                        sleeps
-                            .sleep()
-                            .map(Wake::Sleep)
-                            .instrument(trace_span!("snapshot::sleep")),
-                    ));
-                }
-            }
-        }
     }
 
     /// Test helper for a [Self::listen] call that is expected to succeed.
@@ -1007,6 +945,52 @@ where
         self.listen(Antichain::from_elem(as_of))
             .await
             .expect("cannot serve requested as_of")
+    }
+}
+
+/// State for a read handle that has not been explicitly expired.
+#[derive(Debug)]
+pub(crate) struct UnexpiredReadHandleState {
+    pub(crate) heartbeat_tasks: Vec<JoinHandle<()>>,
+}
+
+impl Drop for UnexpiredReadHandleState {
+    fn drop(&mut self) {
+        for heartbeat_task in &self.heartbeat_tasks {
+            heartbeat_task.abort();
+        }
+    }
+}
+
+/// An incremental cursor through a particular shard, returned from [ReadHandle::snapshot_cursor].
+///
+/// To read an entire dataset, the
+/// client should call `next` until it returns `None`, which signals all data has been returned...
+/// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
+#[derive(Debug)]
+pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D> {
+    consolidator: Consolidator<T, D>,
+    _schemas: Schemas<K, V>,
+}
+
+impl<K, V, T, D> Cursor<K, V, T, D>
+where
+    K: Debug + Codec + Ord,
+    V: Debug + Codec + Ord,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    /// Grab the next batch of consolidated data.
+    pub async fn next(
+        &mut self,
+    ) -> Option<impl Iterator<Item = ((Result<K, String>, Result<V, String>), T, D)> + '_> {
+        let iter = self
+            .consolidator
+            .next()
+            .await
+            .expect("fetching a leased part")?;
+        let iter = iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d));
+        Some(iter)
     }
 }
 
@@ -1034,6 +1018,16 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        if self
+            .machine
+            .applier
+            .cfg
+            .dynamic
+            .enabled(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH)
+        {
+            return self.snapshot_and_fetch_streaming(as_of).await;
+        }
+
         let snap = self.snapshot(as_of).await?;
 
         let mut contents = Vec::new();
@@ -1071,6 +1065,85 @@ where
             consolidate_updates(&mut contents);
         }
         Ok(contents)
+    }
+
+    /// Generates a [Self::snapshot], and fetches all of the batches it
+    /// contains.
+    ///
+    /// The output is consolidated. Furthermore, to keep memory usage down when
+    /// reading a snapshot that consolidates well, this consolidates as it goes.
+    async fn snapshot_and_fetch_streaming(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        let mut cursor = self.snapshot_cursor(as_of).await?;
+        let mut contents = Vec::new();
+        while let Some(iter) = cursor.next().await {
+            contents.extend(iter);
+        }
+
+        // We don't currently guarantee that encoding is one-to-one, so we still need to
+        // consolidate the decoded outputs. However, let's report if this isn't a noop.
+        let old_len = contents.len();
+        consolidate_updates(&mut contents);
+        if old_len != contents.len() {
+            // TODO(bkirwi): do we need more / finer-grained metrics for this?
+            self.machine
+                .applier
+                .shard_metrics
+                .unconsolidated_snapshot
+                .inc();
+        }
+
+        Ok(contents)
+    }
+
+    /// Generates a [Self::snapshot], and fetches all of the batches it
+    /// contains.
+    ///
+    /// To keep memory usage down when reading a snapshot that consolidates well, this consolidates
+    /// as it goes. However, note that only the serialized data is consolidated: the deserialized
+    /// data will only be consolidated if your K/V codecs are one-to-one.
+    pub async fn snapshot_cursor(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Cursor<K, V, T, D>, Since<T>> {
+        let batches = self.machine.snapshot(&as_of).await?;
+
+        let mut consolidator = Consolidator::new(
+            Arc::clone(&self.metrics),
+            FetchBatchFilter::Snapshot {
+                as_of: as_of.clone(),
+            },
+            self.cfg.dynamic.compaction_memory_bound_bytes(),
+        );
+
+        let metadata = SerdeLeasedBatchPartMetadata::Snapshot {
+            as_of: as_of.iter().map(T::encode).collect(),
+        };
+
+        for batch in batches {
+            for run in batch.runs() {
+                let leased_parts: Vec<_> = run
+                    .into_iter()
+                    .map(|part| {
+                        self.lease_batch_part(batch.desc.clone(), part.clone(), metadata.clone())
+                    })
+                    .collect();
+                consolidator.enqueue_leased_run(
+                    &self.blob,
+                    |m| &m.snapshot,
+                    &self.machine.applier.shard_metrics,
+                    &self.lease_returner,
+                    leased_parts.into_iter(),
+                );
+            }
+        }
+
+        Ok(Cursor {
+            consolidator,
+            _schemas: self.schemas.clone(),
+        })
     }
 
     /// Generates a [Self::snapshot], and streams out all of the updates
@@ -1148,12 +1221,16 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
-        if let Some(heartbeat_task) = self.heartbeat_task.take() {
-            heartbeat_task.abort();
-        }
-        if self.explicitly_expired {
+        if self.unexpired_state.is_none() {
             return;
         }
+
+        // We drop the unexpired state before expiring the reader to ensure the
+        // heartbeat tasks can never observe the expired state. This doesn't
+        // matter for correctness, but avoids confusing log output if the
+        // heartbeat task were to discover that its lease has been expired.
+        self.unexpired_state = None;
+
         let handle = match Handle::try_current() {
             Ok(x) => x,
             Err(_) => {
@@ -1369,7 +1446,7 @@ mod tests {
         width = 4;
         // Collect parts while continuing to write values
         for i in offset..offset + width {
-            for event in subscribe.next().await {
+            for event in subscribe.next(None).await {
                 if let ListenEvent::Updates(mut new_parts) = event {
                     parts.append(&mut new_parts);
                     // Here and elsewhere we "cheat" and immediately downgrade the since
@@ -1425,7 +1502,7 @@ mod tests {
             subscribe.return_leased_part(part);
 
             // Simulates an exchange
-            for event in subscribe.next().await {
+            for event in subscribe.next(None).await {
                 if let ListenEvent::Updates(parts) = event {
                     for part in parts {
                         subsequent_parts.push(part.into_exchangeable_part());

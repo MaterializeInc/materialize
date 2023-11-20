@@ -10,8 +10,10 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Dbt, Materialized, Redpanda
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.dbt import Dbt
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
 
 SERVICES = [
     Materialized(),
@@ -58,7 +60,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 # TODO: Can dbt connect using mz_system user instead of materialize?
                 additional_system_parameter_defaults={
                     "enable_rbac_checks": "false",
-                    "enable_ld_rbac_checks": "false",
                 },
             )
             test_args = ["dbt-materialize/tests"]

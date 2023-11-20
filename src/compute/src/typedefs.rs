@@ -13,13 +13,15 @@
 
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::{ColKeySpine, ColValSpine};
-use mz_repr::{Diff, Row, Timestamp};
-use mz_storage_client::types::errors::DataflowError;
 
-pub type RowSpine<K, V, T, R, O = usize> = ColValSpine<K, V, T, R, O>;
-pub type RowKeySpine<K, T, R, O = usize> = ColKeySpine<K, T, R, O>;
-pub type ErrSpine<K, T, R, O = usize> = ColKeySpine<K, T, R, O>;
-pub type ErrValSpine<K, T, R, O = usize> = ColValSpine<K, DataflowError, T, R, O>;
+use mz_ore::num::Overflowing;
+use mz_repr::{Diff, Row, Timestamp};
+use mz_storage_types::errors::DataflowError;
+
+pub type RowSpine<K, V, T, R> = ColValSpine<K, V, T, R, Overflowing<u32>>;
+pub type RowKeySpine<K, T, R> = ColKeySpine<K, T, R, Overflowing<u32>>;
+pub type ErrSpine<K, T, R> = ColKeySpine<K, T, R, Overflowing<u32>>;
+pub type ErrValSpine<K, T, R> = ColValSpine<K, DataflowError, T, R, Overflowing<u32>>;
 pub type TraceRowHandle<K, V, T, R> = TraceAgent<RowSpine<K, V, T, R>>;
 pub type TraceErrHandle<K, T, R> = TraceAgent<ErrSpine<K, T, R>>;
 pub type KeysValsHandle = TraceRowHandle<Row, Row, Timestamp, Diff>;

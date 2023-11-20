@@ -4,7 +4,7 @@ description: "Create and manage roles in Materialize"
 menu:
   main:
     parent: access-control
-    weight: 15
+    weight: 20
 ---
 
 This page outlines how to create and manage roles in Materialize.

@@ -11,6 +11,7 @@
 // source code is subject to the terms of the PostgreSQL license, a copy of
 // which can be found in the LICENSE file at the root of this repository.
 
+use std::borrow::Cow;
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
@@ -19,7 +20,8 @@ use std::{fmt, iter, str};
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
+use chrono_tz::{OffsetComponents, OffsetName, Tz};
 use dec::OrderedDecimal;
 use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
@@ -33,10 +35,11 @@ use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
 use mz_ore::soft_assert;
 use mz_pgrepr::Type;
+use mz_pgtz::timezone::{Timezone, TimezoneSpec};
+use mz_proto::chrono::any_naive_datetime;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
-use mz_repr::adt::datetime::Timezone;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
@@ -44,7 +47,6 @@ use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::range::{self, Range, RangeBound, RangeOps};
 use mz_repr::adt::regex::{any_regex, Regex};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
-use mz_repr::chrono::any_naive_datetime;
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 use num::traits::CheckedNeg;
@@ -54,6 +56,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
+use subtle::ConstantTimeEq;
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::{
@@ -119,7 +122,9 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::CurrentSchemasWithoutSystem => {
                 ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
             }
-            UnmaterializableFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::CurrentTimestamp => {
+                ScalarType::TimestampTz { precision: None }.nullable(false)
+            }
             UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
             UnmaterializableFunc::IsRbacEnabled => ScalarType::Bool.nullable(false),
             UnmaterializableFunc::MzEnvironmentId => ScalarType::String.nullable(false),
@@ -135,7 +140,9 @@ impl UnmaterializableFunc {
             UnmaterializableFunc::MzVersion => ScalarType::String.nullable(false),
             UnmaterializableFunc::MzVersionNum => ScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
-            UnmaterializableFunc::PgPostmasterStartTime => ScalarType::TimestampTz.nullable(false),
+            UnmaterializableFunc::PgPostmasterStartTime => {
+                ScalarType::TimestampTz { precision: None }.nullable(false)
+            }
             UnmaterializableFunc::SessionUser => ScalarType::String.nullable(false),
             UnmaterializableFunc::Version => ScalarType::String.nullable(false),
             UnmaterializableFunc::ViewableVariables => ScalarType::Map {
@@ -432,7 +439,7 @@ fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, Eva
         // Ensure rescale doesn't exceed max precision by putting a ceiling on
         // b equal to the maximum remaining scale the value can support.
         let max_remaining_scale = u32::from(numeric::NUMERIC_DATUM_MAX_PRECISION)
-            - (numeric::get_precision(&a) - u32::from(numeric::get_scale(&a)));
+            - (numeric::get_precision(&a) - numeric::get_scale(&a));
         b = match i32::try_from(max_remaining_scale) {
             Ok(max_remaining_scale) => std::cmp::min(b, max_remaining_scale),
             Err(_) => b,
@@ -1355,6 +1362,18 @@ fn get_byte<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::from(i32::from(*i)))
 }
 
+pub fn constant_time_eq_bytes<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a_bytes = a.unwrap_bytes();
+    let b_bytes = b.unwrap_bytes();
+    Ok(Datum::from(bool::from(a_bytes.ct_eq(b_bytes))))
+}
+
+pub fn constant_time_eq_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_str();
+    let b = b.unwrap_str();
+    Ok(Datum::from(bool::from(a.as_bytes().ct_eq(b.as_bytes()))))
+}
+
 fn contains_range_elem<'a, R: RangeOps<'a>>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>
 where
     <R as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
@@ -1603,35 +1622,6 @@ fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         Some((_k, v)) => v,
         None => Datum::Null,
     }
-}
-
-fn map_get_values<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let map = a.unwrap_map();
-    let values: Vec<Datum> = b
-        .unwrap_array()
-        .elements()
-        .iter()
-        .map(
-            |target_key| match map.iter().find(|(key, _v)| target_key.unwrap_str() == *key) {
-                Some((_k, v)) => v,
-                None => Datum::Null,
-            },
-        )
-        .collect();
-
-    Ok(temp_storage.try_make_datum(|packer| {
-        packer.push_array(
-            &[ArrayDimension {
-                lower_bound: 1,
-                length: values.len(),
-            }],
-            values,
-        )
-    })?)
 }
 
 // TODO(jamii) nested loops are possibly not the fastest way to do this
@@ -1903,9 +1893,11 @@ fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, Eval
 }
 
 /// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
-pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
-    tz.parse()
-        .map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
+///
+/// The interpretation of fixed offsets depend on whether the POSIX or ISO 8601 standard is being
+/// used.
+pub(crate) fn parse_timezone(tz: &str, spec: TimezoneSpec) -> Result<Timezone, EvalError> {
+    Timezone::parse(tz, spec).map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
 }
 
 /// Converts the time datum `b`, which is assumed to be in UTC, to the timezone that the interval datum `a` is assumed
@@ -1959,6 +1951,26 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
     }
 }
 
+fn timezone_offset<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let tz_str = a.unwrap_str();
+    let tz = match Tz::from_str_insensitive(tz_str) {
+        Ok(tz) => tz,
+        Err(_) => return Err(EvalError::InvalidIanaTimezoneId(tz_str.into())),
+    };
+    let offset = tz.offset_from_utc_datetime(&b.unwrap_timestamptz().naive_utc());
+    Ok(temp_storage.make_datum(|packer| {
+        packer.push_list_with(|packer| {
+            packer.push(Datum::from(offset.abbreviation()));
+            packer.push(Datum::from(offset.base_utc_offset()));
+            packer.push(Datum::from(offset.dst_offset()));
+        });
+    }))
+}
+
 /// Determines if an mz_aclitem contains one of the specified privileges. This will return true if
 /// any of the listed privileges are contained in the mz_aclitem.
 fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
@@ -1966,7 +1978,7 @@ fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'s
     let privileges = b.unwrap_str();
     let acl_mode = AclMode::parse_multiple_privileges(privileges)
         .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))?;
-    let contains = !mz_acl_item.acl_mode.union(acl_mode).is_empty();
+    let contains = !mz_acl_item.acl_mode.intersection(acl_mode).is_empty();
     Ok(contains.into())
 }
 
@@ -2064,6 +2076,64 @@ fn parse_ident<'a>(
             elems,
         )
     })?)
+}
+
+fn regexp_split_to_array<'a>(
+    text: Datum<'a>,
+    regexp: Datum<'a>,
+    flags: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let text = text.unwrap_str();
+    let regexp = regexp.unwrap_str();
+    let flags = flags.unwrap_str();
+    let regexp = build_regex(regexp, flags)?;
+    regexp_split_to_array_re(text, &regexp, temp_storage)
+}
+
+fn regexp_split_to_array_re<'a>(
+    text: &str,
+    regexp: &Regex,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let found = mz_regexp::regexp_split_to_array(text, regexp);
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    packer.push_array(
+        &[ArrayDimension {
+            lower_bound: 1,
+            length: found.len(),
+        }],
+        found.into_iter().map(Datum::String),
+    )?;
+    Ok(temp_storage.push_unary_row(row))
+}
+
+fn regexp_replace<'a>(
+    source: Datum<'a>,
+    pattern: Datum<'a>,
+    replacement: Datum<'a>,
+    flags: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let source = source.unwrap_str();
+    let pattern = pattern.unwrap_str();
+    let replacement = replacement.unwrap_str();
+    let flags = flags.unwrap_str();
+    // 'g' means to replace all instead of the first. Use a Cow to avoid allocating in the fast
+    // path. We could switch build_regex to take an iter which would also achieve that.
+    let (n, flags) = if flags.contains('g') {
+        let flags = flags.replace('g', "");
+        (0, Cow::Owned(flags))
+    } else {
+        (1, Cow::Borrowed(flags))
+    };
+    let regexp = build_regex(pattern, &flags)?;
+    let replaced = match regexp.replacen(source, n, replacement) {
+        Cow::Borrowed(s) => s,
+        Cow::Owned(s) => temp_storage.push_string(s),
+    };
+    Ok(Datum::String(replaced))
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -2193,6 +2263,7 @@ pub enum BinaryFunc {
     TimezoneIntervalTimestamp,
     TimezoneIntervalTimestampTz,
     TimezoneIntervalTime,
+    TimezoneOffset,
     TextConcat,
     JsonbGetInt64 { stringify: bool },
     JsonbGetString { stringify: bool },
@@ -2204,7 +2275,6 @@ pub enum BinaryFunc {
     JsonbDeleteString,
     MapContainsKey,
     MapGetValue,
-    MapGetValues,
     MapContainsAllKeys,
     MapContainsAnyKeys,
     MapContainsMap,
@@ -2237,6 +2307,8 @@ pub enum BinaryFunc {
     Power,
     PowerNumeric,
     GetByte,
+    ConstantTimeEqBytes,
+    ConstantTimeEqString,
     RangeContainsElem { elem_type: ScalarType, rev: bool },
     RangeContainsRange { rev: bool },
     RangeOverlaps,
@@ -2427,14 +2499,16 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestamp => date_trunc(a, b.unwrap_timestamp().deref()),
             BinaryFunc::DateTruncInterval => date_trunc_interval(a, b),
             BinaryFunc::DateTruncTimestampTz => date_trunc(a, b.unwrap_timestamptz().deref()),
-            BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str())
+            BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str(), TimezoneSpec::Posix)
                 .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp().into()).map(Into::into)),
-            BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str()).and_then(|tz| {
-                Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into())?.try_into()?)
-            }),
+            BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str(), TimezoneSpec::Posix)
+                .and_then(|tz| {
+                    Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into())?.try_into()?)
+                }),
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
+            BinaryFunc::TimezoneOffset => timezone_offset(a, b, temp_storage),
             BinaryFunc::TextConcat => Ok(text_concat_binary(a, b, temp_storage)),
             BinaryFunc::JsonbGetInt64 { stringify } => {
                 Ok(jsonb_get_int64(a, b, temp_storage, *stringify))
@@ -2452,7 +2526,6 @@ impl BinaryFunc {
             BinaryFunc::JsonbDeleteString => Ok(jsonb_delete_string(a, b, temp_storage)),
             BinaryFunc::MapContainsKey => Ok(map_contains_key(a, b)),
             BinaryFunc::MapGetValue => Ok(map_get_value(a, b)),
-            BinaryFunc::MapGetValues => map_get_values(a, b, temp_storage),
             BinaryFunc::MapContainsAllKeys => Ok(map_contains_all_keys(a, b)),
             BinaryFunc::MapContainsAnyKeys => Ok(map_contains_any_keys(a, b)),
             BinaryFunc::MapContainsMap => Ok(map_contains_map(a, b)),
@@ -2486,15 +2559,17 @@ impl BinaryFunc {
             BinaryFunc::PowerNumeric => power_numeric(a, b),
             BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
             BinaryFunc::GetByte => get_byte(a, b),
+            BinaryFunc::ConstantTimeEqBytes => constant_time_eq_bytes(a, b),
+            BinaryFunc::ConstantTimeEqString => constant_time_eq_string(a, b),
             BinaryFunc::RangeContainsElem { elem_type, rev: _ } => Ok(match elem_type {
                 ScalarType::Int32 => contains_range_elem::<i32>(a, b),
                 ScalarType::Int64 => contains_range_elem::<i64>(a, b),
                 ScalarType::Date => contains_range_elem::<Date>(a, b),
                 ScalarType::Numeric { .. } => contains_range_elem::<OrderedDecimal<Numeric>>(a, b),
-                ScalarType::Timestamp => {
+                ScalarType::Timestamp { .. } => {
                     contains_range_elem::<CheckedTimestamp<NaiveDateTime>>(a, b)
                 }
-                ScalarType::TimestampTz => {
+                ScalarType::TimestampTz { .. } => {
                     contains_range_elem::<CheckedTimestamp<DateTime<Utc>>>(a, b)
                 }
                 _ => unreachable!(),
@@ -2592,12 +2667,12 @@ impl BinaryFunc {
             | SubTimeInterval => input1_type.nullable(in_nullable),
 
             AddDateInterval | SubDateInterval | AddDateTime | DateBinTimestamp
-            | DateTruncTimestamp => ScalarType::Timestamp.nullable(in_nullable),
+            | DateTruncTimestamp => ScalarType::Timestamp { precision: None }.nullable(in_nullable),
 
             DateTruncInterval => ScalarType::Interval.nullable(in_nullable),
 
             TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
-                ScalarType::Timestamp.nullable(in_nullable)
+                ScalarType::Timestamp { precision: None }.nullable(in_nullable)
             }
 
             ExtractInterval | ExtractTime | ExtractTimestamp | ExtractTimestampTz | ExtractDate => {
@@ -2608,13 +2683,22 @@ impl BinaryFunc {
                 ScalarType::Float64.nullable(true)
             }
 
-            DateBinTimestampTz | DateTruncTimestampTz => ScalarType::TimestampTz.nullable(true),
+            DateBinTimestampTz | DateTruncTimestampTz => ScalarType::TimestampTz { precision: None }.nullable(true),
 
             TimezoneTimestamp | TimezoneIntervalTimestamp => {
-                ScalarType::TimestampTz.nullable(in_nullable)
+                ScalarType::TimestampTz { precision: None }.nullable(in_nullable)
             }
 
             TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
+
+            TimezoneOffset => ScalarType::Record {
+                fields: vec![
+                    ("abbrev".into(), ScalarType::String.nullable(false)),
+                    ("base_utc_offset".into(), ScalarType::Interval.nullable(false)),
+                    ("dst_offset".into(), ScalarType::Interval.nullable(false)),
+                ],
+                custom_id: None,
+            }.nullable(true),
 
             SubTime => ScalarType::Interval.nullable(in_nullable),
 
@@ -2640,11 +2724,6 @@ impl BinaryFunc {
                 .clone()
                 .nullable(true),
 
-            MapGetValues => ScalarType::Array(Box::new(
-                input1_type.scalar_type.unwrap_map_value_type().clone(),
-            ))
-            .nullable(true),
-
             ArrayLength | ArrayLower | ArrayUpper => ScalarType::Int32.nullable(true),
 
             ListLengthMax { .. } => ScalarType::Int32.nullable(true),
@@ -2669,6 +2748,10 @@ impl BinaryFunc {
 
             GetByte => ScalarType::Int32.nullable(in_nullable),
 
+            ConstantTimeEqBytes | ConstantTimeEqString => {
+                ScalarType::Bool.nullable(in_nullable)
+            },
+
             UuidGenerateV5 => ScalarType::Uuid.nullable(in_nullable),
 
             RangeContainsElem { .. }
@@ -2690,7 +2773,7 @@ impl BinaryFunc {
 
             MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable),
 
-            ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
+            ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable),
         }
     }
 
@@ -2823,6 +2906,8 @@ impl BinaryFunc {
             | IsRegexpMatch { .. }
             | ToCharTimestamp
             | ToCharTimestampTz
+            | ConstantTimeEqBytes
+            | ConstantTimeEqString
             | DateBinTimestamp
             | DateBinTimestampTz
             | ExtractInterval
@@ -2842,6 +2927,7 @@ impl BinaryFunc {
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
+            | TimezoneOffset
             | TextConcat
             | JsonbContainsString
             | JsonbContainsJsonb
@@ -2888,8 +2974,6 @@ impl BinaryFunc {
             | UuidGenerateV5
             | MzAclItemContainsPrivilege
             | ParseIdent => false,
-            // can produce nulls inside the resulting array for missing keys, but always produces an outer array
-            MapGetValues => false,
 
             JsonbGetInt64 { .. }
             | JsonbGetString { .. }
@@ -3016,7 +3100,6 @@ impl BinaryFunc {
             | JsonbDeleteString
             | MapContainsKey
             | MapGetValue
-            | MapGetValues
             | MapContainsAllKeys
             | MapContainsAnyKeys
             | MapContainsMap
@@ -3065,6 +3148,7 @@ impl BinaryFunc {
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
+            | TimezoneOffset
             | RoundNumeric
             | ConvertFrom
             | Left
@@ -3090,6 +3174,8 @@ impl BinaryFunc {
             | UuidGenerateV5
             | GetByte
             | MzAclItemContainsPrivilege
+            | ConstantTimeEqBytes
+            | ConstantTimeEqString
             | ParseIdent => false,
         }
     }
@@ -3254,7 +3340,8 @@ impl BinaryFunc {
             | BinaryFunc::TimezoneTimestampTz
             | BinaryFunc::TimezoneIntervalTimestamp
             | BinaryFunc::TimezoneIntervalTimestampTz
-            | BinaryFunc::TimezoneIntervalTime => (false, false),
+            | BinaryFunc::TimezoneIntervalTime
+            | BinaryFunc::TimezoneOffset => (false, false),
             BinaryFunc::TextConcat
             | BinaryFunc::JsonbGetInt64 { .. }
             | BinaryFunc::JsonbGetString { .. }
@@ -3266,7 +3353,6 @@ impl BinaryFunc {
             | BinaryFunc::JsonbDeleteString
             | BinaryFunc::MapContainsKey
             | BinaryFunc::MapGetValue
-            | BinaryFunc::MapGetValues
             | BinaryFunc::MapContainsAllKeys
             | BinaryFunc::MapContainsAnyKeys
             | BinaryFunc::MapContainsMap => (false, false),
@@ -3312,6 +3398,7 @@ impl BinaryFunc {
             BinaryFunc::UuidGenerateV5 => (false, false),
             BinaryFunc::MzAclItemContainsPrivilege => (false, false),
             BinaryFunc::ParseIdent => (false, false),
+            BinaryFunc::ConstantTimeEqBytes | BinaryFunc::ConstantTimeEqString => (false, false),
         }
     }
 }
@@ -3453,6 +3540,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => f.write_str("timezoneits"),
             BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
+            BinaryFunc::TimezoneOffset => f.write_str("timezone_offset"),
             BinaryFunc::TextConcat => f.write_str("||"),
             BinaryFunc::JsonbGetInt64 { stringify: false } => f.write_str("->"),
             BinaryFunc::JsonbGetInt64 { stringify: true } => f.write_str("->>"),
@@ -3465,7 +3553,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::JsonbContainsJsonb | BinaryFunc::MapContainsMap => f.write_str("@>"),
             BinaryFunc::JsonbDeleteInt64 => f.write_str("-"),
             BinaryFunc::JsonbDeleteString => f.write_str("-"),
-            BinaryFunc::MapGetValue | BinaryFunc::MapGetValues => f.write_str("->"),
+            BinaryFunc::MapGetValue => f.write_str("->"),
             BinaryFunc::MapContainsAllKeys => f.write_str("?&"),
             BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),
             BinaryFunc::RoundNumeric => f.write_str("round"),
@@ -3497,6 +3585,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
             BinaryFunc::GetByte => f.write_str("get_byte"),
+            BinaryFunc::ConstantTimeEqBytes => f.write_str("constant_time_compare_bytes"),
+            BinaryFunc::ConstantTimeEqString => f.write_str("constant_time_compare_strings"),
             BinaryFunc::RangeContainsElem { rev, .. } => {
                 f.write_str(if *rev { "<@" } else { "@>" })
             }
@@ -3661,6 +3751,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::TimezoneIntervalTimestamp).boxed(),
             Just(BinaryFunc::TimezoneIntervalTimestampTz).boxed(),
             Just(BinaryFunc::TimezoneIntervalTime).boxed(),
+            Just(BinaryFunc::TimezoneOffset).boxed(),
             Just(BinaryFunc::TextConcat).boxed(),
             bool::arbitrary()
                 .prop_map(|stringify| BinaryFunc::JsonbGetInt64 { stringify })
@@ -3678,7 +3769,6 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::JsonbDeleteString).boxed(),
             Just(BinaryFunc::MapContainsKey).boxed(),
             Just(BinaryFunc::MapGetValue).boxed(),
-            Just(BinaryFunc::MapGetValues).boxed(),
             Just(BinaryFunc::MapContainsAllKeys).boxed(),
             Just(BinaryFunc::MapContainsAnyKeys).boxed(),
             Just(BinaryFunc::MapContainsMap).boxed(),
@@ -3861,6 +3951,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => TimezoneIntervalTimestamp(()),
             BinaryFunc::TimezoneIntervalTimestampTz => TimezoneIntervalTimestampTz(()),
             BinaryFunc::TimezoneIntervalTime => TimezoneIntervalTime(()),
+            BinaryFunc::TimezoneOffset => TimezoneOffset(()),
             BinaryFunc::TextConcat => TextConcat(()),
             BinaryFunc::JsonbGetInt64 { stringify } => JsonbGetInt64(*stringify),
             BinaryFunc::JsonbGetString { stringify } => JsonbGetString(*stringify),
@@ -3872,7 +3963,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::JsonbDeleteString => JsonbDeleteString(()),
             BinaryFunc::MapContainsKey => MapContainsKey(()),
             BinaryFunc::MapGetValue => MapGetValue(()),
-            BinaryFunc::MapGetValues => MapGetValues(()),
             BinaryFunc::MapContainsAllKeys => MapContainsAllKeys(()),
             BinaryFunc::MapContainsAnyKeys => MapContainsAnyKeys(()),
             BinaryFunc::MapContainsMap => MapContainsMap(()),
@@ -3924,6 +4014,8 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::UuidGenerateV5 => UuidGenerateV5(()),
             BinaryFunc::MzAclItemContainsPrivilege => MzAclItemContainsPrivilege(()),
             BinaryFunc::ParseIdent => ParseIdent(()),
+            BinaryFunc::ConstantTimeEqBytes => ConstantTimeEqBytes(()),
+            BinaryFunc::ConstantTimeEqString => ConstantTimeEqString(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -4059,6 +4151,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 TimezoneIntervalTimestamp(()) => Ok(BinaryFunc::TimezoneIntervalTimestamp),
                 TimezoneIntervalTimestampTz(()) => Ok(BinaryFunc::TimezoneIntervalTimestampTz),
                 TimezoneIntervalTime(()) => Ok(BinaryFunc::TimezoneIntervalTime),
+                TimezoneOffset(()) => Ok(BinaryFunc::TimezoneOffset),
                 TextConcat(()) => Ok(BinaryFunc::TextConcat),
                 JsonbGetInt64(stringify) => Ok(BinaryFunc::JsonbGetInt64 { stringify }),
                 JsonbGetString(stringify) => Ok(BinaryFunc::JsonbGetString { stringify }),
@@ -4070,7 +4163,6 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 JsonbDeleteString(()) => Ok(BinaryFunc::JsonbDeleteString),
                 MapContainsKey(()) => Ok(BinaryFunc::MapContainsKey),
                 MapGetValue(()) => Ok(BinaryFunc::MapGetValue),
-                MapGetValues(()) => Ok(BinaryFunc::MapGetValues),
                 MapContainsAllKeys(()) => Ok(BinaryFunc::MapContainsAllKeys),
                 MapContainsAnyKeys(()) => Ok(BinaryFunc::MapContainsAnyKeys),
                 MapContainsMap(()) => Ok(BinaryFunc::MapContainsMap),
@@ -4124,6 +4216,8 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 UuidGenerateV5(()) => Ok(BinaryFunc::UuidGenerateV5),
                 MzAclItemContainsPrivilege(()) => Ok(BinaryFunc::MzAclItemContainsPrivilege),
                 ParseIdent(()) => Ok(BinaryFunc::ParseIdent),
+                ConstantTimeEqBytes(()) => Ok(BinaryFunc::ConstantTimeEqBytes),
+                ConstantTimeEqString(()) => Ok(BinaryFunc::ConstantTimeEqString),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
@@ -4456,11 +4550,13 @@ derive_unary!(
     CastIntervalToString,
     CastIntervalToTime,
     CastTimestampToDate,
+    AdjustTimestampPrecision,
     CastTimestampToTimestampTz,
     CastTimestampToString,
     CastTimestampToTime,
     CastTimestampTzToDate,
     CastTimestampTzToTimestamp,
+    AdjustTimestampTzPrecision,
     CastTimestampTzToString,
     CastTimestampTzToTime,
     CastPgLegacyCharToString,
@@ -4564,7 +4660,7 @@ derive_unary!(
     ExpNumeric,
     Sleep,
     Panic,
-    RescaleNumeric,
+    AdjustNumericScale,
     PgColumnSize,
     MzRowSize,
     MzTypeName,
@@ -4586,7 +4682,8 @@ derive_unary!(
     AclItemGrantee,
     AclItemPrivileges,
     QuoteIdent,
-    TryParseMonotonicIso8601Timestamp
+    TryParseMonotonicIso8601Timestamp,
+    RegexpSplitToArray
 );
 
 impl UnaryFunc {
@@ -4915,6 +5012,9 @@ impl Arbitrary for UnaryFunc {
             any_regex()
                 .prop_map(|regex| UnaryFunc::RegexpMatch(RegexpMatch(regex)))
                 .boxed(),
+            any_regex()
+                .prop_map(|regex| UnaryFunc::RegexpSplitToArray(RegexpSplitToArray(regex)))
+                .boxed(),
             ExtractInterval::arbitrary().prop_map_into().boxed(),
             ExtractTime::arbitrary().prop_map_into().boxed(),
             ExtractTimestamp::arbitrary().prop_map_into().boxed(),
@@ -4974,7 +5074,7 @@ impl Arbitrary for UnaryFunc {
             ExpNumeric::arbitrary().prop_map_into().boxed(),
             Sleep::arbitrary().prop_map_into().boxed(),
             Panic::arbitrary().prop_map_into().boxed(),
-            RescaleNumeric::arbitrary().prop_map_into().boxed(),
+            AdjustNumericScale::arbitrary().prop_map_into().boxed(),
             PgColumnSize::arbitrary().prop_map_into().boxed(),
             MzRowSize::arbitrary().prop_map_into().boxed(),
             MzTypeName::arbitrary().prop_map_into().boxed(),
@@ -5170,8 +5270,12 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 }))
             }
             UnaryFunc::CastStringToTime(_) => CastStringToTime(()),
-            UnaryFunc::CastStringToTimestamp(_) => CastStringToTimestamp(()),
-            UnaryFunc::CastStringToTimestampTz(_) => CastStringToTimestampTz(()),
+            UnaryFunc::CastStringToTimestamp(precision) => {
+                CastStringToTimestamp(precision.0.into_proto())
+            }
+            UnaryFunc::CastStringToTimestampTz(precision) => {
+                CastStringToTimestampTz(precision.0.into_proto())
+            }
             UnaryFunc::CastStringToInterval(_) => CastStringToInterval(()),
             UnaryFunc::CastStringToNumeric(func) => CastStringToNumeric(func.0.into_proto()),
             UnaryFunc::CastStringToUuid(_) => CastStringToUuid(()),
@@ -5188,19 +5292,41 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             }),
             UnaryFunc::CastCharToString(_) => CastCharToString(()),
             UnaryFunc::CastVarCharToString(_) => CastVarCharToString(()),
-            UnaryFunc::CastDateToTimestamp(_) => CastDateToTimestamp(()),
-            UnaryFunc::CastDateToTimestampTz(_) => CastDateToTimestampTz(()),
+            UnaryFunc::CastDateToTimestamp(func) => CastDateToTimestamp(func.0.into_proto()),
+            UnaryFunc::CastDateToTimestampTz(func) => CastDateToTimestampTz(func.0.into_proto()),
             UnaryFunc::CastDateToString(_) => CastDateToString(()),
             UnaryFunc::CastTimeToInterval(_) => CastTimeToInterval(()),
             UnaryFunc::CastTimeToString(_) => CastTimeToString(()),
             UnaryFunc::CastIntervalToString(_) => CastIntervalToString(()),
             UnaryFunc::CastIntervalToTime(_) => CastIntervalToTime(()),
             UnaryFunc::CastTimestampToDate(_) => CastTimestampToDate(()),
-            UnaryFunc::CastTimestampToTimestampTz(_) => CastTimestampToTimestampTz(()),
+            UnaryFunc::AdjustTimestampPrecision(func) => Kind::AdjustTimestampPrecision(
+                mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
+                    from: func.from.map(|p| p.into_proto()),
+                    to: func.to.map(|p| p.into_proto()),
+                },
+            ),
+            UnaryFunc::CastTimestampToTimestampTz(func) => CastTimestampToTimestampTz(
+                mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
+                    from: func.from.map(|p| p.into_proto()),
+                    to: func.to.map(|p| p.into_proto()),
+                },
+            ),
             UnaryFunc::CastTimestampToString(_) => CastTimestampToString(()),
             UnaryFunc::CastTimestampToTime(_) => CastTimestampToTime(()),
             UnaryFunc::CastTimestampTzToDate(_) => CastTimestampTzToDate(()),
-            UnaryFunc::CastTimestampTzToTimestamp(_) => CastTimestampTzToTimestamp(()),
+            UnaryFunc::AdjustTimestampTzPrecision(func) => Kind::AdjustTimestampTzPrecision(
+                mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
+                    from: func.from.map(|p| p.into_proto()),
+                    to: func.to.map(|p| p.into_proto()),
+                },
+            ),
+            UnaryFunc::CastTimestampTzToTimestamp(func) => CastTimestampTzToTimestamp(
+                mz_repr::adt::timestamp::ProtoFromToTimestampPrecisions {
+                    from: func.from.map(|p| p.into_proto()),
+                    to: func.to.map(|p| p.into_proto()),
+                },
+            ),
             UnaryFunc::CastTimestampTzToString(_) => CastTimestampTzToString(()),
             UnaryFunc::CastTimestampTzToTime(_) => CastTimestampTzToTime(()),
             UnaryFunc::CastPgLegacyCharToString(_) => CastPgLegacyCharToString(()),
@@ -5260,6 +5386,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::IsLikeMatch(pattern) => IsLikeMatch(pattern.0.into_proto()),
             UnaryFunc::IsRegexpMatch(regex) => IsRegexpMatch(regex.0.into_proto()),
             UnaryFunc::RegexpMatch(regex) => RegexpMatch(regex.0.into_proto()),
+            UnaryFunc::RegexpSplitToArray(regex) => RegexpSplitToArray(regex.0.into_proto()),
             UnaryFunc::ExtractInterval(func) => ExtractInterval(func.0.into_proto()),
             UnaryFunc::ExtractTime(func) => ExtractTime(func.0.into_proto()),
             UnaryFunc::ExtractTimestamp(func) => ExtractTimestamp(func.0.into_proto()),
@@ -5322,7 +5449,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::ExpNumeric(_) => ExpNumeric(()),
             UnaryFunc::Sleep(_) => Sleep(()),
             UnaryFunc::Panic(_) => Panic(()),
-            UnaryFunc::RescaleNumeric(func) => RescaleNumeric(func.0.into_proto()),
+            UnaryFunc::AdjustNumericScale(func) => AdjustNumericScale(func.0.into_proto()),
             UnaryFunc::PgColumnSize(_) => PgColumnSize(()),
             UnaryFunc::MzRowSize(_) => MzRowSize(()),
             UnaryFunc::MzTypeName(_) => MzTypeName(()),
@@ -5558,8 +5685,12 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 }
                 .into()),
                 CastStringToTime(()) => Ok(impls::CastStringToTime.into()),
-                CastStringToTimestamp(()) => Ok(impls::CastStringToTimestamp.into()),
-                CastStringToTimestampTz(()) => Ok(impls::CastStringToTimestampTz.into()),
+                CastStringToTimestamp(precision) => {
+                    Ok(impls::CastStringToTimestamp(precision.into_rust()?).into())
+                }
+                CastStringToTimestampTz(precision) => {
+                    Ok(impls::CastStringToTimestampTz(precision.into_rust()?).into())
+                }
                 CastStringToInterval(()) => Ok(impls::CastStringToInterval.into()),
                 CastStringToNumeric(max_scale) => {
                     Ok(impls::CastStringToNumeric(max_scale.into_rust()?).into())
@@ -5581,19 +5712,41 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 .into()),
                 CastCharToString(()) => Ok(impls::CastCharToString.into()),
                 CastVarCharToString(()) => Ok(impls::CastVarCharToString.into()),
-                CastDateToTimestamp(()) => Ok(impls::CastDateToTimestamp.into()),
-                CastDateToTimestampTz(()) => Ok(impls::CastDateToTimestampTz.into()),
+                CastDateToTimestamp(precision) => {
+                    Ok(impls::CastDateToTimestamp(precision.into_rust()?).into())
+                }
+                CastDateToTimestampTz(precision) => {
+                    Ok(impls::CastDateToTimestampTz(precision.into_rust()?).into())
+                }
                 CastDateToString(()) => Ok(impls::CastDateToString.into()),
                 CastTimeToInterval(()) => Ok(impls::CastTimeToInterval.into()),
                 CastTimeToString(()) => Ok(impls::CastTimeToString.into()),
                 CastIntervalToString(()) => Ok(impls::CastIntervalToString.into()),
                 CastIntervalToTime(()) => Ok(impls::CastIntervalToTime.into()),
                 CastTimestampToDate(()) => Ok(impls::CastTimestampToDate.into()),
-                CastTimestampToTimestampTz(()) => Ok(impls::CastTimestampToTimestampTz.into()),
+                AdjustTimestampPrecision(precisions) => Ok(impls::AdjustTimestampPrecision {
+                    from: precisions.from.into_rust()?,
+                    to: precisions.to.into_rust()?,
+                }
+                .into()),
+                CastTimestampToTimestampTz(precisions) => Ok(impls::CastTimestampToTimestampTz {
+                    from: precisions.from.into_rust()?,
+                    to: precisions.to.into_rust()?,
+                }
+                .into()),
                 CastTimestampToString(()) => Ok(impls::CastTimestampToString.into()),
                 CastTimestampToTime(()) => Ok(impls::CastTimestampToTime.into()),
                 CastTimestampTzToDate(()) => Ok(impls::CastTimestampTzToDate.into()),
-                CastTimestampTzToTimestamp(()) => Ok(impls::CastTimestampTzToTimestamp.into()),
+                CastTimestampTzToTimestamp(precisions) => Ok(impls::CastTimestampTzToTimestamp {
+                    from: precisions.from.into_rust()?,
+                    to: precisions.to.into_rust()?,
+                }
+                .into()),
+                AdjustTimestampTzPrecision(precisions) => Ok(impls::AdjustTimestampTzPrecision {
+                    from: precisions.from.into_rust()?,
+                    to: precisions.to.into_rust()?,
+                }
+                .into()),
                 CastTimestampTzToString(()) => Ok(impls::CastTimestampTzToString.into()),
                 CastTimestampTzToTime(()) => Ok(impls::CastTimestampTzToTime.into()),
                 CastPgLegacyCharToString(()) => Ok(impls::CastPgLegacyCharToString.into()),
@@ -5677,6 +5830,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 IsLikeMatch(pattern) => Ok(impls::IsLikeMatch(pattern.into_rust()?).into()),
                 IsRegexpMatch(regex) => Ok(impls::IsRegexpMatch(regex.into_rust()?).into()),
                 RegexpMatch(regex) => Ok(impls::RegexpMatch(regex.into_rust()?).into()),
+                RegexpSplitToArray(regex) => {
+                    Ok(impls::RegexpSplitToArray(regex.into_rust()?).into())
+                }
                 ExtractInterval(units) => Ok(impls::ExtractInterval(units.into_rust()?).into()),
                 ExtractTime(units) => Ok(impls::ExtractTime(units.into_rust()?).into()),
                 ExtractTimestamp(units) => Ok(impls::ExtractTimestamp(units.into_rust()?).into()),
@@ -5750,8 +5906,8 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 ExpNumeric(()) => Ok(impls::ExpNumeric.into()),
                 Sleep(()) => Ok(impls::Sleep.into()),
                 Panic(()) => Ok(impls::Panic.into()),
-                RescaleNumeric(max_scale) => {
-                    Ok(impls::RescaleNumeric(max_scale.into_rust()?).into())
+                AdjustNumericScale(max_scale) => {
+                    Ok(impls::AdjustNumericScale(max_scale.into_rust()?).into())
                 }
                 PgColumnSize(()) => Ok(impls::PgColumnSize.into()),
                 MzRowSize(()) => Ok(impls::MzRowSize.into()),
@@ -6375,8 +6531,8 @@ where
         Numeric { .. } => Ok(strconv::format_numeric(buf, &d.unwrap_numeric())),
         Date => Ok(strconv::format_date(buf, d.unwrap_date())),
         Time => Ok(strconv::format_time(buf, d.unwrap_time())),
-        Timestamp => Ok(strconv::format_timestamp(buf, &d.unwrap_timestamp())),
-        TimestampTz => Ok(strconv::format_timestamptz(buf, &d.unwrap_timestamptz())),
+        Timestamp { .. } => Ok(strconv::format_timestamp(buf, &d.unwrap_timestamp())),
+        TimestampTz { .. } => Ok(strconv::format_timestamptz(buf, &d.unwrap_timestamptz())),
         Interval => Ok(strconv::format_interval(buf, d.unwrap_interval())),
         Bytes => Ok(strconv::format_bytes(buf, d.unwrap_bytes())),
         String | VarChar { .. } | PgLegacyName => Ok(strconv::format_string(buf, d.unwrap_str())),
@@ -7280,6 +7436,8 @@ pub enum VariadicFunc {
         elem_type: ScalarType,
     },
     TimezoneTime,
+    RegexpSplitToArray,
+    RegexpReplace,
 }
 
 impl VariadicFunc {
@@ -7364,14 +7522,31 @@ impl VariadicFunc {
             VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition => array_position(&ds),
             VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage),
-            VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str()).map(|tz| {
-                timezone_time(
-                    tz,
-                    ds[1].unwrap_time(),
-                    &ds[2].unwrap_timestamptz().naive_utc(),
-                )
-                .into()
-            }),
+            VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str(), TimezoneSpec::Posix)
+                .map(|tz| {
+                    timezone_time(
+                        tz,
+                        ds[1].unwrap_time(),
+                        &ds[2].unwrap_timestamptz().naive_utc(),
+                    )
+                    .into()
+                }),
+            VariadicFunc::RegexpSplitToArray => {
+                let flags = if ds.len() == 2 {
+                    Datum::String("")
+                } else {
+                    ds[2]
+                };
+                regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
+            }
+            VariadicFunc::RegexpReplace => {
+                let flags = if ds.len() == 3 {
+                    Datum::String("")
+                } else {
+                    ds[3]
+                };
+                regexp_replace(ds[0], ds[1], ds[2], flags, temp_storage)
+            }
         }
     }
 
@@ -7415,7 +7590,9 @@ impl VariadicFunc {
             | VariadicFunc::MakeMzAclItem
             | VariadicFunc::ArrayPosition
             | VariadicFunc::ArrayFill { .. }
-            | VariadicFunc::TimezoneTime => false,
+            | VariadicFunc::TimezoneTime
+            | VariadicFunc::RegexpSplitToArray
+            | VariadicFunc::RegexpReplace => false,
         }
     }
 
@@ -7423,12 +7600,23 @@ impl VariadicFunc {
         use VariadicFunc::*;
         let in_nullable = input_types.iter().any(|t| t.nullable);
         match self {
-            Coalesce | Greatest | Least => input_types
+            Greatest | Least => input_types
                 .into_iter()
                 .reduce(|l, r| l.union(&r).unwrap())
                 .unwrap(),
+            Coalesce => {
+                // Note that the parser doesn't allow empty argument lists for variadic functions
+                // that use the standard function call syntax (ArrayCreate and co. are different
+                // because of the special syntax for calling them).
+                let nullable = input_types.iter().all(|typ| typ.nullable);
+                input_types
+                    .into_iter()
+                    .reduce(|l, r| l.union(&r).unwrap())
+                    .unwrap()
+                    .nullable(nullable)
+            }
             Concat | ConcatWs => ScalarType::String.nullable(in_nullable),
-            MakeTimestamp => ScalarType::Timestamp.nullable(true),
+            MakeTimestamp => ScalarType::Timestamp { precision: None }.nullable(true),
             PadLeading => ScalarType::String.nullable(in_nullable),
             Substr => ScalarType::String.nullable(in_nullable),
             Replace => ScalarType::String.nullable(in_nullable),
@@ -7470,7 +7658,11 @@ impl VariadicFunc {
                 .nullable(true),
             ListSliceLinear { .. } => input_types[0].scalar_type.clone().nullable(in_nullable),
             RecordCreate { field_names } => ScalarType::Record {
-                fields: field_names.clone().into_iter().zip(input_types).collect(),
+                fields: field_names
+                    .clone()
+                    .into_iter()
+                    .zip_eq(input_types)
+                    .collect(),
                 custom_id: None,
             }
             .nullable(false),
@@ -7478,8 +7670,8 @@ impl VariadicFunc {
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
             HmacString | HmacBytes => ScalarType::Bytes.nullable(in_nullable),
             ErrorIfNull => input_types[0].scalar_type.clone().nullable(false),
-            DateBinTimestamp => ScalarType::Timestamp.nullable(in_nullable),
-            DateBinTimestampTz => ScalarType::TimestampTz.nullable(in_nullable),
+            DateBinTimestamp => ScalarType::Timestamp { precision: None }.nullable(in_nullable),
+            DateBinTimestampTz => ScalarType::TimestampTz { precision: None }.nullable(in_nullable),
             DateDiffTimestamp => ScalarType::Int64.nullable(in_nullable),
             DateDiffTimestampTz => ScalarType::Int64.nullable(in_nullable),
             DateDiffDate => ScalarType::Int64.nullable(in_nullable),
@@ -7496,6 +7688,10 @@ impl VariadicFunc {
                 ScalarType::Array(Box::new(elem_type.clone())).nullable(false)
             }
             TimezoneTime => ScalarType::Time.nullable(in_nullable),
+            RegexpSplitToArray => {
+                ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
+            }
+            RegexpReplace => ScalarType::String.nullable(in_nullable),
         }
     }
 
@@ -7563,7 +7759,9 @@ impl VariadicFunc {
             | MakeMzAclItem
             | ArrayPosition
             | ArrayFill { .. }
-            | TimezoneTime => false,
+            | TimezoneTime
+            | RegexpSplitToArray
+            | RegexpReplace => false,
             Coalesce
             | Greatest
             | Least
@@ -7666,7 +7864,9 @@ impl VariadicFunc {
             | VariadicFunc::DateDiffTimestampTz
             | VariadicFunc::DateDiffDate
             | VariadicFunc::DateDiffTime
-            | VariadicFunc::TimezoneTime => false,
+            | VariadicFunc::TimezoneTime
+            | VariadicFunc::RegexpSplitToArray
+            | VariadicFunc::RegexpReplace => false,
         }
     }
 }
@@ -7712,8 +7912,8 @@ impl fmt::Display for VariadicFunc {
                 ScalarType::Int64 => "int8range",
                 ScalarType::Date => "daterange",
                 ScalarType::Numeric { .. } => "numrange",
-                ScalarType::Timestamp => "tsrange",
-                ScalarType::TimestampTz => "tstzrange",
+                ScalarType::Timestamp { .. } => "tsrange",
+                ScalarType::TimestampTz { .. } => "tstzrange",
                 _ => unreachable!(),
             }),
             VariadicFunc::MakeAclItem => f.write_str("makeaclitem"),
@@ -7721,6 +7921,8 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::ArrayPosition => f.write_str("array_position"),
             VariadicFunc::ArrayFill { .. } => f.write_str("array_fill"),
             VariadicFunc::TimezoneTime => f.write_str("timezonet"),
+            VariadicFunc::RegexpSplitToArray => f.write_str("regexp_split_to_array"),
+            VariadicFunc::RegexpReplace => f.write_str("regexp_replace"),
         }
     }
 }
@@ -7837,6 +8039,8 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::ArrayPosition => ArrayPosition(()),
             VariadicFunc::ArrayFill { elem_type } => ArrayFill(elem_type.into_proto()),
             VariadicFunc::TimezoneTime => TimezoneTime(()),
+            VariadicFunc::RegexpSplitToArray => RegexpSplitToArray(()),
+            VariadicFunc::RegexpReplace => RegexpReplace(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -7898,6 +8102,8 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                     elem_type: elem_type.into_rust()?,
                 }),
                 TimezoneTime(()) => Ok(VariadicFunc::TimezoneTime),
+                RegexpSplitToArray(()) => Ok(VariadicFunc::RegexpSplitToArray),
+                RegexpReplace(()) => Ok(VariadicFunc::RegexpReplace),
             }
         } else {
             Err(TryFromProtoError::missing_field(

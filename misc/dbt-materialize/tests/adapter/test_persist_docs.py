@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 from dbt.tests.adapter.persist_docs.test_persist_docs import (
     BasePersistDocs,
     BasePersistDocsColumnMissing,
@@ -21,17 +20,14 @@ from dbt.tests.adapter.persist_docs.test_persist_docs import (
 )
 
 
-@pytest.mark.skip(reason="Materialize does not support COMMENT")
 class TestPersistDocsMaterialize(BasePersistDocs):
     pass
 
 
-@pytest.mark.skip(reason="Materialize does not support COMMENT")
 class TestPersistDocsColumnMissingMaterialize(BasePersistDocsColumnMissing):
     pass
 
 
-@pytest.mark.skip(reason="Materialize does not support COMMENT")
 class TestPersistDocsCommentOnQuotedColumnMaterialize(
     BasePersistDocsCommentOnQuotedColumn
 ):

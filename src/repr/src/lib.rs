@@ -100,18 +100,18 @@ mod timestamp;
 
 pub mod adt;
 pub mod antichain;
-pub mod chrono;
 pub mod explain;
+pub mod fixed_length;
 pub mod global_id;
 pub mod namespaces;
 pub mod role_id;
 pub mod stats;
 pub mod strconv;
 pub mod url;
+pub mod user;
 
 pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
-pub use crate::explain::ProtoIndexUsageType;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
     ColumnName, ColumnType, NotNullViolation, ProtoColumnName, ProtoColumnType, ProtoRelationDesc,
@@ -122,12 +122,11 @@ pub use crate::row::encoding::{
     RowEncoder,
 };
 pub use crate::row::{
-    datum_list_size, datum_size, datum_size_deterministic, datums_size, datums_size_deterministic,
-    row_size_deterministic, DatumList, DatumMap, ProtoRow, Row, RowArena, RowPacker, RowRef,
+    datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, ProtoRow, Row,
+    RowArena, RowPacker, RowRef, SharedRow,
 };
 pub use crate::scalar::{
     arb_datum, arb_range_type, ArrayRustType, AsColumnType, Datum, DatumType, PropArray, PropDatum,
     PropDict, PropList, ProtoScalarType, ScalarBaseType, ScalarType,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};
-pub use row::VARIABLE_LENGTH_ENCODING as VARIABLE_LENGTH_ROW_ENCODING;

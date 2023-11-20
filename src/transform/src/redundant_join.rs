@@ -54,8 +54,8 @@ impl CheckedRecursion for RedundantJoin {
 
 impl crate::Transform for RedundantJoin {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "redundant_join")
     )]
@@ -150,7 +150,7 @@ impl RedundantJoin {
                     Ok(result)
                 }
 
-                MirRelationExpr::Get { id, typ } => {
+                MirRelationExpr::Get { id, typ, .. } => {
                     if let Id::Local(id) = id {
                         // Extract the value provenance (this should always exist).
                         let mut val_info = ctx.get(id).cloned().unwrap_or_else(|| {
@@ -650,7 +650,7 @@ fn find_redundancy(
                     };
 
                     // Find an unique key for input that has all columns equated to other.
-                    if keys.iter().any(|key| all_key_columns_equated(key)) {
+                    if keys.iter().any(all_key_columns_equated) {
                         // Find out whether we can produce input's projection strictly with
                         // elements in other's projection.
                         let expressions = input_prov
@@ -789,8 +789,7 @@ impl ProvInfoCtx {
     pub fn extend_uses(&mut self, expr: &MirRelationExpr) {
         expr.visit_pre(&mut |expr: &MirRelationExpr| match expr {
             MirRelationExpr::Get {
-                id: Id::Local(id),
-                typ: _,
+                id: Id::Local(id), ..
             } => {
                 let count = self.uses.entry(id.clone()).or_insert(0_usize);
                 *count += 1;

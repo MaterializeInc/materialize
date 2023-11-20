@@ -9,36 +9,40 @@
 #
 # https://github.com/github/gitignore/tree/master/Global
 
-target
-target-ra
-target-xcompile
-miri-target
+/target
+/target-ra
+/target-xcompile
+/miri-target
 .mtrlz.log
-**/*.rs.bk
+*.rs.bk
 mzdata
 __pycache__
 .mypy_cache
 venv
 node_modules
-coverage
-**/*.swp
-test/feature-benchmark/tmp/*.td
-test/zippy/tmp/*.td
-test/**/tmp_*.toml
+/coverage
+/test/feature-benchmark/tmp/*.td
+/test/zippy/tmp/*.td
+/test/**/tmp_*.toml
 junit_*.xml
+parallel-workload-queries.log
 perf.data*
-**/*.rej
-**/*.orig
-**/*.profraw
-**/*.profdata
-**/*.debug
-scratch
+*.rej
+*.orig
+*.profraw
+*.profdata
+*.debug
+/scratch
+services.log
+*.swp
+test/scalability/results/**/*.csv
+test/scalability/results/**/*.png
 
 # This is un-orthodox, but adding it to the repo would "tie" it to each user's
 # local version of nixpkgs. This way, we can all use the flake and have a
 # flake.lock that works well with the rest of the package versions on our
 # system.
-**/flake.lock
+flake.lock
 
 /misc/python/materialize/build/
 /misc/python/materialize/*.egg-info/

@@ -256,13 +256,22 @@ pub async fn run_ingest(
 
         for headers_map in headers_maps {
             for (k, v) in headers_map.iter() {
-                if let Value::String(val) = v {
-                    headers.push((k.clone(), Some(val.clone())));
-                } else if let Value::Null = v {
-                    headers.push((k.clone(), None));
-                } else {
-                    bail!("`headers` must have string or null values")
-                }
+                headers.push((k.clone(), match v {
+                    Value::String(val) => Some(val.as_bytes().to_vec()),
+                    Value::Array(val) => {
+                        let mut values = Vec::new();
+                        for value in val {
+                            if let Value::Number(int) = value {
+                                values.push(u8::try_from(int.as_i64().unwrap()).unwrap())
+                            } else {
+                                bail!("`headers` value arrays must only contain numbers (to represent bytes)")
+                            }
+                        }
+                        Some(values.clone())
+                    },
+                    Value::Null => None,
+                    _ => bail!("`headers` must have string, int array or null values")
+                }));
             }
         }
         Some(headers)
@@ -392,7 +401,7 @@ pub async fn run_ingest(
 }
 
 async fn make_transcoder(
-    state: &mut State,
+    state: &State,
     format: Format,
     ccsr_subject: String,
 ) -> Result<Transcoder, anyhow::Error> {

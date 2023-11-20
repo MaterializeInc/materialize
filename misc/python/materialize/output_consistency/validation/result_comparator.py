@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
-    InconsistencyIgnoreFilter,
+    GenericInconsistencyIgnoreFilter,
 )
 from materialize.output_consistency.query.query_result import (
     QueryExecution,
@@ -36,9 +36,13 @@ from materialize.output_consistency.validation.validation_outcome import (
 class ResultComparator:
     """Compares the outcome (result or failure) of multiple query executions"""
 
-    def __init__(self, ignore_filter: InconsistencyIgnoreFilter):
+    def __init__(
+        self,
+        ignore_filter: GenericInconsistencyIgnoreFilter,
+        error_message_normalizer: ErrorMessageNormalizer = ErrorMessageNormalizer(),
+    ):
         self.ignore_filter = ignore_filter
-        self.error_message_normalizer = ErrorMessageNormalizer()
+        self.error_message_normalizer = error_message_normalizer
 
     def compare_results(self, query_execution: QueryExecution) -> ValidationOutcome:
         validation_outcome = ValidationOutcome()
@@ -96,6 +100,12 @@ class ResultComparator:
                     "Outcome differs",
                     value1=outcome1.__class__.__name__,
                     value2=outcome2.__class__.__name__,
+                    sql_error1=outcome1.error_message
+                    if isinstance(outcome1, QueryFailure)
+                    else None,
+                    sql_error2=outcome2.error_message
+                    if isinstance(outcome2, QueryFailure)
+                    else None,
                     strategy1=outcome1.strategy,
                     strategy2=outcome2.strategy,
                     sql1=outcome1.sql,
@@ -118,10 +128,7 @@ class ResultComparator:
             # this needs will no longer be sensible when more than two evaluation strategies are used
             self.remark_on_success_with_single_column(outcome1, validation_outcome)
 
-        if (
-            both_failed
-            and not query_execution.query_template.disable_error_message_validation
-        ):
+        if both_failed and self.shall_validate_error_message(query_execution):
             failure1 = cast(QueryFailure, outcome1)
             self.validate_error_messages(
                 query_execution,
@@ -140,6 +147,9 @@ class ResultComparator:
                 )
             )
             self.warn_on_failure_with_multiple_columns(any_failure, validation_outcome)
+
+    def shall_validate_error_message(self, query_execution: QueryExecution) -> bool:
+        return not query_execution.query_template.disable_error_message_validation
 
     def validate_row_count(
         self,
@@ -192,6 +202,8 @@ class ResultComparator:
                     "Error message differs",
                     value1=norm_error_message_1,
                     value2=norm_error_message_2,
+                    sql_error1=failure1.error_message,
+                    sql_error2=failure2.error_message,
                     strategy1=failure1.strategy,
                     strategy2=failure2.strategy,
                     sql1=failure1.sql,
@@ -310,10 +322,29 @@ class ResultComparator:
         if value1 == value2:
             return True
 
+        if isinstance(value1, list) and isinstance(value2, list):
+            return self.is_list_equal(value1, value2)
+
         if isinstance(value1, Decimal) and isinstance(value2, Decimal):
-            return value1.is_nan() and value2.is_nan()
+            if value1.is_nan() and value2.is_nan():
+                return True
+            else:
+                return value1 == value2
 
         if isinstance(value1, float) and isinstance(value2, float):
-            return math.isnan(value1) and math.isnan(value2)
+            if math.isnan(value1) and math.isnan(value2):
+                return True
+            else:
+                return value1 == value2
 
         return False
+
+    def is_list_equal(self, list1: list[Any], list2: list[Any]) -> bool:
+        if len(list1) != len(list2):
+            return False
+
+        for value1, value2 in zip(list1, list2):
+            if not self.is_value_equal(value1, value2):
+                return False
+
+        return True

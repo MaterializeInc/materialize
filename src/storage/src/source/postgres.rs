@@ -92,9 +92,9 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::PostgresError;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::SourceErrorDetails;
-use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::errors::SourceErrorDetails;
+use mz_storage_types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
@@ -103,7 +103,8 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::{Client, SimpleQueryMessage, SimpleQueryRow};
 
-use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod metrics;
@@ -114,6 +115,8 @@ impl SourceRender for PostgresSourceConnection {
     type Key = ();
     type Value = Row;
     type Time = MzOffset;
+
+    const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Postgres;
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.
@@ -127,7 +130,7 @@ impl SourceRender for PostgresSourceConnection {
     ) -> (
         Collection<G, (usize, Result<SourceMessage<(), Row>, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
-        Stream<G, (usize, HealthStatusUpdate)>,
+        Stream<G, HealthStatusMessage>,
         Rc<dyn Any>,
     ) {
         // Determined which collections need to be snapshot and which already have been.
@@ -185,33 +188,44 @@ impl SourceRender for PostgresSourceConnection {
 
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
             let res = res.map(|row| SourceMessage {
-                upstream_time_millis: None,
                 key: (),
                 value: row,
-                headers: None,
+                metadata: Row::default(),
             });
             (output, res)
         });
 
+        // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
+        // restart we are going to set the status to an ssh error correctly, so we don't do this
+        // extra work.
+
         let health = snapshot_err.concat(&repl_err).flat_map(move |err| {
-            let update = HealthStatus::StalledWithError {
-                error: err.display_with_causes().to_string(),
-                hint: None,
-            };
             // This update will cause the dataflow to restart
-            let halt_status = HealthStatusUpdate {
-                update: update.clone(),
-                should_halt: true,
+            let err_string = err.display_with_causes().to_string();
+            let update = HealthStatusUpdate::halting(err_string.clone(), None);
+            let namespace = if matches!(
+                &*err,
+                TransientError::PostgresError(PostgresError::Ssh(_))
+                    | TransientError::PostgresError(PostgresError::SshIo(_))
+            ) {
+                StatusNamespace::Ssh
+            } else {
+                Self::STATUS_NAMESPACE.clone()
             };
-            let mut statuses = vec![(0, halt_status)];
+            let mut statuses = vec![HealthStatusMessage {
+                index: 0,
+                namespace: namespace.clone(),
+                update,
+            }];
 
             // But we still want to report the transient error for all subsources
             statuses.extend(subsource_outputs.iter().map(|index| {
-                let status = HealthStatusUpdate {
-                    update: update.clone(),
-                    should_halt: false,
-                };
-                (*index, status)
+                let status = HealthStatusUpdate::stalled(err_string.clone(), None);
+                HealthStatusMessage {
+                    index: *index,
+                    namespace,
+                    update: status,
+                }
             }));
             statuses
         });
@@ -291,7 +305,8 @@ impl From<DefiniteError> for SourceReaderError {
 
 /// Ensures the replication slot of this connection is created.
 async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), TransientError> {
-    let slot = Ident::from(slot).to_ast_string();
+    // Note: Using unchecked here is okay because we're using it in a SQL query.
+    let slot = Ident::new_unchecked(slot).to_ast_string();
     let query = format!("CREATE_REPLICATION_SLOT {slot} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT");
     match simple_query_opt(client, &query).await {
         Ok(_) => Ok(()),

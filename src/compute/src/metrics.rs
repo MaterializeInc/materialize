@@ -9,9 +9,9 @@
 
 use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::metric;
-use mz_ore::metrics::{raw, DeleteOnDropGauge, GaugeVec, GaugeVecExt, MetricsRegistry, UIntGauge};
-use mz_repr::GlobalId;
+use mz_ore::metrics::{raw, MetricsRegistry, UIntGauge};
 use prometheus::core::{AtomicF64, GenericCounter};
+use prometheus::Histogram;
 
 /// Metrics exposed by compute replicas.
 //
@@ -32,12 +32,23 @@ pub struct ComputeMetrics {
     reconciliation_reused_dataflows_count_total: raw::IntCounterVec,
     reconciliation_replaced_dataflows_count_total: raw::IntCounterVec,
 
-    // dataflow state
-    dataflow_initial_output_duration_seconds: GaugeVec,
-
     // arrangements
     arrangement_maintenance_seconds_total: raw::CounterVec,
     arrangement_maintenance_active_info: raw::UIntGaugeVec,
+
+    // timely step timings
+    //
+    // Note that this particular metric unfortunately takes some care to
+    // interpret. It measures the duration of step_or_park calls, which
+    // undesirably includes the parking. This is probably fine because we
+    // regularly send progress information through persist sources, which likely
+    // means the parking is capped at a second or two in practice. It also
+    // doesn't do anything to let you pinpoint _which_ operator or worker isn't
+    // yielding, but it should hopefully alert us when there is something to
+    // look at.
+    pub(crate) timely_step_duration_seconds: Histogram,
+
+    pub(crate) delayed_time_seconds_total: raw::CounterVec,
 }
 
 impl ComputeMetrics {
@@ -63,11 +74,6 @@ impl ComputeMetrics {
                 help: "The total number of dataflows that were replaced during compute reconciliation.",
                 var_labels: ["worker_id", "reason"],
             )),
-            dataflow_initial_output_duration_seconds: registry.register(metric!(
-                name: "mz_dataflow_initial_output_duration_seconds",
-                help: "The time from dataflow installation up to when the first output was produced.",
-                var_labels: ["worker_id", "collection_id"],
-            )),
             arrangement_maintenance_seconds_total: registry.register(metric!(
                 name: "mz_arrangement_maintenance_seconds_total",
                 help: "The total time spent maintaining arrangements.",
@@ -76,6 +82,18 @@ impl ComputeMetrics {
             arrangement_maintenance_active_info: registry.register(metric!(
                 name: "mz_arrangement_maintenance_active_info",
                 help: "Whether maintenance is currently occuring.",
+                var_labels: ["worker_id"],
+            )),
+            timely_step_duration_seconds: registry.register(metric!(
+                name: "mz_timely_step_duration_seconds",
+                help: "The time spent in each compute step_or_park call",
+                const_labels: {"cluster" => "compute"},
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
+            )),
+            delayed_time_seconds_total: registry.register(metric!(
+                name: "mz_dataflow_delayed_time_seconds_total",
+                help: "The total time dataflow outputs were delayed relative to their inputs.",
+                const_labels: {"cluster" => "compute"},
                 var_labels: ["worker_id"],
             )),
         }
@@ -110,27 +128,15 @@ impl ComputeMetrics {
         }
     }
 
-    pub fn for_collection(
-        &self,
-        collection_id: GlobalId,
-        worker_id: usize,
-    ) -> Option<CollectionMetrics> {
-        // In an effort to reduce the cardinality of timeseries created, we collect metrics only
-        // for non-transient dataflows. This is roughly equivalent to "long-lived" dataflows,
-        // with the exception of subscribes which may or may not be long-lived. We might want to
-        // change this policy in the future to track subscribes as well.
-        if collection_id.is_transient() {
-            return None;
+    pub fn for_logging(&self, worker_id: usize) -> LoggingMetrics {
+        let worker = worker_id.to_string();
+        let delayed_time_seconds_total = self
+            .delayed_time_seconds_total
+            .with_label_values(&[&worker]);
+
+        LoggingMetrics {
+            delayed_time_seconds_total,
         }
-
-        let labels = vec![worker_id.to_string(), collection_id.to_string()];
-        let initial_output_duration_seconds = self
-            .dataflow_initial_output_duration_seconds
-            .get_delete_on_drop_gauge(labels);
-
-        Some(CollectionMetrics {
-            initial_output_duration_seconds,
-        })
     }
 
     /// Record the reconciliation result for a single dataflow.
@@ -166,11 +172,6 @@ impl ComputeMetrics {
     }
 }
 
-/// Metrics maintained per compute collection.
-pub struct CollectionMetrics {
-    pub initial_output_duration_seconds: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
-}
-
 /// Metrics maintained by the trace manager.
 pub struct TraceMetrics {
     pub maintenance_seconds_total: GenericCounter<AtomicF64>,
@@ -180,4 +181,10 @@ pub struct TraceMetrics {
     /// to gain a sense that Materialize is stuck on maintenance before the
     /// maintenance completes
     pub maintenance_active_info: UIntGauge,
+}
+
+/// Metrics maintained by the logging dataflows.
+#[derive(Clone)]
+pub struct LoggingMetrics {
+    pub delayed_time_seconds_total: GenericCounter<AtomicF64>,
 }

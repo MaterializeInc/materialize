@@ -13,8 +13,8 @@
 # Define t0 source
 define
 DefSource name=t0
-  - bigint
-  - bigint
+  - c0: bigint
+  - c1: bigint
 ----
 Source defined as t0
 
@@ -58,7 +58,7 @@ Return
         Get l1
   With Mutually Recursive
     cte l2 = // { types: "(bigint, bigint?)" }
-      Distinct group_by=[#0, #1]
+      Distinct project=[#0, #1]
         Union
           Filter #1 > 7
             Get l0
@@ -71,7 +71,7 @@ Return
           Filter #1 > 7
             Get l2
     cte l1 = // { types: "(bigint, bigint?)" }
-      Distinct group_by=[#0, #1]
+      Distinct project=[#0, #1]
         Union
           Filter #1 > 7
             Get l0
@@ -101,7 +101,7 @@ Return
       Get l4
 With Mutually Recursive
   cte l7 =
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Union
         Filter (#1 > 7)
           Get l1
@@ -116,7 +116,7 @@ With Mutually Recursive
     Filter (#1 > 7)
       Get l4
   cte l4 =
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Union
         Filter (#1 > 7)
           Get l1

@@ -16,7 +16,7 @@ from collections.abc import Callable
 
 import junit_xml
 
-from materialize import MZ_ROOT, ci_util
+from materialize import MZ_ROOT, buildkite, ci_util
 
 # - None value indicates that this line is interesting, but we don't know yet
 #   if it can actually be covered.
@@ -27,62 +27,38 @@ Coverage = dict[str, OrderedDict[int, int | None]]
 SOURCE_RE = re.compile(
     "^/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/(.*$)"
 )
-# Deriving generates more code, but we don't expect to cover this in most
-# cases, so ignore such lines. Same for mz_ore::test
-IGNORE_RE = re.compile(
+# * Deriving generates more code, but we don't expect to cover this in most
+# cases, so ignore such lines.
+# * Same for mz_ore::test
+# * The await keyword is not properly supported
+# (https://github.com/rust-lang/rust/issues/98712).
+IGNORE_SRC_LINE_RE = re.compile(
     r"""
-    ( #\[derive\(.*\)\]
-    | #\[mz_ore::test.*\]
+    ( \#\[derive\(.*\)\]
+    | \#\[mz_ore::test.*\]
+    | \.await
+    )
+    """,
+    re.VERBOSE,
+)
+
+IGNORE_FILE_PATH_RE = re.compile(
+    r"""
+    (  /maelstrom/
     )
     """,
     re.VERBOSE,
 )
 
 
-def find_modified_lines() -> Coverage:
-    """
-    Find each line that has been added or modified in the current pull request.
-    """
-    base_branch = os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", "main") or os.getenv(
-        "BUILDKITE_PIPELINE_DEFAULT_BRANCH", "main"
-    )
-    # Make sure we have the latest state to correctly identify the merge base
-    subprocess.run(["git", "fetch", "origin", base_branch], check=True)
-    result = subprocess.run(
-        ["git", "merge-base", "HEAD", f"origin/{base_branch}"],
-        check=True,
-        capture_output=True,
-    )
-    merge_base = result.stdout.strip()
-    print(f"Merge base: {merge_base.decode('utf-8')}")
-    result = subprocess.run(
-        ["git", "diff", "-U0", merge_base], check=True, capture_output=True
-    )
+def ignore_file_in_coverage_report(file_path: str) -> bool:
+    if not file_path.endswith(".rs"):
+        return True
 
-    coverage: Coverage = {}
-    file = None
-    for line_raw in result.stdout.splitlines():
-        line = line_raw.decode("utf-8")
-        # +++ b/src/adapter/src/coord/command_handler.rs
-        if line.startswith("+++"):
-            file = line.removeprefix("+++ b/")
-            if not line.endswith(".rs"):
-                continue
-            coverage[file] = OrderedDict()
-        # @@ -641,7 +640,6 @@ impl Coordinator {
-        elif line.startswith("@@ ") and file in coverage:
-            # We only care about the second value ("+640,6" in the example),
-            # which contains the line number and length of the modified block
-            # in new code state.
-            parts = line.split(" ")[2]
-            if "," in parts:
-                start, length = map(int, parts.split(","))
-            else:
-                start = int(parts)
-                length = 1
-            for line_nr in range(start, start + length):
-                coverage[file][line_nr] = None
-    return coverage
+    if IGNORE_FILE_PATH_RE.search(file_path):
+        return True
+
+    return False
 
 
 unittests_have_run = False
@@ -103,6 +79,10 @@ def mark_covered_lines(
             not unittests_have_run
         ), "Call mark_covered_lines for unit tests last in order to get correct code coverage reports"
 
+    # There will always be an SF line specifying a file before a DA line
+    # according to the lcov tracing file format definition
+    file = None
+
     for line in open(lcov_file):
         line = line.strip()
         if not line:
@@ -110,7 +90,6 @@ def mark_covered_lines(
         if line == "end_of_record":
             continue
         method, content = tuple(line.strip().split(":", 1))
-        file = "__SENTINEL_VERY_UNLIKELY_TO_MATCH_ANY_FILE_NAME"
         # SF:/var/lib/buildkite-agent/builds/buildkite-builders-d43b1b5-i-0193496e7aec9a4e3-1/materialize/coverage/src/transform/src/lib.rs
         if method == "SF":
             if content.startswith("src/"):  # for unit tests
@@ -122,16 +101,20 @@ def mark_covered_lines(
         # DA:111,15524
         # DA:112,0
         # DA:113,15901
-        elif method == "DA" and file in coverage:
-            line_str, hit_str = content.split(",", 1)
-            line_nr = int(line_str)
-            hit = int(hit_str) if hit_str.isnumeric() else int(float(hit_str))
-            if line_nr in coverage[file]:
-                if unittests:
-                    if not coverage[file][line_nr]:
-                        coverage[file][line_nr] = (coverage[file][line_nr] or 0) - hit
-                else:
-                    coverage[file][line_nr] = (coverage[file][line_nr] or 0) + hit
+        elif method == "DA":
+            assert file, "file was not set by a SF line"
+            if file in coverage:
+                line_str, hit_str = content.split(",", 1)
+                line_nr = int(line_str)
+                hit = int(hit_str) if hit_str.isnumeric() else int(float(hit_str))
+                if line_nr in coverage[file]:
+                    if unittests:
+                        if not coverage[file][line_nr]:
+                            coverage[file][line_nr] = (
+                                coverage[file][line_nr] or 0
+                            ) - hit
+                    else:
+                        coverage[file][line_nr] = (coverage[file][line_nr] or 0) + hit
 
 
 def get_report(
@@ -191,7 +174,11 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
 
     test_cases = []
 
-    coverage = find_modified_lines()
+    coverage: Coverage = {}
+    for file, line in buildkite.find_modified_lines():
+        if not ignore_file_in_coverage_report(file):
+            coverage.setdefault(file, OrderedDict())[line] = None
+
     for lcov_file in args.tests:
         mark_covered_lines(lcov_file, coverage)
     if args.unittests:
@@ -214,7 +201,7 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
         lambda lines, i, line: bool(
             lines.get(i + 1) is None
             or (lines.get(i + 1) or 0) != 0
-            or IGNORE_RE.match(line)
+            or IGNORE_SRC_LINE_RE.search(line)
         ),
     )
 

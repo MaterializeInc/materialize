@@ -36,7 +36,7 @@ $ schema-registry-wait subject=postgres.public.concurrent_delete2-value
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE concurrent_delete1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_delete1')

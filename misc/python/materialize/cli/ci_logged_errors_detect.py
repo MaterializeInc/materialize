@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 #
 # ci_logged_errors_detect.py - Detect errors in log files during CI and find
-# associated open Github issues in Materialize repository.
+# associated open GitHub issues in Materialize repository.
 
 import argparse
 import os
@@ -18,14 +18,19 @@ from typing import Any
 
 import requests
 
-from materialize import ci_util, spawn
+from materialize import ci_util, spawn, ui
 
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
+
+# Unexpected failures, report them
 ERROR_RE = re.compile(
     r"""
     ( panicked\ at
     | segfault\ at
+    | trap\ invalid\ opcode
+    | general\ protection
+    | has\ overflowed\ its\ stack
     | internal\ error:
     | \*\ FATAL:
     | [Oo]ut\ [Oo]f\ [Mm]emory
@@ -48,17 +53,34 @@ ERROR_RE = re.compile(
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
     | unrecognized\ configuration\ parameter
+    | Coordinator\ is\ stuck
     )
+    """,
+    re.VERBOSE,
+)
+
+# Expected failures, don't report them
+IGNORE_RE = re.compile(
+    r"""
+    # Expected in restart test
+    ( restart-materialized-1\ \ \|\ thread\ 'coordinator'\ panicked\ at\ 'can't\ persist\ timestamp
+    # Expected in cluster test
+    | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
     # Emitted by tests employing explicit mz_panic()
-    (?!.*forced\ panic)
+    | forced\ panic
     # Expected once compute cluster has panicked, brings no new information
-    (?!.*timely\ communication\ error:)
+    | timely\ communication\ error:
     # Expected once compute cluster has panicked, only happens in CI
-    (?!.*aborting\ because\ propagate_crashes\ is\ enabled)
-    # Emitted by webhook source tests that explicitly panic the validation.
-    (?!.*webhook\ panic\ test')
-    # Emitted by unit test at src/persist-client/src/cache.rs:765
-    (?!.*thread\ 'cache::tests::state_cache'\ panicked\ at\ 'boom')
+    | aborting\ because\ propagate_crashes\ is\ enabled
+    # Expected when CRDB is corrupted
+    | restart-materialized-1\ .*relation\ \\"fence\\"\ does\ not\ exist
+    # Expected when CRDB is corrupted
+    | restart-materialized-1\ .*relation\ "consensus"\ does\ not\ exist
+    # Will print a separate panic line which will be handled and contains the relevant information
+    | internal\ error:\ panic\ at\ the\ `.*`\ optimization\ stage
+    # redpanda INFO logging
+    | larger\ sizes\ prevent\ running\ out\ of\ memory
+    )
     """,
     re.VERBOSE,
 )
@@ -84,14 +106,13 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="""
 ci-logged-errors-detect detects errors in log files during CI and finds
-associated open Github issues in Materialize repository.""",
+associated open GitHub issues in Materialize repository.""",
     )
 
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    annotate_logged_errors(args.log_files)
-    return 0
+    return annotate_logged_errors(args.log_files)
 
 
 def annotate_errors(errors: list[str], title: str, style: str) -> None:
@@ -123,11 +144,17 @@ def annotate_errors(errors: list[str], title: str, style: str) -> None:
     )
 
 
-def annotate_logged_errors(log_files: list[str]) -> None:
+def annotate_logged_errors(log_files: list[str]) -> int:
+    """
+    Returns the number of unknown errors, 0 when all errors are known or there
+    were no errors logged. This will be used to fail a test even if the test
+    itself succeeded, as long as it had any unknown error logs.
+    """
+
     error_logs = get_error_logs(log_files)
 
     if not error_logs:
-        return
+        return 0
 
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
     buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
@@ -196,14 +223,29 @@ def annotate_logged_errors(log_files: list[str]) -> None:
     )
     annotate_errors(known_errors, "Known errors in logs, ignoring", "info")
 
+    if unknown_errors:
+        print(
+            f"+++ Failing test because of {len(unknown_errors)} unknown error(s) in logs:"
+        )
+        print(unknown_errors)
+
+    return len(unknown_errors)
+
 
 def get_error_logs(log_files: list[str]) -> list[ErrorLog]:
     error_logs = []
     for log_file in log_files:
         with open(log_file) as f:
             for line_nr, line in enumerate(f):
-                match = ERROR_RE.search(line)
-                if match:
+                if ERROR_RE.search(line) and not IGNORE_RE.search(line):
+                    # environmentd segfaults during normal shutdown in coverage builds, see #20016
+                    # Ignoring this in regular ways would still be quite spammy.
+                    if (
+                        "environmentd" in line
+                        and "segfault at" in line
+                        and ui.env_is_truthy("CI_COVERAGE_ENABLED")
+                    ):
+                        continue
                     error_logs.append(ErrorLog(line, log_file, line_nr + 1))
     # TODO: Only report multiple errors once?
     return error_logs
@@ -214,8 +256,7 @@ def get_known_issues_from_github_page(page: int = 1) -> Any:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    token = os.getenv("GITHUB_TOKEN")
-    if token:
+    if token := os.getenv("GITHUB_TOKEN"):
         headers["Authorization"] = f"Bearer {token}"
 
     response = requests.get(
@@ -224,7 +265,7 @@ def get_known_issues_from_github_page(page: int = 1) -> Any:
     )
 
     if response.status_code != 200:
-        raise ValueError(f"Bad return code from Github: {response.status_code}")
+        raise ValueError(f"Bad return code from GitHub: {response.status_code}")
 
     issues_json = response.json()
     assert issues_json["incomplete_results"] == False

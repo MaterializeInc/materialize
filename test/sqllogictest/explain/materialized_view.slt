@@ -25,7 +25,7 @@ EXPLAIN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Filter (#1 = 100)
-    Get materialize.public.accounts
+    ReadStorage materialize.public.accounts
 
 Source materialize.public.accounts
   filter=((#1 = 100))
@@ -43,7 +43,7 @@ EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Filter (#1 = 100)
-    Get materialize.public.accounts
+    ReadStorage materialize.public.accounts
 
 Source materialize.public.accounts
   filter=((#1 = 100))
@@ -74,7 +74,7 @@ EXPLAIN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)
-    ReadExistingIndex materialize.public.accounts lookup_value=(100)
+    ReadIndex on=materialize.public.accounts accounts_balance_idx=[lookup value=(100)]
 
 Used Indexes:
   - materialize.public.accounts_balance_idx (lookup)
@@ -95,9 +95,11 @@ materialize.public.mv:
     Get::PassArrangements materialize.public.accounts
       raw=false
       arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      types=[integer?, integer?]
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer]
       Constant
         - (100)
 
@@ -117,7 +119,7 @@ EXPLAIN OPTIMiZED PLAN FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)
-    ReadExistingIndex materialize.public.accounts lookup_value=(100)
+    ReadIndex on=materialize.public.accounts accounts_balance_index=[lookup value=(100)]
 
 Used Indexes:
   - materialize.public.accounts_balance_index (lookup)
@@ -138,9 +140,11 @@ materialize.public.mv:
     Get::PassArrangements materialize.public.accounts
       raw=false
       arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      types=[integer?, integer?]
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer]
       Constant
         - (100)
 
@@ -155,13 +159,13 @@ statement ok
 DROP INDEX accounts_balance_index;
 
 
-# ensure that the index is now used by the view
+# The index is still used by the view
 query T multiline
 EXPLAIN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)
-    ReadExistingIndex materialize.public.accounts lookup_value=(100)
+    ReadIndex on=materialize.public.accounts [DELETED INDEX]=[lookup value=(100)]
 
 Used Indexes:
   - [DELETED INDEX] (lookup)
@@ -182,9 +186,11 @@ materialize.public.mv:
     Get::PassArrangements materialize.public.accounts
       raw=false
       arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      types=[integer?, integer?]
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer]
       Constant
         - (100)
 

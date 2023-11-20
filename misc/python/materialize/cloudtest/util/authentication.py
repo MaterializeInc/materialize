@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, fields
 
 import requests
-from requests.exceptions import ConnectionError
+from requests.exceptions import ConnectionError, ReadTimeout
 
 from materialize.cloudtest.util.common import retry
 from materialize.cloudtest.util.jwt_key import fetch_jwt, make_jwt
@@ -26,6 +26,8 @@ class AuthConfig:
     app_password: str | None
 
     refresh_fn: Callable[[AuthConfig], None]
+
+    pgwire_ssl_mode: str = "require"
 
     def refresh(self) -> None:
         self.refresh_fn(self)
@@ -54,7 +56,7 @@ def create_auth(
             refresh_fn,
         ),
         5,
-        [ConnectionError],
+        [ConnectionError, ReadTimeout],
     )
     return config
 

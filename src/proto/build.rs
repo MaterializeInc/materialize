@@ -83,7 +83,11 @@ fn main() {
     prost_build::Config::new()
         .btree_map(["."])
         .compile_protos(
-            &["proto/src/proto.proto", "proto/src/tokio_postgres.proto"],
+            &[
+                "proto/src/chrono.proto",
+                "proto/src/proto.proto",
+                "proto/src/tokio_postgres.proto",
+            ],
             &[".."],
         )
         .unwrap_or_else(|e| panic!("{e}"))

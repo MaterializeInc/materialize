@@ -44,6 +44,7 @@ def __create_values(
         f"'{_date_time_data_type.max_value}{timezone_value_suffix}'",
         f"MAX_VAL{timezone_column_suffix}",
         {ExpressionCharacteristics.MAX_VALUE},
+        is_pg_compatible=_date_time_data_type.is_max_value_pg_compatible,
     )
 
     for index, value in enumerate(_date_time_data_type.further_values):
@@ -59,7 +60,7 @@ for date_time_data_type in DATE_TIME_DATA_TYPES:
     DATE_TIME_DATA_TYPES_WITH_VALUES.append(values_of_type)
 
     if date_time_data_type.has_time_zone:
-        for timezone in TIME_ZONE_PARAM.values:
+        for timezone in TIME_ZONE_PARAM.get_valid_values():
             __create_values(values_of_type, date_time_data_type, timezone)
     else:
         __create_values(values_of_type, date_time_data_type, None)

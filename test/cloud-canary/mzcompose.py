@@ -15,8 +15,17 @@ import urllib.parse
 
 import pg8000
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser, _wait_for_pg
-from materialize.mzcompose.services import Cockroach, Materialized, Mz, Testdrive
+from materialize.mzcompose import (
+    _wait_for_pg,
+)
+from materialize.mzcompose.composition import (
+    Composition,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
 REGION = "aws/us-east-1"
@@ -45,6 +54,8 @@ SERVICES = [
             "--orchestrator-process-secrets-directory=/mzdata/secrets",
             "--orchestrator-process-scratch-directory=/scratch",
         ],
+        # We can not restart this container at will, as it does not have clusterd
+        sanity_restart=False,
     ),
     Testdrive(),  # Overriden below
     Mz(
@@ -176,6 +187,7 @@ def td(c: Composition, *args: str) -> None:
             seed=1,  # Required for predictable Kafka topic names
             kafka_url=KAFKA_BOOTSTRAP_SERVER,
             schema_registry_url=SCHEMA_REGISTRY_ENDPOINT,
+            no_consistency_checks=True,
             environment=[
                 "KAFKA_OPTION="
                 + ",".join(

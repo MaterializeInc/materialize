@@ -12,8 +12,10 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
@@ -22,7 +24,7 @@ use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
-use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
+use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_ore::tracing::TracingHandle;
@@ -42,6 +44,13 @@ use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
 
+/// Caller-provided configuration for compute.
+#[derive(Clone, Debug)]
+pub struct ComputeInstanceContext {
+    /// A directory that can be used for scratch work.
+    pub scratch_directory: Option<PathBuf>,
+}
+
 /// Configures the server with compute-specific metrics.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -49,11 +58,14 @@ pub struct Config {
     // TODO(guswynn): cluster-unification: ensure these stats
     // also work for storage when merging.
     pub metrics: ComputeMetrics,
+    /// Other configuration for compute.
+    pub context: ComputeInstanceContext,
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
 pub fn serve(
     config: mz_cluster::server::ClusterConfig,
+    context: ComputeInstanceContext,
 ) -> Result<
     (
         TimelyContainerRef<ComputeCommand, ComputeResponse, SyncActivator>,
@@ -62,7 +74,7 @@ pub fn serve(
     Error,
 > {
     let metrics = ComputeMetrics::register_with(&config.metrics_registry);
-    let compute_config = Config { metrics };
+    let compute_config = Config { metrics, context };
 
     let (timely_container, client_builder) = mz_cluster::server::serve::<
         Config,
@@ -135,7 +147,12 @@ impl CommandReceiverQueue {
     /// is available.
     fn recv<A: Allocate>(&mut self, worker: &mut Worker<A>) -> Result<ComputeCommand, RecvError> {
         while self.is_empty() {
+            let start = Instant::now();
             worker.timely_worker.step_or_park(None);
+            worker
+                .metrics
+                .timely_step_duration_seconds
+                .observe(start.elapsed().as_secs_f64());
         }
         match self.try_recv() {
             Ok(cmd) => Ok(cmd),
@@ -171,6 +188,7 @@ struct Worker<'w, A: Allocate> {
     persist_clients: Arc<PersistClientCache>,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
+    context: ComputeInstanceContext,
 }
 
 impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
@@ -190,6 +208,7 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             timely_worker,
             client_rx,
             metrics: config.metrics,
+            context: config.context,
             persist_clients,
             compute_state: None,
             tracing_handle,
@@ -367,7 +386,11 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.traces.maintenance();
             }
 
+            let start = Instant::now();
             self.timely_worker.step_or_park(None);
+            self.metrics
+                .timely_step_duration_seconds
+                .observe(start.elapsed().as_secs_f64());
 
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
@@ -407,6 +430,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     Arc::clone(&self.persist_clients),
                     self.metrics.clone(),
                     Arc::clone(&self.tracing_handle),
+                    self.context.clone(),
                 ));
             }
             _ => (),
@@ -478,9 +502,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         if let Some(compute_state) = &mut self.compute_state {
             // Reduce the installed commands.
             // Importantly, act as if all peeks may have been retired (as we cannot know otherwise).
-            compute_state
-                .command_history
-                .retain_peeks(&BTreeMap::<_, ()>::default());
+            compute_state.command_history.discard_peeks();
             compute_state.command_history.reduce();
 
             // At this point, we need to sort out which of the *certainly installed* dataflows are
@@ -651,7 +673,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
                 // Compensate what already was sent to logging sources.
                 if let Some(logger) = &compute_state.compute_logger {
-                    if let Some(time) = collection.reported_frontier().logging_time() {
+                    if let Some(time) = collection.reported_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                     }
                     if let Some(time) = new_reported_frontier.logging_time() {
@@ -659,7 +681,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     }
                 }
 
-                collection.set_reported_frontier(new_reported_frontier);
+                collection.reported_frontier = new_reported_frontier;
 
                 // Sink tokens should be retained for retained dataflows, and dropped for dropped
                 // dataflows.
@@ -691,7 +713,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             let mut command_history =
                 ComputeCommandHistory::new(self.metrics.for_history(worker_id));
             for command in new_commands.iter() {
-                command_history.push(command.clone(), &compute_state.pending_peeks);
+                command_history.push(command.clone());
             }
             compute_state.command_history = command_history;
         }

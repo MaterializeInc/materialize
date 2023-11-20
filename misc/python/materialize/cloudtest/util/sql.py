@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
 from typing import Any
 
 import psycopg
@@ -14,9 +15,10 @@ from psycopg.abc import Params, Query
 from psycopg.connection import Connection
 
 from materialize.cloudtest.util.authentication import AuthConfig
-from materialize.cloudtest.util.common import eprint
 from materialize.cloudtest.util.environment import Environment
 from materialize.cloudtest.util.web_request import WebRequests
+
+LOGGER = logging.getLogger(__name__)
 
 
 def sql_query(
@@ -57,7 +59,7 @@ def pgwire_sql_conn(auth: AuthConfig, environment: Environment) -> Connection[An
         password=auth.app_password,
         host=pgwire_host,
         port=pgwire_port,
-        sslmode="require",
+        sslmode=auth.pgwire_ssl_mode,
     )
     conn.autocommit = True
     return conn
@@ -70,7 +72,7 @@ def sql_query_pgwire(
     vars: Params | None = None,
 ) -> list[list[Any]]:
     with pgwire_sql_conn(auth, environment) as conn:
-        eprint(f"QUERY: {query}")
+        LOGGER.info(f"QUERY: {query}")
         return sql_query(conn, query, vars)
 
 
@@ -81,7 +83,7 @@ def sql_execute_pgwire(
     vars: Params | None = None,
 ) -> None:
     with pgwire_sql_conn(auth, environment) as conn:
-        eprint(f"QUERY: {query}")
+        LOGGER.info(f"QUERY: {query}")
         return sql_execute(conn, query, vars)
 
 

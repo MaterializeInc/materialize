@@ -12,15 +12,13 @@ import time
 from argparse import Namespace
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -189,12 +187,19 @@ def workflow_inspect_shard(c: Composition) -> None:
                 repeat('SENTINEL', 2048),
                 repeat('x', 1024), repeat('x', 1024)
             );
+            SELECT * FROM foo;
             """
         )
     )
     json_dict = c.sql_query("INSPECT SHARD 'u1'", port=6877, user="mz_system")[0][0]
-
-    cols = json_dict["batches"][1]["part_runs"][0][0]["stats"]["cols"]["ok"]
+    parts = [
+        part
+        for batch in json_dict["batches"]
+        for part_run in batch["part_runs"]
+        for part in part_run
+    ]
+    non_empty_part = next(part for part in parts if part["encoded_size_bytes"] > 0)
+    cols = non_empty_part["stats"]["cols"]["ok"]
 
     # Leading columns are present in the stats
     assert "SENTINEL" in cols["bartimestamp"]["lower"]

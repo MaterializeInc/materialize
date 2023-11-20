@@ -25,8 +25,6 @@ if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
     done
 fi
 
-sar -q 60 > sar.log &
-
 date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 
 # Sometimes build cancellations prevent us from properly cleaning up the last
@@ -43,9 +41,19 @@ fi
 
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
+rm -f services.log
 
 ci_collapsed_heading ":docker: Rebuilding non-mzbuild containers"
 mzcompose --mz-quiet build
+
+# Clean up cores here so that just killed processes' core files are ignored
+cores="$HOME"/cores
+rm -rf "$cores" parallel-workload-queries.log parallel-workload-queries.log.zst
+mkdir -m 777 "$cores"
+# Max 128 characters, so don't use $PWD which will make it too long
+sudo sysctl -w kernel.core_pattern="|/usr/bin/env tee $cores/core.%E.%t"
+echo -n "Core pattern: "
+cat /proc/sys/kernel/core_pattern
 
 # Start dependencies under a different heading so that the main heading is less
 # noisy. But not if the service is actually a workflow, in which case it will

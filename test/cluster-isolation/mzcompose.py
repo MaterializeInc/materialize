@@ -10,15 +10,13 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import UIError
 
 SERVICES = [
@@ -185,7 +183,8 @@ t1
 # topic name.
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
     BROKER '${testdrive.kafka-addr}',
-    PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}'
+    PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}',
+    SECURITY PROTOCOL PLAINTEXT
   );
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (

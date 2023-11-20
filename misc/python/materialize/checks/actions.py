@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import textwrap
 import time
 from inspect import getframeinfo, stack
 from typing import TYPE_CHECKING, Any
@@ -30,8 +31,8 @@ class Testdrive(Action):
     # Instruct pytest this class does not contain actual tests
     __test__ = False
 
-    def __init__(self, input: str) -> None:
-        self.input = input
+    def __init__(self, input: str, dedent: bool = True) -> None:
+        self.input = textwrap.dedent(input) if dedent else input
         self.handle: Any | None = None
         self.caller = getframeinfo(stack()[1][0])
 
@@ -79,7 +80,6 @@ class Manipulate(Action):
         self.phase = phase - 1
 
         self.checks = scenario.check_objects
-        assert len(self.checks) >= self.phase
 
     def execute(self, e: Executor) -> None:
         assert self.phase is not None

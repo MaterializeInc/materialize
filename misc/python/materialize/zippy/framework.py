@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import TypeVar, Union
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 
 
 class Capability:
@@ -106,6 +106,11 @@ class Action:
         """Compute the capability classes that this action requires."""
         return set()
 
+    @classmethod
+    def incompatible_with(cls) -> set[type[Capability]]:
+        """The capability classes that this action is not compatible with."""
+        return set()
+
     def withholds(self) -> set[type[Capability]]:
         """Compute the capability classes that this action will make unavailable."""
         return set()
@@ -136,6 +141,11 @@ class ActionFactory:
     @classmethod
     def requires(cls) -> set[type[Capability]] | list[set[type[Capability]]]:
         """Compute the capability classes that this Action Factory requires."""
+        return set()
+
+    @classmethod
+    def incompatible_with(cls) -> set[type[Capability]]:
+        """The capability classes that this action is not compatible with."""
         return set()
 
 
@@ -234,8 +244,13 @@ class Test:
         return random.choices(actions_or_factories, weights=class_weights, k=1)[0]
 
     def _can_run(self, action: ActionOrFactory) -> bool:
-        requires = action.requires()
+        if any(
+            self._capabilities.provides(dislike)
+            for dislike in action.incompatible_with()
+        ):
+            return False
 
+        requires = action.requires()
         if isinstance(requires, set):
             return all(self._capabilities.provides(req) for req in requires)
         else:

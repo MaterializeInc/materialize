@@ -10,6 +10,13 @@
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
+from materialize.output_consistency.input_data.return_specs.date_time_return_spec import (
+    DateTimeReturnTypeSpec,
+)
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
 class DateTimeDataType(DataType):
@@ -21,12 +28,27 @@ class DateTimeDataType(DataType):
         max_value: str,
         further_values: list[str],
         has_time_zone: bool = False,
+        is_pg_compatible: bool = True,
+        is_max_value_pg_compatible: bool = True,
     ):
-        super().__init__(identifier, type_name, DataTypeCategory.DATE_TIME)
+        super().__init__(
+            identifier,
+            type_name,
+            DataTypeCategory.DATE_TIME,
+            is_pg_compatible=is_pg_compatible,
+        )
         self.min_value = min_value
         self.max_value = max_value
         self.further_values = further_values
         self.has_time_zone = has_time_zone
+        self.is_max_value_pg_compatible = is_max_value_pg_compatible
+
+    def resolve_return_type_spec(
+        self, characteristics: set[ExpressionCharacteristics]
+    ) -> ReturnTypeSpec:
+        return DateTimeReturnTypeSpec(
+            type_identifier=self.identifier,
+        )
 
 
 DATE_TYPE_IDENTIFIER = "DATE"
@@ -42,6 +64,7 @@ DATE_TYPE = DateTimeDataType(
     "0001-01-01",
     "99999-12-31",
     ["2023-06-01"],
+    is_max_value_pg_compatible=False,
 )
 TIME_TYPE = DateTimeDataType(
     TIME_TYPE_IDENTIFIER, "TIME", "00:00:00", "23:59:59.999999", ["01:02:03.000001"]
@@ -52,7 +75,8 @@ TIMESTAMP_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
-    ["2023-06-01 11:22:33"],
+    ["2023-06-01 11:22:33.44444"],
+    is_max_value_pg_compatible=False,
 )
 TIMESTAMPTZ_TYPE = DateTimeDataType(
     TIMESTAMPTZ_TYPE_IDENTIFIER,
@@ -60,8 +84,9 @@ TIMESTAMPTZ_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
-    ["2023-06-01 11:22:33"],
+    ["2023-06-01 11:22:33.44444", "2023-09-01 14:00:02.46464646"],
     has_time_zone=True,
+    is_max_value_pg_compatible=False,
 )
 INTERVAL_TYPE = DateTimeDataType(
     INTERVAL_TYPE_IDENTIFIER,
@@ -69,6 +94,9 @@ INTERVAL_TYPE = DateTimeDataType(
     "-178956970 years -8 months -2147483648 days -2562047788:00:54.775808",
     "178956970 years 7 months 2147483647 days 2562047788:00:54.775807",
     ["2 years 3 months 4 days 11:22:33.456789", "100 months 100 days", "44:45:45"],
+    # type is compatible but causes too many issues for now
+    is_pg_compatible=False,
+    is_max_value_pg_compatible=True,
 )
 
 DATE_TIME_DATA_TYPES: list[DateTimeDataType] = [

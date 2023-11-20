@@ -10,41 +10,79 @@
 use std::time::Duration;
 
 use mz_compute_client::protocol::command::ComputeParameters;
+use mz_compute_types::dataflows::YieldSpec;
 use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_service::params::GrpcClientParameters;
-use mz_sql::session::vars::SystemVars;
-use mz_storage_client::types::parameters::{
+use mz_sql::session::vars::{SystemVars, DEFAULT_LINEAR_JOIN_YIELDING};
+use mz_storage_types::parameters::{
     StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
 };
 use mz_tracing::params::TracingParameters;
 
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
+    let linear_join_yielding = config.linear_join_yielding();
+    let linear_join_yielding = parse_yield_spec(linear_join_yielding).unwrap_or_else(|| {
+        tracing::error!("invalid `linear_join_yielding` config: {linear_join_yielding}");
+        parse_yield_spec(&DEFAULT_LINEAR_JOIN_YIELDING).expect("default is valid")
+    });
+
     ComputeParameters {
         max_result_size: Some(config.max_result_size()),
-        dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
-        enable_arrangement_size_logging: Some(config.enable_arrangement_size_logging()),
+        dataflow_max_inflight_bytes: Some(config.compute_dataflow_max_inflight_bytes()),
+        linear_join_yielding: Some(linear_join_yielding),
         enable_mz_join_core: Some(config.enable_mz_join_core()),
+        enable_jemalloc_profiling: Some(config.enable_jemalloc_profiling()),
+        enable_specialized_arrangements: Some(config.enable_specialized_arrangements()),
+        enable_columnation_lgalloc: Some(config.enable_columnation_lgalloc()),
         persist: persist_config(config),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),
     }
 }
 
+fn parse_yield_spec(s: &str) -> Option<YieldSpec> {
+    let mut after_work = None;
+    let mut after_time = None;
+
+    let options = s.split(',').map(|o| o.trim());
+    for option in options {
+        let parts: Vec<_> = option.split(':').map(|p| p.trim()).collect();
+        match &parts[..] {
+            ["work", amount] => {
+                let amount = amount.parse().ok()?;
+                after_work = Some(amount);
+            }
+            ["time", millis] => {
+                let millis = millis.parse().ok()?;
+                let duration = Duration::from_millis(millis);
+                after_time = Some(duration);
+            }
+            _ => return None,
+        }
+    }
+
+    Some(YieldSpec {
+        after_work,
+        after_time,
+    })
+}
+
 /// Return the current storage configuration, derived from the system configuration.
 pub fn storage_config(config: &SystemVars) -> StorageParameters {
     StorageParameters {
         persist: persist_config(config),
-        pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts {
-            connect_timeout: Some(config.pg_replication_connect_timeout()),
-            keepalives_retries: Some(config.pg_replication_keepalives_retries()),
-            keepalives_idle: Some(config.pg_replication_keepalives_idle()),
-            keepalives_interval: Some(config.pg_replication_keepalives_interval()),
-            tcp_user_timeout: Some(config.pg_replication_tcp_user_timeout()),
+        pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig {
+            connect_timeout: Some(config.pg_source_connect_timeout()),
+            keepalives_retries: Some(config.pg_source_keepalives_retries()),
+            keepalives_idle: Some(config.pg_source_keepalives_idle()),
+            keepalives_interval: Some(config.pg_source_keepalives_interval()),
+            tcp_user_timeout: Some(config.pg_source_tcp_user_timeout()),
         },
+        pg_source_snapshot_statement_timeout: config.pg_source_snapshot_statement_timeout(),
         keep_n_source_status_history_entries: config.keep_n_source_status_history_entries(),
         keep_n_sink_status_history_entries: config.keep_n_source_status_history_entries(),
         upsert_rocksdb_tuning_config: {
@@ -118,6 +156,9 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         delay_sources_past_rehydration: config.storage_dataflow_delay_sources_past_rehydration(),
         shrink_upsert_unused_buffers_by_ratio: config
             .storage_shrink_upsert_unused_buffers_by_ratio(),
+        truncate_statement_log: config.truncate_statement_log(),
+        statement_logging_retention_time_seconds: config.statement_logging_retention().as_secs(),
+        record_namespaced_errors: config.storage_record_source_sink_namespaced_errors(),
     }
 }
 
@@ -151,11 +192,18 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
         storage_sink_minimum_batch_updates: Some(
             config.storage_persist_sink_minimum_batch_updates(),
         ),
+        storage_source_decode_fuel: Some(config.storage_source_decode_fuel()),
         next_listen_batch_retryer: Some(RetryParameters {
             initial_backoff: config.persist_next_listen_batch_retryer_initial_backoff(),
             multiplier: config.persist_next_listen_batch_retryer_multiplier(),
             clamp: config.persist_next_listen_batch_retryer_clamp(),
         }),
+        txns_data_shard_retryer: Some(RetryParameters {
+            initial_backoff: config.persist_txns_data_shard_retryer_initial_backoff(),
+            multiplier: config.persist_txns_data_shard_retryer_multiplier(),
+            clamp: config.persist_txns_data_shard_retryer_clamp(),
+        }),
+        reader_lease_duration: Some(config.persist_reader_lease_duration()),
         stats_audit_percent: Some(config.persist_stats_audit_percent()),
         stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
         stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
@@ -164,6 +212,7 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
         pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
         pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
         rollup_threshold: Some(config.persist_rollup_threshold()),
+        feature_flags: config.persist_flags(),
     }
 }
 

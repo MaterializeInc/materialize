@@ -10,7 +10,7 @@
 use mz_interchange::avro::Decoder;
 use mz_ore::error::ErrorExt;
 use mz_repr::Row;
-use mz_storage_client::types::errors::DecodeErrorKind;
+use mz_storage_types::errors::DecodeErrorKind;
 
 #[derive(Debug)]
 pub struct AvroDecoderState {
@@ -31,8 +31,11 @@ impl AvroDecoderState {
         })
     }
 
-    pub async fn decode(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
-        match self.decoder.decode(bytes).await {
+    pub async fn decode(
+        &mut self,
+        bytes: &mut &[u8],
+    ) -> Result<Result<Option<Row>, DecodeErrorKind>, anyhow::Error> {
+        let result = match self.decoder.decode(bytes).await? {
             Ok(row) => {
                 self.events_success += 1;
                 Ok(Some(row))
@@ -41,6 +44,7 @@ impl AvroDecoderState {
                 "avro deserialization error: {}",
                 err.display_with_causes()
             ))),
-        }
+        };
+        Ok(result)
     }
 }

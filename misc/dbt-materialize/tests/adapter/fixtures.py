@@ -16,14 +16,14 @@
 from dbt.tests.adapter.hooks import test_model_hooks as core_base
 
 test_materialized_view = """
-{{ config(materialized='materializedview') }}
+{{ config(materialized='materialized_view') }}
 
-    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
+    SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
 """
 
 test_materialized_view_index = """
 {{ config(
-    materialized='materializedview',
+    materialized='materialized_view',
     indexes=[{'columns': ['a', 'length(a)'], 'name': 'a_idx'}]
 ) }}
 
@@ -48,11 +48,18 @@ test_table_index = """
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
 """
 
+test_seed = """
+id,value
+1,100
+2,200
+3,300
+""".strip()
+
 test_source = """
 {{ config(
     materialized='source',
     database='materialize',
-    pre_hook="CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}')"
+    pre_hook="CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}', SECURITY PROTOCOL PLAINTEXT)"
     )
 }}
 
@@ -85,7 +92,10 @@ FOR ALL TABLES;
 """
 
 test_sink = """
-{{ config(materialized='sink') }}
+{{ config(
+    materialized='sink'
+    )
+}}
  CREATE SINK {{ this }}
  FROM {{ ref('test_materialized_view') }}
  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink')
@@ -137,14 +147,14 @@ unique = """
 """
 
 expected_base_relation_types = {
-    "base": "materializedview",
+    "base": "materialized_view",
     "view_model": "view",
-    "table_model": "materializedview",
-    "swappable": "materializedview",
+    "table_model": "materialized_view",
+    "swappable": "materialized_view",
 }
 
 test_relation_name_length = """
-{{ config(materialized='materializedview') }}
+{{ config(materialized='materialized_view') }}
 
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
 """
@@ -210,7 +220,8 @@ create table {schema}.on_model_hook (
     target_pass      TEXT,
     target_threads   INTEGER,
     run_started_at   TEXT,
-    invocation_id    TEXT
+    invocation_id    TEXT,
+    thread_id        TEXT
 )
 """
 
@@ -226,6 +237,27 @@ create table {schema}.on_run_hook (
     target_pass      TEXT,
     target_threads   INTEGER,
     run_started_at   TEXT,
-    invocation_id    TEXT
+    invocation_id    TEXT,
+    thread_id        TEXT
 )
+"""
+
+nullability_assertions_schema_yml = """
+version: 2
+models:
+  - name: test_nullability_assertions_ddl
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: a
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: b
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: c
+        data_type: string
 """

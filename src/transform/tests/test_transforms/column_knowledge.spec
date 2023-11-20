@@ -13,33 +13,33 @@
 # Define t0 source
 define
 DefSource name=t0 keys=[[#0]]
-  - bigint
-  - bigint?
+  - c0: bigint
+  - c1: bigint?
 ----
 Source defined as t0
 
 # Define t1 source
 define
 DefSource name=t1 keys=[[#0]]
-  - text
-  - bigint
-  - boolean
+  - c0: text
+  - c1: bigint
+  - c2: boolean
 ----
 Source defined as t1
 
 # Define t2 source
 define
 DefSource name=t2
-  - bigint?
-  - bigint?
+  - c0: bigint?
+  - c1: bigint?
 ----
 Source defined as t2
 
 # Define t3 source
 define
 DefSource name=t3
-  - bigint?
-  - bigint?
+  - c0: bigint?
+  - c1: bigint?
 ----
 Source defined as t3
 
@@ -176,7 +176,7 @@ Return
               Negate
                 Join on=(#0 = #2)
                   Get t2
-                  Distinct group_by=[#0]
+                  Distinct project=[#0]
                     Get l0
             Get t2
         Get l0
@@ -198,7 +198,7 @@ Return
               Negate
                 Join on=(#0 = #2)
                   Get t2
-                  Distinct group_by=[#0]
+                  Distinct project=[#0]
                     Get l0
             Get t2
         Get l0
@@ -223,7 +223,7 @@ Return
 With Mutually Recursive
   cte l0 = // { types: "(bigint, bigint?)" }
     Filter #0 = 3 AND #1 = 5
-      Distinct group_by=[#0, #1]
+      Distinct project=[#0, #1]
         Union
           Get t0
           Get l0
@@ -234,7 +234,7 @@ Return
 With Mutually Recursive
   cte l0 =
     Filter (#0 = 3) AND (#1 = 5)
-      Distinct group_by=[#0, #1]
+      Distinct project=[#0, #1]
         Union
           Get t0
           Get l0
@@ -248,7 +248,7 @@ Return
 With Mutually Recursive
   cte l0 = // { types: "(bigint, bigint?)" }
     Filter #1 IS NOT NULL
-      Distinct group_by=[#0, #1]
+      Distinct project=[#0, #1]
         Union
           Get t0
           Get l0
@@ -259,7 +259,7 @@ Return
 With Mutually Recursive
   cte l0 =
     Filter (#1) IS NOT NULL
-      Distinct group_by=[#0, #1]
+      Distinct project=[#0, #1]
         Union
           Get t0
           Get l0
@@ -271,7 +271,7 @@ Return
   Get l1
 With Mutually Recursive
   cte l1 = // { types: "(bigint, bigint, bigint)" }
-    Distinct group_by=[#0, #1, #2]
+    Distinct project=[#0, #1, #2]
       Union
         Project (#3, #1, #2)
           Map (#0 * 2)
@@ -280,7 +280,7 @@ With Mutually Recursive
               Get t0
         Get l1
   cte l0 = // { types: "(bigint)" }
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Union
         Constant // { types: "(bigint)" }
           - (1)
@@ -291,7 +291,7 @@ Return
   Get l1
 With Mutually Recursive
   cte l1 =
-    Distinct group_by=[2, #1, #2]
+    Distinct project=[2, #1, #2]
       Union
         Project (#3, #1, #2)
           Map (2)
@@ -300,7 +300,7 @@ With Mutually Recursive
               Get t0
         Get l1
   cte l0 =
-    Distinct group_by=[1]
+    Distinct project=[1]
       Union
         Constant
           - (1)
@@ -318,7 +318,7 @@ Return
   Get l1
 With Mutually Recursive
   cte l1 = // { types: "(boolean, bigint, bigint)" }
-    Distinct group_by=[#0, #1, #2]
+    Distinct project=[#0, #1, #2]
       Union
         Project (#3, #1, #2)
           Map (#0 IS NULL)
@@ -327,7 +327,7 @@ With Mutually Recursive
               Get t0
         Get l1
   cte l0 = // { types: "(bigint)" }
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Union
         Constant // { types: "(bigint)" }
           - (1)
@@ -338,7 +338,7 @@ Return
   Get l1
 With Mutually Recursive
   cte l1 =
-    Distinct group_by=[false, #1, #2]
+    Distinct project=[false, #1, #2]
       Union
         Project (#3, #1, #2)
           Map (false)
@@ -347,7 +347,7 @@ With Mutually Recursive
               Get t0
         Get l1
   cte l0 =
-    Distinct group_by=[1]
+    Distinct project=[1]
       Union
         Constant
           - (1)

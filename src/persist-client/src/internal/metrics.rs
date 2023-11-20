@@ -9,29 +9,36 @@
 
 //! Prometheus monitoring metrics.
 
+use async_stream::stream;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::StreamExt;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
-    DeleteOnDropGauge, GaugeVecExt, IntCounter, MetricsRegistry, UIntGauge,
+    DeleteOnDropGauge, GaugeVecExt, IntCounter, MakeCollector, MetricsRegistry, UIntGauge,
+    UIntGaugeVec,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo,
+    VersionedData,
 };
-use mz_persist::metrics::{PostgresConsensusMetrics, S3BlobMetrics};
+use mz_persist::metrics::S3BlobMetrics;
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
-use prometheus::core::{AtomicI64, AtomicU64};
+use mz_postgres_client::metrics::PostgresClientMetrics;
+use prometheus::core::{AtomicI64, AtomicU64, Collector, Desc, GenericGauge};
+use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
+use tokio_metrics::TaskMonitor;
 use tracing::instrument;
 
 use crate::internal::paths::BlobKey;
@@ -80,8 +87,12 @@ pub struct Metrics {
     pub pubsub_client: PubSubClientMetrics,
     /// Metrics for mfp/filter pushdown.
     pub pushdown: PushdownMetrics,
+    /// Metrics for consolidation.
+    pub consolidation: ConsolidationMetrics,
     /// Metrics for blob caching.
     pub blob_cache_mem: BlobMemCache,
+    /// Metrics for tokio tasks.
+    pub tasks: TasksMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -89,7 +100,7 @@ pub struct Metrics {
     /// Metrics for S3-backed blob implementation
     pub s3_blob: S3BlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
-    pub postgres_consensus: PostgresConsensusMetrics,
+    pub postgres_consensus: PostgresClientMetrics,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -132,10 +143,12 @@ impl Metrics {
             watch: WatchMetrics::new(registry),
             pubsub_client: PubSubClientMetrics::new(registry),
             pushdown: PushdownMetrics::new(registry),
+            consolidation: ConsolidationMetrics::new(registry),
             blob_cache_mem: BlobMemCache::new(registry),
+            tasks: TasksMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
-            postgres_consensus: PostgresConsensusMetrics::new(registry),
+            postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
             _vecs: vecs,
             _uptime: uptime,
         }
@@ -459,6 +472,7 @@ impl MetricsVecs {
             get: self.external_op_metrics("blob_get", true),
             list_keys: self.external_op_metrics("blob_list_keys", false),
             delete: self.external_op_metrics("blob_delete", false),
+            restore: self.external_op_metrics("restore", false),
             delete_noop: self.external_blob_delete_noop_count.clone(),
             blob_sizes: self.external_blob_sizes.clone(),
             rtt_latency: self.external_rtt_latency.with_label_values(&["blob"]),
@@ -467,6 +481,7 @@ impl MetricsVecs {
 
     fn consensus_metrics(&self) -> ConsensusMetrics {
         ConsensusMetrics {
+            list_keys: self.external_op_metrics("consensus_list_keys", false),
             head: self.external_op_metrics("consensus_head", false),
             compare_and_set: self.external_op_metrics("consensus_cas", true),
             scan: self.external_op_metrics("consensus_scan", false),
@@ -1051,10 +1066,20 @@ pub struct StateMetrics {
     pub(crate) fetch_recent_live_diffs_slow_path: IntCounter,
     pub(crate) writer_added: IntCounter,
     pub(crate) writer_removed: IntCounter,
+    pub(crate) force_apply_hostname: IntCounter,
+    pub(crate) rollup_write_success: IntCounter,
+    pub(crate) rollup_write_noop_latest: IntCounter,
+    pub(crate) rollup_write_noop_truncated: IntCounter,
 }
 
 impl StateMetrics {
     pub(crate) fn new(registry: &MetricsRegistry) -> Self {
+        let rollup_write_noop: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_state_rollup_write_noop",
+                help: "count of no-op rollup writes",
+                var_labels: ["reason"],
+        ));
+
         StateMetrics {
             apply_spine_fast_path: registry.register(metric!(
                 name: "mz_persist_state_apply_spine_fast_path",
@@ -1112,6 +1137,16 @@ impl StateMetrics {
                 name: "mz_persist_state_writer_removed",
                 help: "count of writers removed from the state",
             )),
+            force_apply_hostname: registry.register(metric!(
+                name: "mz_persist_state_force_applied_hostname",
+                help: "count of when hostname diffs needed to be force applied",
+            )),
+            rollup_write_success: registry.register(metric!(
+                name: "mz_persist_state_rollup_write_success",
+                help: "count of rollups written successful (may not be linked in to state)",
+            )),
+            rollup_write_noop_latest: rollup_write_noop.with_label_values(&["latest"]),
+            rollup_write_noop_truncated: rollup_write_noop.with_label_values(&["truncated"]),
         }
     }
 }
@@ -1150,6 +1185,10 @@ pub struct ShardsMetrics {
     blob_gets: mz_ore::metrics::IntCounterVec,
     blob_sets: mz_ore::metrics::IntCounterVec,
     live_writers: mz_ore::metrics::UIntGaugeVec,
+    unconsolidated_snapshot: mz_ore::metrics::IntCounterVec,
+    backpressure_emitted_bytes: IntCounterVec,
+    backpressure_last_backpressured_bytes: UIntGaugeVec,
+    backpressure_retired_bytes: IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1312,6 +1351,28 @@ impl ShardsMetrics {
                 help: "number of writers that have recently appended updates to this shard",
                 var_labels: ["shard", "name"],
             )),
+            unconsolidated_snapshot: registry.register(metric!(
+                name: "mz_persist_shard_unconsolidated_snapshot",
+                help: "in snapshot_and_read, the number of times consolidating the raw data wasn't enough to produce consolidated output",
+                var_labels: ["shard", "name"],
+            )),
+            backpressure_emitted_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_emitted_bytes",
+                help: "A counter with the number of emitted bytes.",
+                var_labels: ["shard", "name"],
+            )),
+            backpressure_last_backpressured_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_last_backpressured_bytes",
+                help: "The last count of bytes we are waiting to be retired in \
+                    the operator. This cannot be directly compared to \
+                    `retired_bytes`, but CAN indicate that backpressure is happening.",
+                var_labels: ["shard", "name"],
+            )),
+            backpressure_retired_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_retired_bytes",
+                help:"A counter with the number of bytes retired by downstream processing.",
+                var_labels: ["shard", "name"],
+            )),
             shards,
         }
     }
@@ -1384,6 +1445,11 @@ pub struct ShardMetrics {
     pub blob_gets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub live_writers: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub unconsolidated_snapshot: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
+    pub backpressure_last_backpressured_bytes:
+        Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+    pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
 }
 
 impl ShardMetrics {
@@ -1474,7 +1540,25 @@ impl ShardMetrics {
                 .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
             live_writers: shards_metrics
                 .live_writers
-                .get_delete_on_drop_gauge(vec![shard, name.to_string()]),
+                .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            unconsolidated_snapshot: shards_metrics
+                .unconsolidated_snapshot
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+            backpressure_emitted_bytes: Arc::new(
+                shards_metrics
+                    .backpressure_emitted_bytes
+                    .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+            ),
+            backpressure_last_backpressured_bytes: Arc::new(
+                shards_metrics
+                    .backpressure_last_backpressured_bytes
+                    .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            ),
+            backpressure_retired_bytes: Arc::new(
+                shards_metrics
+                    .backpressure_retired_bytes
+                    .get_delete_on_drop_counter(vec![shard, name.to_string()]),
+            ),
         }
     }
 
@@ -1905,6 +1989,7 @@ pub struct PushdownMetrics {
     pub(crate) parts_audited_bytes: IntCounter,
     pub(crate) parts_stats_trimmed_count: IntCounter,
     pub(crate) parts_stats_trimmed_bytes: IntCounter,
+    pub parts_mismatched_stats_count: IntCounter,
 }
 
 impl PushdownMetrics {
@@ -1941,6 +2026,36 @@ impl PushdownMetrics {
             parts_stats_trimmed_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_stats_trimmed_bytes",
                 help: "total bytes trimmed from part stats",
+            )),
+            parts_mismatched_stats_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_mismatched_stats_count",
+                help: "number of parts read with unexpectedly the incorrect type of stats",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConsolidationMetrics {
+    pub(crate) parts_fetched: IntCounter,
+    pub(crate) parts_skipped: IntCounter,
+    pub(crate) parts_wasted: IntCounter,
+}
+
+impl ConsolidationMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        ConsolidationMetrics {
+            parts_fetched: registry.register(metric!(
+                name: "mz_persist_consolidation_parts_fetched_count",
+                help: "count of parts that were fetched and used during consolidation",
+            )),
+            parts_skipped: registry.register(metric!(
+                name: "mz_persist_consolidation_parts_skipped_count",
+                help: "count of parts that were never needed during consolidation",
+            )),
+            parts_wasted: registry.register(metric!(
+                name: "mz_persist_consolidation_parts_wasted_count",
+                help: "count of parts that were fetched but not needed during consolidation",
             )),
         }
     }
@@ -2027,6 +2142,41 @@ impl ExternalOpMetrics {
         };
         res
     }
+
+    fn run_stream<'a, R: 'a, S, OpFn, ErrFn>(
+        &'a self,
+        op_fn: OpFn,
+        mut on_err_fn: ErrFn,
+    ) -> impl futures::Stream<Item = Result<R, ExternalError>> + 'a
+    where
+        S: futures::Stream<Item = Result<R, ExternalError>> + Unpin + 'a,
+        OpFn: FnOnce() -> S,
+        ErrFn: FnMut(&AlertsMetrics, &ExternalError) + 'a,
+    {
+        self.started.inc();
+        let start = Instant::now();
+        let mut stream = op_fn();
+        stream! {
+            let mut succeeded = true;
+            while let Some(res) = stream.next().await {
+                if let Err(err) = res.as_ref() {
+                    on_err_fn(&self.alerts_metrics, err);
+                    succeeded = false;
+                }
+                yield res;
+            }
+            if succeeded {
+                self.succeeded.inc()
+            } else {
+                self.failed.inc()
+            }
+            let elapsed_seconds = start.elapsed().as_secs_f64();
+            self.seconds.inc_by(elapsed_seconds);
+            if let Some(h) = &self.seconds_histogram {
+                h.observe(elapsed_seconds);
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -2035,6 +2185,7 @@ pub struct BlobMetrics {
     get: ExternalOpMetrics,
     list_keys: ExternalOpMetrics,
     delete: ExternalOpMetrics,
+    restore: ExternalOpMetrics,
     delete_noop: IntCounter,
     blob_sizes: Histogram,
     pub rtt_latency: Gauge,
@@ -2143,10 +2294,19 @@ impl Blob for MetricsBlob {
         }
         Ok(bytes)
     }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        self.metrics
+            .blob
+            .restore
+            .run_op(|| self.blob.restore(key), Self::on_err)
+            .await
+    }
 }
 
 #[derive(Debug)]
 pub struct ConsensusMetrics {
+    list_keys: ExternalOpMetrics,
     head: ExternalOpMetrics,
     compare_and_set: ExternalOpMetrics,
     scan: ExternalOpMetrics,
@@ -2178,6 +2338,15 @@ impl MetricsConsensus {
 
 #[async_trait]
 impl Consensus for MetricsConsensus {
+    fn list_keys(&self) -> ResultStream<String> {
+        Box::pin(
+            self.metrics
+                .consensus
+                .list_keys
+                .run_stream(|| self.consensus.list_keys(), Self::on_err),
+        )
+    }
+
     #[instrument(name = "consensus::head", skip_all, fields(shard=key))]
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let res = self
@@ -2262,6 +2431,110 @@ impl Consensus for MetricsConsensus {
             .truncated_count
             .inc_by(u64::cast_from(deleted));
         Ok(deleted)
+    }
+}
+
+/// A standard set of metrics for an async task. Call [TaskMetrics::instrument_task] to instrument
+/// a future and report its metrics for this task type.
+#[derive(Debug, Clone)]
+pub struct TaskMetrics {
+    f64_gauges: Vec<(Gauge, fn(&tokio_metrics::TaskMetrics) -> f64)>,
+    u64_gauges: Vec<(
+        GenericGauge<AtomicU64>,
+        fn(&tokio_metrics::TaskMetrics) -> u64,
+    )>,
+    monitor: TaskMonitor,
+}
+
+impl TaskMetrics {
+    pub fn new(name: &str) -> Self {
+        let monitor = TaskMonitor::new();
+        Self {
+            f64_gauges: vec![
+                (
+                    Gauge::make_collector(metric!(
+                        name: "mz_persist_task_total_idle_duration",
+                        help: "Seconds of time spent idling, ie. waiting for a task to be woken up.",
+                        const_labels: {"name" => name}
+                    )),
+                    |m| m.total_idle_duration.as_secs_f64(),
+                ),
+                (
+                    Gauge::make_collector(metric!(
+                        name: "mz_persist_task_total_scheduled_duration",
+                        help: "Seconds of time spent scheduled, ie. ready to poll but not yet polled.",
+                        const_labels: {"name" => name}
+                    )),
+                    |m| m.total_scheduled_duration.as_secs_f64(),
+                ),
+            ],
+            u64_gauges: vec![
+                (
+                    MakeCollector::make_collector(metric!(
+                        name: "mz_persist_task_total_scheduled_count",
+                        help: "The total number of task schedules. Useful for computing the average scheduled time.",
+                        const_labels: {"name" => name}
+                    )),
+                    |m| m.total_scheduled_count,
+                ),
+                (
+                    MakeCollector::make_collector(metric!(
+                        name: "mz_persist_task_total_idled_count",
+                        help: "The total number of task idles. Useful for computing the average idle time.",
+                        const_labels: {"name" => name}
+                    ,
+                    )),
+                    |m| m.total_idled_count,
+                ),
+            ],
+            monitor,
+        }
+    }
+
+    /// Instrument the provided future. The expectation is that the result will be executed
+    /// as a task. (See [TaskMonitor::instrument] for more context.)
+    pub fn instrument_task<F>(&self, task: F) -> tokio_metrics::Instrumented<F> {
+        self.monitor.instrument(task)
+    }
+}
+
+impl Collector for TaskMetrics {
+    fn desc(&self) -> Vec<&Desc> {
+        let mut descs = Vec::with_capacity(self.f64_gauges.len() + self.u64_gauges.len());
+        for (g, _) in &self.f64_gauges {
+            descs.extend(g.desc());
+        }
+        for (g, _) in &self.u64_gauges {
+            descs.extend(g.desc());
+        }
+        descs
+    }
+
+    fn collect(&self) -> Vec<MetricFamily> {
+        let mut families = Vec::with_capacity(self.f64_gauges.len() + self.u64_gauges.len());
+        let metrics = self.monitor.cumulative();
+        for (g, metrics_fn) in &self.f64_gauges {
+            g.set(metrics_fn(&metrics));
+            families.extend(g.collect());
+        }
+        for (g, metrics_fn) in &self.u64_gauges {
+            g.set(metrics_fn(&metrics));
+            families.extend(g.collect());
+        }
+        families
+    }
+}
+
+#[derive(Debug)]
+pub struct TasksMetrics {
+    pub heartbeat_read: TaskMetrics,
+}
+
+impl TasksMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let heartbeat_read = TaskMetrics::new("heartbeat_read");
+        registry.register_collector(heartbeat_read.clone());
+        TasksMetrics { heartbeat_read }
     }
 }
 

@@ -23,13 +23,13 @@ query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT row(a,b) as record from t1 union select row(a,b) as record from t2
 ----
 Explained Query:
-  Distinct group_by=[#0] // { arity: 1 }
+  Distinct project=[#0] // { arity: 1 }
     Union // { arity: 1 }
       Project (#2) // { arity: 1 }
         Map (row(#0, #1)) // { arity: 3 }
-          Get materialize.public.t1 // { arity: 2 }
+          ReadStorage materialize.public.t1 // { arity: 2 }
       Project (#2) // { arity: 1 }
         Map (row(#0, #1)) // { arity: 3 }
-          Get materialize.public.t2 // { arity: 2 }
+          ReadStorage materialize.public.t2 // { arity: 2 }
 
 EOF

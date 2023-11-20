@@ -23,6 +23,7 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
+use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug_span, trace_span, Instrument};
@@ -33,6 +34,7 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::PartialBatchKey;
 use crate::read::{LeasedReaderId, ReadHandle};
+use crate::stats::PartStats;
 use crate::ShardId;
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
@@ -118,7 +120,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-enum FetchBatchFilter<T> {
+pub(crate) enum FetchBatchFilter<T> {
     Snapshot {
         as_of: Antichain<T>,
     },
@@ -126,10 +128,32 @@ enum FetchBatchFilter<T> {
         as_of: Antichain<T>,
         lower: Antichain<T>,
     },
+    Compaction {
+        since: Antichain<T>,
+    },
 }
 
 impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
-    fn filter_ts(&self, t: &mut T) -> bool {
+    pub(crate) fn new(meta: &SerdeLeasedBatchPartMetadata) -> Self
+    where
+        T: Codec64,
+    {
+        match &meta {
+            SerdeLeasedBatchPartMetadata::Snapshot { as_of } => {
+                let as_of =
+                    Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+                FetchBatchFilter::Snapshot { as_of }
+            }
+            SerdeLeasedBatchPartMetadata::Listen { as_of, lower } => {
+                let as_of =
+                    Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+                let lower =
+                    Antichain::from(lower.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+                FetchBatchFilter::Listen { as_of, lower }
+            }
+        }
+    }
+    pub(crate) fn filter_ts(&self, t: &mut T) -> bool {
         match self {
             FetchBatchFilter::Snapshot { as_of } => {
                 // This time is covered by a listen
@@ -157,6 +181,10 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
                 }
                 true
             }
+            FetchBatchFilter::Compaction { since } => {
+                t.advance_by(since.borrow());
+                true
+            }
         }
     }
 }
@@ -180,17 +208,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    let ts_filter = match &part.metadata {
-        SerdeLeasedBatchPartMetadata::Snapshot { as_of } => {
-            let as_of = Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
-            FetchBatchFilter::Snapshot { as_of }
-        }
-        SerdeLeasedBatchPartMetadata::Listen { as_of, lower } => {
-            let as_of = Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
-            let lower = Antichain::from(lower.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
-            FetchBatchFilter::Listen { as_of, lower }
-        }
-    };
+    let ts_filter = FetchBatchFilter::new(&part.metadata);
 
     let encoded_part = fetch_batch_part(
         &part.shard_id,
@@ -343,10 +361,7 @@ pub(crate) enum SerdeLeasedBatchPartMetadata {
 ///
 /// In any other circumstance, dropping `LeasedBatchPart` panics.
 #[derive(Debug)]
-pub struct LeasedBatchPart<T>
-where
-    T: Timestamp + Codec64,
-{
+pub struct LeasedBatchPart<T> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_id: ShardId,
     pub(crate) reader_id: LeasedReaderId,
@@ -360,6 +375,9 @@ where
     pub(crate) leased_seqno: Option<SeqNo>,
     pub(crate) stats: Option<LazyPartStats>,
     pub(crate) filter_pushdown_audit: bool,
+    /// A lower bound on the key. If a tight lower bound is not available, the
+    /// empty vec (as the minimum vec) is a conservative choice.
+    pub(crate) key_lower: Vec<u8>,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -388,6 +406,7 @@ where
             reader_id: self.reader_id.clone(),
             stats: self.stats.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit,
+            key_lower: std::mem::take(&mut self.key_lower),
         };
         // If `x` has a lease, we've effectively transferred it to `r`.
         let _ = self.leased_seqno.take();
@@ -424,12 +443,14 @@ where
     pub fn request_filter_pushdown_audit(&mut self) {
         self.filter_pushdown_audit = true;
     }
+
+    /// Returns the pushdown stats for this part.
+    pub fn stats(&self) -> Option<PartStats> {
+        self.stats.as_ref().map(|x| x.decode())
+    }
 }
 
-impl<T> Drop for LeasedBatchPart<T>
-where
-    T: Timestamp + Codec64,
-{
+impl<T> Drop for LeasedBatchPart<T> {
     /// For details, see [`LeasedBatchPart`].
     fn drop(&mut self) {
         self.metrics.lease.dropped_part.inc()
@@ -603,6 +624,12 @@ where
             needs_truncation,
         }
     }
+
+    pub(crate) fn maybe_unconsolidated(&self) -> bool {
+        // At time of writing, only user parts may be unconsolidated, and they are always
+        // written with a since of [T::minimum()].
+        self.part.desc.since().borrow() == AntichainRef::new(&[T::minimum()])
+    }
 }
 
 /// A pointer into a particular encoded part, with methods for fetching an update and
@@ -663,6 +690,13 @@ impl Cursor {
         }
         update
     }
+
+    /// Advance the cursor just past the end of the most recent update, if there is one.
+    pub fn advance<'a, T: Timestamp + Codec64>(&mut self, part: &'a EncodedPart<T>) {
+        if self.part_idx < part.part.updates.len() {
+            self.idx += 1;
+        }
+    }
 }
 
 /// This represents the serde encoding for [`LeasedBatchPart`]. We expose the struct
@@ -686,6 +720,7 @@ pub struct SerdeLeasedBatchPart {
     reader_id: LeasedReaderId,
     stats: Option<LazyPartStats>,
     filter_pushdown_audit: bool,
+    key_lower: Vec<u8>,
 }
 
 impl SerdeLeasedBatchPart {
@@ -721,6 +756,7 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
             reader_id: x.reader_id,
             stats: x.stats,
             filter_pushdown_audit: x.filter_pushdown_audit,
+            key_lower: x.key_lower,
         }
     }
 }

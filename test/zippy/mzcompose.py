@@ -12,21 +12,20 @@ import re
 from datetime import timedelta
 from enum import Enum
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Cockroach,
-    Debezium,
-    Grafana,
-    Kafka,
-    Materialized,
-    Minio,
-    Postgres,
-    Prometheus,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.balancerd import Balancerd
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.debezium import Debezium
+from materialize.mzcompose.services.grafana import Grafana
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.prometheus import Prometheus
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.zippy.framework import Test
 from materialize.zippy.scenarios import *  # noqa: F401 F403
 
@@ -38,6 +37,7 @@ SERVICES = [
     Postgres(),
     Cockroach(),
     Minio(setup_materialize=True),
+    Balancerd(),
     # Those two are overriden below
     Materialized(),
     Clusterd(name="storaged"),
@@ -143,6 +143,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             setup_materialize=True,
         ),
         Testdrive(
+            materialize_url="postgres://materialize@balancerd:6875",
             no_reset=True,
             seed=1,
             default_timeout="600s",
@@ -155,6 +156,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             default_size=args.size or Materialized.Size.DEFAULT_SIZE,
             external_minio=True,
             external_cockroach=True,
+            sanity_restart=False,
         ),
     ):
         c.up("materialized")
@@ -167,7 +169,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.sql(
             """
-            CREATE CLUSTER storaged REPLICAS (r2 (
+            CREATE CLUSTER storage REPLICAS (r2 (
                 STORAGECTL ADDRESSES ['storaged:2100'],
                 STORAGE ADDRESSES ['storaged:2103'],
                 COMPUTECTL ADDRESSES ['storaged:2101'],

@@ -19,21 +19,21 @@ use differential_dataflow::collection::AsCollection;
 use differential_dataflow::logging::{
     BatchEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
 };
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
+use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InputCapability};
 
-use crate::compute_state::ComputeState;
 use crate::extensions::arrange::MzArrange;
 use crate::logging::compute::ComputeEvent;
-use crate::logging::{DifferentialLog, EventQueue, LogVariant, SharedLoggingState};
+use crate::logging::{
+    DifferentialLog, EventQueue, LogVariant, PermutedRowPacker, SharedLoggingState,
+};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
 /// Constructs the logging dataflow for differential logs.
@@ -49,7 +49,6 @@ pub(super) fn construct<A: Allocate>(
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<DifferentialEvent>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-    compute_state: &ComputeState,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
@@ -115,33 +114,37 @@ pub(super) fn construct<A: Allocate>(
         });
 
         // Encode the contents of each logging stream into its expected `Row` format.
-        let arrangement_batches = batches.as_collection().map(move |op| {
-            Row::pack_slice(&[
-                Datum::UInt64(u64::cast_from(op)),
-                Datum::UInt64(u64::cast_from(worker_id)),
-            ])
-        });
-        let arrangement_records = records.as_collection().map(move |op| {
-            Row::pack_slice(&[
-                Datum::UInt64(u64::cast_from(op)),
-                Datum::UInt64(u64::cast_from(worker_id)),
-            ])
-        });
+        let mut packer = PermutedRowPacker::new(DifferentialLog::ArrangementBatches);
+        let arrangement_batches = batches
+            .as_collection()
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential batches")
+            .as_collection(move |op, ()| {
+                packer.pack_slice(&[
+                    Datum::UInt64(u64::cast_from(*op)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                ])
+            });
+        let mut packer = PermutedRowPacker::new(DifferentialLog::ArrangementRecords);
+        let arrangement_records = records
+            .as_collection()
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential records")
+            .as_collection(move |op, ()| {
+                packer.pack_slice(&[
+                    Datum::UInt64(u64::cast_from(*op)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                ])
+            });
 
+        let mut packer = PermutedRowPacker::new(DifferentialLog::Sharing);
         let sharing = sharing
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Differential sharing",
-                compute_state.enable_arrangement_size_logging,
-            );
-
-        let sharing = sharing.as_collection(move |op, ()| {
-            Row::pack_slice(&[
-                Datum::UInt64(u64::cast_from(*op)),
-                Datum::UInt64(u64::cast_from(worker_id)),
-            ])
-        });
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential sharing")
+            .as_collection(move |op, ()| {
+                packer.pack_slice(&[
+                    Datum::UInt64(u64::cast_from(*op)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                ])
+            });
 
         use DifferentialLog::*;
         let logs = [
@@ -155,33 +158,10 @@ pub(super) fn construct<A: Allocate>(
         for (variant, collection) in logs {
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
-                let key = variant.index_by();
-                let (_, value) = permutation_for_arrangement(
-                    &key.iter()
-                        .cloned()
-                        .map(MirScalarExpr::Column)
-                        .collect::<Vec<_>>(),
-                    variant.desc().arity(),
-                );
                 let trace = collection
-                    .map({
-                        let mut row_buf = Row::default();
-                        let mut datums = DatumVec::new();
-                        move |row| {
-                            let datums = datums.borrow_with(&row);
-                            row_buf.packer().extend(key.iter().map(|k| datums[*k]));
-                            let row_key = row_buf.clone();
-                            row_buf.packer().extend(value.iter().map(|c| datums[*c]));
-                            let row_val = row_buf.clone();
-                            (row_key, row_val)
-                        }
-                    })
-                    .mz_arrange::<RowSpine<_, _, _, _>>(
-                        &format!("ArrangeByKey {:?}", variant),
-                        compute_state.enable_arrangement_size_logging,
-                    )
+                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
                     .trace;
-                traces.insert(variant.clone(), (trace, Rc::clone(&token)));
+                traces.insert(variant, (trace, Rc::clone(&token)));
             }
         }
 
@@ -194,8 +174,8 @@ type OutputBuffer<'a, 'b, D> = ConsolidateBuffer<'a, 'b, Timestamp, D, Diff, Pus
 
 /// Bundled output buffers used by the demux operator.
 struct DemuxOutput<'a, 'b> {
-    batches: OutputBuffer<'a, 'b, usize>,
-    records: OutputBuffer<'a, 'b, usize>,
+    batches: OutputBuffer<'a, 'b, (usize, ())>,
+    records: OutputBuffer<'a, 'b, (usize, ())>,
     sharing: OutputBuffer<'a, 'b, (usize, ())>,
 }
 
@@ -248,10 +228,10 @@ impl DemuxHandler<'_, '_, '_> {
     fn handle_batch(&mut self, event: BatchEvent) {
         let ts = self.ts();
         let op = event.operator;
-        self.output.batches.give(self.cap, (op, ts, 1));
+        self.output.batches.give(self.cap, ((op, ()), ts, 1));
 
         let diff = Diff::try_from(event.length).expect("must fit");
-        self.output.records.give(self.cap, (op, ts, diff));
+        self.output.records.give(self.cap, ((op, ()), ts, diff));
         self.notify_arrangement_size(op);
     }
 
@@ -260,12 +240,12 @@ impl DemuxHandler<'_, '_, '_> {
 
         let ts = self.ts();
         let op = event.operator;
-        self.output.batches.give(self.cap, (op, ts, -1));
+        self.output.batches.give(self.cap, ((op, ()), ts, -1));
 
         let diff = Diff::try_from(done).expect("must fit")
             - Diff::try_from(event.length1 + event.length2).expect("must fit");
         if diff != 0 {
-            self.output.records.give(self.cap, (op, ts, diff));
+            self.output.records.give(self.cap, ((op, ()), ts, diff));
         }
         self.notify_arrangement_size(op);
     }
@@ -273,11 +253,11 @@ impl DemuxHandler<'_, '_, '_> {
     fn handle_drop(&mut self, event: DropEvent) {
         let ts = self.ts();
         let op = event.operator;
-        self.output.batches.give(self.cap, (op, ts, -1));
+        self.output.batches.give(self.cap, ((op, ()), ts, -1));
 
         let diff = -Diff::try_from(event.length).expect("must fit");
         if diff != 0 {
-            self.output.records.give(self.cap, (op, ts, diff));
+            self.output.records.give(self.cap, ((op, ()), ts, diff));
         }
         self.notify_arrangement_size(op);
     }

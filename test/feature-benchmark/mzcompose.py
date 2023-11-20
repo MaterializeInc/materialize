@@ -14,6 +14,8 @@ import time
 import uuid
 from textwrap import dedent
 
+from materialize import docker
+
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
@@ -41,19 +43,19 @@ from materialize.feature_benchmark.termination import (
     RunAtMost,
     TerminationCondition,
 )
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Cockroach,
-    Materialized,
-    Minio,
-    Postgres,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
-from materialize.mzcompose.services import Kafka as KafkaService
-from materialize.mzcompose.services import Kgen as KgenService
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.balancerd import Balancerd
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka as KafkaService
+from materialize.mzcompose.services.kgen import Kgen as KgenService
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import all_subclasses
 from materialize.version_list import VersionsFromDocs
 
 #
@@ -94,13 +96,12 @@ SERVICES = [
     Redpanda(),
     Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
-    Materialized(),
-    Testdrive(
-        default_timeout=default_timeout,
-        materialize_params={"statement_timeout": f"'{default_timeout}'"},
-    ),
     KgenService(),
     Postgres(),
+    Balancerd(),
+    # Overridden below
+    Materialized(),
+    Testdrive(),
 ]
 
 
@@ -119,66 +120,109 @@ def run_one_scenario(
     common_seed = round(time.time())
 
     for mz_id, instance in enumerate(["this", "other"]):
-        tag, size, params = (
-            (args.this_tag, args.this_size, args.this_params)
+        balancerd, tag, size, params = (
+            (args.this_balancerd, args.this_tag, args.this_size, args.this_params)
             if instance == "this"
-            else (args.other_tag, args.other_size, args.other_params)
+            else (
+                args.other_balancerd,
+                args.other_tag,
+                args.other_size,
+                args.other_params,
+            )
         )
+
+        if tag == "common-ancestor":
+            tag = docker.resolve_ancestor_image_tag()
+
+        entrypoint_host = "balancerd" if balancerd else "materialized"
 
         c.up("testdrive", persistent=True)
 
-        additional_system_parameter_defaults = None
+        additional_system_parameter_defaults = {}
+
         if params is not None:
-            additional_system_parameter_defaults = {}
             for param in params.split(";"):
                 param_name, param_value = param.split("=")
                 additional_system_parameter_defaults[param_name] = param_value
 
-        mz = Materialized(
-            image=f"materialize/materialized:{tag}" if tag else None,
-            default_size=size,
-            # Avoid clashes with the Kafka sink progress topic across restarts
-            environment_id=f"local-az1-{uuid.uuid4()}-0",
-            soft_assertions=False,
-            additional_system_parameter_defaults=additional_system_parameter_defaults,
-            external_cockroach=True,
-            external_minio=True,
-        )
+        mz_image = f"materialize/materialized:{tag}" if tag else None
+        mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
 
-        with c.override(mz):
-            print(f"The version of the '{instance.upper()}' Mz instance is:")
-            c.run(
-                "materialized",
-                "-c",
-                "environmentd --version | grep environmentd",
-                entrypoint="bash",
-                rm=True,
+        if tag is not None and not c.try_pull_service_image(mz):
+            print(
+                f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
+            )
+            mz_image = "materialize/materialized:latest"
+            mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+
+        start_overridden_mz_and_cockroach(c, mz, instance)
+        if balancerd:
+            c.up("balancerd")
+
+        with c.override(
+            Testdrive(
+                materialize_url=f"postgres://materialize@{entrypoint_host}:6875",
+                default_timeout=default_timeout,
+                materialize_params={"statement_timeout": f"'{default_timeout}'"},
+            )
+        ):
+            executor = Docker(composition=c, seed=common_seed, materialized=mz)
+
+            benchmark = Benchmark(
+                mz_id=mz_id,
+                scenario=scenario,
+                scale=args.scale,
+                executor=executor,
+                filter=make_filter(args),
+                termination_conditions=make_termination_conditions(args),
+                aggregation_class=make_aggregation_class(),
+                measure_memory=args.measure_memory,
             )
 
-            c.up("cockroach", "materialized")
-
-        executor = Docker(composition=c, seed=common_seed, materialized=mz)
-
-        benchmark = Benchmark(
-            mz_id=mz_id,
-            scenario=scenario,
-            scale=args.scale,
-            executor=executor,
-            filter=make_filter(args),
-            termination_conditions=make_termination_conditions(args),
-            aggregation_class=make_aggregation_class(),
-            measure_memory=args.measure_memory,
-        )
-
-        aggregations = benchmark.run()
-        for i, comparator in enumerate(comparators):
-            comparator.append(aggregations[i].aggregate())
+            aggregations = benchmark.run()
+            for aggregation, comparator in zip(aggregations, comparators):
+                comparator.append(aggregation.aggregate())
 
         c.kill("cockroach", "materialized", "testdrive")
         c.rm("cockroach", "materialized", "testdrive")
         c.rm_volumes("mzdata")
 
     return comparators
+
+
+def create_mz_service(
+    mz_image: str | None,
+    default_size: int,
+    additional_system_parameter_defaults: dict[str, str] | None,
+) -> Materialized:
+    return Materialized(
+        image=mz_image,
+        default_size=default_size,
+        # Avoid clashes with the Kafka sink progress topic across restarts
+        environment_id=f"local-az1-{uuid.uuid4()}-0",
+        soft_assertions=False,
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
+        external_cockroach=True,
+        external_minio=True,
+        sanity_restart=False,
+        catalog_store="stash",
+    )
+
+
+def start_overridden_mz_and_cockroach(
+    c: Composition, mz: Materialized, instance: str
+) -> None:
+    with c.override(mz):
+        print(f"The version of the '{instance.upper()}' Mz instance is:")
+        c.run(
+            "materialized",
+            "-c",
+            "environmentd --version | grep environmentd",
+            entrypoint="bash",
+            rm=True,
+        )
+
+        c.up("cockroach", "materialized")
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -208,6 +252,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--this-balancerd",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use balancerd for THIS",
+    )
+
+    parser.add_argument(
         "--this-params",
         metavar="PARAMS",
         type=str,
@@ -229,6 +280,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=str,
         default=os.getenv("OTHER_PARAMS", None),
         help="Semicolon-separated list of parameter=value pairs to apply to the 'OTHER' Mz instance",
+    )
+
+    parser.add_argument(
+        "--other-balancerd",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use balancerd for OTHER",
     )
 
     parser.add_argument(
@@ -260,7 +318,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--max-retries",
         metavar="N",
         type=int,
-        default=5,
+        default=10,
         help="Retry any potential performance regressions up to N times.",
     )
 
@@ -283,9 +341,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"""
             this_tag: {args.this_tag}
             this_size: {args.this_size}
+            this_balancerd: {args.this_balancerd}
 
             other_tag: {args.other_tag}
             other_size: {args.other_size}
+            other_balancerd: {args.other_balancerd}
 
             root_scenario: {args.root_scenario}"""
         )
@@ -293,19 +353,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Build the list of scenarios to run
     root_scenario = globals()[args.root_scenario]
-    initial_scenarios = {}
+    scenarios = []
 
     if root_scenario.__subclasses__():
-        for scenario in root_scenario.__subclasses__():
-            has_children = False
-            for s in scenario.__subclasses__():
-                has_children = True
-                initial_scenarios[s] = 1
-
-            if not has_children:
-                initial_scenarios[scenario] = 1
+        scenarios = [s for s in all_subclasses(root_scenario) if not s.__subclasses__()]
     else:
-        initial_scenarios[root_scenario] = 1
+        scenarios = [root_scenario]
 
     dependencies = ["postgres"]
 
@@ -316,31 +369,31 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(*dependencies)
 
-    scenarios = initial_scenarios.copy()
-
     for cycle in range(0, args.max_retries):
         print(
-            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
+            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios])}"
         )
 
         report = Report()
 
-        for scenario in list(scenarios.keys()):
+        scenarios_with_regressions = []
+        for scenario in scenarios:
             comparators = run_one_scenario(c, scenario, args)
             report.extend(comparators)
 
             # Do not retry the scenario if no regressions
-            if all([not c.is_regression() for c in comparators]):
-                del scenarios[scenario]
+            if any([c.is_regression() for c in comparators]):
+                scenarios_with_regressions.append(scenario)
 
             print(f"+++ Benchmark Report for cycle {cycle+1}:")
             report.dump()
 
-        if len(scenarios.keys()) == 0:
+        scenarios = scenarios_with_regressions
+        if not scenarios:
             break
 
-    if len(scenarios.keys()) > 0:
+    if scenarios:
         print(
-            f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
+            f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios])}"
         )
         sys.exit(1)

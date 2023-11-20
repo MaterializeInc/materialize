@@ -21,7 +21,82 @@ reference these objects is not allowed.
 {{< /warning >}}
 
 
-## System Relations
+## System relations
+
+### `mz_activity_log`
+
+{{< public-preview />}}
+
+{{< warning >}}
+Do not rely on all statements being logged in this view. Materialize
+controls the maximum rate at which statements are sampled, and may change
+this rate at any time.
+{{< /warning >}}
+
+{{< warning >}}
+Entries in this view may be cleared on restart (e.g., during Materialize maintenance windows).
+{{< /warning >}}
+
+The `mz_activity_log` view contains a log of the SQL statements that
+have been issued to Materialize, along with various metadata about
+them.
+
+Entries in this log may be sampled. The sampling rate is controlled by
+the session variable `statement_logging_sample_rate`, which may be set
+to any value between 0 and 1. For example, to disable statement
+logging entirely for a session, execute `SET
+statement_logging_sample_rate TO 0`. Materialize may apply a lower
+sampling rate than the one set in this variable.
+
+<!-- RELATION_SPEC mz_internal.mz_activity_log -->
+| Field                     | Type                         | Meaning                                                                                                                                                                                                                                                                       |
+|---------------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `execution_id`            | [`uuid`]                     | An ID that is unique for each executed statement.                                                                                                                                                                                                                              |
+| `sample_rate`             | [`double precision`]         | The actual rate at which the statement was sampled.                                                                                                                                                                                                                           |
+| `cluster_id`              | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_clusters).                                                                                                                                                                                                               |
+| `application_name`        | [`text`]                     | The value of the `application_name` session variable at execution time.                                                                                                                                                                                                       |
+| `cluster_name`            | [`text`]                     | The name of the cluster with ID `cluster_id` at execution time.                                                                                                                                                                                                               |
+| `transaction_isolation`   | [`text`]                     | The value of the `transaction_isolation` session variable at execution time.                                                                                                                                                                                                  |
+| `execution_timestamp`     | [`uint8`]                    | The logical timestamp at which execution was scheduled.                                                                                                                                                                                                                       |
+| `transient_index_id`      | [`text`]                     | The internal index of the compute dataflow created for the query, if any.                                                                                                                                                                                                     |
+| `params`                  | [`text array`]                   | The parameters with which the statement was executed.                                                                                                                                                                                                                         |
+| `began_at`                | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
+| `finished_at`             | [`timestamp with time zone`] | The wall-clock time at which the statement finished executing.                                                                                                                                                                                                                   |
+| `finished_status`         | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `errored`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                    |
+| `error_message`           | [`text`]                     | The error message, if the statement failed.                                                                                                                                                                                                                                   |
+| `rows_returned`           | [`bigint`]                   | The number of rows returned, for statements that return rows.                                                                                                                                                                                                                 |
+| `execution_strategy`      | [`text`]                     | For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow. |
+| `transaction_id`          | [`uint8`]                    | The ID of the transaction that the statement was part of. Note that transaction IDs are only unique per session.                                                                                                                                                              |
+| `prepared_statement_id`   | [`uuid`]                     | An ID that is unique for each prepared statement. For example, if a statement is prepared once and then executed multiple times, all executions will have the same value for this column (but different values for `execution_id`).                                           |
+| `sql`                     | [`text`]                     | The SQL text of the statement.                                                                                                                                                                                                                                                |
+| `prepared_statement_name` | [`text`]                     | The name given by the client library to the prepared statement.                                                                                                                                                                                                               |
+| `session_id`              | [`uuid`]                     | An ID that is unique for each session.                                                                                                                                                                                                                                        |
+| `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
+| `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
+
+### `mz_cluster_replica_frontiers`
+
+The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
+sources, sinks, materialized views, indexes, and subscriptions in the system,
+as observed from the coordinator.
+
+[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to
+`mz_cluster_replica_frontiers`, but `mz_compute_frontiers` reports the
+frontiers known to the active compute replica, while
+`mz_cluster_replica_frontiers` reports the frontiers of all replicas. Note also
+that `mz_compute_frontiers` is restricted to compute objects (indexes,
+materialized views, and subscriptions) while `mz_cluster_replica_frontiers`
+contains storage objects that are installed on replicas (sources, sinks) as
+well.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_replica_frontiers -->
+| Field            | Type             | Meaning                                                                |
+| -----------------| ---------------- | --------                                                               |
+| `object_id`      | [`text`]         | The ID of the source, sink, index, materialized view, or subscription. |
+| `replica_id`     | [`text`]         | The ID of a cluster replica.                                           |
+| `write_frontier` | [`mz_timestamp`] | The next timestamp at which the output may change.                     |
 
 ### `mz_cluster_replica_metrics`
 
@@ -37,7 +112,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `process_id`        | [`uint8`]    | An identifier of a compute process within a replica.                                                                                                         |
 | `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core.                                                                                                         |
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
-| `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
+| `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
 
 ### `mz_cluster_replica_sizes`
 
@@ -57,7 +132,7 @@ any kind of capacity planning.
 | `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.                                                                                                           |
 | `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.                                                                                                |
 | `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
-| `disk_bytes`           | [`uint8`]   | The disk allocation per process, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
+| `disk_bytes`           | [`uint8`]   | The disk allocation per process, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
 | `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
 
 ### `mz_cluster_links`
@@ -108,7 +183,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `process_id`     | [`uint8`]            | An identifier of a compute process within a replica.                                                                                                                                   |
 | `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.                                                                                                                              |
 | `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.                                                                                                                              |
-| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation, if the replica is configured with an [attached disk](/sql/create-cluster-replica#disk-attached-replicas). `NULL` otherwise. |
+| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
 
 ### `mz_cluster_replica_heartbeats`
 
@@ -138,6 +213,27 @@ each replica, including the times at which it was created and dropped
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
 | `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
 
+### `mz_internal_cluster_replicas`
+
+The `mz_internal_cluster_replicas` table lists the replicas that are created and maintained by Materialize support.
+
+<!-- RELATION_SPEC mz_internal.mz_internal_cluster_replicas -->
+| Field      | Type     | Meaning                                                                                                     |
+|------------|----------|-------------------------------------------------------------------------------------------------------------|
+| id         | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
+
+### `mz_comments`
+
+The `mz_comments` table stores optional comments (descriptions) for objects in the database.
+
+<!-- RELATION_SPEC mz_internal.mz_comments -->
+| Field          | Type        | Meaning                                                                                      |
+| -------------- |-------------| --------                                                                                     |
+| `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
+| `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
+| `object_sub_id`| [`integer`] | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `comment`      | [`text`]    | The comment itself.                                                                          |
+
 ### `mz_compute_dependencies`
 
 The `mz_compute_dependencies` table describes the dependency structure between each compute object (index, materialized view, or subscription) and the sources of its data.
@@ -157,45 +253,16 @@ The `mz_frontiers` table describes the frontiers of each source, sink, table,
 materialized view, index, and subscription in the system, as observed from the
 coordinator.
 
-For objects that are installed on replicas (e.g., materialized views and
-indexes), the `replica_id` field is always non-`NULL`. If an object is installed
-on multiple replicas, it has multiple entries describing the frontier on each
-individual replica. For objects that are not installed on replicas (e.g.,
-tables), the `replica_id` field is `NULL`.
-
-[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to `mz_frontiers`,
-but `mz_compute_frontiers` reports the frontiers known to the active compute
-replica, while `mz_frontiers` reports the frontiers of all replicas. Note also
-that `mz_compute_frontiers` is restricted to compute objects (indexes,
-materialized views, and subscriptions) while `mz_frontiers` contains storage
-objects (sources, sinks, and tables) as well.
-
 At this time, we do not make any guarantees about the freshness of these numbers.
 
 <!-- RELATION_SPEC mz_internal.mz_frontiers -->
-| Field         | Type             | Meaning                                                                             |
-| ------------- | ------------     | --------                                                                            |
-| `object_id`   | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription.       |
-| `replica_id`  | [`text`]         | The ID of a cluster replica, or `NULL` if the object is not installed on a replica. |
-| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                                  |
+| Field            | Type             | Meaning                                                                             |
+| ---------------- | ------------     | --------                                                                            |
+| `object_id`      | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription.       |
+| `read_frontier`  | [`mz_timestamp`] | The earliest timestamp at which the output is still readable.                       |
+| `write_frontier` | [`mz_timestamp`] | The next timestamp at which the output may change.                                  |
 
-### `mz_global_frontiers`
-
-The `mz_global_frontiers` view describes the global frontiers of each source,
-sink, table, materialized view, index, and subscription in the system, as
-observed from the coordinator.
-
-For objects that are installed on replicas (e.g., materialized views and
-indexes), the global frontier is the maximum of the per-replica frontiers.
-Objects that are not installed on replicas only have a single, global frontier.
-
-At this time, we do not make any guarantees about the freshness of these numbers.
-
-<!-- RELATION_SPEC mz_internal.mz_global_frontiers -->
-| Field         | Type             | Meaning                                                                       |
-| ------------- | ------------     | --------                                                                      |
-| `object_id`   | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription. |
-| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                            |
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_global_frontiers -->
 
 ### `mz_kafka_sources`
 
@@ -206,6 +273,24 @@ The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 |------------------------|----------------|-----------------------------------------------------------------------------------------------------------|
 | `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
 | `group_id_base`        | [`text`]       | The prefix of the group ID that Materialize will use when consuming data for the Kafka source.            |
+
+### `mz_materialization_lag`
+
+The `mz_materialization_lag` view describes the difference between the input
+frontiers and the output frontier for each materialized view, index, and sink
+in the system. For hydrated dataflows, this lag roughly corresponds to the time
+it takes for updates at the inputs to be reflected in the output.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_materialization_lag -->
+| Field                     | Type             | Meaning                                                                                  |
+| ------------------------- | ---------------- | --------                                                                                 |
+| `object_id`               | [`text`]         | The ID of the materialized view, index, or sink.                                         |
+| `local_lag`               | [`interval`]     | The amount of time the materialization lags behind its direct inputs.                    |
+| `global_lag`              | [`interval`]     | The amount of time the materialization lags behind its root inputs (sources and tables). |
+| `slowest_local_input_id`  | [`text`]         | The ID of the slowest direct input.                                                      |
+| `slowest_global_input_id` | [`text`]         | The ID of the slowest root input.                                                        |
 
 ### `mz_object_dependencies`
 
@@ -296,7 +381,7 @@ referenced from
 | `id`                 | [`uuid`]                     | The globally unique ID of this history entry. Does **not** correspond to [`mz_sessions.id`](#mz_sessions), which can be recycled. |
 | `connected_at`       | [`timestamp with time zone`] | The time at which the session was established.                                                                                    |
 | `application_name`   | [`text`]                     | The `application_name` session metadata field.                                                                                    |
-| `authenticated_user` | [`text`]                     | The name of the user for wish the session was established.                                                                        |
+| `authenticated_user` | [`text`]                     | The name of the user for which the session was established.                                                                       |
 -->
 
 ### `mz_sessions`
@@ -690,8 +775,18 @@ operations in the system.
 | `created_at`             | [`timestamp with time zone`] | The time at which the subscription was created.                                                                            |
 | `referenced_object_ids`  | [`text list`]                | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)             |
 
+### `mz_webhook_sources`
 
-## Replica Introspection Relations
+The `mz_webhook_sources` table contains a row for each webhook source in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_webhook_sources -->
+| Field          | Type        | Meaning                                                                                      |
+| -------------- |-------------| --------                                                                                     |
+| `id`           | [`text`]    | The ID of the webhook source. Corresponds to [`mz_sources.id`](../mz_catalog/#mz_sources).   |
+| `name`         | [`text`]    | The name of the webhook source.                                                              |
+| `url`          | [`text`]    | The URL which can be used to send events to the source.                                      |
+
+## Replica introspection relations
 
 This section lists the available replica introspection relations.
 
@@ -747,6 +842,8 @@ Specifically, reductions can use more memory than we show here.
 | `allocations` | [`numeric`] | The number of separate memory allocations backing the arrangement.                                                        |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_sizes_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_records_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batches_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_allocations_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_capacity_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_size_raw -->
@@ -765,6 +862,21 @@ The `mz_compute_delays_histogram` view describes a histogram of the wall-clock d
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_raw -->
+
+### `mz_compute_error_counts`
+
+The `mz_compute_error_counts` view describes the counts of errors in objects exported by [dataflows][dataflow] in the system.
+
+Dataflow exports that don't have any errors are not included in this view.
+
+<!-- RELATION_SPEC mz_internal.mz_compute_error_counts -->
+| Field        | Type        | Meaning                                                                                              |
+| ------------ |-------------| --------                                                                                             |
+| `export_id`  | [`text`]    | The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports). |
+| `count`      | [`numeric`] | The count of errors present in this dataflow export.                                                 |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw -->
 
 ### `mz_compute_exports`
 
@@ -852,7 +964,7 @@ operators under each dataflow.
 | Field         | Type        | Meaning                                                                      |
 |---------------|-------------|------------------------------------------------------------------------------|
 | `id`          | [`uint8`]   | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`        | [`text`]    | The name of the object (e.g., index) maintained by the dataflow.             |
+| `name`        | [`text`]    | The name of the [dataflow].                                                  |
 | `records`     | [`numeric`] | The number of records in all arrangements in the dataflow.                   |
 | `batches`     | [`numeric`] | The number of batches in all arrangements in the dataflow.                   |
 | `size`        | [`numeric`] | The utilized size in bytes of the arrangements.                              |
@@ -943,10 +1055,10 @@ The `mz_dataflow_shutdown_durations_histogram` view describes a histogram of the
 
 ### `mz_expected_group_size_advice`
 
-The `mz_expected_group_size_advice` view provides advice on opportunities to set the `EXPECTED GROUP SIZE`
-[query hint]. This hint is applicable to dataflows maintaining [`MIN`], [`MAX`], or [Top K] query patterns. The
-maintainance of these query patterns is implemented inside an operator scope, called a region, through a
-hierarchical scheme for either aggregation or Top K computations.
+The `mz_expected_group_size_advice` view provides advice on opportunities to set [query hints].
+Query hints are applicable to dataflows maintaining [`MIN`], [`MAX`], or [Top K] query patterns.
+The maintainance of these query patterns is implemented inside an operator scope, called a region,
+through a hierarchical scheme for either aggregation or Top K computations.
 
 <!-- RELATION_SPEC mz_internal.mz_expected_group_size_advice -->
 | Field           | Type                 | Meaning                                                                                                   |
@@ -958,7 +1070,7 @@ hierarchical scheme for either aggregation or Top K computations.
 | `levels`        | [`bigint`]           | The number of levels in the hierarchical scheme implemented by the region.                                |
 | `to_cut`        | [`bigint`]           | The number of levels that can be eliminated (cut) from the region's hierarchy.                            |
 | `savings`       | [`numeric`]          | A conservative estimate of the amount of memory in bytes to be saved by applying the hint.                |
-| `hint`          | [`double precision`] | The hint value for `EXPECTED GROUP SIZE` that will eliminate `to_cut` levels from the regions' hierarchy. |
+| `hint`          | [`double precision`] | The hint value that will eliminate `to_cut` levels from the region's hierarchy.                           |
 
 ### `mz_message_counts`
 
@@ -1055,18 +1167,6 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_raw -->
 
-### `mz_comments`
-
-The `mz_comments` table stores optional comments (descriptions) for objects in the database.
-
-<!-- RELATION_SPEC mz_internal.mz_comments -->
-| Field          | Type        | Meaning                                                                                      |
-| -------------- |-------------| --------                                                                                     |
-| `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
-| `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
-| `sub_id`       | [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
-| `comment`      | [`text`]    | The comment itself.                                                                          |
-
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
 [`boolean`]: /sql/types/boolean
@@ -1075,6 +1175,7 @@ The `mz_comments` table stores optional comments (descriptions) for objects in t
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
+[`text array`]: /sql/types/array
 [`text list`]: /sql/types/list
 [`uuid`]: /sql/types/uuid
 [`uint4`]: /sql/types/uint4
@@ -1085,22 +1186,23 @@ The `mz_comments` table stores optional comments (descriptions) for objects in t
 [`MIN`]: /sql/functions/#min
 [`MAX`]: /sql/functions/#max
 [Top K]: /transform-data/patterns/top-k
-[query hint]: /sql/select/#query-hints
+[query hints]: /sql/select/#query-hints
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batches_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_records_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_session_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_cluster_replicas -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sinks -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sources -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_view_foreign_keys -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_view_keys -->

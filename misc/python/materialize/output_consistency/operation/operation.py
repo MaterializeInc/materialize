@@ -9,6 +9,7 @@
 
 from enum import Enum
 
+from materialize.mz_version import MzVersion
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
@@ -42,6 +43,8 @@ class DbOperationOrFunction:
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
+        is_pg_compatible: bool = True,
+        since_mz_version: MzVersion | None = None,
     ):
         """
         :param is_enabled: an operation should only be disabled if its execution causes problems;
@@ -58,6 +61,8 @@ class DbOperationOrFunction:
         self.is_aggregation = is_aggregation
         self.relevance = relevance
         self.is_enabled = is_enabled
+        self.is_pg_compatible = is_pg_compatible
+        self.since_mz_version = since_mz_version
 
     def to_pattern(self, args_count: int) -> str:
         raise NotImplementedError
@@ -95,9 +100,7 @@ class DbOperationOrFunction:
             if validator.is_expected_to_cause_error(args):
                 return True
 
-        for arg_index, arg in enumerate(args):
-            param = self.params[arg_index]
-
+        for param, arg in zip(self.params, args):
             if not param.supports_expression(arg):
                 return True
 
@@ -115,6 +118,7 @@ class DbOperation(DbOperationOrFunction):
         args_validators: set[OperationArgsValidator] | None = None,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
+        is_pg_compatible: bool = True,
     ):
         param_count = len(params)
         super().__init__(
@@ -126,6 +130,7 @@ class DbOperation(DbOperationOrFunction):
             is_aggregation=False,
             relevance=relevance,
             is_enabled=is_enabled,
+            is_pg_compatible=is_pg_compatible,
         )
         self.pattern = pattern
 
@@ -154,6 +159,8 @@ class DbFunction(DbOperationOrFunction):
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
+        is_pg_compatible: bool = True,
+        since_mz_version: MzVersion | None = None,
     ):
         self.validate_params(params)
 
@@ -166,6 +173,8 @@ class DbFunction(DbOperationOrFunction):
             is_aggregation=is_aggregation,
             relevance=relevance,
             is_enabled=is_enabled,
+            is_pg_compatible=is_pg_compatible,
+            since_mz_version=since_mz_version,
         )
         self.function_name_in_lower_case = function_name.lower()
 
@@ -227,3 +236,12 @@ class DbFunctionWithCustomPattern(DbFunction):
             )
 
         return self.pattern_per_param_count[args_count]
+
+
+def match_function_by_name(
+    op: DbOperationOrFunction, function_name_in_lower_case: str
+) -> bool:
+    return (
+        isinstance(op, DbFunction)
+        and op.function_name_in_lower_case == function_name_in_lower_case
+    )

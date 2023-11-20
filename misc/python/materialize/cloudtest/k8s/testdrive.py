@@ -14,6 +14,7 @@ from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodS
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
+from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID
 
 
 class TestdriveBase:
@@ -45,6 +46,7 @@ class TestdriveBase:
         seed: int | None = None,
         caller: Traceback | None = None,
         default_timeout: str = "300s",
+        kafka_options: str | None = None,
         log_filter: str = "off",
     ) -> None:
         command: list[str] = [
@@ -55,6 +57,7 @@ class TestdriveBase:
             f"--schema-registry-url={self.schema_registry_url}",
             f"--default-timeout={default_timeout}",
             f"--log-filter={log_filter}",
+            f"--environment-id={DEFAULT_MZ_ENVIRONMENT_ID}",
             "--var=replicas=1",
             "--var=default-storage-size=1",
             "--var=default-replica-size=1",
@@ -66,6 +69,7 @@ class TestdriveBase:
             *(["--no-reset"] if no_reset else []),
             *([f"--seed={seed}"] if seed else []),
             *([f"--source={caller.filename}:{caller.lineno}"] if caller else []),
+            *([f"--kafka-option={kafka_options}"] if kafka_options else []),
             *args,
         ]
 

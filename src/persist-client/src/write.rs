@@ -33,12 +33,14 @@ use crate::batch::{
     validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     ProtoBatch,
 };
+use crate::cfg::PersistFeatureFlag;
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HandleDebugState, HollowBatch, Upper};
+use crate::read::ReadHandle;
 use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
@@ -132,26 +134,32 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    // We don't actually do an async call in here at the moment, but we used to and may
-    // again later, so let's reserve the right for now.
-    #[allow(clippy::unused_async)]
-    pub(crate) async fn new(
+    pub(crate) fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
         machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
-        compact: Option<Compactor<K, V, T, D>>,
         blob: Arc<dyn Blob + Send + Sync>,
-        isolated_runtime: Arc<IsolatedRuntime>,
         writer_id: WriterId,
         purpose: &str,
         schemas: Schemas<K, V>,
-        upper: Antichain<T>,
     ) -> Self {
+        let isolated_runtime = Arc::clone(&machine.isolated_runtime);
+        let compact = cfg.compaction_enabled.then(|| {
+            Compactor::new(
+                cfg.clone(),
+                Arc::clone(&metrics),
+                Arc::clone(&isolated_runtime),
+                writer_id.clone(),
+                schemas.clone(),
+                gc.clone(),
+            )
+        });
         let debug_state = HandleDebugState {
             hostname: cfg.hostname.to_owned(),
             purpose: purpose.to_owned(),
         };
+        let upper = machine.applier.clone_upper();
         WriteHandle {
             cfg,
             metrics,
@@ -168,6 +176,21 @@ where
         }
     }
 
+    /// Creates a [WriteHandle] for the same shard from an existing
+    /// [ReadHandle].
+    pub fn from_read(read: &ReadHandle<K, V, T, D>, purpose: &str) -> Self {
+        Self::new(
+            read.cfg.clone(),
+            Arc::clone(&read.metrics),
+            read.machine.clone(),
+            read.gc.clone(),
+            Arc::clone(&read.blob),
+            WriterId::new(),
+            purpose,
+            read.schemas.clone(),
+        )
+    }
+
     /// This handle's shard id.
     pub fn shard_id(&self) -> ShardId {
         self.machine.shard_id()
@@ -175,9 +198,21 @@ where
 
     /// A cached version of the shard-global `upper` frontier.
     ///
-    /// This will always be less or equal to the shard-global `upper`.
+    /// This is the most recent upper discovered by this handle. It is
+    /// potentially more stale than [Self::shared_upper] but is lock-free and
+    /// allocation-free. This will always be less or equal to the shard-global
+    /// `upper`.
     pub fn upper(&self) -> &Antichain<T> {
         &self.upper
+    }
+
+    /// A less-stale cached version of the shard-global `upper` frontier.
+    ///
+    /// This is the most recently known upper for this shard process-wide, but
+    /// unlike [Self::upper] it requires a mutex and a clone. This will always be
+    /// less or equal to the shard-global `upper`.
+    pub fn shared_upper(&self) -> Antichain<T> {
+        self.machine.applier.clone_upper()
     }
 
     /// Fetches and returns a recent shard-global `upper`. Importantly, this operation is not
@@ -501,6 +536,11 @@ where
     /// to append it to this shard.
     pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
         let ret = Batch {
+            batch_delete_enabled: self
+                .cfg
+                .dynamic
+                .enabled(PersistFeatureFlag::BATCH_DELETE_ENABLED),
+            metrics: Arc::clone(&self.metrics),
             shard_id: batch
                 .shard_id
                 .into_rust()
@@ -510,7 +550,7 @@ where
                 .batch
                 .into_rust_if_some("ProtoBatch::batch")
                 .expect("valid transmittable batch"),
-            _blob: Arc::clone(&self.blob),
+            blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
         };
         assert_eq!(ret.shard_id, self.machine.shard_id());
@@ -582,6 +622,19 @@ where
         }
 
         builder.finish(upper.clone()).await
+    }
+
+    /// Blocks until the given `frontier` is less than the upper of the shard.
+    pub async fn wait_for_upper_past(&mut self, frontier: &Antichain<T>) {
+        let mut watch = self.machine.applier.watch();
+        let batch = self
+            .machine
+            .next_listen_batch(frontier, &mut watch, None, None)
+            .await;
+        if PartialOrder::less_than(&self.upper, batch.desc.upper()) {
+            self.upper.clone_from(batch.desc.upper());
+        }
+        assert!(PartialOrder::less_than(frontier, &self.upper));
     }
 
     /// Politely expires this writer, releasing any associated state.
@@ -718,6 +771,7 @@ mod tests {
     use std::str::FromStr;
 
     use differential_dataflow::consolidation::consolidate_updates;
+    use futures_util::FutureExt;
     use mz_ore::collections::CollectionExt;
     use serde_json::json;
 
@@ -877,5 +931,39 @@ mod tests {
         let mut actual = read.expect_snapshot_and_fetch(3).await;
         consolidate_updates(&mut actual);
         assert_eq!(actual, all_ok(&expected, 3));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn wait_for_upper_past() {
+        let client = new_test_client().await;
+        let (mut write, _) = client.expect_open::<(), (), u64, i64>(ShardId::new()).await;
+        let five = Antichain::from_elem(5);
+
+        // Upper is not past 5.
+        assert_eq!(write.wait_for_upper_past(&five).now_or_never(), None);
+
+        // Upper is still not past 5.
+        write
+            .expect_compare_and_append(&[(((), ()), 1, 1)], 0, 5)
+            .await;
+        assert_eq!(write.wait_for_upper_past(&five).now_or_never(), None);
+
+        // Upper is past 5.
+        write
+            .expect_compare_and_append(&[(((), ()), 5, 1)], 5, 7)
+            .await;
+        assert_eq!(write.wait_for_upper_past(&five).now_or_never(), Some(()));
+        assert_eq!(write.upper(), &Antichain::from_elem(7));
+
+        // Waiting for previous uppers does not regress the handle's cached
+        // upper.
+        assert_eq!(
+            write
+                .wait_for_upper_past(&Antichain::from_elem(2))
+                .now_or_never(),
+            Some(())
+        );
+        assert_eq!(write.upper(), &Antichain::from_elem(7));
     }
 }

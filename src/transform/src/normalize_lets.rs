@@ -60,8 +60,8 @@ impl NormalizeLets {
 
 impl crate::Transform for NormalizeLets {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "normalize_lets")
     )]
@@ -301,6 +301,7 @@ mod support {
                 MirRelationExpr::Get {
                     id: Id::Local(id),
                     typ,
+                    access_strategy: _,
                 } => {
                     if let Some(new_type) = types.get(id) {
                         // Assert that the column length has not changed.

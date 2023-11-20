@@ -20,8 +20,8 @@ pub struct Negate;
 
 impl crate::Transform for Negate {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "negate_fusion")
     )]

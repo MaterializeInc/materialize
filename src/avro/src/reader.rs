@@ -624,7 +624,7 @@ impl<'a> SchemaResolver<'a> {
                 SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(r_inner)),
             ) => {
                 let w2r = self.writer_to_reader_names.clone();
-                // permutation[1] is Some((j, val)) if the i'th writer variant
+                // permutation[1] is Some((j, val)) iff the i'th writer variant
                 // _matches_ the j'th reader variant
                 // (i.e., it is the same primitive type, or the same kind of named type and has the same name, or a decimal with the same parameters)
                 // and successfully _resolves_ against it,

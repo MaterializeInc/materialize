@@ -425,7 +425,7 @@ SELECT '1'::varchar::smallint
 query error CAST does not support casting from time to smallint
 SELECT '01:02:03'::time::smallint
 
-query error CAST does not support casting from timestamp to smallint
+query error CAST does not support casting from timestamp without time zone to smallint
 SELECT '2002 03-04'::timestamp::smallint
 
 query error CAST does not support casting from timestamp with time zone to smallint
@@ -501,7 +501,7 @@ SELECT '1'::varchar::bigint
 query error CAST does not support casting from time to bigint
 SELECT '01:02:03'::time::bigint
 
-query error CAST does not support casting from timestamp to bigint
+query error CAST does not support casting from timestamp without time zone to bigint
 SELECT '2002 03-04'::timestamp::bigint
 
 query error CAST does not support casting from timestamp with time zone to bigint
@@ -561,7 +561,7 @@ true
 query error CAST does not support casting from time to boolean
 SELECT '01:02:03'::time::boolean
 
-query error CAST does not support casting from timestamp to boolean
+query error CAST does not support casting from timestamp without time zone to boolean
 SELECT '2002 03-04'::timestamp::boolean
 
 query error CAST does not support casting from timestamp with time zone to boolean
@@ -692,7 +692,7 @@ SELECT '1'::varchar::numeric
 query error CAST does not support casting from time to numeric
 SELECT '01:02:03'::time::numeric
 
-query error CAST does not support casting from timestamp to numeric
+query error CAST does not support casting from timestamp without time zone to numeric
 SELECT '2002 03-04'::timestamp::numeric
 
 query error CAST does not support casting from timestamp with time zone to numeric
@@ -763,7 +763,7 @@ SELECT '1'::varchar::double
 query error CAST does not support casting from time to double precision
 SELECT '01:02:03'::time::double
 
-query error CAST does not support casting from timestamp to double precision
+query error CAST does not support casting from timestamp without time zone to double precision
 SELECT '2002 03-04'::timestamp::double
 
 query error CAST does not support casting from timestamp with time zone to double precision
@@ -834,7 +834,7 @@ SELECT '1'::varchar::real
 query error CAST does not support casting from time to real
 SELECT '01:02:03'::time::real
 
-query error CAST does not support casting from timestamp to real
+query error CAST does not support casting from timestamp without time zone to real
 SELECT '2002 03-04'::timestamp::real
 
 query error CAST does not support casting from timestamp with time zone to real
@@ -902,7 +902,7 @@ SELECT '1'::varchar::integer
 query error CAST does not support casting from time to integer
 SELECT '01:02:03'::time::integer
 
-query error CAST does not support casting from timestamp to integer
+query error CAST does not support casting from timestamp without time zone to integer
 SELECT '2002 03-04'::timestamp::integer
 
 query error CAST does not support casting from timestamp with time zone to integer
@@ -960,7 +960,7 @@ SELECT '01:02:03'::time::interval;
 ----
 01:02:03
 
-query error CAST does not support casting from timestamp to interval
+query error CAST does not support casting from timestamp without time zone to interval
 SELECT '2002 03-04'::timestamp::interval
 
 query error CAST does not support casting from timestamp with time zone to interval
@@ -1004,7 +1004,7 @@ SELECT '1'::jsonb::jsonb;
 query error CAST does not support casting from time to jsonb
 SELECT '01:02:03'::time::jsonb
 
-query error CAST does not support casting from timestamp to jsonb
+query error CAST does not support casting from timestamp without time zone to jsonb
 SELECT '2002 03-04'::timestamp::jsonb
 
 query error CAST does not support casting from timestamp with time zone to jsonb
@@ -1608,3 +1608,13 @@ SELECT pg_typeof(lag(f1, 1::int, 0::int) OVER (PARTITION BY f2 ORDER BY f3 DESC,
 FROM t
 ----
 numeric
+
+# implicit timestamp_to_timestamptz cast
+query T
+values ('2023-01-01T00:00:00.666'::timestamp(6)) union all values ('2023-01-01T00:00:00.666666'::timestamptz(3));
+----
+2023-01-01 00:00:00.666+00
+2023-01-01 00:00:00.667+00
+
+query error numeric field overflow
+SELECT '1e-307'::float8::numeric
