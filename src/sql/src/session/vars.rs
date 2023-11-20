@@ -2008,13 +2008,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unified_optimizer_api,
-        desc: "use the new unified optimizer API in bootstrap() and coordinator methods",
-        default: true,
-        internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_assert_not_null,
         desc: "ASSERT NOT NULL for materialized views",
         default: false,

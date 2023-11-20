@@ -383,59 +383,6 @@ impl FastPathPlan {
 }
 
 impl crate::coord::Coordinator {
-    /// Creates a [`PeekPlan`] for the given `dataflow`.
-    ///
-    /// The result will be a [`PeekPlan::FastPath`] plan iff the [`create_fast_path_plan`]
-    /// call succeeds, or a [`PeekPlan::SlowPath`] plan wrapping a [`PeekDataflowPlan`]
-    /// otherwise.
-    pub(crate) fn create_peek_plan(
-        &self,
-        mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-        view_id: GlobalId,
-        compute_instance: ComputeInstanceId,
-        index_id: GlobalId,
-        key: Vec<MirScalarExpr>,
-        permutation: BTreeMap<usize, usize>,
-        thinned_arity: usize,
-        finishing: &RowSetFinishing,
-    ) -> Result<PeekPlan, AdapterError> {
-        // try to produce a `FastPathPlan`
-        let fast_path_plan = create_fast_path_plan(
-            &mut dataflow,
-            view_id,
-            Some(finishing),
-            self.catalog.system_config().persist_fast_path_limit(),
-        )?;
-        // derive a PeekPlan from the optional FastPathPlan
-        let peek_plan = fast_path_plan.map_or_else(
-            // finalize the dataflow and produce a PeekPlan::SlowPath as a default
-            || {
-                // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
-                // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
-                if let Some(as_of) = dataflow.as_of.as_ref() {
-                    if !as_of.is_empty() {
-                        if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1))
-                        {
-                            dataflow.until = timely::progress::Antichain::from_elem(next);
-                        }
-                    }
-                }
-                let desc = self.finalize_dataflow(dataflow, compute_instance)?;
-
-                Ok::<_, AdapterError>(PeekPlan::SlowPath(PeekDataflowPlan {
-                    desc,
-                    id: index_id,
-                    key,
-                    permutation,
-                    thinned_arity,
-                }))
-            },
-            // produce a PeekPlan::FastPath if possible
-            |plan| Ok::<_, AdapterError>(PeekPlan::FastPath(plan)),
-        )?;
-        Ok(peek_plan)
-    }
-
     /// Implements a peek plan produced by `create_plan` above.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn implement_peek_plan(

@@ -17,7 +17,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
-use differential_dataflow::lattice::Lattice;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_compute_client::controller::error::InstanceMissing;
@@ -35,17 +34,14 @@ use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::{CatalogRole, SessionCatalog};
 use mz_sql::rbac;
 use mz_transform::dataflow::DataflowMetainfo;
-use timely::progress::Antichain;
-use timely::PartialOrder;
 use tracing::warn;
 
 use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::{viewable_variables, ResultExt};
@@ -168,99 +164,6 @@ impl Coordinator {
             Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
         )
         .await;
-    }
-
-    #[deprecated = "This is being replaced by ship_dataflow_new (see #20569)."]
-    /// Finalizes a dataflow and then broadcasts it to all workers.
-    pub(crate) async fn ship_dataflow(
-        &mut self,
-        mut dataflow: DataflowDesc,
-        instance: ComputeInstanceId,
-    ) -> Result<DataflowDescription<Plan>, AdapterError> {
-        // If the only outputs of the dataflow are sinks, we might
-        // be able to turn off the computation early, if they all
-        // have non-trivial `up_to`s.
-        if dataflow.index_exports.is_empty() {
-            dataflow.until = Antichain::from_elem(Timestamp::MIN);
-            for (_, sink) in &dataflow.sink_exports {
-                dataflow.until.join_assign(&sink.up_to);
-            }
-        }
-
-        let plan = self.finalize_dataflow(dataflow, instance)?;
-
-        self.controller
-            .active_compute()
-            .create_dataflow(instance, plan.clone())
-            .unwrap_or_terminate("dataflow creation cannot fail");
-
-        self.initialize_compute_read_policies(
-            plan.export_ids().collect(),
-            instance,
-            Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-        )
-        .await;
-
-        Ok(plan)
-    }
-
-    /// Finalizes a dataflow.
-    ///
-    /// Finalization includes optimization, but also validation of various
-    /// invariants such as ensuring that the `as_of` frontier is in advance of
-    /// the various `since` frontiers of participating data inputs.
-    ///
-    /// In particular, there are requirements on the `as_of` field for the dataflow
-    /// and the `since` frontiers of created arrangements, as a function of the `since`
-    /// frontiers of dataflow inputs (sources and imported arrangements).
-    ///
-    /// Additionally, this method requires that the `until` field of the dataflow
-    /// has been set, so that any plan improvements based on its difference to `as_of`
-    /// can be carried out.
-    ///
-    /// # Panics
-    ///
-    /// Panics if as_of is < the `since` frontiers.
-    pub(crate) fn finalize_dataflow(
-        &self,
-        mut dataflow: DataflowDesc,
-        compute_instance: ComputeInstanceId,
-    ) -> Result<DataflowDescription<mz_compute_types::plan::Plan>, AdapterError> {
-        let id_bundle = dataflow_import_id_bundle(&dataflow, compute_instance);
-        let since = self.least_valid_read(&id_bundle);
-
-        // Ensure that the dataflow's `as_of` is at least `since`.
-        if let Some(as_of) = &mut dataflow.as_of {
-            // It should not be possible to request an invalid time. SINK doesn't support
-            // AS OF. Subscribe and Peek check that their AS OF is >= since.
-            assert!(
-                PartialOrder::less_equal(&since, as_of),
-                "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
-                dataflow.debug_name,
-                as_of,
-                since
-            );
-        } else {
-            // Bind the since frontier to the dataflow description.
-            dataflow.set_as_of(since);
-        }
-
-        // Ensure all expressions are normalized before finalizing.
-        for build in dataflow.objects_to_build.iter_mut() {
-            mz_transform::normalize_lets::normalize_lets(&mut build.plan.0)
-                .unwrap_or_terminate("Normalize failed; unrecoverable error");
-        }
-
-        mz_compute_types::plan::Plan::finalize_dataflow(
-            dataflow,
-            self.catalog()
-                .system_config()
-                .enable_consolidate_after_union_negate(),
-            self.catalog()
-                .system_config()
-                .enable_specialized_arrangements(),
-        )
-        .map_err(AdapterError::Internal)
     }
 }
 

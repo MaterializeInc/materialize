@@ -61,7 +61,6 @@ mod alter_set_cluster;
 mod cluster;
 mod inner;
 mod linked_cluster;
-pub(super) mod old_optimizer_api;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would
@@ -126,10 +125,6 @@ impl Coordinator {
                 return ctx.retire(Err(e.into()));
             }
 
-            let enable_unified_optimizer_api = self
-                .catalog()
-                .system_config()
-                .enable_unified_optimizer_api();
             match plan {
                 Plan::CreateSource(plan) => {
                     let source_id =
@@ -304,20 +299,10 @@ impl Coordinator {
                     self.sequence_peek(ctx, plan, target_cluster).await;
                 }
                 Plan::Subscribe(plan) => {
-                    if enable_unified_optimizer_api {
-                        let result = self
-                            .sequence_subscribe(&mut ctx, plan, target_cluster)
-                            .await;
-                        ctx.retire(result);
-                    } else {
-                        // Allow while the introduction of the new optimizer API in
-                        // #20569 is in progress.
-                        #[allow(deprecated)]
-                        let result = self
-                            .sequence_subscribe_deprecated(&mut ctx, plan, target_cluster)
-                            .await;
-                        ctx.retire(result);
-                    }
+                    let result = self
+                        .sequence_subscribe(&mut ctx, plan, target_cluster)
+                        .await;
+                    ctx.retire(result);
                 }
                 Plan::SideEffectingFunc(plan) => {
                     ctx.retire(self.sequence_side_effecting_func(plan));
