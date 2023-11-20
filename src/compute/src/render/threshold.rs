@@ -38,7 +38,7 @@ fn threshold_arrangement<G, K, V, T, R, L>(
 ) -> Arranged<G, TraceRowHandle<K, V, G::Timestamp, Diff>>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
     T: Timestamp + Lattice,
     K: Columnation + Data,
     V: Columnation + Data,
@@ -63,7 +63,7 @@ fn dispatch_threshold_arrangement_local<G, L>(
 ) -> SpecializedArrangement<G>
 where
     G: Scope,
-    G::Timestamp: Lattice,
+    G::Timestamp: Lattice + Columnation,
     L: Fn(&Diff) -> bool + 'static,
 {
     match oks {
@@ -87,8 +87,8 @@ fn dispatch_threshold_arrangement_trace<G, T, L>(
 ) -> SpecializedArrangement<G>
 where
     G: Scope,
-    T: Timestamp + Lattice,
-    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
     L: Fn(&Diff) -> bool + 'static,
 {
     match oks {
@@ -114,8 +114,8 @@ pub fn build_threshold_basic<G, T>(
 ) -> CollectionBundle<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
+    T: Timestamp + Lattice + Columnation,
 {
     let arrangement = input
         .arrangement(&key)
@@ -139,8 +139,8 @@ where
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
+    T: Timestamp + Lattice + Columnation,
 {
     pub(crate) fn render_threshold(
         &self,

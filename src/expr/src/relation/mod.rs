@@ -32,6 +32,7 @@ use mz_repr::explain::{
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use timely::container::columnation::{Columnation, CopyRegion};
 
 use crate::explain::HumanizedExpr;
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
@@ -2238,7 +2239,18 @@ impl VisitChildren<Self> for MirRelationExpr {
 
 /// Specification for an ordering by a column.
 #[derive(
-    Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
 )]
 pub struct ColumnOrder {
     /// The column index.
@@ -2249,6 +2261,10 @@ pub struct ColumnOrder {
     /// Whether to sort nulls last.
     #[serde(default)]
     pub nulls_last: bool,
+}
+
+impl Columnation for ColumnOrder {
+    type InnerRegion = CopyRegion<Self>;
 }
 
 impl RustType<ProtoColumnOrder> for ColumnOrder {

@@ -365,8 +365,8 @@ fn dispatch_build_halfjoin_trace<G, T, CF>(
 )
 where
     G: Scope,
-    T: Timestamp + Lattice,
-    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
@@ -576,8 +576,8 @@ fn dispatch_build_update_stream_trace<G, T>(
 ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
-    T: Timestamp + Lattice,
-    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
 {
     match trace {
         SpecializedArrangementImport::RowUnit(inner) => build_update_stream(

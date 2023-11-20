@@ -269,11 +269,11 @@ where
 impl<G, K, V, T, R> ArrangementSize for Arranged<G, TraceAgent<RowSpine<K, V, T, R>>>
 where
     G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord,
+    G::Timestamp: Lattice + Ord + Columnation,
     K: Data + Columnation,
     V: Data + Columnation,
     T: Lattice + Timestamp,
-    R: Semigroup,
+    R: Semigroup + Columnation,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
@@ -300,8 +300,8 @@ where
     G: Scope<Timestamp = T>,
     G::Timestamp: Lattice + Ord,
     K: Data + Columnation,
-    T: Lattice + Timestamp,
-    R: Semigroup,
+    T: Lattice + Timestamp + Columnation,
+    R: Semigroup + Columnation,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {

@@ -26,6 +26,7 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::{DatumVec, Diff, Row, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
@@ -381,7 +382,7 @@ fn build_topk_negated_stage<G, R>(
 ) -> Collection<G, ((Row, u64), R), Diff>
 where
     G: Scope,
-    G::Timestamp: Lattice,
+    G::Timestamp: Lattice + Columnation,
     R: MaybeValidatingRow<Row, Row>,
 {
     // We only want to arrange parts of the input that are not part of the actual output
@@ -645,6 +646,7 @@ pub mod monoids {
     use mz_expr::ColumnOrder;
     use mz_repr::{DatumVec, Diff, Row};
     use serde::{Deserialize, Serialize};
+    use timely::container::columnation::{Columnation, Region};
 
     /// A monoid containing a row and an ordering.
     #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
@@ -694,6 +696,60 @@ pub mod monoids {
 
         fn is_zero(&self) -> bool {
             false
+        }
+    }
+
+    impl Columnation for Top1Monoid {
+        type InnerRegion = Top1MonoidRegion;
+    }
+
+    #[derive(Default)]
+    pub struct Top1MonoidRegion {
+        row_region: <Row as Columnation>::InnerRegion,
+        order_key_region: <Vec<ColumnOrder> as Columnation>::InnerRegion,
+    }
+
+    impl Region for Top1MonoidRegion {
+        type Item = Top1Monoid;
+
+        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+            let row = self.row_region.copy(&item.row);
+            let order_key = self.order_key_region.copy(&item.order_key);
+            Self::Item { row, order_key }
+        }
+
+        fn clear(&mut self) {
+            self.row_region.clear();
+            self.order_key_region.clear();
+        }
+
+        fn reserve_items<'a, I>(&mut self, items1: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            let items2 = items1.clone();
+            self.row_region
+                .reserve_items(items1.into_iter().map(|s| &s.row));
+            self.order_key_region
+                .reserve_items(items2.into_iter().map(|s| &s.order_key));
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions1: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            let regions2 = regions1.clone();
+            self.row_region
+                .reserve_regions(regions1.into_iter().map(|s| &s.row_region));
+            self.order_key_region
+                .reserve_regions(regions2.into_iter().map(|s| &s.order_key_region));
+        }
+
+        fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
+            self.row_region.heap_size(&mut callback);
+            self.order_key_region.heap_size(callback);
         }
     }
 
