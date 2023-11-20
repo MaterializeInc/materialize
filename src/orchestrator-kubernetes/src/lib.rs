@@ -1035,6 +1035,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 image: Some(image),
                 image_pull_policy: Some(self.config.image_pull_policy.to_string()),
                 resources: Some(ResourceRequirements {
+                    claims: None,
                     // Set both limits and requests to the same values, to ensure a
                     // `Guaranteed` QoS class for the pod.
                     limits: Some(limits.clone()),
@@ -1224,6 +1225,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                             .collect(),
                     ),
                     resources: Some(ResourceRequirements {
+                        claims: None,
                         // Set both limits and requests to the same values, to ensure a
                         // `Guaranteed` QoS class for the pod.
                         limits: Some(limits.clone()),
