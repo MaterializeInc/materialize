@@ -154,7 +154,6 @@ where
     /// see a different version of state, even if this Applier has not explicitly fetched and
     /// updated to the latest state. Successive calls will always return values such that
     /// `PartialOrder::less_equal(call1, call2)` hold true.
-    #[cfg(test)]
     pub fn since(&self) -> Antichain<T> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {

@@ -69,6 +69,13 @@ pub enum InvalidUsage<T> {
         /// The shard of the handle
         handle_shard: ShardId,
     },
+    /// Attempted to finalize a shard without advancing frontiers.
+    FinalizationError {
+        /// The current since of the shard.
+        since: Antichain<T>,
+        /// The current upper of the shard.
+        upper: Antichain<T>,
+    },
     /// The requested codecs don't match the actual ones in durable storage.
     CodecMismatch(Box<CodecMismatch>),
 }
@@ -110,6 +117,13 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
                 batch_shard,
                 handle_shard,
             } => write!(f, "batch was from {} not {}", batch_shard, handle_shard),
+            InvalidUsage::FinalizationError { since, upper } => {
+                write!(
+                    f,
+                    "finalized without fully advancing since {since:?} and upper {upper:?}"
+                )
+            }
+
             InvalidUsage::CodecMismatch(err) => std::fmt::Display::fmt(err, f),
         }
     }
