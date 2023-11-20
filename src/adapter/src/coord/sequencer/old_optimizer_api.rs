@@ -499,7 +499,11 @@ impl Coordinator {
     ) -> Result<PeekStageTimestampDeprecated, AdapterError> {
         let optimizer = Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
         let source = optimizer.optimize(source)?;
-        let mut builder = DataflowBuilder::new(catalog, compute);
+        let mut builder = DataflowBuilder::new(
+            catalog,
+            compute,
+            catalog.system_config().enable_eager_delta_joins(),
+        );
 
         // We create a dataflow and optimize it, to determine if we can avoid building it.
         // This can happen if the result optimizes to a constant, or to a `Get` expression
@@ -540,7 +544,7 @@ impl Coordinator {
             &mut dataflow,
             &builder,
             &*stats,
-            session.vars().enable_eager_delta_joins(),
+            catalog.system_config().enable_eager_delta_joins(),
         )?;
 
         Ok(PeekStageTimestampDeprecated {
@@ -1071,7 +1075,7 @@ impl Coordinator {
                 &mut df,
                 &self.index_oracle(target_cluster_id),
                 stats.as_ref(),
-                session.vars().enable_eager_delta_joins(),
+                self.catalog().system_config().enable_eager_delta_joins(),
             )?;
 
             Ok::<_, AdapterError>((df, df_metainfo))

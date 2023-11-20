@@ -1483,6 +1483,14 @@ pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+pub const ENABLE_EAGER_DELTA_JOINS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_eager_delta_joins"),
+    value: &false,
+    description:
+        "Plan delta joins when it would require no more arrangements than a differential join.",
+    internal: false,
+};
+
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -2070,13 +2078,6 @@ feature_flags!(
         desc: "CREATE CONNECTION ... TO AWS",
         default: &true, // will set to false once we verify that nobody's using this
         internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
-        name: enable_eager_delta_joins,
-        desc: "Plan delta joins when it would require no more arrangements than a differential join.",
-        default: &false,
-        internal: false,
         enable_for_item_parsing: false,
     },
 );
@@ -2831,7 +2832,8 @@ impl SystemVars {
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
-            .with_var(&ENABLE_COLUMNATION_LGALLOC);
+            .with_var(&ENABLE_COLUMNATION_LGALLOC)
+            .with_var(&ENABLE_EAGER_DELTA_JOINS);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3610,6 +3612,11 @@ impl SystemVars {
     /// Returns the `enable_columnation_lgalloc` configuration parameter.
     pub fn enable_columnation_lgalloc(&self) -> bool {
         *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
+    }
+
+    /// Returns the `enable_eager_delta_joins` configuration parameter.
+    pub fn enable_eager_delta_joins(&self) -> bool {
+        *self.expect_value(&ENABLE_EAGER_DELTA_JOINS)
     }
 }
 
@@ -5186,6 +5193,7 @@ pub fn is_compute_config_var(name: &str) -> bool {
         || name == ENABLE_JEMALLOC_PROFILING.name()
         || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
         || name == ENABLE_COLUMNATION_LGALLOC.name()
+        || name == ENABLE_EAGER_DELTA_JOINS.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
 }
