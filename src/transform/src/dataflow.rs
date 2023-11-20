@@ -47,6 +47,7 @@ pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
     stats: &dyn StatisticsOracle,
+    eager_delta_joins: bool,
 ) -> Result<DataflowMetainfo, TransformError> {
     let ctx = crate::typecheck::empty_context();
     let mut dataflow_metainfo = DataflowMetainfo::default();
@@ -59,6 +60,7 @@ pub fn optimize_dataflow(
         dataflow,
         indexes,
         stats,
+        eager_delta_joins,
         &Optimizer::logical_optimizer(&ctx),
         &mut dataflow_metainfo,
     )?;
@@ -78,6 +80,7 @@ pub fn optimize_dataflow(
         dataflow,
         indexes,
         stats,
+        eager_delta_joins,
         &Optimizer::logical_cleanup_pass(&ctx, false),
         &mut dataflow_metainfo,
     )?;
@@ -87,6 +90,7 @@ pub fn optimize_dataflow(
         dataflow,
         indexes,
         stats,
+        eager_delta_joins,
         &Optimizer::physical_optimizer(&ctx),
         &mut dataflow_metainfo,
     )?;
@@ -217,6 +221,7 @@ fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
     stats: &dyn StatisticsOracle,
+    eager_delta_joins: bool,
     optimizer: &Optimizer,
     dataflow_metainfo: &mut DataflowMetainfo,
 ) -> Result<(), TransformError> {
@@ -228,10 +233,11 @@ fn optimize_dataflow_relations(
         // Re-run all optimizations on the composite views.
         optimizer.transform(
             object.plan.as_inner_mut(),
-            &mut TransformCtx::with_id_and_stats_and_metainfo(
+            &mut TransformCtx::with_config_and_metainfo(
                 indexes,
                 stats,
                 &object.id,
+                eager_delta_joins,
                 dataflow_metainfo,
             ),
         )?;

@@ -67,7 +67,12 @@ impl crate::Transform for JoinImplementation {
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        let result = self.action_recursive(relation, &mut IndexMap::new(ctx.indexes), ctx.stats);
+        let result = self.action_recursive(
+            relation,
+            &mut IndexMap::new(ctx.indexes),
+            ctx.stats,
+            ctx.enable_eager_delta_joins,
+        );
         mz_repr::explain::trace_plan(&*relation);
         result
     }
@@ -83,10 +88,11 @@ impl JoinImplementation {
         relation: &mut MirRelationExpr,
         indexes: &mut IndexMap,
         stats: &dyn StatisticsOracle,
+        eager_delta_joins: bool,
     ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
             if let MirRelationExpr::Let { id, value, body } = relation {
-                self.action_recursive(value, indexes, stats)?;
+                self.action_recursive(value, indexes, stats, eager_delta_joins)?;
                 match &**value {
                     MirRelationExpr::ArrangeBy { keys, .. } => {
                         for key in keys {
@@ -101,14 +107,16 @@ impl JoinImplementation {
                     }
                     _ => {}
                 }
-                self.action_recursive(body, indexes, stats)?;
+                self.action_recursive(body, indexes, stats, eager_delta_joins)?;
                 indexes.remove_local(*id);
                 Ok(())
             } else {
                 let (mfp, mfp_input) =
                     MapFilterProject::extract_non_errors_from_expr_ref_mut(relation);
-                mfp_input.try_visit_mut_children(|e| self.action_recursive(e, indexes, stats))?;
-                self.action(mfp_input, mfp, indexes, stats)?;
+                mfp_input.try_visit_mut_children(|e| {
+                    self.action_recursive(e, indexes, stats, eager_delta_joins)
+                })?;
+                self.action(mfp_input, mfp, indexes, stats, eager_delta_joins)?;
                 Ok(())
             }
         })
@@ -121,6 +129,7 @@ impl JoinImplementation {
         mfp_above: MapFilterProject,
         indexes: &IndexMap,
         stats: &dyn StatisticsOracle,
+        eager_delta_joins: bool,
     ) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
             inputs,
@@ -411,6 +420,7 @@ impl JoinImplementation {
                     &unique_keys,
                     &cardinalities,
                     &filters,
+                    eager_delta_joins,
                 )
             };
             let differential_plan = || {
@@ -495,6 +505,7 @@ mod index_map {
 
 mod delta_queries {
 
+    use itertools::Itertools;
     use mz_expr::{
         FilterCharacteristics, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr,
     };
@@ -512,6 +523,7 @@ mod delta_queries {
         unique_keys: &[Vec<Vec<usize>>],
         cardinalities: &[Option<usize>],
         filters: &[FilterCharacteristics],
+        eager_delta_joins: bool,
     ) -> Result<MirRelationExpr, TransformError> {
         let mut new_join = join.clone();
 
@@ -557,14 +569,45 @@ mod delta_queries {
             // A viable delta query requires that, for every order,
             // there is an arrangement for every input except for
             // the starting one.
-            if !orders
+            let arrangement_counts = orders
                 .iter()
-                .all(|o| o.iter().skip(1).all(|(c, _, _)| c.arranged))
-            {
-                return Err(TransformError::Internal(String::from(
-                    "delta plan not viable",
-                )));
+                .map(|o| o.iter().skip(1).filter(|(c, _, _)| c.arranged).count())
+                .collect::<Vec<_>>();
+            let expected_number_of_arrangements = inputs.len() - 1;
+            let missing_arrangements: std::collections::BTreeSet<usize> = orders
+                .iter()
+                .flat_map(|o| {
+                    o.iter()
+                        .skip(1)
+                        .filter_map(|(c, _, input)| if c.arranged { None } else { Some(*input) })
+                })
+                .collect();
+            let insufficiently_arranged_orders = missing_arrangements.len();
+
+            if insufficiently_arranged_orders > 0 {
+                ::tracing::info!("{insufficiently_arranged_orders} orders out of {} have insufficient arrangements ({}; missing {} distinct arrangements: {})",
+                    inputs.len(),
+                    arrangement_counts
+                        .iter()
+                        .map(|count| format!("{}", expected_number_of_arrangements - count))
+                        .join(" "),
+                    missing_arrangements.len(),
+                    missing_arrangements.iter().map(|input| format!("%{input}")).join(" "));
+
+                // Differential joins need to arrange every intermediate result: #inputs - 1 such arrangements.
+                // Delta joins only arrange inputs... if we would have fewer net arrangements, delta will be a better deal.
+                if insufficiently_arranged_orders > expected_number_of_arrangements {
+                    return Err(TransformError::Internal(String::from(
+                        "delta plan not viable",
+                    )));
+                } else if !eager_delta_joins {
+                    return Err(TransformError::Internal(String::from(
+                        "delta plan viable but not used (eager delta joins disabled)",
+                    )));
+                }
             }
+
+            ::tracing::info!("using a delta join ({insufficiently_arranged_orders} new input arrangements) instead of a differential join ({expected_number_of_arrangements} intermediate arrangements)");
 
             // Convert the order information into specific (input, key, characteristics) information.
             let mut orders = orders

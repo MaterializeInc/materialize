@@ -159,6 +159,8 @@ pub struct TransformCtx<'a> {
     pub stats: &'a dyn StatisticsOracle,
     /// The global ID for this query (if it exists).
     pub global_id: Option<&'a GlobalId>,
+    /// Whether or not to eagerly apply delta joins.
+    pub enable_eager_delta_joins: bool,
     /// Transforms can use this field to communicate information outside the result plans.
     pub dataflow_metainfo: &'a mut DataflowMetainfo,
 }
@@ -170,22 +172,25 @@ impl<'a> TransformCtx<'a> {
             indexes: &EmptyIndexOracle,
             stats: &EmptyStatisticsOracle,
             global_id: None,
+            enable_eager_delta_joins: false,
             dataflow_metainfo,
         }
     }
 
     /// Generates a `TransformArgs` instance for the given `IndexOracle` and `StatisticsOracle` with
     /// a `GlobalId`
-    pub fn with_id_and_stats_and_metainfo(
+    pub fn with_config_and_metainfo(
         indexes: &'a dyn IndexOracle,
         stats: &'a dyn StatisticsOracle,
         global_id: &'a GlobalId,
+        eager_delta_joins: bool,
         dataflow_metainfo: &'a mut DataflowMetainfo,
     ) -> Self {
         Self {
             indexes,
             stats,
             global_id: Some(global_id),
+            enable_eager_delta_joins: eager_delta_joins,
             dataflow_metainfo,
         }
     }
