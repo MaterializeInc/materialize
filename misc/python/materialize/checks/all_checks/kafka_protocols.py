@@ -48,7 +48,7 @@ class KafkaProtocols(Check):
                 > CREATE SECRET kafka_protocols_password AS 'sekurity'
 
                 > CREATE CONNECTION kafka_plaintext TO KAFKA (
-                    BROKER 'kafka:9093' USING SSH TUNNEL thancred,
+                    BROKER 'kafka:9093' USING SSH TUNNEL ssh_tunnel_0,
                     SSL CERTIFICATE AUTHORITY '${ca-crt}'
                   )
 
@@ -60,7 +60,7 @@ class KafkaProtocols(Check):
                   )
 
                 > CREATE CONNECTION kafka_scram_sha_512 TO KAFKA (
-                    BROKER 'kafka:9095' USING SSH TUNNEL thancred,
+                    BROKER 'kafka:9095' USING SSH TUNNEL ssh_tunnel_0,
                     SASL MECHANISMS 'SCRAM-SHA-512',
                     SASL USERNAME 'materialize',
                     SASL PASSWORD SECRET kafka_protocols_password,
@@ -76,7 +76,7 @@ class KafkaProtocols(Check):
                   )
 
                 > CREATE CONNECTION kafka_sasl TO KAFKA (
-                    BROKER 'kafka:9097' USING SSH TUNNEL thancred,
+                    BROKER 'kafka:9097' USING SSH TUNNEL ssh_tunnel_0,
                     SASL MECHANISMS 'PLAIN',
                     SASL USERNAME 'materialize',
                     SASL PASSWORD SECRET kafka_protocols_password,
