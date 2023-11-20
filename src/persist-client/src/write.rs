@@ -216,7 +216,7 @@ where
     }
 
     /// Fetches and returns a recent shard-global `upper`. Importantly, this operation is
-    /// linearized with other write operations.
+    /// linearized with write operations.
     ///
     /// This requires fetching the latest state from consensus and is therefore a potentially
     /// expensive operation.
@@ -771,6 +771,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::mpsc;
 
+    use crate::cache::PersistClientCache;
     use differential_dataflow::consolidation::consolidate_updates;
     use futures_util::FutureExt;
     use mz_ore::collections::CollectionExt;
@@ -778,7 +779,7 @@ mod tests {
     use serde_json::json;
 
     use crate::tests::{all_ok, new_test_client};
-    use crate::ShardId;
+    use crate::{PersistLocation, ShardId};
 
     use super::*;
 
@@ -969,24 +970,32 @@ mod tests {
         assert_eq!(write.upper(), &Antichain::from_elem(7));
     }
 
-    #[mz_ore::test(tokio::test)]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn fetch_recent_upper_linearized() {
         type Timestamp = u64;
         let max_upper = 1000;
 
-        let client = new_test_client().await;
         let shard_id = ShardId::new();
-        let (mut upper_writer, _) = client.expect_open::<(), (), Timestamp, i64>(shard_id).await;
-        let (mut upper_reader, _) = client.expect_open::<(), (), Timestamp, i64>(shard_id).await;
-
+        let mut clients = PersistClientCache::new_no_metrics();
+        let upper_writer_client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
+        let (mut upper_writer, _) = upper_writer_client
+            .expect_open::<(), (), Timestamp, i64>(shard_id)
+            .await;
+        // Clear the state cache between each client to maximally disconnect
+        // them from each other.
+        clients.clear_state_cache();
+        let upper_reader_client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
+        let (mut upper_reader, _) = upper_reader_client
+            .expect_open::<(), (), Timestamp, i64>(shard_id)
+            .await;
         let (tx, rx) = mpsc::channel();
 
         let task = task::spawn(|| "upper-reader", async move {
             let mut upper = Timestamp::MIN;
 
             while upper < max_upper {
-                if let Ok(new_upper) = rx.try_recv() {
+                while let Ok(new_upper) = rx.try_recv() {
                     upper = new_upper;
                 }
 
