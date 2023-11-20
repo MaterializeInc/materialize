@@ -41,12 +41,12 @@ pub enum DurableCatalogError {
     Fence(String),
     /// The persisted catalog's version is too old for the current catalog to migrate.
     #[error(
-        "incompatible Catalog version {found_version}, minimum: {min_stash_version}, current: {stash_version}"
+        "incompatible Catalog version {found_version}, minimum: {min_catalog_version}, current: {catalog_version}"
     )]
     IncompatibleVersion {
         found_version: u64,
-        min_stash_version: u64,
-        stash_version: u64,
+        min_catalog_version: u64,
+        catalog_version: u64,
     },
     /// Catalog is uninitialized.
     #[error("uninitialized")]
@@ -104,8 +104,8 @@ impl From<StashError> for DurableCatalogError {
                 stash_version,
             } => DurableCatalogError::IncompatibleVersion {
                 found_version,
-                min_stash_version,
-                stash_version,
+                min_catalog_version: min_stash_version,
+                catalog_version: stash_version,
             },
             InternalStashError::Uninitialized => DurableCatalogError::Uninitialized,
             InternalStashError::StashNotWritable(msg) => DurableCatalogError::NotWritable(msg),
