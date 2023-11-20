@@ -77,14 +77,18 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::future::IntoFuture;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{env, fs, iter, thread};
+use std::{env, fs, iter};
 
 use anyhow::anyhow;
+use futures::future::{BoxFuture, LocalBoxFuture};
+use futures::Future;
 use headers::{Header, HeaderMapExt};
 use hyper::http::header::HeaderMap;
 use mz_controller::ControllerConfig;
@@ -93,7 +97,7 @@ use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
-use mz_ore::task::{self};
+use mz_ore::task;
 use mz_ore::tracing::{
     OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
     TracingHandle,
@@ -127,8 +131,8 @@ use regex::Regex;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
-use tokio_postgres::config::Host;
-use tokio_postgres::Client;
+use tokio_postgres::config::{Host, SslMode};
+use tokio_postgres::{AsyncMessage, Client};
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 use tracing::Level;
@@ -142,8 +146,9 @@ use crate::{CatalogConfig, FronteggAuthentication, WebSocketAuth, WebSocketRespo
 pub static KAFKA_ADDRS: Lazy<String> =
     Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
 
+/// Entry point for creating and configuring an `environmentd` test harness.
 #[derive(Clone)]
-pub struct Config {
+pub struct TestHarness {
     data_directory: Option<PathBuf>,
     tls: Option<TlsCertConfig>,
     frontegg: Option<FronteggAuthentication>,
@@ -168,9 +173,9 @@ pub struct Config {
     environment_id: EnvironmentId,
 }
 
-impl Default for Config {
-    fn default() -> Config {
-        Config {
+impl Default for TestHarness {
+    fn default() -> TestHarness {
+        TestHarness {
             data_directory: None,
             tls: None,
             frontegg: None,
@@ -203,7 +208,29 @@ impl Default for Config {
     }
 }
 
-impl Config {
+impl TestHarness {
+    /// Starts a test [`TestServer`], panicking if the server could not be started.
+    ///
+    /// For cases when startup might fail, see [`TestHarness::try_start`].
+    pub async fn start(self) -> TestServer {
+        self.try_start().await.expect("Failed to start test Server")
+    }
+
+    /// Starts a test [`TestServer`], returning an error if the server could not be started.
+    pub async fn try_start(self) -> Result<TestServer, anyhow::Error> {
+        let listeners = Listeners::new().await?;
+        listeners.serve(self).await
+    }
+
+    /// Starts a runtime and returns a [`TestServerWithRuntime`].
+    pub fn start_blocking(self) -> TestServerWithRuntime {
+        let runtime = Runtime::new().expect("failed to spawn runtime for test");
+        let runtime = Arc::new(runtime);
+        let server = runtime.block_on(self.start());
+
+        TestServerWithRuntime { runtime, server }
+    }
+
     pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
         self.data_directory = Some(data_directory.into());
         self
@@ -309,18 +336,16 @@ impl Config {
 }
 
 pub struct Listeners {
-    pub runtime: Arc<Runtime>,
     pub inner: crate::Listeners,
 }
 
 impl Listeners {
-    pub fn new() -> Result<Listeners, anyhow::Error> {
-        let runtime = Arc::new(Runtime::new()?);
-        let inner = runtime.block_on(async { crate::Listeners::bind_any_local().await })?;
-        Ok(Listeners { runtime, inner })
+    pub async fn new() -> Result<Listeners, anyhow::Error> {
+        let inner = crate::Listeners::bind_any_local().await?;
+        Ok(Listeners { inner })
     }
 
-    pub fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
+    pub async fn serve(self, config: TestHarness) -> Result<TestServer, anyhow::Error> {
         let (data_directory, temp_dir) = match config.data_directory {
             None => {
                 // If no data directory is provided, we create a temporary
@@ -337,13 +362,20 @@ impl Listeners {
             let seed = config.seed;
             let cockroach_url = env::var("COCKROACH_URL")
                 .map_err(|_| anyhow!("COCKROACH_URL environment variable is not set"))?;
-            let mut conn = postgres::Client::connect(&cockroach_url, NoTls)?;
-            conn.batch_execute(&format!(
-                "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
-                 CREATE SCHEMA IF NOT EXISTS adapter_{seed};
-                 CREATE SCHEMA IF NOT EXISTS storage_{seed};
-                 CREATE SCHEMA IF NOT EXISTS tsoracle_{seed};",
-            ))?;
+            let (client, conn) = tokio_postgres::connect(&cockroach_url, NoTls).await?;
+            mz_ore::task::spawn(|| "startup-postgres-conn", async move {
+                if let Err(err) = conn.await {
+                    panic!("connection error: {}", err);
+                };
+            });
+            client
+                .batch_execute(&format!(
+                    "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
+                    CREATE SCHEMA IF NOT EXISTS adapter_{seed};
+                    CREATE SCHEMA IF NOT EXISTS storage_{seed};
+                    CREATE SCHEMA IF NOT EXISTS tsoracle_{seed};"
+                ))
+                .await?;
             (
                 format!("{cockroach_url}?options=--search_path=consensus_{seed}"),
                 format!("{cockroach_url}?options=--search_path=adapter_{seed}"),
@@ -352,24 +384,23 @@ impl Listeners {
             )
         };
         let metrics_registry = config.metrics_registry.unwrap_or_else(MetricsRegistry::new);
-        let orchestrator = Arc::new(
-            self.runtime
-                .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
-                    image_dir: env::current_exe()?
-                        .parent()
-                        .unwrap()
-                        .parent()
-                        .unwrap()
-                        .to_path_buf(),
-                    suppress_output: false,
-                    environment_id: config.environment_id.to_string(),
-                    secrets_dir: data_directory.join("secrets"),
-                    command_wrapper: vec![],
-                    propagate_crashes: config.propagate_crashes,
-                    tcp_proxy: None,
-                    scratch_directory: scratch_dir.path().to_path_buf(),
-                }))?,
-        );
+        let orchestrator = ProcessOrchestrator::new(ProcessOrchestratorConfig {
+            image_dir: env::current_exe()?
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf(),
+            suppress_output: false,
+            environment_id: config.environment_id.to_string(),
+            secrets_dir: data_directory.join("secrets"),
+            command_wrapper: vec![],
+            propagate_crashes: config.propagate_crashes,
+            tcp_proxy: None,
+            scratch_directory: scratch_dir.path().to_path_buf(),
+        })
+        .await?;
+        let orchestrator = Arc::new(orchestrator);
         // Messing with the clock causes persist to expire leases, causing hangs and
         // panics. Is it possible/desirable to put this back somehow?
         let persist_now = SYSTEM_TIME.clone();
@@ -384,31 +415,26 @@ impl Listeners {
 
         let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_cfg, &metrics_registry);
         let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
-        let persist_pubsub_tcp_listener = self
-            .runtime
-            .block_on(TcpListener::bind(SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                0,
-            )))
-            .expect("pubsub addr binding");
+        let persist_pubsub_tcp_listener =
+            TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+                .await
+                .expect("pubsub addr binding");
         let persist_pubsub_server_port = persist_pubsub_tcp_listener
             .local_addr()
             .expect("pubsub addr has local addr")
             .port();
-        let _persist_pubsub_server = {
-            let _tokio_guard = self.runtime.enter();
-            mz_ore::task::spawn(|| "persist_pubsub_server", async move {
-                persist_pubsub_server
-                    .serve_with_stream(TcpListenerStream::new(persist_pubsub_tcp_listener))
-                    .await
-                    .expect("success")
-            });
-        };
-        let persist_clients = {
-            let _tokio_guard = self.runtime.enter();
-            PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| persist_pubsub_client)
-        };
+
+        // Spawn the persist pub-sub server.
+        mz_ore::task::spawn(|| "persist_pubsub_server", async move {
+            persist_pubsub_server
+                .serve_with_stream(TcpListenerStream::new(persist_pubsub_tcp_listener))
+                .await
+                .expect("success")
+        });
+        let persist_clients =
+            PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| persist_pubsub_client);
         let persist_clients = Arc::new(persist_clients);
+
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let orchestrator = Arc::new(TracingOrchestrator::new(
@@ -436,8 +462,7 @@ impl Listeners {
                 build_time: crate::BUILD_INFO.time,
                 registry: metrics_registry.clone(),
             };
-            let (tracing_handle, tracing_guard) =
-                self.runtime.block_on(mz_ore::tracing::configure(config))?;
+            let (tracing_handle, tracing_guard) = mz_ore::tracing::configure(config).await?;
             (tracing_handle, Some(tracing_guard))
         } else {
             (TracingHandle::disabled(), None)
@@ -448,185 +473,101 @@ impl Listeners {
             persist_clients: Arc::clone(&persist_clients),
         };
 
-        let inner = self.runtime.block_on(async {
-            self.inner
-                .serve(crate::Config {
-                    catalog_config,
-                    timestamp_oracle_url: Some(timestamp_oracle_url),
-                    controller: ControllerConfig {
-                        build_info: &crate::BUILD_INFO,
-                        orchestrator,
-                        clusterd_image: "clusterd".into(),
-                        init_container_image: None,
-                        persist_location: PersistLocation {
-                            blob_uri: format!("file://{}/persist/blob", data_directory.display()),
-                            consensus_uri,
-                        },
-                        persist_clients,
-                        storage_stash_url,
-                        now: config.now.clone(),
-                        stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
-                        metrics_registry: metrics_registry.clone(),
-                        persist_pubsub_url: format!(
-                            "http://localhost:{}",
-                            persist_pubsub_server_port
-                        ),
-                        secrets_args: mz_service::secrets::SecretsReaderCliArgs {
-                            secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
-                            secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
-                            secrets_reader_kubernetes_context: None,
-                            secrets_reader_aws_region: None,
-                            secrets_reader_aws_prefix: None,
-                        },
+        let inner = self
+            .inner
+            .serve(crate::Config {
+                catalog_config,
+                timestamp_oracle_url: Some(timestamp_oracle_url),
+                controller: ControllerConfig {
+                    build_info: &crate::BUILD_INFO,
+                    orchestrator,
+                    clusterd_image: "clusterd".into(),
+                    init_container_image: None,
+                    persist_location: PersistLocation {
+                        blob_uri: format!("file://{}/persist/blob", data_directory.display()),
+                        consensus_uri,
                     },
-                    secrets_controller,
-                    cloud_resource_controller: None,
-                    tls: config.tls,
-                    frontegg: config.frontegg,
-                    unsafe_mode: config.unsafe_mode,
-                    all_features: false,
+                    persist_clients,
+                    storage_stash_url,
+                    now: config.now.clone(),
+                    stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
                     metrics_registry: metrics_registry.clone(),
-                    now: config.now,
-                    environment_id: config.environment_id,
-                    cors_allowed_origin: AllowOrigin::list([]),
-                    cluster_replica_sizes: Default::default(),
-                    default_storage_cluster_size: None,
-                    bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
-                    bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
-                    system_parameter_defaults: config.system_parameter_defaults,
-                    availability_zones: Default::default(),
-                    connection_context,
-                    tracing_handle,
-                    storage_usage_collection_interval: config.storage_usage_collection_interval,
-                    storage_usage_retention_period: config.storage_usage_retention_period,
-                    segment_api_key: None,
-                    egress_ips: vec![],
-                    aws_account_id: None,
-                    aws_privatelink_availability_zones: None,
-                    launchdarkly_sdk_key: None,
-                    launchdarkly_key_map: Default::default(),
-                    config_sync_loop_interval: None,
-                    bootstrap_role: config.bootstrap_role,
-                    deploy_generation: config.deploy_generation,
-                    http_host_name: Some(host_name),
-                    internal_console_redirect_url: config.internal_console_redirect_url,
-                    // TODO(txn): Get this flipped to true before turning anything on in prod.
-                    enable_persist_txn_tables_cli: None,
-                })
-                .await
-        })?;
-        let server = Server {
+                    persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
+                    secrets_args: mz_service::secrets::SecretsReaderCliArgs {
+                        secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                        secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
+                        secrets_reader_kubernetes_context: None,
+                        secrets_reader_aws_region: None,
+                        secrets_reader_aws_prefix: None,
+                    },
+                },
+                secrets_controller,
+                cloud_resource_controller: None,
+                tls: config.tls,
+                frontegg: config.frontegg,
+                unsafe_mode: config.unsafe_mode,
+                all_features: false,
+                metrics_registry: metrics_registry.clone(),
+                now: config.now,
+                environment_id: config.environment_id,
+                cors_allowed_origin: AllowOrigin::list([]),
+                cluster_replica_sizes: Default::default(),
+                default_storage_cluster_size: None,
+                bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
+                bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
+                system_parameter_defaults: config.system_parameter_defaults,
+                availability_zones: Default::default(),
+                connection_context,
+                tracing_handle,
+                storage_usage_collection_interval: config.storage_usage_collection_interval,
+                storage_usage_retention_period: config.storage_usage_retention_period,
+                segment_api_key: None,
+                egress_ips: vec![],
+                aws_account_id: None,
+                aws_privatelink_availability_zones: None,
+                launchdarkly_sdk_key: None,
+                launchdarkly_key_map: Default::default(),
+                config_sync_loop_interval: None,
+                bootstrap_role: config.bootstrap_role,
+                deploy_generation: config.deploy_generation,
+                http_host_name: Some(host_name),
+                internal_console_redirect_url: config.internal_console_redirect_url,
+                // TODO(txn): Get this flipped to true before turning anything on in prod.
+                enable_persist_txn_tables_cli: None,
+            })
+            .await?;
+
+        Ok(TestServer {
             inner,
-            runtime: self.runtime,
             metrics_registry,
             _temp_dir: temp_dir,
             _tracing_guard: tracing_guard,
-        };
-        Ok(server)
+        })
     }
 }
 
-pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
-    let listeners = Listeners::new()?;
-    listeners.serve(config)
-}
-
-pub struct Server {
+/// A running instance of `environmentd`.
+pub struct TestServer {
     pub inner: crate::Server,
-    pub runtime: Arc<Runtime>,
     pub metrics_registry: MetricsRegistry,
     _temp_dir: Option<TempDir>,
     _tracing_guard: Option<TracingGuard>,
 }
 
-impl Server {
-    pub fn pg_config(&self) -> postgres::Config {
-        let local_addr = self.inner.sql_local_addr();
-        let mut config = postgres::Config::new();
-        config
-            .host(&Ipv4Addr::LOCALHOST.to_string())
-            .port(local_addr.port())
-            .user("materialize");
-        config
+impl TestServer {
+    pub fn connect(&self) -> ConnectBuilder<'_, postgres::NoTls, NoHandle> {
+        ConnectBuilder::new(self).no_tls()
     }
 
-    pub fn pg_config_internal(&self) -> postgres::Config {
-        let local_addr = self.inner.internal_sql_local_addr();
-        let mut config = postgres::Config::new();
-        config
-            .host(&Ipv4Addr::LOCALHOST.to_string())
-            .port(local_addr.port())
-            .user("mz_system");
-        config
-    }
-    pub fn pg_config_balancer(&self) -> postgres::Config {
-        let local_addr = self.inner.balancer_sql_local_addr();
-        let mut config = postgres::Config::new();
-        config
-            .host(&Ipv4Addr::LOCALHOST.to_string())
-            .port(local_addr.port())
-            .user("materialize")
-            .ssl_mode(tokio_postgres::config::SslMode::Disable);
-        config
-    }
-
-    pub fn pg_config_async(&self) -> tokio_postgres::Config {
-        let local_addr = self.inner.sql_local_addr();
-        let mut config = tokio_postgres::Config::new();
-        config
-            .host(&Ipv4Addr::LOCALHOST.to_string())
-            .port(local_addr.port())
-            .user("materialize");
-        config
-    }
-
-    pub fn enable_feature_flags(&self, flags: &[&'static str]) {
-        let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
+    pub async fn enable_feature_flags(&self, flags: &[&'static str]) {
+        let internal_client = self.connect().internal().await.unwrap();
 
         for flag in flags {
             internal_client
                 .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
+                .await
                 .unwrap();
         }
-    }
-
-    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, postgres::Error>
-    where
-        T: MakeTlsConnect<Socket> + Send + 'static,
-        T::TlsConnect: Send,
-        T::Stream: Send,
-        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
-    {
-        self.pg_config().connect(tls)
-    }
-
-    pub fn connect_internal<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
-    where
-        T: MakeTlsConnect<Socket> + Send + 'static,
-        T::TlsConnect: Send,
-        T::Stream: Send,
-        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
-    {
-        Ok(self.pg_config_internal().connect(tls)?)
-    }
-
-    pub async fn connect_async<T>(
-        &self,
-        tls: T,
-    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), postgres::Error>
-    where
-        T: MakeTlsConnect<Socket> + Send + 'static,
-        T::TlsConnect: Send,
-        T::Stream: Send,
-        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
-    {
-        let (client, conn) = self.pg_config_async().connect(tls).await?;
-        let handle = task::spawn(|| "connect_async", async move {
-            if let Err(err) = conn.await {
-                panic!("connection error: {}", err);
-            }
-        });
-        Ok((client, handle))
     }
 
     pub fn ws_addr(&self) -> Url {
@@ -643,6 +584,344 @@ impl Server {
             self.inner.internal_http_local_addr()
         ))
         .unwrap()
+    }
+}
+
+/// A builder struct to configure a pgwire connection to a running [`TestServer`].
+///
+/// You can create this struct, and thus open a pgwire connection, using [`TestServer::connect`].
+pub struct ConnectBuilder<'s, T, H> {
+    /// A running `environmentd` test server.
+    server: &'s TestServer,
+
+    /// Postgres configuration for connecting to the test server.
+    pg_config: tokio_postgres::Config,
+    /// Port to use when connecting to the test server.
+    port: u16,
+    /// Tls settings to use.
+    tls: T,
+
+    /// Callback that gets invoked for every notice we receive.
+    notice_callback: Option<Box<dyn FnMut(tokio_postgres::error::DbError) + Send + 'static>>,
+
+    /// Type variable for whether or not we include the handle for the spawned [`tokio::task`].
+    _with_handle: H,
+}
+
+impl<'s> ConnectBuilder<'s, (), NoHandle> {
+    fn new(server: &'s TestServer) -> Self {
+        let mut pg_config = tokio_postgres::Config::new();
+        pg_config
+            .host(&Ipv4Addr::LOCALHOST.to_string())
+            .user("materialize")
+            .application_name("environmentd_test_framework");
+
+        ConnectBuilder {
+            server,
+            pg_config,
+            port: server.inner.sql_local_addr().port(),
+            tls: (),
+            notice_callback: None,
+            _with_handle: NoHandle,
+        }
+    }
+}
+
+impl<'s, T, H> ConnectBuilder<'s, T, H> {
+    /// Create a pgwire connection without using TLS.
+    ///
+    /// Note: this is the default for all connections.
+    pub fn no_tls(self) -> ConnectBuilder<'s, postgres::NoTls, H> {
+        ConnectBuilder {
+            server: self.server,
+            pg_config: self.pg_config,
+            port: self.port,
+            tls: postgres::NoTls,
+            notice_callback: self.notice_callback,
+            _with_handle: self._with_handle,
+        }
+    }
+
+    /// Create a pgwire connection with TLS.
+    pub fn with_tls<Tls>(self, tls: Tls) -> ConnectBuilder<'s, Tls, H>
+    where
+        Tls: MakeTlsConnect<Socket> + Send + 'static,
+        Tls::TlsConnect: Send,
+        Tls::Stream: Send,
+        <Tls::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    {
+        ConnectBuilder {
+            server: self.server,
+            pg_config: self.pg_config,
+            port: self.port,
+            tls,
+            notice_callback: self.notice_callback,
+            _with_handle: self._with_handle,
+        }
+    }
+
+    /// Create a [`ConnectBuilder`] using the provided [`tokio_postgres::Config`].
+    pub fn with_config(mut self, pg_config: tokio_postgres::Config) -> Self {
+        self.pg_config = pg_config;
+        self
+    }
+
+    /// Set the [`SslMode`] to be used with the resulting connection.
+    pub fn ssl_mode(mut self, mode: SslMode) -> Self {
+        self.pg_config.ssl_mode(mode);
+        self
+    }
+
+    /// Set the user for the pgwire connection.
+    pub fn user(mut self, user: &str) -> Self {
+        self.pg_config.user(user);
+        self
+    }
+
+    /// Set the password for the pgwire connection.
+    pub fn password(mut self, password: &str) -> Self {
+        self.pg_config.password(password);
+        self
+    }
+
+    /// Set the application name for the pgwire connection.
+    pub fn application_name(mut self, application_name: &str) -> Self {
+        self.pg_config.application_name(application_name);
+        self
+    }
+
+    /// Set the database name for the pgwire connection.
+    pub fn dbname(mut self, dbname: &str) -> Self {
+        self.pg_config.dbname(dbname);
+        self
+    }
+
+    /// Configures this [`ConnectBuilder`] to connect to the __internal__ SQL port of the running
+    /// [`TestServer`].
+    ///
+    /// For example, this will change the port we connect to, and the user we connect as.
+    pub fn internal(mut self) -> Self {
+        self.port = self.server.inner.internal_sql_local_addr().port();
+        self.pg_config.user(mz_sql::session::user::SYSTEM_USER_NAME);
+        self
+    }
+
+    /// Configures this [`ConnectBuilder`] to connect to the __balancer__ SQL port of the running
+    /// [`TestServer`].
+    ///
+    /// For example, this will change the port we connect to, and the user we connect as.
+    pub fn balancer(mut self) -> Self {
+        self.port = self.server.inner.balancer_sql_local_addr().port();
+        self.pg_config.user("materialize");
+        self
+    }
+
+    /// Sets a callback for any database notices that are received from the [`TestServer`].
+    pub fn notice_callback(self, callback: impl FnMut(DbError) + Send + 'static) -> Self {
+        ConnectBuilder {
+            notice_callback: Some(Box::new(callback)),
+            ..self
+        }
+    }
+
+    /// Configures this [`ConnectBuilder`] to return the [`tokio::task::JoinHandle`] that is
+    /// polling the underlying postgres connection, associated with the returned client.
+    pub fn with_handle(self) -> ConnectBuilder<'s, T, WithHandle> {
+        ConnectBuilder {
+            server: self.server,
+            pg_config: self.pg_config,
+            port: self.port,
+            tls: self.tls,
+            notice_callback: self.notice_callback,
+            _with_handle: WithHandle,
+        }
+    }
+
+    /// Returns the [`tokio_postgres::Config`] that will be used to connect.
+    pub fn as_pg_config(&self) -> &tokio_postgres::Config {
+        &self.pg_config
+    }
+}
+
+/// This trait enables us to either include or omit the [`tokio::task::JoinHandle`] in the result
+/// of a client connection.
+pub trait IncludeHandle: Send {
+    type Output;
+    fn transform_result(
+        client: tokio_postgres::Client,
+        handle: tokio::task::JoinHandle<()>,
+    ) -> Self::Output;
+}
+
+/// Type parameter that denotes we __will not__ return the [`tokio::task::JoinHandle`] in the
+/// result of a [`ConnectBuilder`].
+pub struct NoHandle;
+impl IncludeHandle for NoHandle {
+    type Output = tokio_postgres::Client;
+    fn transform_result(
+        client: tokio_postgres::Client,
+        _handle: tokio::task::JoinHandle<()>,
+    ) -> Self::Output {
+        client
+    }
+}
+
+/// Type parameter that denotes we __will__ return the [`tokio::task::JoinHandle`] in the result of
+/// a [`ConnectBuilder`].
+pub struct WithHandle;
+impl IncludeHandle for WithHandle {
+    type Output = (tokio_postgres::Client, tokio::task::JoinHandle<()>);
+    fn transform_result(
+        client: tokio_postgres::Client,
+        handle: tokio::task::JoinHandle<()>,
+    ) -> Self::Output {
+        (client, handle)
+    }
+}
+
+impl<'s, T, H> IntoFuture for ConnectBuilder<'s, T, H>
+where
+    T: MakeTlsConnect<Socket> + Send + 'static,
+    T::TlsConnect: Send,
+    T::Stream: Send,
+    <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    H: IncludeHandle,
+{
+    type Output = Result<H::Output, postgres::Error>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
+
+    fn into_future(mut self) -> Self::IntoFuture {
+        Box::pin(async move {
+            assert!(
+                self.pg_config.get_ports().is_empty(),
+                "specifying multiple ports is not supported"
+            );
+            self.pg_config.port(self.port);
+
+            let (client, mut conn) = self.pg_config.connect(self.tls).await?;
+            let mut notice_callback = self.notice_callback.take();
+
+            let handle = task::spawn(|| "connect", async move {
+                while let Some(msg) = std::future::poll_fn(|cx| conn.poll_message(cx)).await {
+                    match msg {
+                        Ok(AsyncMessage::Notice(notice)) => {
+                            if let Some(callback) = notice_callback.as_mut() {
+                                callback(notice);
+                            }
+                        }
+                        Ok(msg) => {
+                            tracing::debug!(?msg, "Dropping message from database");
+                        }
+                        Err(e) => panic!("connection error: {e}"),
+                    }
+                }
+                tracing::info!("connection closed");
+            });
+
+            let output = H::transform_result(client, handle);
+            Ok(output)
+        })
+    }
+}
+
+/// A running instance of `environmentd`, that exposes blocking/synchronous test helpers.
+///
+/// Note: Ideally you should use a [`TestServer`] which relies on an external runtime, e.g. the
+/// [`tokio::test`] macro. This struct exists so we can incrementally migrate our existing tests.
+pub struct TestServerWithRuntime {
+    server: TestServer,
+    runtime: Arc<Runtime>,
+}
+
+impl TestServerWithRuntime {
+    /// Returns the [`Runtime`] owned by this [`TestServerWithRuntime`].
+    ///
+    /// Can be used to spawn async tasks.
+    pub fn runtime(&self) -> &Arc<Runtime> {
+        &self.runtime
+    }
+
+    /// Returns a referece to the inner running `environmentd` [`crate::Server`]`.
+    pub fn inner(&self) -> &crate::Server {
+        &self.server.inner
+    }
+
+    /// Connect to the __public__ SQL port of the running `environmentd` server.
+    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, postgres::Error>
+    where
+        T: MakeTlsConnect<Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    {
+        self.pg_config().connect(tls)
+    }
+
+    /// Connect to the __internal__ SQL port of the running `environmentd` server.
+    pub fn connect_internal<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    where
+        T: MakeTlsConnect<Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    {
+        Ok(self.pg_config_internal().connect(tls)?)
+    }
+
+    /// Enable LaunchDarkly feature flags.
+    pub fn enable_feature_flags(&self, flags: &[&'static str]) {
+        let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
+                .unwrap();
+        }
+    }
+
+    /// Return a [`postgres::Config`] for connecting to the __public__ SQL port of the running
+    /// `environmentd` server.
+    pub fn pg_config(&self) -> postgres::Config {
+        let local_addr = self.server.inner.sql_local_addr();
+        let mut config = postgres::Config::new();
+        config
+            .host(&Ipv4Addr::LOCALHOST.to_string())
+            .port(local_addr.port())
+            .user("materialize");
+        config
+    }
+
+    /// Return a [`postgres::Config`] for connecting to the __internal__ SQL port of the running
+    /// `environmentd` server.
+    pub fn pg_config_internal(&self) -> postgres::Config {
+        let local_addr = self.server.inner.internal_sql_local_addr();
+        let mut config = postgres::Config::new();
+        config
+            .host(&Ipv4Addr::LOCALHOST.to_string())
+            .port(local_addr.port())
+            .user("mz_system");
+        config
+    }
+
+    /// Return a [`postgres::Config`] for connecting to the __balancer__ SQL port of the running
+    /// `environmentd` server.
+    pub fn pg_config_balancer(&self) -> postgres::Config {
+        let local_addr = self.server.inner.balancer_sql_local_addr();
+        let mut config = postgres::Config::new();
+        config
+            .host(&Ipv4Addr::LOCALHOST.to_string())
+            .port(local_addr.port())
+            .user("materialize")
+            .ssl_mode(tokio_postgres::config::SslMode::Disable);
+        config
+    }
+
+    pub fn ws_addr(&self) -> Url {
+        self.server.ws_addr()
+    }
+
+    pub fn internal_ws_addr(&self) -> Url {
+        self.server.internal_ws_addr()
     }
 }
 
@@ -688,35 +967,42 @@ where
 /// Group commit will block writes until the current time has advanced. This can make
 /// performing inserts while using deterministic time difficult. This is a helper
 /// method to perform writes and advance the current time.
-pub fn insert_with_deterministic_timestamps(
+pub async fn insert_with_deterministic_timestamps(
     table: &'static str,
     values: &'static str,
-    server: &Server,
+    server: &TestServer,
     now: Arc<std::sync::Mutex<EpochMillis>>,
 ) -> Result<(), Box<dyn Error>> {
-    let mut client_write = server.connect(postgres::NoTls)?;
-    let mut client_read = server.connect(postgres::NoTls)?;
+    let client_write = server.connect().await?;
+    let client_read = server.connect().await?;
 
-    let mut current_ts = get_explain_timestamp(table, &mut client_read);
-    let write_thread = thread::spawn(move || {
-        client_write
-            .execute(&format!("INSERT INTO {table} VALUES {values}"), &[])
-            .unwrap();
-    });
-    while !write_thread.is_finished() {
-        // Keep increasing `now` until the write has executed succeed. Table advancements may
-        // have increased the global timestamp by an unknown amount.
-        current_ts += 1;
-        *now.lock().expect("lock poisoned") = current_ts;
-        thread::sleep(Duration::from_millis(1));
+    let mut current_ts = get_explain_timestamp(table, &client_read).await;
+
+    let insert_query = format!("INSERT INTO {table} VALUES {values}");
+
+    let write_future = client_write.execute(&insert_query, &[]);
+    let timestamp_interval = tokio::time::interval(Duration::from_millis(1));
+
+    let mut write_future = std::pin::pin!(write_future);
+    let mut timestamp_interval = std::pin::pin!(timestamp_interval);
+
+    // Keep increasing `now` until the write has executed succeed. Table advancements may
+    // have increased the global timestamp by an unknown amount.
+    loop {
+        tokio::select! {
+            _ = (&mut write_future) => return Ok(()),
+            _ = timestamp_interval.tick() => {
+                current_ts += 1;
+                *now.lock().expect("lock poisoned") = current_ts;
+            }
+        };
     }
-    write_thread.join().unwrap();
-    Ok(())
 }
 
-pub fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> EpochMillis {
+pub async fn get_explain_timestamp(table: &str, client: &Client) -> EpochMillis {
     let row = client
         .query_one(&format!("EXPLAIN TIMESTAMP FOR SELECT * FROM {table}"), &[])
+        .await
         .unwrap();
     let explain: String = row.get(0);
     let timestamp_re = Regex::new(r"^\s+query timestamp:\s*(\d+)").unwrap();
@@ -726,30 +1012,27 @@ pub fn get_explain_timestamp(table: &str, client: &mut postgres::Client) -> Epoc
 
 /// Helper function to create a Postgres source.
 ///
-/// IMPORTANT: Make sure to call closure that is returned at
-/// the end of the test to clean up Postgres state.
+/// IMPORTANT: Make sure to call closure that is returned at the end of the test to clean up
+/// Postgres state.
 ///
-/// WARNING: If multiple tests use this, and the tests are run
-/// in parallel, then make sure the test use different postgres
-/// tables.
-pub fn create_postgres_source_with_table(
-    runtime: &Arc<Runtime>,
-    mz_client: &mut postgres::Client,
+/// WARNING: If multiple tests use this, and the tests are run in parallel, then make sure the test
+/// use different postgres tables.
+pub async fn create_postgres_source_with_table<'a>(
+    mz_client: &Client,
     table_name: &str,
     table_schema: &str,
     source_name: &str,
 ) -> Result<
     (
         Client,
-        impl FnOnce(&mut postgres::Client, &mut Client, &Arc<Runtime>) -> Result<(), Box<dyn Error>>,
+        impl FnOnce(&'a Client, &'a Client) -> LocalBoxFuture<'a, Result<(), Box<dyn Error>>>,
     ),
     Box<dyn Error>,
 > {
     let postgres_url = env::var("POSTGRES_URL")
         .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
 
-    let (pg_client, connection) =
-        runtime.block_on(tokio_postgres::connect(&postgres_url, postgres::NoTls))?;
+    let (pg_client, connection) = tokio_postgres::connect(&postgres_url, postgres::NoTls).await?;
 
     let pg_config: tokio_postgres::Config = postgres_url.parse().unwrap();
     let user = pg_config.get_user().unwrap_or("postgres");
@@ -767,77 +1050,101 @@ pub fn create_postgres_source_with_table(
     };
     let password = pg_config.get_password();
 
-    let pg_runtime = Arc::<tokio::runtime::Runtime>::clone(runtime);
-    thread::spawn(move || {
-        if let Err(e) = pg_runtime.block_on(connection) {
+    mz_ore::task::spawn(|| "postgres-source-connection", async move {
+        while let Err(e) = connection.await {
             panic!("connection error: {}", e);
         }
     });
 
     // Create table in Postgres with publication.
-    let _ =
-        runtime.block_on(pg_client.execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[]))?;
-    let _ = runtime
-        .block_on(pg_client.execute(&format!("DROP PUBLICATION IF EXISTS {source_name};"), &[]))?;
-    let _ = runtime
-        .block_on(pg_client.execute(&format!("CREATE TABLE {table_name} {table_schema};"), &[]))?;
-    let _ = runtime.block_on(pg_client.execute(
-        &format!("ALTER TABLE {table_name} REPLICA IDENTITY FULL;"),
-        &[],
-    ))?;
-    let _ = runtime.block_on(pg_client.execute(
-        &format!("CREATE PUBLICATION {source_name} FOR TABLE {table_name};"),
-        &[],
-    ))?;
+    let _ = pg_client
+        .execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[])
+        .await?;
+    let _ = pg_client
+        .execute(&format!("DROP PUBLICATION IF EXISTS {source_name};"), &[])
+        .await?;
+    let _ = pg_client
+        .execute(&format!("CREATE TABLE {table_name} {table_schema};"), &[])
+        .await?;
+    let _ = pg_client
+        .execute(
+            &format!("ALTER TABLE {table_name} REPLICA IDENTITY FULL;"),
+            &[],
+        )
+        .await?;
+    let _ = pg_client
+        .execute(
+            &format!("CREATE PUBLICATION {source_name} FOR TABLE {table_name};"),
+            &[],
+        )
+        .await?;
 
     // Create postgres source in Materialize.
     let mut connection_str = format!("HOST '{host}', PORT {port}, USER {user}, DATABASE {db_name}");
     if let Some(password) = password {
         let password = std::str::from_utf8(password).unwrap();
-        mz_client.batch_execute(&format!("CREATE SECRET s AS '{password}'"))?;
+        mz_client
+            .batch_execute(&format!("CREATE SECRET s AS '{password}'"))
+            .await?;
         connection_str = format!("{connection_str}, PASSWORD SECRET s");
     }
-    mz_client.batch_execute(&format!(
-        "CREATE CONNECTION pgconn TO POSTGRES ({connection_str})"
-    ))?;
-    mz_client.batch_execute(&format!(
-        "CREATE SOURCE {source_name}
+    mz_client
+        .batch_execute(&format!(
+            "CREATE CONNECTION pgconn TO POSTGRES ({connection_str})"
+        ))
+        .await?;
+    mz_client
+        .batch_execute(&format!(
+            "CREATE SOURCE {source_name}
             FROM POSTGRES
             CONNECTION pgconn
             (PUBLICATION '{source_name}')
             FOR TABLES ({table_name});"
-    ))?;
+        ))
+        .await?;
 
     let table_name = table_name.to_string();
     let source_name = source_name.to_string();
     Ok((
         pg_client,
-        move |mz_client: &mut postgres::Client, pg_client: &mut Client, runtime: &Arc<Runtime>| {
-            mz_client.batch_execute(&format!("DROP SOURCE {source_name};"))?;
-            mz_client.batch_execute("DROP CONNECTION pgconn;")?;
+        move |mz_client: &'a Client, pg_client: &'a Client| {
+            let f: Pin<Box<dyn Future<Output = Result<(), Box<dyn Error>>> + 'a>> =
+                Box::pin(async move {
+                    mz_client
+                        .batch_execute(&format!("DROP SOURCE {source_name};"))
+                        .await?;
+                    mz_client.batch_execute("DROP CONNECTION pgconn;").await?;
 
-            let _ = runtime
-                .block_on(pg_client.execute(&format!("DROP PUBLICATION {source_name};"), &[]))?;
-            let _ =
-                runtime.block_on(pg_client.execute(&format!("DROP TABLE {table_name};"), &[]))?;
-            Ok(())
+                    let _ = pg_client
+                        .execute(&format!("DROP PUBLICATION {source_name};"), &[])
+                        .await?;
+                    let _ = pg_client
+                        .execute(&format!("DROP TABLE {table_name};"), &[])
+                        .await?;
+                    Ok(())
+                });
+            f
         },
     ))
 }
 
-pub fn wait_for_view_population(
-    mz_client: &mut postgres::Client,
+pub async fn wait_for_view_population(
+    mz_client: &Client,
     view_name: &str,
     source_rows: i64,
 ) -> Result<(), Box<dyn Error>> {
     let current_isolation = mz_client
-        .query_one("SHOW transaction_isolation", &[])?
+        .query_one("SHOW transaction_isolation", &[])
+        .await?
         .get::<_, String>(0);
-    mz_client.batch_execute("SET transaction_isolation = SERIALIZABLE")?;
+    mz_client
+        .batch_execute("SET transaction_isolation = SERIALIZABLE")
+        .await?;
     Retry::default()
-        .retry(|_| {
+        .retry_async(|_| async move {
             let rows = mz_client
                 .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
+                .await
                 .unwrap()
                 .get::<_, i64>(0);
             if rows == source_rows {
@@ -848,10 +1155,13 @@ pub fn wait_for_view_population(
                 ))
             }
         })
+        .await
         .unwrap();
-    mz_client.batch_execute(&format!(
-        "SET transaction_isolation = '{current_isolation}'"
-    ))?;
+    mz_client
+        .batch_execute(&format!(
+            "SET transaction_isolation = '{current_isolation}'"
+        ))
+        .await?;
     Ok(())
 }
 
