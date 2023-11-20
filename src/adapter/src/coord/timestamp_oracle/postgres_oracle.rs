@@ -105,7 +105,7 @@ impl From<PostgresTimestampOracleConfig> for PostgresClientConfig {
 }
 
 impl PostgresTimestampOracleConfig {
-    const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "COCKROACH_URL";
+    pub(crate) const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "COCKROACH_URL";
 
     /// Returns a new instance of [`PostgresTimestampOracleConfig`] with default tuning.
     pub fn new(url: &str, metrics: Arc<Metrics>) -> Self {

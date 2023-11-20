@@ -31,6 +31,7 @@ use tracing::{debug, error, info};
 use crate::catalog::CatalogItem;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
+use crate::coord::timestamp_oracle::batching_oracle::BatchingTimestampOracle;
 use crate::coord::timestamp_oracle::catalog_oracle::{
     CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
     TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
@@ -256,6 +257,16 @@ impl Coordinator {
                         )
                         .await,
                     );
+
+                    let shared_oracle = oracle
+                        .get_shared()
+                        .expect("postgres timestamp oracle is shareable");
+
+                    let batching_oracle =
+                        BatchingTimestampOracle::new(Arc::clone(metrics), shared_oracle);
+
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> =
+                        Box::new(batching_oracle);
 
                     oracle
                 }
