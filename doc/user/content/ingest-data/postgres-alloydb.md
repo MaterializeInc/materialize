@@ -14,15 +14,17 @@ This page shows you how to stream data from [AlloyDB](https://cloud.google.com/a
 
 {{% postgres-direct/before-you-begin %}}
 
-## Step 1. Create an AlloyDB instance
+If you don't already have an AlloyDB instance, creating one involves several steps, including configuring your cluster and setting up network connections. For detailed instructions, refer to the [AlloyDB documentation](https://cloud.google.com/alloydb/docs).
 
-Creating an AlloyDB instance involves several steps, including configuring your cluster and setting up network connections. For detailed instructions, refer to the [AlloyDB documentation](https://cloud.google.com/alloydb/docs).
-
-## Step 2. Enable logical replication
+## Step 1. Enable logical replication
 
 Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html) protocol to track changes in your database and propagate them to Materialize.
 
 For guidance on enabling logical replication in AlloyDB, see the [AlloyDB documentation](https://cloud.google.com/datastream/docs/configure-your-source-postgresql-database#configure_alloydb_for_replication).
+
+## Step 2. Create a publication
+
+{{% postgres-direct/create-a-publication-other %}}
 
 ## Step 3. Set up the AlloyDB Auth Proxy
 
