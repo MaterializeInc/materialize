@@ -571,18 +571,8 @@ impl SourceRender for KafkaSourceConnection {
                             if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid].data;
-                                match msg {
-                                    Ok(msg) => {
-                                        data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await
-                                    }
-                                    Err(err) => {
-                                        let err = SourceReaderError::other_definite(anyhow!(err));
-
-                                        data_output
-                                            .give(part_cap, ((0, Err(err)), time, diff))
-                                            .await
-                                    }
-                                }
+                                let msg = msg.map_err(|e| SourceReaderError::other_definite(anyhow!(e)));
+                                data_output.give(part_cap, ((0, msg), time, diff)).await;
                             }
                         }
                         Err(e) => {
