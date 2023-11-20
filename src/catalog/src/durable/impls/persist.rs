@@ -131,9 +131,11 @@ impl PersistHandle {
             )));
         }
 
-        // Listen cannot read any writes that happen at `Timestamp::minimum()`. So we initialize
-        // the shard with an empty write at `Timestamp::minimum()`. The append has no effect if the
-        // upper is already past `Timestamp::minimum()`.
+        // It is convenient to establish the invariant that the shard is always readable at some
+        // timestamp, even if it's not yet initialized, so that we don't need to special case
+        // reading a snapshot of an uninitialized catalog. Therefore, we initialize the shard with
+        // an empty write at `Timestamp::minimum()`. The append has no effect if the upper is
+        // already past `Timestamp::minimum()`.
         let empty_updates: &[((StateUpdateKind, ()), Timestamp, Diff)] = &[];
         let () = self
             .write_handle
@@ -307,14 +309,15 @@ impl PersistHandle {
         snapshot(&mut self.read_handle, as_of).await
     }
 
-    /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
-    /// state up to, and including, `as_of`.
+    /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
+    /// catalog state up to, and including, `as_of`.
     async fn snapshot_unconsolidated(
         &mut self,
         as_of: Timestamp,
     ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
         let mut snapshot = Vec::new();
         let mut stream = Box::pin(
+            // We use `snapshot_and_stream` because it guarantees unconsolidated output.
             self.read_handle
                 .snapshot_and_stream(Antichain::from_elem(as_of))
                 .await
@@ -616,6 +619,8 @@ impl PersistCatalogState {
                         apply(&mut self.snapshot.default_privileges, key, value, diff);
                     }
                     StateUpdateKind::Epoch(epoch) => {
+                        // Explicitly check for diff == 1 so that we don't return an error when the
+                        // previous epoch is retracted.
                         if diff == 1 && epoch != self.epoch {
                             return Err(DurableCatalogError::Fence(format!(
                                 "current catalog epoch {} fenced by new catalog epoch {}",
