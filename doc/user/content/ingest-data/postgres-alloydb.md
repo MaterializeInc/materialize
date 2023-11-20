@@ -26,7 +26,7 @@ For guidance on enabling logical replication in AlloyDB, see the [AlloyDB docume
 
 ## Step 3. Set up the AlloyDB Auth Proxy
 
-To establish authorized and secure connections to an AlloyDB instance, an authentication proxy is necessary. The Google Cloud Platform offers a guide [here](https://cloud.google.com/alloydb/docs/auth-proxy/connect) to assist you in setting up this proxy and generating a connection string that can be utilized with Hasura. Further down, we will provide you with a tailored approach specific to integrating Hasura.
+To establish authorized and secure connections to an AlloyDB instance, an authentication proxy is necessary. The Google Cloud Platform offers a guide [here](https://cloud.google.com/alloydb/docs/auth-proxy/connect) to assist you in setting up this proxy and generating a connection string that can be utilized with Materialize. Further down, we will provide you with a tailored approach specific to integrating Materialize.
 
 ## Step 4. Configure network security
 
