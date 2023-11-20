@@ -145,10 +145,12 @@ class Column:
 class DB:
     seed: str
     db_id: int
+    lock: threading.Lock
 
     def __init__(self, seed: str, db_id: int):
         self.seed = seed
         self.db_id = db_id
+        self.lock = threading.Lock()
 
     def name(self) -> str:
         return naughtify(f"db-pw-{self.seed}-{self.db_id}")
@@ -167,11 +169,13 @@ class Schema:
     schema_id: int
     rename: int
     db: DB
+    lock: threading.Lock
 
     def __init__(self, db: DB, schema_id: int):
         self.schema_id = schema_id
         self.db = db
         self.rename = 0
+        self.lock = threading.Lock()
 
     def name(self) -> str:
         if self.rename:
@@ -188,6 +192,10 @@ class Schema:
 
 class DBObject:
     columns: Sequence[Column]
+    lock: threading.Lock
+
+    def __init__(self):
+        self.lock = threading.Lock()
 
     def name(self) -> str:
         raise NotImplementedError
@@ -203,6 +211,7 @@ class Table(DBObject):
     schema: Schema
 
     def __init__(self, rng: random.Random, table_id: int, schema: Schema):
+        super().__init__()
         self.table_id = table_id
         self.schema = schema
         self.columns = [
@@ -247,6 +256,7 @@ class View(DBObject):
         base_object2: DBObject | None,
         schema: Schema,
     ):
+        super().__init__()
         self.rename = 0
         self.view_id = view_id
         self.base_object = base_object
@@ -358,6 +368,7 @@ class WebhookSource(DBObject):
     def __init__(
         self, source_id: int, cluster: "Cluster", schema: Schema, rng: random.Random
     ):
+        super().__init__()
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
@@ -454,6 +465,7 @@ class KafkaSource(DBObject):
         ports: dict[str, int],
         rng: random.Random,
     ):
+        super().__init__()
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
@@ -507,6 +519,7 @@ class KafkaSink(DBObject):
         base_object: DBObject,
         rng: random.Random,
     ):
+        super().__init__()
         self.sink_id = sink_id
         self.cluster = cluster
         self.schema = schema
@@ -576,6 +589,7 @@ class PostgresSource(DBObject):
         ports: dict[str, int],
         rng: random.Random,
     ):
+        super().__init__()
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
@@ -609,9 +623,11 @@ class PostgresSource(DBObject):
 
 class Role:
     role_id: int
+    lock: threading.Lock
 
     def __init__(self, role_id: int):
         self.role_id = role_id
+        self.lock = threading.Lock()
 
     def __str__(self) -> str:
         return f"role{self.role_id}"
@@ -625,12 +641,14 @@ class ClusterReplica:
     size: str
     cluster: "Cluster"
     rename: int
+    lock: threading.Lock
 
     def __init__(self, replica_id: int, size: str, cluster: "Cluster"):
         self.replica_id = replica_id
         self.size = size
         self.cluster = cluster
         self.rename = 0
+        self.lock = threading.Lock()
 
     def name(self) -> str:
         if self.rename:
@@ -655,6 +673,7 @@ class Cluster:
     replica_id: int
     introspection_interval: str
     rename: int
+    lock: threading.Lock
 
     def __init__(
         self,
@@ -673,6 +692,7 @@ class Cluster:
         self.replica_id = len(self.replicas)
         self.introspection_interval = introspection_interval
         self.rename = 0
+        self.lock = threading.Lock()
 
     def name(self) -> str:
         if self.rename:
