@@ -81,7 +81,6 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
-use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -93,7 +92,9 @@ use chrono::{DateTime, Utc};
 use http::StatusCode;
 use itertools::Itertools;
 use mz_adapter::{TimestampContext, TimestampExplanation};
-use mz_environmentd::test_util::{self, MzTimestamp, PostgresErrorExt, Server, KAFKA_ADDRS};
+use mz_environmentd::test_util::{
+    self, MzTimestamp, PostgresErrorExt, TestServerWithRuntime, KAFKA_ADDRS,
+};
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::result::ResultExt;
@@ -327,7 +328,7 @@ async fn test_drop_connection_race() {
 
 #[mz_ore::test]
 fn test_time() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     server.enable_feature_flags(&["enable_dangerous_functions"]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -371,8 +372,7 @@ fn test_time() {
 
 #[mz_ore::test]
 fn test_subscribe_consolidation() {
-    let config = test_util::Config::default().workers(2);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -401,8 +401,7 @@ fn test_subscribe_consolidation() {
 
 #[mz_ore::test]
 fn test_subscribe_negative_diffs() {
-    let config = test_util::Config::default().workers(2);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -519,11 +518,10 @@ fn test_subscribe_basic() {
         let nowfn = Arc::clone(&nowfn);
         NowFn::from(move || (nowfn.lock().unwrap())())
     };
-    let config = test_util::Config::default()
-        .workers(2)
+    let server = test_util::TestHarness::default()
         .with_now(now)
-        .unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
+        .unsafe_mode()
+        .start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -682,10 +680,7 @@ fn test_subscribe_basic() {
 /// data row we will also see one progressed message.
 #[mz_ore::test]
 fn test_subscribe_progress() {
-    mz_ore::test::init_logging();
-
-    let config = test_util::Config::default().workers(2);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     for has_initial_data in [false, true] {
         for has_index in [false, true] {
@@ -802,8 +797,7 @@ fn test_subscribe_progress() {
 // turns them into nullable columns. See #6304.
 #[mz_ore::test]
 fn test_subscribe_progress_non_nullable_columns() {
-    let config = test_util::Config::default().workers(2);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -853,8 +847,7 @@ fn test_subscribe_progress_non_nullable_columns() {
 /// receive data or not.
 #[mz_ore::test]
 fn test_subcribe_continuous_progress() {
-    let config = test_util::Config::default().workers(2);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -938,8 +931,7 @@ fn test_subcribe_continuous_progress() {
 
 #[mz_ore::test]
 fn test_subscribe_fetch_timeout() {
-    let config = test_util::Config::default().workers(2);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client.batch_execute("CREATE TABLE t (i INT8)").unwrap();
@@ -1035,8 +1027,7 @@ fn test_subscribe_fetch_timeout() {
 
 #[mz_ore::test]
 fn test_subscribe_fetch_wait() {
-    let config = test_util::Config::default().workers(2);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client.batch_execute("CREATE TABLE t (i INT8)").unwrap();
@@ -1098,8 +1089,7 @@ fn test_subscribe_fetch_wait() {
 
 #[mz_ore::test]
 fn test_subscribe_empty_upper_frontier() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client
@@ -1149,8 +1139,7 @@ async fn test_subscribe_shutdown() {
 
 #[mz_ore::test]
 fn test_subscribe_table_rw_timestamps() {
-    let config = test_util::Config::default().workers(3);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client_interactive = server.connect(postgres::NoTls).unwrap();
     let mut client_subscribe = server.connect(postgres::NoTls).unwrap();
 
@@ -1234,7 +1223,7 @@ fn test_subscribe_table_rw_timestamps() {
 // by another connection.
 #[mz_ore::test]
 fn test_temporary_views() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client_a = server.connect(postgres::NoTls).unwrap();
     let mut client_b = server.connect(postgres::NoTls).unwrap();
     client_a
@@ -1264,8 +1253,7 @@ fn test_temporary_views() {
 // Test EXPLAIN TIMESTAMP with tables.
 #[mz_ore::test]
 fn test_explain_timestamp_table() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     let timestamp_re = Regex::new(r"\s*(\d+) \(\d+-\d\d-\d\d \d\d:\d\d:\d\d.\d\d\d\)").unwrap();
 
@@ -1295,8 +1283,7 @@ source materialize.public.t1 (u1, storage):
 // Test `EXPLAIN TIMESTAMP AS JSON`
 #[mz_ore::test]
 fn test_explain_timestamp_json() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("CREATE TABLE t1 (i1 int)").unwrap();
 
@@ -1318,9 +1305,9 @@ fn test_explain_timestamp_json() {
 // GitHub issue # 18950
 #[mz_ore::test]
 fn test_transactional_explain_timestamps() {
-    let config = test_util::Config::default().workers(2).unsafe_mode();
-
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
@@ -1590,8 +1577,7 @@ async fn test_github_12546() {
 
 #[mz_ore::test]
 fn test_github_12951() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // Verify sinks (SUBSCRIBE) are correctly handled for a dropped cluster.
     {
@@ -1650,8 +1636,7 @@ fn test_github_12951() {
 #[mz_ore::test]
 // Tests github issue #13100
 fn test_subscribe_outlive_cluster() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // Verify sinks (SUBSCRIBE) are correctly handled for a dropped cluster, when a new cluster is created.
     let mut client1 = server.connect(postgres::NoTls).unwrap();
@@ -1685,8 +1670,7 @@ fn test_subscribe_outlive_cluster() {
 
 #[mz_ore::test]
 fn test_read_then_write_serializability() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // Create table with initial value
     {
@@ -1922,8 +1906,7 @@ async fn test_linearizability() {
 
 #[mz_ore::test]
 fn test_internal_users() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     assert!(server
         .pg_config()
@@ -1949,8 +1932,7 @@ fn test_internal_users() {
 
 #[mz_ore::test]
 fn test_internal_users_cluster() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     for (user, expected_cluster) in INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.iter() {
         let mut internal_client = server
@@ -1971,8 +1953,7 @@ fn test_internal_users_cluster() {
 // crashing
 #[mz_ore::test]
 fn test_internal_ports() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     {
         let mut external_client = server.connect(postgres::NoTls).unwrap();
@@ -2029,8 +2010,7 @@ fn test_internal_ports() {
 // needed for this test.
 #[mz_ore::test]
 fn test_alter_system_invalid_param() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut mz_client = server
         .pg_config_internal()
@@ -2057,8 +2037,7 @@ fn test_alter_system_invalid_param() {
 
 #[mz_ore::test]
 fn test_concurrent_writes() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let num_tables = 10;
 
@@ -2115,7 +2094,9 @@ fn test_concurrent_writes() {
 
 #[mz_ore::test]
 fn test_load_generator() {
-    let server = test_util::start_server(test_util::Config::default().unsafe_mode()).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client
@@ -2151,8 +2132,7 @@ fn test_load_generator() {
 
 #[mz_ore::test]
 fn test_introspection_user_permissions() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut external_client = server.connect(postgres::NoTls).unwrap();
     let mut introspection_client = server
@@ -2219,8 +2199,7 @@ fn test_introspection_user_permissions() {
 
 #[mz_ore::test]
 fn test_idle_in_transaction_session_timeout() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     server.enable_feature_flags(&["enable_dangerous_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2309,25 +2288,25 @@ fn test_coord_startup_blocking() {
         NowFn::from(move || *timestamp.lock().expect("lock poisoned"))
     };
     let data_dir = tempfile::tempdir().unwrap();
-    let config = test_util::Config::default()
+    let harness = test_util::TestHarness::default()
         .with_now(now_fn)
         .data_directory(data_dir.path());
 
     // Start 3 servers and reserve the first 3 timestamp ranges.
     {
-        let server = test_util::start_server(config.clone()).unwrap();
+        let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         client.query("SELECT 1", &[]).unwrap();
     };
     {
-        let server = test_util::start_server(config.clone()).unwrap();
+        let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         client.query("SELECT 1", &[]).unwrap();
     };
     {
-        let server = test_util::start_server(config.clone()).unwrap();
+        let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         client.query("SELECT 1", &[]).unwrap();
@@ -2335,8 +2314,7 @@ fn test_coord_startup_blocking() {
 
     let (tx, rx) = std::sync::mpsc::sync_channel(0);
     std::thread::spawn(move || {
-        let server =
-            test_util::start_server(config.clone()).expect("unable to start server asynchronously");
+        let server = harness.start_blocking();
         let mut client = server
             .connect(postgres::NoTls)
             .expect("unable to start client asynchronously");
@@ -2362,8 +2340,9 @@ fn test_coord_startup_blocking() {
 
 #[mz_ore::test]
 fn test_peek_on_dropped_cluster() {
-    let config = test_util::Config::default().unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut read_client = server.connect(postgres::NoTls).unwrap();
     read_client.batch_execute("CREATE TABLE t ()").unwrap();
@@ -2415,8 +2394,7 @@ fn test_peek_on_dropped_cluster() {
 
 #[mz_ore::test]
 fn test_emit_timestamp_notice() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
@@ -2479,11 +2457,9 @@ fn test_emit_timestamp_notice() {
 
 #[mz_ore::test]
 fn test_isolation_level_notice() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
-
     let mut client = server
         .pg_config()
         .notice_callback(move |notice| {
@@ -2516,10 +2492,10 @@ fn test_isolation_level_notice() {
 
 #[test] // allow(test-attribute)
 fn test_emit_tracing_notice() {
-    let config = test_util::Config::default()
+    let server = test_util::TestHarness::default()
         .with_enable_tracing(true)
-        .with_system_parameter_default("opentelemetry_filter".to_string(), "debug".to_string());
-    let server = test_util::start_server(config).unwrap();
+        .with_system_parameter_default("opentelemetry_filter".to_string(), "debug".to_string())
+        .start_blocking();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
@@ -2553,7 +2529,7 @@ fn test_emit_tracing_notice() {
 #[mz_ore::test]
 fn test_subscribe_on_dropped_source() {
     fn test_subscribe_on_dropped_source_inner(
-        server: &Server,
+        server: &TestServerWithRuntime,
         tables: Vec<&'static str>,
         subscribe: &'static str,
         assertion: impl FnOnce(
@@ -2646,8 +2622,7 @@ fn test_subscribe_on_dropped_source() {
             .unwrap();
     }
 
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     test_subscribe_on_dropped_source_inner(&server, vec!["t"], "SUBSCRIBE t", |res, rx| {
         res.unwrap();
@@ -2666,8 +2641,7 @@ fn test_subscribe_on_dropped_source() {
 
 #[mz_ore::test]
 fn test_dont_drop_sinks_twice() {
-    let config = test_util::Config::default().workers(4);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let (notice_tx, mut notice_rx) = futures::channel::mpsc::unbounded();
 
@@ -2724,9 +2698,9 @@ fn test_dont_drop_sinks_twice() {
 
 #[mz_ore::test]
 fn test_timelines_persist_after_failed_transaction() {
-    let config = test_util::Config::default().unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
-
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     server.enable_feature_flags(&["enable_create_source_denylist_with_options"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2767,8 +2741,7 @@ fn test_timelines_persist_after_failed_transaction() {
 // we have no way to disconnect sessions using SLT.
 #[mz_ore::test]
 fn test_mz_sessions() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut foo_client = server
         .pg_config()
@@ -2894,8 +2867,9 @@ fn test_mz_sessions() {
 #[mz_ore::test]
 fn test_auto_run_on_introspection_feature_enabled() {
     // unsafe_mode enables the feature as a whole
-    let config = test_util::Config::default().unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let mut client = server
@@ -2999,8 +2973,9 @@ const INTROSPECTION_NOTICE: &str = "results from querying these objects depend o
 #[mz_ore::test]
 fn test_auto_run_on_introspection_feature_disabled() {
     // unsafe_mode enables the feature as a whole
-    let config = test_util::Config::default().unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let mut client = server
@@ -3086,8 +3061,9 @@ fn test_auto_run_on_introspection_feature_disabled() {
 #[mz_ore::test]
 fn test_auto_run_on_introspection_per_replica_relations() {
     // unsafe_mode enables the feature as a whole
-    let config = test_util::Config::default().unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let mut client = server
@@ -3164,8 +3140,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
 #[mz_ore::test]
 fn test_max_connections() {
     mz_ore::test::init_logging();
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut mz_client = server
         .pg_config_internal()
@@ -3259,8 +3234,7 @@ fn test_max_connections() {
 #[mz_ore::test]
 fn test_pg_cancel_backend() {
     mz_ore::test::init_logging();
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut mz_client = server
         .pg_config_internal()
@@ -3377,8 +3351,7 @@ fn test_pg_cancel_backend() {
 #[mz_ore::test]
 fn test_params() {
     mz_ore::test::init_logging();
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -3431,9 +3404,7 @@ fn test_params() {
 // Test pg_cancel_backend after the authenticated role is dropped.
 #[mz_ore::test]
 fn test_pg_cancel_dropped_role() {
-    mz_ore::test::init_logging();
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let dropped_role = "r1";
 
     let mut query_client = server.connect(postgres::NoTls).unwrap();
@@ -3483,9 +3454,7 @@ fn test_pg_cancel_dropped_role() {
 
 #[mz_ore::test]
 fn test_peek_on_dropped_indexed_view() {
-    mz_ore::test::init_logging();
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut ddl_client = server.connect(postgres::NoTls).unwrap();
     let mut peek_client = server.connect(postgres::NoTls).unwrap();
