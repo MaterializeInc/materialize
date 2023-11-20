@@ -309,6 +309,20 @@ fn test_timestamp_selection() {
                         Some(isolation),
                     );
 
+                    // TODO: Factor out into method, or somesuch!
+                    let timeline_ctx = TimelineContext::TimestampDependent;
+                    let isolation_level = IsolationLevel::from(isolation);
+                    let when = parse_query_when(&det.when);
+                    let linearized_timeline =
+                        Frontiers::get_linearized_timeline(&isolation_level, &when, &timeline_ctx);
+
+                    let oracle_read_ts = if let Some(timeline) = linearized_timeline {
+                        // WIP: we're reaching into the TimestampProvider here. yikes!
+                        matches!(timeline, Timeline::EpochMilliseconds).then(|| f.oracle)
+                    } else {
+                        None
+                    };
+
                     let ts = block_on(f.determine_timestamp_for(
                         &catalog,
                         &session,
@@ -316,7 +330,8 @@ fn test_timestamp_selection() {
                         &parse_query_when(&det.when),
                         det.instance.parse().unwrap(),
                         &TimelineContext::TimestampDependent,
-                        None,
+                        oracle_read_ts,
+                        None, /* real_time_recency_ts */
                         &IsolationLevel::from(isolation),
                     ))
                     .unwrap();

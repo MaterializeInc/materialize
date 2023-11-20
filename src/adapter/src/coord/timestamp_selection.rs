@@ -208,6 +208,45 @@ pub trait TimestampProvider {
 
     async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp>;
 
+    fn get_timeline(timeline_context: &TimelineContext) -> Option<Timeline> {
+        let timeline = match timeline_context {
+            TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
+            // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
+            TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
+            TimelineContext::TimestampIndependent => None,
+        };
+
+        timeline
+    }
+
+    /// Returns a `Timeline` whose timestamp oracle we have to use to get a
+    /// linearized read timestamp, _iff_ linearization is needed.
+    fn get_linearized_timeline(
+        isolation_level: &IsolationLevel,
+        when: &QueryWhen,
+        timeline_context: &TimelineContext,
+    ) -> Option<Timeline> {
+        let timeline = Self::get_timeline(timeline_context);
+
+        // In order to use a timestamp oracle, we must be in the context of some timeline. In that
+        // context we would use the timestamp oracle in the following scenarios:
+        // - The isolation level is Strict Serializable and the `when` allows us to use the
+        //   the timestamp oracle (ex: queries with no AS OF).
+        // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
+        let linearized_timeline = match &timeline {
+            Some(timeline)
+                if when.must_advance_to_timeline_ts()
+                    || (when.can_advance_to_timeline_ts()
+                        && isolation_level == &IsolationLevel::StrictSerializable) =>
+            {
+                Some(timeline.clone())
+            }
+            _ => None,
+        };
+
+        linearized_timeline
+    }
+
     /// Determines the timestamp for a query.
     ///
     /// Timestamp determination may fail due to the restricted validity of
@@ -223,6 +262,7 @@ pub trait TimestampProvider {
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
         timeline_context: &TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
         isolation_level: &IsolationLevel,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
@@ -242,28 +282,7 @@ pub trait TimestampProvider {
         let upper = self.least_valid_write(id_bundle);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
-        let timeline = match timeline_context {
-            TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
-            // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
-            TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
-            TimelineContext::TimestampIndependent => None,
-        };
-
-        // In order to use a timestamp oracle, we must be in the context of some timeline. In that
-        // context we would use the timestamp oracle in the following scenarios:
-        // - The isolation level is Strict Serializable and the `when` allows us to use the
-        //   the timestamp oracle (ex: queries with no AS OF).
-        // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
-        let oracle_read_ts = match &timeline {
-            Some(timeline)
-                if when.must_advance_to_timeline_ts()
-                    || (when.can_advance_to_timeline_ts()
-                        && isolation_level == &IsolationLevel::StrictSerializable) =>
-            {
-                self.oracle_read_ts(timeline).await
-            }
-            _ => None,
-        };
+        let timeline = Self::get_timeline(timeline_context);
 
         // Initialize candidate to the minimum correct time.
         let mut candidate = Timestamp::minimum();
@@ -432,6 +451,7 @@ impl Coordinator {
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
         timeline_context: &TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
         let isolation_level = session.vars().transaction_isolation();
@@ -443,6 +463,7 @@ impl Coordinator {
                 when,
                 compute_instance,
                 timeline_context,
+                oracle_read_ts,
                 real_time_recency_ts,
                 isolation_level,
             )
@@ -471,6 +492,7 @@ impl Coordinator {
                         when,
                         compute_instance,
                         timeline_context,
+                        oracle_read_ts,
                         real_time_recency_ts,
                         &IsolationLevel::Serializable,
                     )

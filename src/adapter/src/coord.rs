@@ -324,6 +324,7 @@ pub enum RealTimeRecencyContext {
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
         timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
         in_immediate_multi_stmt_txn: bool,
         optimizer: optimize::peek::Optimizer,
@@ -343,6 +344,7 @@ impl RealTimeRecencyContext {
 #[derive(Debug)]
 pub enum PeekStage {
     Validate(PeekStageValidate),
+    Timestamp(PeekStageTimestamp),
     Optimize(PeekStageOptimize),
     RealTimeRecency(PeekStageRealTimeRecency),
     Finish(PeekStageFinish),
@@ -352,7 +354,8 @@ impl PeekStage {
     fn validity(&mut self) -> Option<&mut PlanValidity> {
         match self {
             PeekStage::Validate(_) => None,
-            PeekStage::Optimize(PeekStageOptimize { validity, .. })
+            PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
+            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
         }
@@ -366,6 +369,19 @@ pub struct PeekStageValidate {
 }
 
 #[derive(Debug)]
+pub struct PeekStageTimestamp {
+    validity: PlanValidity,
+    source: MirRelationExpr,
+    copy_to: Option<CopyFormat>,
+    source_ids: BTreeSet<GlobalId>,
+    when: QueryWhen,
+    target_replica: Option<ReplicaId>,
+    timeline_context: TimelineContext,
+    in_immediate_multi_stmt_txn: bool,
+    optimizer: optimize::peek::Optimizer,
+}
+
+#[derive(Debug)]
 pub struct PeekStageOptimize {
     validity: PlanValidity,
     source: MirRelationExpr,
@@ -374,6 +390,7 @@ pub struct PeekStageOptimize {
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
 }
@@ -387,6 +404,7 @@ pub struct PeekStageRealTimeRecency {
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
@@ -400,6 +418,7 @@ pub struct PeekStageFinish {
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     source_ids: BTreeSet<GlobalId>,
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
