@@ -26,13 +26,11 @@ For guidance on enabling logical replication in AlloyDB, see the [AlloyDB docume
 
 {{% postgres-direct/create-a-publication-other %}}
 
-## Step 3. Set up the AlloyDB Auth Proxy
+## Step 3. Configure network security
 
 To establish authorized and secure connections to an AlloyDB instance, an authentication proxy is necessary. The Google Cloud Platform offers a guide [here](https://cloud.google.com/alloydb/docs/auth-proxy/connect) to assist you in setting up this proxy and generating a connection string that can be utilized with Materialize. Further down, we will provide you with a tailored approach specific to integrating Materialize.
 
-## Step 4. Configure network security
-
-Choose the best network configuration for your setup to connect Materialize with AlloyDB:
+Next, choose the best network configuration for your setup to connect Materialize with AlloyDB:
 
 - **Allow Materialize IPs:** If your AlloyDB instance is publicly accessible, configure your firewall to allow connections from Materialize IP addresses.
 - **Use an SSH tunnel:** For private networks, use an SSH tunnel to connect Materialize to AlloyDB.
