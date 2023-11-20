@@ -113,9 +113,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-# 1.72.0 has a compile time performance regression:
-# https://github.com/rust-lang/rust/issues/115283, so don't use it.
-rust-version = "1.71.0"
+rust-version = "1.74.0"
 
 [profile.dev]
 # TODO(gusywnn|benesch): incremental is still not reliable as of rust 1.72
