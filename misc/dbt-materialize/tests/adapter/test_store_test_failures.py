@@ -15,7 +15,16 @@
 
 import pytest
 from dbt.contracts.results import TestStatus
-from dbt.tests.adapter.store_test_failures_tests import basic
+from dbt.tests.adapter.store_test_failures_tests.basic import (
+    StoreTestFailuresAsBase,
+    StoreTestFailuresAsExceptions,
+    StoreTestFailuresAsGeneric,
+    StoreTestFailuresAsInteractions,
+    StoreTestFailuresAsProjectLevelEphemeral,
+    StoreTestFailuresAsProjectLevelOff,
+    StoreTestFailuresAsProjectLevelView,
+    TestResult,
+)
 from dbt.tests.adapter.store_test_failures_tests.fixtures import (
     models__file_model_but_with_a_no_good_very_long_name,
     models__fine_model,
@@ -62,31 +71,29 @@ class TestMaterializeStoreTestFailures(TestStoreTestFailures):
     pass
 
 
-class TestStoreTestFailuresAsInteractions(basic.StoreTestFailuresAsInteractions):
+class TestStoreTestFailuresAsInteractions(StoreTestFailuresAsInteractions):
     pass
 
 
-class TestStoreTestFailuresAsProjectLevelOff(basic.StoreTestFailuresAsProjectLevelOff):
+class TestStoreTestFailuresAsProjectLevelOff(StoreTestFailuresAsProjectLevelOff):
     pass
 
 
-class TestStoreTestFailuresAsProjectLevelView(
-    basic.StoreTestFailuresAsProjectLevelView
-):
+class TestStoreTestFailuresAsProjectLevelView(StoreTestFailuresAsProjectLevelView):
     pass
 
 
-class TestStoreTestFailuresAsGeneric(basic.StoreTestFailuresAsGeneric):
+class TestStoreTestFailuresAsGeneric(StoreTestFailuresAsGeneric):
     pass
 
 
 class TestStoreTestFailuresAsProjectLevelEphemeral(
-    basic.StoreTestFailuresAsProjectLevelEphemeral
+    StoreTestFailuresAsProjectLevelEphemeral
 ):
     pass
 
 
-class TestStoreTestFailuresAsExceptions(basic.StoreTestFailuresAsExceptions):
+class TestStoreTestFailuresAsExceptions(StoreTestFailuresAsExceptions):
     def test_tests_run_unsuccessfully_and_raise_appropriate_exception(self, project):
         results = run_dbt(["test"], expect_pass=False)
         assert len(results) == 1
@@ -94,12 +101,12 @@ class TestStoreTestFailuresAsExceptions(basic.StoreTestFailuresAsExceptions):
         assert "Compilation Error" in result.message
         assert "'error' is not a valid value" in result.message
         assert (
-            "Accepted values are: ['table', 'view', 'materialized_view']"
+            "Accepted values are: ['ephemeral', 'table', 'view', 'materialized_view']"
             in result.message
         )
 
 
-class TestStoreTestFailuresAsProjectLevelMaterializeView(basic.StoreTestFailuresAsBase):
+class TestStoreTestFailuresAsProjectLevelMaterializeView(StoreTestFailuresAsBase):
     """
     These scenarios test that `store_failures_as` at the project level takes precedence over `store_failures`
     at the model level.
@@ -128,8 +135,8 @@ class TestStoreTestFailuresAsProjectLevelMaterializeView(basic.StoreTestFailures
 
     def test_tests_run_successfully_and_are_stored_as_expected(self, project):
         expected_results = {
-            basic.TestResult("results_true", TestStatus.Fail, "materialized_view"),
-            basic.TestResult("results_false", TestStatus.Fail, "materialized_view"),
-            basic.TestResult("results_unset", TestStatus.Fail, "materialized_view"),
+            TestResult("results_true", TestStatus.Fail, "materialized_view"),
+            TestResult("results_false", TestStatus.Fail, "materialized_view"),
+            TestResult("results_unset", TestStatus.Fail, "materialized_view"),
         }
         self.run_and_assert(project, expected_results)
