@@ -105,7 +105,7 @@ use matcher::MatcherImpl;
 // This lint interacts poorly with `derivative` here; we are confident it generates
 // compatible `PartialOrd` and `Ord` impls. Unfortunately it also requires we introduce
 // this module to allow it.
-#[allow(clippy::non_canonical_partial_ord_impl)]
+#[allow(clippy::incorrect_partial_ord_impl_on_ord_type)]
 mod matcher {
     use super::*;
 
