@@ -226,7 +226,7 @@ key          duplicates                 headers
 message_3    message_3_header_3_third   "{\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f6669727374)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7365636f6e64)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7468697264)\"}"
 
 
-# Verifz that the source is bricked when there are headers that cannot be parsed as utf-8
+# Verify that the source is bricked when there are headers that cannot be parsed as utf-8
 $ kafka-create-topic topic=ill_formed_header
 
 $ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${keyschema} schema=${schema} headers={"header1": "message_1_header_1"}
@@ -255,7 +255,7 @@ $ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${
 contains:Found ill-formed byte sequence in header 'header1' that cannot be decoded as valid utf-8 (original bytes: [c3, 28])
 
 
-# Verify that the source is bricked when messages have missing headers 
+# Verify that the source is bricked when messages have missing headers
 
 > CREATE SOURCE missing_headers
   FROM KAFKA CONNECTION kafka_conn (TOPIC
