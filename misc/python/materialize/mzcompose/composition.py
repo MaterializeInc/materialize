@@ -44,6 +44,7 @@ from pg8000 import Connection, Cursor
 from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
+from materialize.mzcompose.services.minio import MINIO_BLOB_URI
 from materialize.ui import UIError
 
 
@@ -968,3 +969,63 @@ class Composition:
             self.exec(service, *args_with_source, stdin=input)
         else:
             self.run(service, *args_with_source, stdin=input)
+
+    def enable_minio_versioning(self) -> None:
+        self.up("minio")
+        self.up("mc", persistent=True)
+        self.exec(
+            "mc",
+            "mc",
+            "alias",
+            "set",
+            "persist",
+            "http://minio:9000/",
+            "minioadmin",
+            "minioadmin",
+        )
+
+        self.exec("mc", "mc", "version", "enable", "persist/persist")
+
+    def backup_crdb(self) -> None:
+        self.up("mc", persistent=True)
+        self.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
+        self.exec(
+            "cockroach",
+            "cockroach",
+            "sql",
+            "--insecure",
+            "-e",
+            """
+                CREATE EXTERNAL CONNECTION backup_bucket
+                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
+                BACKUP INTO 'external://backup_bucket';
+                DROP EXTERNAL CONNECTION backup_bucket;
+            """,
+        )
+
+    def restore_mz(self) -> None:
+        self.kill("materialized")
+        self.exec(
+            "cockroach",
+            "cockroach",
+            "sql",
+            "--insecure",
+            "-e",
+            """
+                DROP DATABASE defaultdb;
+                CREATE EXTERNAL CONNECTION backup_bucket
+                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
+                RESTORE DATABASE defaultdb
+                FROM LATEST IN 'external://backup_bucket';
+                DROP EXTERNAL CONNECTION backup_bucket;
+            """,
+        )
+        self.run(
+            "persistcli",
+            "admin",
+            "--commit",
+            "restore-blob",
+            f"--blob-uri={MINIO_BLOB_URI}",
+            "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
+        )
+        self.up("materialized")
