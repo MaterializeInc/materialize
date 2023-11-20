@@ -77,7 +77,6 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use differential_dataflow::difference::Semigroup;
 use differential_dataflow::{AsCollection, Collection};
 use futures::{future, future::select, FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
 use once_cell::sync::Lazy;
@@ -190,10 +189,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 subsource_resume_uppers
                     .values()
                     .flat_map(|f| f.elements())
-                    // When snapshotting tables, the resume LSN wants to move to 0;
-                    // however, we want to ensure it is at least the slot's LSN, so
-                    // ensure that any 0 resume upper is treated as the slot's LSN.
-                    .map(|t| if t.is_zero() { slot_lsn } else { *t })
+                    // Advance any upper as far as the slot_lsn.
+                    .map(|t|std::cmp::max(*t, slot_lsn))
             );
 
             let Some(resume_lsn) = resume_upper.into_option() else {
