@@ -276,8 +276,10 @@ The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 
 ### `mz_materialization_lag`
 
-The `mz_materialization_lag` view describes for each materialized view, index, and sink in the system the difference between the input frontiers and the output frontier.
-For hydrated dataflows, this lag roughly corresponds to the time it takes for updates at the inputs to become reflected in the outputs.
+The `mz_materialization_lag` view describes the difference between the input
+frontiers and the output frontier for each materialized view, index, and sink
+in the system. For hydrated dataflows, this lag roughly corresponds to the time
+it takes for updates at the inputs to be reflected in the output.
 
 At this time, we do not make any guarantees about the freshness of these numbers.
 
