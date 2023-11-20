@@ -39,7 +39,20 @@ use crate::AdapterError;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TimestampContext<T> {
     /// Read is executed in a specific timeline with a specific timestamp.
-    TimelineTimestamp(Timeline, T),
+    TimelineTimestamp {
+        timeline: Timeline,
+        /// The timestamp that was chosen for a read. This can differ from the
+        /// `oracle_ts` when collections are not readable at the (linearized)
+        /// timestamp for the oracle. In those cases (when the chosen timestamp
+        /// is further ahead than the oracle timestamp) we have to delay
+        /// returning peek results until the timestamp oracle is also
+        /// sufficiently advanced.
+        chosen_ts: T,
+        /// The timestamp that would have been chosen for the read by the
+        /// (linearized) timestamp oracle). In most cases this will be picked as
+        /// the `chosen_ts`.
+        oracle_ts: Option<T>,
+    },
     /// Read is execute without a timeline or timestamp.
     NoTimestamp,
 }
@@ -47,7 +60,8 @@ pub enum TimestampContext<T> {
 impl<T: TimestampManipulation> TimestampContext<T> {
     /// Creates a `TimestampContext` from a timestamp and `TimelineContext`.
     pub fn from_timeline_context(
-        ts: T,
+        chosen_ts: T,
+        oracle_ts: Option<T>,
         transaction_timeline: Option<Timeline>,
         timeline_context: &TimelineContext,
     ) -> TimestampContext<T> {
@@ -56,14 +70,19 @@ impl<T: TimestampManipulation> TimestampContext<T> {
                 if let Some(transaction_timeline) = transaction_timeline {
                     assert_eq!(timeline, &transaction_timeline);
                 }
-                Self::TimelineTimestamp(timeline.clone(), ts)
+                Self::TimelineTimestamp {
+                    timeline: timeline.clone(),
+                    chosen_ts,
+                    oracle_ts,
+                }
             }
             TimelineContext::TimestampDependent => {
                 // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
-                Self::TimelineTimestamp(
-                    transaction_timeline.unwrap_or(Timeline::EpochMilliseconds),
-                    ts,
-                )
+                Self::TimelineTimestamp {
+                    timeline: transaction_timeline.unwrap_or(Timeline::EpochMilliseconds),
+                    chosen_ts,
+                    oracle_ts,
+                }
             }
             TimelineContext::TimestampIndependent => Self::NoTimestamp,
         }
@@ -72,7 +91,7 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     /// The timeline belonging to this context, if one exists.
     pub fn timeline(&self) -> Option<&Timeline> {
         match self {
-            Self::TimelineTimestamp(timeline, _) => Some(timeline),
+            Self::TimelineTimestamp { timeline, .. } => Some(timeline),
             Self::NoTimestamp => None,
         }
     }
@@ -80,7 +99,7 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     /// The timestamp belonging to this context, if one exists.
     pub fn timestamp(&self) -> Option<&T> {
         match self {
-            Self::TimelineTimestamp(_, ts) => Some(ts),
+            Self::TimelineTimestamp { chosen_ts, .. } => Some(chosen_ts),
             Self::NoTimestamp => None,
         }
     }
@@ -88,7 +107,7 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     /// The timestamp belonging to this context, or a sensible default if one does not exists.
     pub fn timestamp_or_default(&self) -> T {
         match self {
-            Self::TimelineTimestamp(_, ts) => ts.clone(),
+            Self::TimelineTimestamp { chosen_ts, .. } => chosen_ts.clone(),
             // Anything without a timestamp is given the maximum possible timestamp to indicate
             // that they have been closed up until the end of time. This allows us to SUBSCRIBE to
             // static views.
@@ -350,8 +369,12 @@ pub trait TimestampProvider {
             ));
         };
 
-        let timestamp_context =
-            TimestampContext::from_timeline_context(timestamp, timeline, timeline_context);
+        let timestamp_context = TimestampContext::from_timeline_context(
+            timestamp,
+            oracle_read_ts,
+            timeline,
+            timeline_context,
+        );
 
         Ok(TimestampDetermination {
             timestamp_context,
@@ -588,7 +611,9 @@ pub struct TimestampDetermination<T> {
 impl<T: TimestampManipulation> TimestampDetermination<T> {
     pub fn respond_immediately(&self) -> bool {
         match &self.timestamp_context {
-            TimestampContext::TimelineTimestamp(_, timestamp) => !self.upper.less_equal(timestamp),
+            TimestampContext::TimelineTimestamp { chosen_ts, .. } => {
+                !self.upper.less_equal(chosen_ts)
+            }
             TimestampContext::NoTimestamp => true,
         }
     }

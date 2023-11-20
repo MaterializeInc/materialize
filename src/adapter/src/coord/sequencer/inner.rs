@@ -2615,7 +2615,7 @@ impl Coordinator {
                 // Use the transaction's timestamp if it exists and this isn't an AS OF query.
                 Some(
                     determination @ TimestampDetermination {
-                        timestamp_context: TimestampContext::TimelineTimestamp(_, _),
+                        timestamp_context: TimestampContext::TimelineTimestamp { .. },
                         ..
                     },
                 ) if in_immediate_multi_stmt_txn => (determination, None),
@@ -4345,13 +4345,17 @@ impl Coordinator {
             // Note: It's only OK for the write to have a greater timestamp than the read
             // because the write lock prevents any other writes from happening in between
             // the read and write.
-            if let Some(TimestampContext::TimelineTimestamp(timeline, read_ts)) = timestamp_context
+            if let Some(TimestampContext::TimelineTimestamp {
+                timeline,
+                chosen_ts: chosen_read_ts,
+                oracle_ts: _,
+            }) = timestamp_context
             {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 let result = strict_serializable_reads_tx.send(PendingReadTxn {
                     txn: PendingRead::ReadThenWrite {
                         tx,
-                        timestamp: (read_ts, timeline),
+                        timestamp: (chosen_read_ts, timeline),
                     },
                     created: Instant::now(),
                     num_requeues: 0,

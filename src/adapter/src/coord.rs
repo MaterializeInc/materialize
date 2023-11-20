@@ -701,7 +701,12 @@ impl PendingRead {
             PendingRead::ReadThenWrite {
                 timestamp: (timestamp, timeline),
                 ..
-            } => TimestampContext::TimelineTimestamp(timeline.clone(), timestamp.clone()),
+            } => TimestampContext::TimelineTimestamp {
+                timeline: timeline.clone(),
+                chosen_ts: timestamp.clone(),
+                oracle_ts: None, // For writes, we always pick the oracle
+                                 // timestamp!
+            },
         }
     }
 

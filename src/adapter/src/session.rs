@@ -473,7 +473,7 @@ impl<T: TimestampManipulation> Session<T> {
                 pcx: _,
                 ops: TransactionOps::Peeks {
                     determination: TimestampDetermination {
-                        timestamp_context: TimestampContext::TimelineTimestamp(_, _),
+                        timestamp_context: TimestampContext::TimelineTimestamp { .. },
                         ..
                     },
                     ..
@@ -1051,8 +1051,16 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                                 &add_timestamp_determination.timestamp_context,
                             ) {
                                 (
-                                    TimestampContext::TimelineTimestamp(txn_timeline, txn_ts),
-                                    TimestampContext::TimelineTimestamp(add_timeline, add_ts),
+                                    TimestampContext::TimelineTimestamp {
+                                        timeline: txn_timeline,
+                                        chosen_ts: txn_ts,
+                                        oracle_ts: _,
+                                    },
+                                    TimestampContext::TimelineTimestamp {
+                                        timeline: add_timeline,
+                                        chosen_ts: add_ts,
+                                        oracle_ts: _,
+                                    },
                                 ) => {
                                     assert_eq!(txn_timeline, add_timeline);
                                     assert_eq!(txn_ts, add_ts);
@@ -1173,7 +1181,7 @@ impl<T> Transaction<T> {
             TransactionOps::Peeks {
                 determination:
                     TimestampDetermination {
-                        timestamp_context: TimestampContext::TimelineTimestamp(timeline, _),
+                        timestamp_context: TimestampContext::TimelineTimestamp { timeline, .. },
                         ..
                     },
                 ..

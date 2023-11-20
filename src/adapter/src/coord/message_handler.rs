@@ -618,15 +618,37 @@ impl Coordinator {
         let mut deferred_txns = Vec::new();
 
         for mut read_txn in pending_read_txns {
-            if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
-                read_txn.txn.timestamp_context()
+            if let TimestampContext::TimelineTimestamp {
+                timeline,
+                chosen_ts,
+                oracle_ts,
+            } = read_txn.txn.timestamp_context()
             {
+                let oracle_ts = match oracle_ts {
+                    Some(oracle_ts) => oracle_ts,
+                    None => {
+                        // There was no oracle timestamp, so no need to delay.
+                        ready_txns.push(read_txn);
+                        continue;
+                    }
+                };
+
+                if chosen_ts <= oracle_ts {
+                    // Chosen ts was already <= the oracle ts, so we're good
+                    // to go!
+                    ready_txns.push(read_txn);
+                    continue;
+                }
+
                 let timestamp_oracle = self.get_timestamp_oracle(&timeline);
-                let read_ts = timestamp_oracle.read_ts().await;
-                if timestamp <= read_ts {
+
+                // See what the oracle timestamp is now and delay when needed.
+                let current_oracle_ts = timestamp_oracle.read_ts().await;
+                if chosen_ts <= current_oracle_ts {
                     ready_txns.push(read_txn);
                 } else {
-                    let wait = Duration::from_millis(timestamp.saturating_sub(read_ts).into());
+                    let wait =
+                        Duration::from_millis(chosen_ts.saturating_sub(current_oracle_ts).into());
                     if wait < shortest_wait {
                         shortest_wait = wait;
                     }
