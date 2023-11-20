@@ -93,9 +93,6 @@ use crate::coord::dataflows::{
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PeekDataflowPlan, PeekPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
-use crate::coord::sequencer::old_optimizer_api::{
-    PeekStageDeprecated, PeekStageValidateDeprecated,
-};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
@@ -895,11 +892,6 @@ impl Coordinator {
 
         let mut ops = vec![];
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
         ops.extend(
             drop_ids
                 .iter()
@@ -909,59 +901,35 @@ impl Coordinator {
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
         let raw_expr = view.expr.clone();
-        if enable_unified_optimizer_api {
-            // Collect optimizer parameters.
-            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-            // Build an optimizer for this VIEW.
-            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+        // Collect optimizer parameters.
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-            let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+        // Build an optimizer for this VIEW.
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
-            let view = catalog::View {
-                create_sql: view.create_sql.clone(),
-                raw_expr,
-                desc: RelationDesc::new(optimized_expr.typ(), view.column_names.clone()),
-                optimized_expr,
-                conn_id: if view.temporary {
-                    Some(session.conn_id().clone())
-                } else {
-                    None
-                },
-                resolved_ids,
-            };
-            ops.push(catalog::Op::CreateItem {
-                id: view_id,
-                oid: view_oid,
-                name: name.clone(),
-                item: CatalogItem::View(view),
-                owner_id: *session.current_role_id(),
-            });
-        } else {
-            let decorrelated_expr = raw_expr.clone().lower(self.catalog().system_config())?;
-            let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
-            let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
-            let view = catalog::View {
-                create_sql: view.create_sql.clone(),
-                raw_expr,
-                optimized_expr,
-                desc,
-                conn_id: if view.temporary {
-                    Some(session.conn_id().clone())
-                } else {
-                    None
-                },
-                resolved_ids,
-            };
-            ops.push(catalog::Op::CreateItem {
-                id: view_id,
-                oid: view_oid,
-                name: name.clone(),
-                item: CatalogItem::View(view),
-                owner_id: *session.current_role_id(),
-            });
-        }
+        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+        let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+
+        let view = catalog::View {
+            create_sql: view.create_sql.clone(),
+            raw_expr,
+            desc: RelationDesc::new(optimized_expr.typ(), view.column_names.clone()),
+            optimized_expr,
+            conn_id: if view.temporary {
+                Some(session.conn_id().clone())
+            } else {
+                None
+            },
+            resolved_ids,
+        };
+        ops.push(catalog::Op::CreateItem {
+            id: view_id,
+            oid: view_oid,
+            name: name.clone(),
+            item: CatalogItem::View(view),
+            owner_id: *session.current_role_id(),
+        });
 
         Ok(ops)
     }
@@ -2158,40 +2126,17 @@ impl Coordinator {
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
-        if enable_unified_optimizer_api {
-            self.sequence_peek_stage(
-                ctx,
-                PeekStage::Validate(PeekStageValidate {
-                    plan,
-                    target_cluster,
-                }),
-            )
-            .await;
-        } else {
-            // Allow while the introduction of the new optimizer API in
-            // #20569 is in progress.
-            #[allow(deprecated)]
-            self.sequence_peek_stage_deprecated(
-                ctx,
-                PeekStageDeprecated::Validate(PeekStageValidateDeprecated {
-                    plan,
-                    target_cluster,
-                }),
-            )
-            .await;
-        }
+        self.sequence_peek_stage(
+            ctx,
+            PeekStage::Validate(PeekStageValidate {
+                plan,
+                target_cluster,
+            }),
+        )
+        .await;
     }
 
     /// Processes as many peek stages as possible.
-    ///
-    /// WARNING! This should mirror the semantics of `sequence_peek_stage_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_peek_stage(
         &mut self,
@@ -2235,10 +2180,6 @@ impl Coordinator {
     }
 
     /// Do some simple validation. We must defer most of it until after any off-thread work.
-    ///
-    /// WARNING! This should mirror the semantics of `peek_stage_validate_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     fn peek_stage_validate(
         &mut self,
         session: &Session,
@@ -2335,9 +2276,6 @@ impl Coordinator {
         })
     }
 
-    /// WARNING! This should mirror the semantics of `peek_stage_optimize_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
@@ -2390,9 +2328,6 @@ impl Coordinator {
         );
     }
 
-    /// WARNING! This should mirror the semantics of `optimize_peek_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     fn optimize_peek(
         session: &Session,
         stats: Box<dyn StatisticsOracle>,
@@ -2427,9 +2362,6 @@ impl Coordinator {
         })
     }
 
-    /// WARNING! This should mirror the semantics of `peek_stage_timestamp_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
     fn peek_stage_timestamp(
         &mut self,
@@ -2497,9 +2429,6 @@ impl Coordinator {
         }
     }
 
-    /// WARNING! This should mirror the semantics of `peek_stage_finish_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_finish(
         &mut self,
@@ -2582,10 +2511,6 @@ impl Coordinator {
 
     /// Determines the query timestamp and acquires read holds on dependent sources
     /// if necessary.
-    ///
-    /// WARNING! This should mirror the semantics of `sequence_peek_timestamp_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     async fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,
@@ -2706,9 +2631,6 @@ impl Coordinator {
         Ok(determination)
     }
 
-    /// WARNING! This should mirror the semantics of `plan_peek_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     async fn plan_peek(
         &mut self,
         session: &mut Session,
@@ -2798,8 +2720,6 @@ impl Coordinator {
         }
     }
 
-    /// This should mirror the operational semantics of
-    /// `Coordinator::sequence_subscribe_deprecated`.
     pub(super) async fn sequence_subscribe(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -3168,11 +3088,6 @@ impl Coordinator {
         // we aren't storing this clone in a `Subscriber`, so we should be fine.
         let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
         let pipeline_result = match stmt {
             plan::ExplaineeStatement::Query {
                 raw_plan,
@@ -3180,39 +3095,20 @@ impl Coordinator {
                 desc,
                 broken,
             } => {
-                if enable_unified_optimizer_api {
-                    // Please see the doc comment on `explain_query_optimizer_pipeline` for more
-                    // information regarding its subtleties.
-                    self.explain_query_optimizer_pipeline(
-                        raw_plan,
-                        broken,
-                        target_cluster,
-                        ctx.session_mut(),
-                        row_set_finishing,
-                        desc,
-                        &config,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                } else {
-                    // Allow while the introduction of the new optimizer API in
-                    // #20569 is in progress.
-                    #[allow(deprecated)]
-                    // Please see the doc comment on `explain_query_optimizer_pipeline` for more
-                    // information regarding its subtleties.
-                    self.explain_query_optimizer_pipeline_deprecated(
-                        raw_plan,
-                        broken,
-                        target_cluster,
-                        ctx.session_mut(),
-                        &Some(row_set_finishing),
-                        &config,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                }
+                // Please see the doc comment on `explain_query_optimizer_pipeline` for more
+                // information regarding its subtleties.
+                self.explain_query_optimizer_pipeline(
+                    raw_plan,
+                    broken,
+                    target_cluster,
+                    ctx.session_mut(),
+                    row_set_finishing,
+                    desc,
+                    &config,
+                    root_dispatch,
+                )
+                .with_subscriber(&optimizer_trace)
+                .await
             }
             plan::ExplaineeStatement::CreateMaterializedView {
                 name,
@@ -3840,24 +3736,14 @@ impl Coordinator {
     > {
         let plan::ExplainTimestampPlan { format, raw_plan } = plan;
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
+        // Collect optimizer parameters.
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-        let optimized_plan = if enable_unified_optimizer_api {
-            // Collect optimizer parameters.
-            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+        // Build an optimizer for this VIEW.
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
-            // Build an optimizer for this VIEW.
-            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
-
-            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-            optimizer.optimize(raw_plan)?
-        } else {
-            let decorrelated_plan = raw_plan.lower(self.catalog().system_config())?;
-            self.view_optimizer.optimize(decorrelated_plan)?
-        };
+        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+        let optimized_plan = optimizer.optimize(raw_plan)?;
 
         let source_ids = optimized_plan.depends_on();
         let cluster = self
@@ -3982,17 +3868,12 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::InsertPlan,
     ) {
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
         let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
             let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
             OptimizedMirRelationExpr(expr)
-        } else if enable_unified_optimizer_api {
+        } else {
             // Collect optimizer parameters.
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
@@ -4001,9 +3882,6 @@ impl Coordinator {
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
             return_if_err!(optimizer.optimize(plan.values), ctx)
-        } else {
-            let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
-            return_if_err!(self.view_optimizer.optimize(expr), ctx)
         };
 
         match optimized_mir.into_inner() {

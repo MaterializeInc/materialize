@@ -89,7 +89,7 @@ use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -100,7 +100,7 @@ use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationType, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
@@ -114,7 +114,6 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourc
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::Timeline;
-use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
@@ -138,7 +137,6 @@ use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
-use crate::coord::sequencer::old_optimizer_api::PeekStageDeprecated;
 use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_selection::TimestampContext;
@@ -230,10 +228,6 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stage: PeekStage,
     },
-    PeekStageDeprecatedReady {
-        ctx: ExecuteContext,
-        stage: PeekStageDeprecated,
-    },
     DrainStatementLog,
 }
 
@@ -273,7 +267,6 @@ impl Message {
                 "execute_single_statement_transaction"
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
-            Message::PeekStageDeprecatedReady { .. } => "peek_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
         }
     }
@@ -327,23 +320,6 @@ pub enum RealTimeRecencyContext {
         optimizer: optimize::peek::Optimizer,
         global_mir_plan: optimize::peek::GlobalMirPlan,
     },
-    PeekDeprecated {
-        ctx: ExecuteContext,
-        finishing: RowSetFinishing,
-        copy_to: Option<CopyFormat>,
-        dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-        cluster_id: ClusterId,
-        when: QueryWhen,
-        target_replica: Option<ReplicaId>,
-        view_id: GlobalId,
-        index_id: GlobalId,
-        timeline_context: TimelineContext,
-        source_ids: BTreeSet<GlobalId>,
-        in_immediate_multi_stmt_txn: bool,
-        key: Vec<MirScalarExpr>,
-        typ: RelationType,
-        dataflow_metainfo: DataflowMetainfo,
-    },
 }
 
 impl RealTimeRecencyContext {
@@ -351,7 +327,6 @@ impl RealTimeRecencyContext {
         match self {
             RealTimeRecencyContext::ExplainTimestamp { ctx, .. }
             | RealTimeRecencyContext::Peek { ctx, .. } => ctx,
-            RealTimeRecencyContext::PeekDeprecated { ctx, .. } => ctx,
         }
     }
 }
