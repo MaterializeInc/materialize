@@ -16,7 +16,6 @@ clap = { version = "3.2.24", features = ["derive", "env"] }
 futures = "0.3.25"
 hyper = { version = "0.14.23", features = ["http1", "server"] }
 hyper-openssl = "0.9.2"
-jsonwebtoken = "8.2.0"
 mz-build-info = { path = "../build-info" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-frontegg-mock = { path = "../frontegg-mock" }
@@ -38,6 +37,7 @@ uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
+jsonwebtoken = "8.2.0"
 mz-environmentd = { path = "../environmentd", features = ["test"] }
 postgres = "0.19.5"
 

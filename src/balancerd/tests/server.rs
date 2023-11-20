@@ -161,7 +161,6 @@ fn test_balancer() {
     let resolvers = vec![
         Resolver::Static(envd_server.inner.balancer_sql_local_addr().to_string()),
         Resolver::Frontegg(FronteggResolver {
-            auth: frontegg_auth,
             addr_template: envd_server.inner.balancer_sql_local_addr().to_string(),
         }),
     ];

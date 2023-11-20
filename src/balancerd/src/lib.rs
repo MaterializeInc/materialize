@@ -98,7 +98,7 @@ use bytes::BytesMut;
 use futures::TryFutureExt;
 use hyper::StatusCode;
 use mz_build_info::{build_info, BuildInfo};
-use mz_frontegg_auth::Authentication as FronteggAuthentication;
+use mz_frontegg_auth::AppPassword;
 use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
 use mz_ore::task::JoinSetExt;
@@ -421,20 +421,11 @@ impl PgwireBalancer {
                 .await;
         }
 
-        let Some(user) = params.get("user") else {
-            return conn
-                .send(ErrorResponse::fatal(
-                    SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
-                    "user parameter required",
-                ))
-                .await;
-        };
-
         if let Err(err) = conn.inner().ensure_tls_compatibility(&tls_mode) {
             return conn.send(err).await;
         }
 
-        let resolved = match resolver.resolve(conn, user).await {
+        let resolved = match resolver.resolve(conn).await {
             Ok(v) => v,
             Err(err) => {
                 return conn
@@ -666,19 +657,12 @@ pub enum Resolver {
 }
 
 impl Resolver {
-    async fn resolve<A>(
-        &self,
-        conn: &mut FramedConn<A>,
-        user: &str,
-    ) -> Result<ResolvedAddr, anyhow::Error>
+    async fn resolve<A>(&self, conn: &mut FramedConn<A>) -> Result<ResolvedAddr, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + Unpin,
     {
         match self {
-            Resolver::Frontegg(FronteggResolver {
-                auth,
-                addr_template,
-            }) => {
+            Resolver::Frontegg(FronteggResolver { addr_template }) => {
                 conn.send(BackendMessage::AuthenticationCleartextPassword)
                     .await?;
                 conn.flush().await?;
@@ -687,19 +671,11 @@ impl Resolver {
                     _ => anyhow::bail!("expected Password message"),
                 };
 
-                let auth_response = auth
-                    .exchange_password_for_token(&password, user.to_string())
-                    .await;
-                let claims = match auth_response {
-                    Ok(result) => result.claims,
-                    Err(e) => {
-                        warn!("pgwire connection failed authentication: {}", e);
-                        // TODO: fix error codes.
-                        anyhow::bail!("invalid password");
-                    }
-                };
+                let app_pw: AppPassword = password
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("invalid password"))?;
 
-                let addr = addr_template.replace("{}", &claims.tenant_id.to_string());
+                let addr = addr_template.replace("{}", &app_pw.client_id.to_string());
                 let mut addrs = tokio::net::lookup_host(&addr).await?;
                 let Some(addr) = addrs.next() else {
                     error!("{addr} did not resolve to any addresses");
@@ -728,7 +704,6 @@ impl Resolver {
 
 #[derive(Debug)]
 pub struct FronteggResolver {
-    pub auth: FronteggAuthentication,
     pub addr_template: String,
 }
 
