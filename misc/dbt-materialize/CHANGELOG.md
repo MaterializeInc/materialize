@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.7.0 - 2023-11-20
 
 * Support specifying the materialization type used to store test failures via
   the new [`store_failures_as` configuration](https://docs.getdbt.com/reference/resource-configs/store_failures_as).
