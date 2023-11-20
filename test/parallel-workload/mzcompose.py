@@ -36,12 +36,7 @@ SERVICES = [
     SchemaRegistry(),
     Minio(setup_materialize=True),
     Mc(),
-    Materialized(
-        external_cockroach=True,
-        restart="on-failure",
-        external_minio=True,
-        ports=["6975:6875", "6976:6876", "6977:6877"],
-    ),
+    Materialized(),
     Service("sqlsmith", {"mzbuild": "sqlsmith"}),
     Service(
         name="persistcli",
@@ -64,11 +59,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "minio",
         "materialized",
     ]
-    catalog_store = (
-        "stash"
-        if args.scenario in (Scenario.Kill, Scenario.BackupRestore)
-        else "shadow"
-    )
+
+    if Scenario(args.scenario) in (Scenario.Kill, Scenario.BackupRestore):
+        catalog_store = "stash"
+        sanity_restart = False
+    else:
+        catalog_store = "shadow"
+        sanity_restart = True
+
     with c.override(
         Materialized(
             external_cockroach=True,
@@ -76,6 +74,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_minio=True,
             ports=["6975:6875", "6976:6876", "6977:6877"],
             catalog_store=catalog_store,
+            sanity_restart=sanity_restart,
         )
     ):
         c.up(*service_names)
