@@ -566,46 +566,22 @@ impl SourceRender for KafkaSourceConnection {
                 while let Some(result) = reader.consumer.poll(Duration::from_secs(0)) {
                     match result {
                         Ok(message) => {
-                            match construct_source_message(&message, &reader.metadata_columns) {
-                                Ok((message, ts)) => {
-                                    if let Some((msg, time, diff)) =
-                                        reader.handle_message(message, ts)
-                                    {
-                                        let pid = time.partition().unwrap();
-                                        let part_cap = &reader.partition_capabilities[pid].data;
-                                        match msg {
-                                            Ok(msg) => {
-                                                data_output
-                                                    .give(part_cap, ((0, Ok(msg)), time, diff))
-                                                    .await
-                                            }
-                                            Err(err) => {
-                                                let err: SourceReaderError =
-                                                    SourceReaderError::other_definite(anyhow!(err));
-
-                                                data_output
-                                                    .give(part_cap, ((0, Err(err)), time, diff))
-                                                    .await
-                                            }
-                                        }
+                            let (message, ts) =
+                                construct_source_message(&message, &reader.metadata_columns);
+                            if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
+                                let pid = time.partition().unwrap();
+                                let part_cap = &reader.partition_capabilities[pid].data;
+                                match msg {
+                                    Ok(msg) => {
+                                        data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await
                                     }
-                                }
-                                Err(e) => {
-                                    let error = format!(
-                                        "kafka error when polling consumer for source: {} topic: {} : {}",
-                                        reader.source_name, reader.topic_name, e
-                                    );
-                                    let status = HealthStatusUpdate::stalled(error, None);
-                                    health_output
-                                        .give(
-                                            &health_cap,
-                                            HealthStatusMessage {
-                                                index: 0,
-                                                namespace: Self::STATUS_NAMESPACE.clone(),
-                                                update: status,
-                                            },
-                                        )
-                                        .await;
+                                    Err(err) => {
+                                        let err = SourceReaderError::other_definite(anyhow!(err));
+
+                                        data_output
+                                            .give(part_cap, ((0, Err(err)), time, diff))
+                                            .await
+                                    }
                                 }
                             }
                         }
@@ -646,8 +622,7 @@ impl SourceRender for KafkaSourceConnection {
                                 data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
                             }
                             Ok(Some((Err(err), time, diff))) => {
-                                let err: SourceReaderError =
-                                    SourceReaderError::other_definite(anyhow!(err));
+                                let err = SourceReaderError::other_definite(anyhow!(err));
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid].data;
                                 data_output
@@ -1024,13 +999,10 @@ impl KafkaSourceReader {
 fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     metadata_columns: &[KafkaMetadataKind],
-) -> Result<
-    (
-        Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, DecodeError>,
-        (PartitionId, MzOffset),
-    ),
-    KafkaError,
-> {
+) -> (
+    Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, DecodeError>,
+    (PartitionId, MzOffset),
+) {
     let pid = msg.partition();
     let Ok(offset) = u64::try_from(msg.offset()) else {
         panic!(
@@ -1090,7 +1062,7 @@ fn construct_source_message(
                         match d {
                             Ok(d) => packer.push(d),
                             //abort with a definite error when the header cannot be parsed correctly
-                            Err(err) => return Ok((Err(err), (pid, offset.into()))),
+                            Err(err) => return (Err(err), (pid, offset.into())),
                         }
                     }
                     None => packer.push(Datum::Null),
@@ -1122,7 +1094,7 @@ fn construct_source_message(
         value: msg.payload().map(|p| p.to_vec()),
         metadata,
     };
-    Ok((Ok(msg), (pid, offset.into())))
+    (Ok(msg), (pid, offset.into()))
 }
 
 /// Wrapper around a partition containing the underlying consumer
@@ -1165,13 +1137,11 @@ impl PartitionConsumer {
         KafkaError,
     > {
         match self.partition_queue.poll(Duration::from_millis(0)) {
-            Some(Ok(msg)) => match construct_source_message(&msg, &self.metadata_columns) {
-                Ok((msg, ts)) => {
-                    assert_eq!(ts.0, self.pid);
-                    Ok(Some((msg, ts)))
-                }
-                Err(err) => Err(err),
-            },
+            Some(Ok(msg)) => {
+                let (msg, ts) = construct_source_message(&msg, &self.metadata_columns);
+                assert_eq!(ts.0, self.pid);
+                Ok(Some((msg, ts)))
+            }
             Some(Err(err)) => Err(err),
             _ => Ok(None),
         }
