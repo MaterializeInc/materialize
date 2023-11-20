@@ -1246,6 +1246,7 @@ DROP ROLE owner
 ----
 db error: ERROR: role "owner" cannot be dropped because some objects depend on it
 DETAIL: owner: owner of SOURCE "materialize.public.s_progress"
+owner: privileges granted on SOURCE "materialize.public.s_progress" to mz_support
 owner: privileges on SOURCE "materialize.public.s_progress" granted by owner
 owner: privileges granted on SOURCE "materialize.public.s_progress" to owner
 owner: owner of SOURCE "materialize.public.s"

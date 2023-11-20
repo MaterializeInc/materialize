@@ -75,7 +75,7 @@ use mz_sql::names::{
 use mz_sql::plan::{
     PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
-use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
+use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
     ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, ENABLE_PERSIST_TXN_TABLES,
 };
@@ -1815,9 +1815,23 @@ impl Catalog {
                             item.typ().into(),
                         )
                         .map(|item| item.mz_acl_item(owner_id));
-                    let privileges: Vec<_> =
-                        merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
-                            .collect();
+                    // mz_support can read all progress sources.
+                    let progress_source_privilege = if item.is_progress_source() {
+                        Some(MzAclItem {
+                            grantee: MZ_SUPPORT_ROLE_ID,
+                            grantor: owner_id,
+                            acl_mode: AclMode::SELECT,
+                        })
+                    } else {
+                        None
+                    };
+                    let privileges: Vec<_> = merge_mz_acl_items(
+                        owner_privileges
+                            .into_iter()
+                            .chain(default_privileges)
+                            .chain(progress_source_privilege),
+                    )
+                    .collect();
 
                     if item.is_temporary() {
                         if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient

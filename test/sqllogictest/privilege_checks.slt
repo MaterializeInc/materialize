@@ -489,6 +489,33 @@ REVOKE CREATE ON CLUSTER source_cluster FROM joe;
 ----
 COMPLETE 0
 
+# mz_support reading from progress source
+
+simple conn=mz_system,user=mz_system
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+simple conn=mz_support,user=mz_support
+SET CLUSTER TO "default";
+----
+COMPLETE 0
+
+simple conn=mz_support,user=mz_support
+SELECT * FROM s_progress LIMIT 0;
+----
+COMPLETE 0
+
+simple conn=mz_support,user=mz_support
+SET CLUSTER TO mz_introspection;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP SOURCE s;
+----
+COMPLETE 0
+
 # CREATE SECRET
 
 simple conn=joe,user=joe
