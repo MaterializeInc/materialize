@@ -1282,24 +1282,16 @@ impl Coordinator {
         }: plan::DropObjectsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let referenced_ids_hashset = referenced_ids.iter().collect::<HashSet<_>>();
-
+        let mut objects = Vec::new();
         for obj_id in &drop_ids {
             if !referenced_ids_hashset.contains(&obj_id) {
-                let notice_msg = match obj_id {
-                    ObjectId::Cluster(id) => format!("Cluster ID: {}", id),
-                    ObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                        format!("Cluster Replica ID: ({}, {})", cluster_id, replica_id)
-                    }
-                    ObjectId::Database(id) => format!("Database ID: {}", id),
-                    ObjectId::Schema((db_specifier, schema_specifier)) => {
-                        format!("Schema ID: ({:?}, {:?})", db_specifier, schema_specifier)
-                    }
-                    ObjectId::Role(id) => format!("Role ID: {}", id),
-                    ObjectId::Item(id) => format!("Item ID: {}", id),
-                };
-
-                session.add_notice(AdapterNotice::CascadeDroppedObject { notice_msg });
+                let object_info = self.get_object_info(obj_id, session)?;
+                objects.push(object_info);
             }
+        }
+
+        if !objects.is_empty() {
+            session.add_notice(AdapterNotice::CascadeDroppedObject { objects });
         }
 
         let DropOps {
@@ -1331,6 +1323,53 @@ impl Coordinator {
                 .inc_by(1);
         }
         Ok(ExecuteResponse::DroppedObject(object_type))
+    }
+
+    fn get_object_info(
+        &self,
+        object_id: &ObjectId,
+        session: &Session,
+    ) -> Result<(String, String), AdapterError> {
+        let object = match object_id {
+            ObjectId::Cluster(id) => {
+                let name = self.catalog().get_cluster(*id).name().to_string();
+                (ObjectType::Cluster.to_string(), name)
+            }
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                let name = self
+                    .catalog()
+                    .get_cluster_replica(*cluster_id, *replica_id)
+                    .name()
+                    .to_string();
+                (ObjectType::ClusterReplica.to_string(), name)
+            }
+            ObjectId::Database(id) => {
+                let name = self.catalog().get_database(id).name().to_string();
+                (ObjectType::Database.to_string(), name)
+            }
+            ObjectId::Schema((db_specifier, schema_specifier)) => {
+                let name = self
+                    .catalog()
+                    .get_schema(db_specifier, schema_specifier, session.conn_id())
+                    .name()
+                    .to_string();
+                (ObjectType::Schema.to_string(), name)
+            }
+            ObjectId::Role(id) => {
+                let name = self.catalog().get_role(id).name().to_string();
+                (ObjectType::Role.to_string(), name)
+            }
+            ObjectId::Item(id) => {
+                let entry = self.catalog().get_entry(id);
+                let name = self
+                    .catalog()
+                    .resolve_full_name(entry.name(), Some(session.conn_id()))
+                    .to_string();
+                (entry.item_type().to_string(), name)
+            }
+        };
+
+        Ok(object)
     }
 
     fn validate_dropped_role_ownership(

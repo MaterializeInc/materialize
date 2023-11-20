@@ -287,10 +287,10 @@ CommandComplete {"tag":"CREATE DATABASE"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"INFO"},{"typ":"C","value":"01000"},{"typ":"M","value":"Schema ID: (Id(User(3)), Id(User(7)))"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"},{"typ":"M","value":"drop cascades to 1 other objects"}]}
 CommandComplete {"tag":"DROP DATABASE"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"INFO"},{"typ":"C","value":"01000"},{"typ":"M","value":"Schema ID: (Id(User(2)), Id(User(6)))"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"},{"typ":"M","value":"drop cascades to 1 other objects"}]}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active database \"d1\" has been dropped"}]}
 CommandComplete {"tag":"DROP DATABASE"}
 ReadyForQuery {"status":"I"}
@@ -300,7 +300,7 @@ RowDescription {"fields":[{"name":"database"}]}
 DataRow {"fields":["db3"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"INFO"},{"typ":"C","value":"01000"},{"typ":"M","value":"Schema ID: (Id(User(4)), Id(User(8)))"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"},{"typ":"M","value":"drop cascades to 1 other objects"}]}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active database \"db3\" has been dropped"}]}
 CommandComplete {"tag":"DROP DATABASE"}
 ReadyForQuery {"status":"I"}
@@ -365,7 +365,7 @@ RowDescription {"fields":[{"name":"cluster"}]}
 DataRow {"fields":["cl3"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"INFO"},{"typ":"C","value":"01000"},{"typ":"M","value":"Cluster Replica ID: (u4, u2)"}]}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"},{"typ":"M","value":"drop cascades to 1 other objects"}]}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active cluster \"cl3\" has been dropped"}]}
 CommandComplete {"tag":"DROP CLUSTER"}
 ReadyForQuery {"status":"I"}

@@ -10,6 +10,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
+use itertools::Itertools;
 use mz_controller::clusters::ClusterStatus;
 use mz_orchestrator::{NotReadyReason, ServiceStatus};
 use mz_ore::str::{separated, StrExt};
@@ -64,7 +65,7 @@ pub enum AdapterNotice {
         time: DateTime<Utc>,
     },
     CascadeDroppedObject {
-        notice_msg: String,
+        objects: Vec<(String, String)>,
     },
     DroppedActiveDatabase {
         name: String,
@@ -158,7 +159,7 @@ impl AdapterNotice {
                 NoticeSeverity::Warning => Severity::Warning,
             },
             AdapterNotice::ClusterReplicaStatusChanged { .. } => Severity::Notice,
-            AdapterNotice::CascadeDroppedObject { .. } => Severity::Info,
+            AdapterNotice::CascadeDroppedObject { .. } => Severity::Notice,
             AdapterNotice::DroppedActiveDatabase { .. } => Severity::Notice,
             AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
             AdapterNotice::QueryTimestamp { .. } => Severity::Notice,
@@ -191,6 +192,14 @@ impl AdapterNotice {
         match self {
             AdapterNotice::PlanNotice(notice) => notice.detail(),
             AdapterNotice::QueryTimestamp { explanation } => Some(format!("\n{explanation}")),
+            AdapterNotice::CascadeDroppedObject { objects } => Some(
+                objects
+                    .iter()
+                    .map(|(obj_type, obj_name)| {
+                        format!("drop cascades to {} {}", obj_type, obj_name)
+                    })
+                    .join("\n"),
+            ),
             _ => None,
         }
     }
@@ -240,7 +249,7 @@ impl AdapterNotice {
             }
             AdapterNotice::UserRequested { .. } => SqlState::WARNING,
             AdapterNotice::ClusterReplicaStatusChanged { .. } => SqlState::WARNING,
-            AdapterNotice::CascadeDroppedObject { .. } => SqlState::WARNING, // unsure
+            AdapterNotice::CascadeDroppedObject { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::DroppedActiveDatabase { .. } => SqlState::WARNING,
             AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
             AdapterNotice::QueryTimestamp { .. } => SqlState::WARNING,
@@ -287,8 +296,8 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::DatabaseDoesNotExist { name } => {
                 write!(f, "database {} does not exist", name.quoted())
             }
-            AdapterNotice::CascadeDroppedObject { notice_msg } => {
-                write!(f, "{}", notice_msg)
+            AdapterNotice::CascadeDroppedObject { objects } => {
+                write!(f, "drop cascades to {} other objects", objects.len())
             }
             AdapterNotice::ClusterDoesNotExist { name } => {
                 write!(f, "cluster {} does not exist", name.quoted())
