@@ -31,7 +31,7 @@ use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::{ClientContext, Message, Offset, TopicPartitionList};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::{info, warn};
 
 /// Formatter for Kafka group.id setting
 pub struct SinkGroupId;
@@ -390,21 +390,18 @@ pub async fn determine_latest_progress_record(
     where
         C: ConsumerContext,
     {
-        if let Some(result) = consumer.poll(timeout) {
-            match result {
-                Ok(message) => match message.payload() {
-                    Some(p) => Ok(Some((
-                        message.key().unwrap_or(&[]).to_vec(),
-                        p.to_vec(),
-                        message.offset(),
-                    ))),
-                    None => bail!("unexpected null payload"),
-                },
-                Err(KafkaError::PartitionEOF(_)) => Ok(None),
-                Err(err) => bail!("Failed to process message {}", err),
-            }
-        } else {
-            Ok(None)
+        match consumer.poll(timeout) {
+            Some(Ok(message)) => match message.payload() {
+                Some(p) => Ok(Some((
+                    message.key().unwrap_or(&[]).to_vec(),
+                    p.to_vec(),
+                    message.offset(),
+                ))),
+                None => bail!("unexpected null payload"),
+            },
+            Some(Err(KafkaError::PartitionEOF(_))) => Ok(None),
+            Some(Err(err)) => bail!("Failed to process message {}", err),
+            None => Ok(None),
         }
     }
 
@@ -469,55 +466,62 @@ pub async fn determine_latest_progress_record(
                 )
             })?;
 
-        // Empty topic.  Return early to avoid unnecessary call to kafka below.
+        info!("fetching latest progress record for {progress_key}, lo/hi: {lo}/{hi}");
+
+        // Empty topic. Return early to avoid unnecessary call to kafka below.
         if hi == 0 {
             return Ok(None);
         }
 
         let mut latest_ts = None;
         let mut latest_offset = None;
-
-        let progress_key_bytes = progress_key.as_bytes();
         while let Some((key, message, offset)) = get_next_message(progress_client, timeout)? {
-            debug_assert!(offset >= latest_offset.unwrap_or(0));
+            assert!(latest_offset < Some(offset));
             latest_offset = Some(offset);
 
-            let timestamp_opt = if &key == progress_key_bytes {
-                let progress: ProgressRecord = serde_json::from_slice(&message)?;
-                Some(progress.timestamp)
-            } else {
-                None
-            };
-
-            if let Some(ts) = timestamp_opt {
-                if ts >= latest_ts.unwrap_or_else(timely::progress::Timestamp::minimum) {
-                    latest_ts = Some(ts);
-                }
+            if &key != progress_key.as_bytes() {
+                continue;
             }
 
-            // If the next possible offset for the client is past the high watermark, we've seen
-            // everything we expect to see.
+            let ProgressRecord { timestamp } = serde_json::from_slice(&message)?;
+            match latest_ts {
+                Some(prev_ts) if timestamp < prev_ts => {
+                    bail!(
+                        "timestamp regressed in topic {progress_topic}:{partition} \
+                         from {prev_ts} to {timestamp}"
+                    );
+                }
+                _ => latest_ts = Some(timestamp),
+            };
+
             let position = progress_client
                 .position()?
                 .find_partition(progress_topic, partition)
                 .ok_or_else(|| anyhow!("No progress info for known partition"))?
                 .offset();
-            if let Offset::Offset(i) = position {
-                if i >= hi {
+
+            if let Offset::Offset(upper) = position {
+                if hi <= upper {
                     break;
                 }
             }
         }
 
-        // Topic not empty but we couldn't read any messages.  We don't expect this to happen but we
-        // have no reason to rely on kafka not inserting any internal messages at the beginning.
-        if latest_offset.is_none() {
-            debug!(
-                "unable to read any messages from non-empty topic {}:{}, lo/hi: {}/{}",
-                progress_topic, partition, lo, hi
-            );
+        let position = progress_client
+            .position()?
+            .find_partition(progress_topic, partition)
+            .ok_or_else(|| anyhow!("No progress info for known partition"))?
+            .offset();
+
+        // We must check that we indeed read all messages until the high watermark because the
+        // previous loop could early exit due to a timeout or partition EOF.
+        match position {
+            Offset::Offset(upper) if hi <= upper => Ok(latest_ts),
+            _ => Err(anyhow!(
+                "failed to reach high watermark of non-empty \
+                 topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}"
+            )),
         }
-        Ok(latest_ts)
     }
 
     // Only actually used for retriable errors.
