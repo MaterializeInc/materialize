@@ -92,6 +92,7 @@ fn main() {
                 "repr/src/relation_and_scalar.proto",
                 "repr/src/role_id.proto",
                 "repr/src/url.proto",
+                "repr/src/refresh_schedule.proto",
                 "repr/src/adt/array.proto",
                 "repr/src/adt/char.proto",
                 "repr/src/adt/date.proto",

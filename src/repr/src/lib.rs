@@ -109,6 +109,7 @@ pub mod stats;
 pub mod strconv;
 pub mod url;
 pub mod user;
+pub mod refresh_schedule;
 
 pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
