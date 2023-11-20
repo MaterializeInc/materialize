@@ -418,10 +418,7 @@ publish: true
      `.cargo/config` files.
 
      Cargo is invoked with the `--release` flag unless the `--dev` flag is
-     specified. The binary's debuginfo can be extracted and copied to a file in
-     the same directory named `BIN.debug` by specifying `split-debuginfo: true`.
-     The binary itself will be stripped of debug information unless `strip:
-     false` is requested.
+     specified.
 
      In rare cases, it may be necessary to extract files from the build
      directory of a dependency. The `extract` key specifies a mapping from a

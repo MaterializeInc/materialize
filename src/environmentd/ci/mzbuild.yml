@@ -11,10 +11,3 @@ name: environmentd
 pre-image:
   - type: cargo-build
     bin: environmentd
-    strip: true
-    split-debuginfo: true
-  - type: s3-upload-debuginfo
-    bin: environmentd
-    bucket: materialize-debuginfo
-  - type: ps-upload-sources
-    bin: environmentd.debug
