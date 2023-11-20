@@ -346,6 +346,12 @@ SCENARIOS = [
 
             > CREATE INDEX idx IN CLUSTER clusterd ON t (a);
 
+            # We do not want to get a 'canceling statement due to statement timeout' error
+            > SET statement_timeout = '300s'
+
+            # And we do not want the DMLs to be retried in any circumstance
+            $ set-max-tries max-tries=1
+
             > INSERT INTO t SELECT a, a FROM generate_series(1, 2000000) AS a;
             > UPDATE t SET b = b + 100000;
             > UPDATE t SET b = b + 1000000;
