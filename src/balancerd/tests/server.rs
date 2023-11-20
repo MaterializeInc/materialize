@@ -159,7 +159,7 @@ fn test_balancer() {
     assert_eq!(res, 4);
 
     let resolvers = vec![
-        Resolver::Static(envd_server.inner.balancer_sql_local_addr()),
+        Resolver::Static(envd_server.inner.balancer_sql_local_addr().to_string()),
         Resolver::Frontegg(FronteggResolver {
             auth: frontegg_auth,
             addr_template: envd_server.inner.balancer_sql_local_addr().to_string(),
