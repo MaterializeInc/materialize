@@ -187,6 +187,11 @@ ORDER BY
 	l_returnflag,
 	l_linestatus;
 
+# Create a default index on Q01 in order to ensure that the EXPLAIN CREATE INDEX
+# output does not produce a plan that just reads from the explained index if it
+# already exists.
+statement ok
+CREATE DEFAULT INDEX ON Q01;
 
 query T multiline
 -- Explain index on Q01

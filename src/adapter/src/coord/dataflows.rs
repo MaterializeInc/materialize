@@ -95,6 +95,9 @@ pub struct DataflowBuilder<'a> {
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
     pub compute: ComputeInstanceSnapshot,
+    /// Indexes to be ignored even if they are present in the catalog.
+    pub ignored_indexes: BTreeSet<GlobalId>,
+    /// A guard for recursive operations in this [`DataflowBuilder`] instance.
     recursion_guard: RecursionGuard,
 }
 
@@ -279,8 +282,13 @@ impl<'a> DataflowBuilder<'a> {
         Self {
             catalog,
             compute,
+            ignored_indexes: Default::default(),
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
+    }
+
+    pub fn ignore_indexes(&mut self, indexes: impl Iterator<Item = GlobalId>) {
+        self.ignored_indexes.extend(indexes);
     }
 
     /// Imports the view, source, or table with `id` into the provided
