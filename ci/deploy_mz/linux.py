@@ -57,6 +57,7 @@ def main() -> None:
             "--no-strip",
             "--deb-version",
             str(VERSION),
+            '--deb-revision=""',
             "-p",
             "mz",
             "-o",
