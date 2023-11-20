@@ -36,7 +36,7 @@ class SshPg(Check):
                   USER postgres,
                   PASSWORD SECRET pgpass,
                   SSL MODE require,
-                  SSH TUNNEL thancred);
+                  SSH TUNNEL ssh_tunnel_0);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 ALTER USER postgres WITH replication;
@@ -68,7 +68,7 @@ class SshPg(Check):
                   USER postgres,
                   PASSWORD SECRET pgpass,
                   SSL MODE require,
-                  SSH TUNNEL thancred);
+                  SSH TUNNEL ssh_tunnel_0);
 
                 > CREATE SOURCE mz_source_ssh2
                   FROM POSTGRES CONNECTION pg_ssh2
@@ -88,7 +88,7 @@ class SshPg(Check):
                   USER postgres,
                   PASSWORD SECRET pgpass,
                   SSL MODE require,
-                  SSH TUNNEL thancred);
+                  SSH TUNNEL ssh_tunnel_0);
 
                 > CREATE SOURCE mz_source_ssh3
                   FROM POSTGRES CONNECTION pg_ssh3
@@ -141,9 +141,9 @@ class SshKafka(Check):
                 one
 
                 >[version<7800] CREATE CONNECTION kafka_conn_ssh1
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0);
                 >[version>=7800] CREATE CONNECTION kafka_conn_ssh1
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh1
                   FROM KAFKA CONNECTION kafka_conn_ssh1 (TOPIC 'testdrive-ssh1-${testdrive.seed}')
@@ -159,9 +159,9 @@ class SshKafka(Check):
             for s in [
                 """
                 >[version<7800] CREATE CONNECTION kafka_conn_ssh2
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0);
                 >[version>=7800] CREATE CONNECTION kafka_conn_ssh2
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh2
                   FROM KAFKA CONNECTION kafka_conn_ssh2 (TOPIC 'testdrive-ssh2-${testdrive.seed}')
@@ -176,9 +176,9 @@ class SshKafka(Check):
                 """,
                 """
                 >[version<7800] CREATE CONNECTION kafka_conn_ssh3
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0);
                 >[version>=7800] CREATE CONNECTION kafka_conn_ssh3
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL ssh_tunnel_0, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh3
                   FROM KAFKA CONNECTION kafka_conn_ssh3 (TOPIC 'testdrive-ssh3-${testdrive.seed}')
