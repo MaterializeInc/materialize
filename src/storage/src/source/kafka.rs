@@ -571,7 +571,8 @@ impl SourceRender for KafkaSourceConnection {
                             if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid].data;
-                                let msg = msg.map_err(|e| SourceReaderError::other_definite(anyhow!(e)));
+                                let msg =
+                                    msg.map_err(|e| SourceReaderError::other_definite(anyhow!(e)));
                                 data_output.give(part_cap, ((0, msg), time, diff)).await;
                             }
                         }
@@ -606,18 +607,12 @@ impl SourceRender for KafkaSourceConnection {
                             Err(err) => Err(err),
                         };
                         match message {
-                            Ok(Some((Ok(msg), time, diff))) => {
+                            Ok(Some((msg, time, diff))) => {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid].data;
-                                data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
-                            }
-                            Ok(Some((Err(err), time, diff))) => {
-                                let err = SourceReaderError::other_definite(anyhow!(err));
-                                let pid = time.partition().unwrap();
-                                let part_cap = &reader.partition_capabilities[pid].data;
-                                data_output
-                                    .give(part_cap, ((0, Err(err)), time, diff))
-                                    .await;
+                                let msg =
+                                    msg.map_err(|e| SourceReaderError::other_definite(anyhow!(e)));
+                                data_output.give(part_cap, ((0, msg), time, diff)).await;
                             }
                             Ok(None) => continue,
                             Err(err) => {
