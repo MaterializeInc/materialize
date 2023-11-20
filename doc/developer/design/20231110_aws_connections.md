@@ -79,6 +79,8 @@ Users should then be able to add a trust policy in their AWS account to give acc
 ```
 
 ## Implementation
+
+#### CREATE CONNECTION
 We already have some [existing code](https://github.com/MaterializeInc/materialize/blob/v0.77.1/src/storage-types/src/connections/aws.rs), which can be re-used to
 handle the AssumeRole scenario.
 
@@ -101,14 +103,19 @@ CREATE CONNECTION <connector_name> TO AWS (
 Users should be able to provide either the `ACCESS KEY` options or the `ASSUME ROLE` options,
 but not both.
 
+When creating the connection, users should specify `WITH (VALIDATE = false)` in the sql.
+This is because we won't be able to validate the connection unless the trust policy has
+been added on the user's end.
+
 #### External ID and principal
 We already have external ID prefix provided in the catalog state.
 The connection ID will be appended to the external ID prefix to get the complete
 External ID and then stored in the new `mz_aws_connections` table for that connection ID.
 
-For principal, we'll create one global role which all environmentd/clusterd-s can assume.
-This will add some good restrictions on who could assume the customers role and also
-allow for migration between environment clusters.
+For principal, we'll create one global role named something like
+`arn:aws:iam::<account_id>:role/MaterializeCloudConnectionAssumeRole`
+which all environmentd/clusterd-s can assume. This will add some good restrictions
+on who could assume the customers role and also allow for migration between environment clusters.
 
 Note: There's a hard limit of 1 hour on the session duration when [Role chaining in AWS](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html).
 This can be revisited for workarounds if we hit this issue.
@@ -116,16 +123,18 @@ This can be revisited for workarounds if we hit this issue.
 Other alternative solutions were:
 1. Using our root account `arn:aws:iam::<account_id>:root`. This would work but this is not
 secure enough since any user/role in this account can assume the customer's role.
-2. An IAM user `arn:aws:iam::<account_id>:user/<id>` created for the customer's environment similar
+2. An IAM role `arn:aws:iam::<account_id>:role/<id>` we create for each customer environment. This
+will not scale, there's a maximum limit of [5000 roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html#reference_iam-quotas-entities)
+we can create per account.
+3. An IAM user `arn:aws:iam::<account_id>:user/<id>` created for the customer's environment similar
 to [Snowflake](https://docs.snowflake.com/en/user-guide/data-load-s3-config-storage-integration#step-4-retrieve-the-aws-iam-user-for-your-snowflake-account).
 This could work if we keep them in a secret and rotate regularly, this would give
 each customer a unique principal. But we'd have to rotate very frequently and we may also
 need to coordinate that role across all users of the credentials which seems like a lot of overhead.
-3. An IAM role `arn:aws:iam::<account_id>:role/<id>` we create for each customer environment. This
-will not scale, there's a maximum limit of [5000 roles](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html#reference_iam-quotas-entities)
-we can create per account.
+There's also a limit of 5000 to [number of users in an account in a region](https://docs.aws.amazon.com/general/latest/gr/iam-service.html),
+so this will not scale as well.
 
-#### `VALIDATE CONNECTION`
+#### VALIDATE CONNECTION
 We can make use of the [GetCallerIdentity AWS API](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html)
 to check if the credentials are valid. We should make the call with the given External ID and
 without to make sure that the user has a secure setup. If we are able to access without the External
@@ -147,7 +156,7 @@ in staging followed by `VALIDATE CONNECTION`.
 
 ## Future work
 
-#### Extend `VALIDATE CONNECTION` of an AWS connection to be comprehensive.
+#### Possibly extend `VALIDATE CONNECTION` of an AWS connection to be comprehensive.
 An AWS connection can be potentially re-used across multiple services like S3 or RDS.
 Having permission to an S3 bucket might not mean that RDS access is set up correctly. So
 a validate connection will not be comprehensive and we'll probably do some additional check
@@ -162,3 +171,5 @@ like `CREATE CONNECTION s3_conn TO S3 ( PREFIX = 'url') USING AWS CONNECTION aws
 Validating s3_conn could verify if we are able to list the prefix, create and
 remove a file there. This seems like an overkill though and a `VALIDATE CONNECTION ... WITH`
 mentioned above would probably be better.
+
+We will revisit this when designing the `COPY ... TO S3` feature.
