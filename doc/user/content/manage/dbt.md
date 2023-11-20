@@ -414,8 +414,8 @@ That's it! From here on, Materialize makes sure that your models are **increment
 
 ## Test and document a dbt project
 
-[//]: # "TODO(morsapaes) Call out the cluster configuration for tests once this
-page is rehashed."
+[//]: # "TODO(morsapaes) Call out the cluster configuration for tests and
+store_failures_as once this page is rehashed."
 
 ### Configure continuous testing
 
