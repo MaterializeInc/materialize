@@ -42,6 +42,7 @@ CommandComplete {"tag":"DROP TABLE"}
 ReadyForQuery {"status":"I"}
 CommandComplete {"tag":"CREATE DATABASE"}
 ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"INFO"},{"typ":"C","value":"01000"},{"typ":"M","value":"Schema ID: (Id(User(2)), Id(User(6)))"}]}
 CommandComplete {"tag":"DROP DATABASE"}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"DATABASE \"t\" does not exist, skipping"}]}
