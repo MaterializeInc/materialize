@@ -39,6 +39,7 @@ use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::{
@@ -86,7 +87,6 @@ pub use expr::{
     WindowExprType,
 };
 pub use lowering::Config as HirToMirConfig;
-use mz_repr::adt::interval::Interval;
 pub use notice::PlanNotice;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
@@ -1434,12 +1434,6 @@ pub struct MaterializedView {
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
     pub refresh_schedule: Option<RefreshSchedule>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct RefreshSchedule {
-    pub interval: Interval,
-    //////// todo: time of first refresh will also come here
 }
 
 #[derive(Clone, Debug)]

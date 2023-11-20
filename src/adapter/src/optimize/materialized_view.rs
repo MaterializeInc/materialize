@@ -32,6 +32,7 @@ use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -66,7 +67,7 @@ pub struct Optimizer {
     /// statement.
     non_null_assertions: Vec<usize>,
     /// Refresh schedule, e.g., `REFRESH INTERVAL '1 day'` ////// todo: check syntax at the end
-    refresh_schedule: Option<mz_sql::plan::RefreshSchedule>,
+    refresh_schedule: Option<RefreshSchedule>,
     /// A human-readable name exposed internally (useful for debugging).
     debug_name: String,
     // Optimizer config.
@@ -81,7 +82,7 @@ impl Optimizer {
         internal_view_id: GlobalId,
         column_names: Vec<ColumnName>,
         non_null_assertions: Vec<usize>,
-        refresh_schedule: Option<mz_sql::plan::RefreshSchedule>,
+        refresh_schedule: Option<RefreshSchedule>,
         debug_name: String,
         config: OptimizerConfig,
     ) -> Self {
@@ -225,9 +226,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
             with_snapshot: true,
             up_to: Antichain::default(),
             non_null_assertions: self.non_null_assertions.clone(),
-            refresh_schedule: self.refresh_schedule.as_ref().map(|refresh_schedule| mz_compute_types::sinks::RefreshSchedule {
-                interval: refresh_schedule.interval,
-            }),
+            refresh_schedule: self.refresh_schedule.clone(),
         };
 
         let df_meta = df_builder.build_sink_dataflow_into(

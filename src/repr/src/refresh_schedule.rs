@@ -7,14 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use mz_proto::{RustType, TryFromProtoError};
 use mz_proto::IntoRustIfSome;
 use crate::adt::interval::Interval;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.refresh_schedule.rs"));
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RefreshSchedule {
     pub interval: Interval,
     //////// todo: time of first refresh will also come here

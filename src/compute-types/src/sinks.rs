@@ -17,6 +17,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use mz_repr::adt::interval::Interval;
+use mz_repr::refresh_schedule::RefreshSchedule;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_types.sinks.rs"));
 
@@ -186,12 +187,6 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMe
                 .into_rust_if_some("ProtoPersistSinkConnection::storage_metadata")?,
         })
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct RefreshSchedule {
-    pub interval: Interval,
-    //////// todo: time of first refresh will also come here
 }
 
 impl RustType<ProtoRefreshSchedule> for RefreshSchedule {
