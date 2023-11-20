@@ -209,15 +209,16 @@ fn test_read_many_rows() {
     assert_eq!(rows.len(), 3, "row len should be all values");
 }
 
-#[mz_ore::test]
-fn test_conn_startup() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
-    let mut client = server.connect(postgres::NoTls).unwrap();
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_conn_startup() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
 
     // The default database should be `materialize`.
     assert_eq!(
         client
             .query_one("SHOW database", &[])
+            .await
             .unwrap()
             .get::<_, String>(0),
         DEFAULT_DATABASE_NAME,
@@ -225,71 +226,51 @@ fn test_conn_startup() {
 
     // Connecting to a nonexistent database should work, and creating that
     // database should work.
-    //
-    // TODO(benesch): we can use the sync client when this issue is fixed:
-    // https://github.com/sfackler/rust-postgres/issues/404.
-    Runtime::new()
-        .unwrap()
-        .block_on(async {
-            let (client, mut conn) = server
-                .pg_config_async()
-                .dbname("newdb")
-                .connect(postgres::NoTls)
-                .await
-                .unwrap();
-            let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
-            task::spawn(|| "test_conn_startup", async move {
-                while let Some(msg) = future::poll_fn(|cx| conn.poll_message(cx)).await {
-                    match msg {
-                        Ok(msg) => notice_tx.send(msg).unwrap(),
-                        Err(e) => panic!("{}", e),
-                    }
-                }
-            });
+    {
+        let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
+        let client = server
+            .connect()
+            .notice_callback(move |notice| notice_tx.send(notice).unwrap())
+            .dbname("newdb")
+            .await
+            .unwrap();
 
-            assert_eq!(
-                client
-                    .query_one("SHOW database", &[])
-                    .await
-                    .unwrap()
-                    .get::<_, String>(0),
-                "newdb",
-            );
-            client.batch_execute("CREATE DATABASE newdb").await.unwrap();
+        assert_eq!(
             client
-                .batch_execute("CREATE TABLE v (i INT)")
+                .query_one("SHOW database", &[])
                 .await
-                .unwrap();
-            client
-                .batch_execute("INSERT INTO v VALUES (1)")
-                .await
-                .unwrap();
+                .unwrap()
+                .get::<_, String>(0),
+            "newdb",
+        );
+        client.batch_execute("CREATE DATABASE newdb").await.unwrap();
+        client
+            .batch_execute("CREATE TABLE v (i INT)")
+            .await
+            .unwrap();
+        client
+            .batch_execute("INSERT INTO v VALUES (1)")
+            .await
+            .unwrap();
 
-            match notice_rx.recv().await {
-                Some(tokio_postgres::AsyncMessage::Notice(n)) => {
-                    assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
-                    assert_eq!(n.message(), "session database \"newdb\" does not exist");
-                }
-                _ => panic!("missing database notice not generated"),
+        match notice_rx.recv().await {
+            Some(n) => {
+                assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
+                assert_eq!(n.message(), "session database \"newdb\" does not exist");
             }
-
-            Ok::<_, Box<dyn Error>>(())
-        })
-        .unwrap();
+            _ => panic!("missing database notice not generated"),
+        }
+    }
 
     // Connecting to an existing database should work.
     {
-        let mut client = server
-            .pg_config()
-            .dbname("newdb")
-            .connect(postgres::NoTls)
-            .unwrap();
-
+        let client = server.connect().dbname("newdb").await.unwrap();
         assert_eq!(
             // `v` here should refer to the `v` in `newdb.public` that we
             // created above.
             client
                 .query_one("SELECT * FROM v", &[])
+                .await
                 .unwrap()
                 .get::<_, i32>(0),
             1,
@@ -298,14 +279,11 @@ fn test_conn_startup() {
 
     // Setting the application name at connection time should be respected.
     {
-        let mut client = server
-            .pg_config()
-            .application_name("hello")
-            .connect(postgres::NoTls)
-            .unwrap();
+        let client = server.connect().application_name("hello").await.unwrap();
         assert_eq!(
             client
                 .query_one("SHOW application_name", &[])
+                .await
                 .unwrap()
                 .get::<_, String>(0),
             "hello",

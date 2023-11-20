@@ -620,10 +620,10 @@ fn test_statement_logging_sampling_constrained() {
     test_statement_logging_sampling_inner(server, client);
 }
 
-#[mz_ore::test]
-fn test_statement_logging_unsampled_metrics() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
-    let mut client = server.connect(postgres::NoTls).unwrap();
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_statement_logging_unsampled_metrics() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
 
     // TODO[btv]
     //
@@ -660,22 +660,25 @@ fn test_statement_logging_unsampled_metrics() {
         .count();
 
     for q in batch_queries {
-        client.batch_execute(q).unwrap();
+        client.batch_execute(q).await.unwrap();
     }
 
     for q in single_queries {
-        client.execute(q, &[]).unwrap();
+        client.execute(q, &[]).await.unwrap();
     }
 
     for q in prepared_queries {
-        let s = client.prepare(q).unwrap();
-        client.execute(&s, &[]).unwrap();
+        let s = client.prepare(q).await.unwrap();
+        client.execute(&s, &[]).await.unwrap();
     }
 
-    client.batch_execute(&named_prepared_outer).unwrap();
+    client.batch_execute(&named_prepared_outer).await.unwrap();
 
     // This should NOT be logged, since we never actually execute it.
-    client.prepare("SELECT 'Hello, not counted!'").unwrap();
+    client
+        .prepare("SELECT 'Hello, not counted!'")
+        .await
+        .unwrap();
 
     let expected_total = batch_total + single_total + prepared_total + named_prepared_outer_len;
     let metric_value = server
@@ -2000,66 +2003,61 @@ fn test_max_connections_on_all_interfaces() {
     assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
-fn test_concurrent_id_reuse() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+async fn test_concurrent_id_reuse() {
+    let server = test_util::TestHarness::default().start().await;
 
-    server.runtime.block_on(async {
-        {
-            let (client, conn) = server.connect_async(postgres::NoTls).await.unwrap();
-            task::spawn(|| "conn await", async {
-                conn.await.unwrap();
-            });
-            client
-                .batch_execute("CREATE TABLE t (a INT);")
+    {
+        let client = server.connect().await.unwrap();
+        client
+            .batch_execute("CREATE TABLE t (a INT);")
+            .await
+            .unwrap();
+    }
+
+    let http_url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.http_local_addr()
+    ))
+    .unwrap();
+    let select_json = "{\"queries\":[{\"query\":\"SELECT * FROM t;\",\"params\":[]}]}";
+    let select_json: serde_json::Value = serde_json::from_str(select_json).unwrap();
+
+    let insert_json = "{\"queries\":[{\"query\":\"INSERT INTO t VALUES (1);\",\"params\":[]}]}";
+    let insert_json: serde_json::Value = serde_json::from_str(insert_json).unwrap();
+
+    // The goal here is to start some connection `B`, after another connection `A` has
+    // terminated, but while connection `A` still has some asynchronous work in flight. Then
+    // connection `A` will terminate it's session after connection `B` has started it's own
+    // session. If they use the same connection ID, then `A` will accidentally tear down `B`'s
+    // state and `B` will panic at any point it tries to access it's state. If they don't use
+    // the same connection ID, then everything will be fine.
+    fail::cfg("async_prepare", "return(true)").unwrap();
+    for i in 0..100 {
+        let http_url = http_url.clone();
+        if i % 2 == 0 {
+            let fut = reqwest::Client::new()
+                .post(http_url)
+                .json(&select_json)
+                .send();
+            let time = tokio::time::sleep(Duration::from_millis(500));
+            futures::select! {
+                _ = fut.fuse() => {},
+                _ = time.fuse() => {},
+            }
+        } else {
+            reqwest::Client::new()
+                .post(http_url)
+                .json(&insert_json)
+                .send()
                 .await
                 .unwrap();
         }
+    }
 
-        let http_url = Url::parse(&format!(
-            "http://{}/api/sql",
-            server.inner.http_local_addr()
-        ))
-        .unwrap();
-        let select_json = "{\"queries\":[{\"query\":\"SELECT * FROM t;\",\"params\":[]}]}";
-        let select_json: serde_json::Value = serde_json::from_str(select_json).unwrap();
-
-        let insert_json = "{\"queries\":[{\"query\":\"INSERT INTO t VALUES (1);\",\"params\":[]}]}";
-        let insert_json: serde_json::Value = serde_json::from_str(insert_json).unwrap();
-
-        // The goal here is to start some connection `B`, after another connection `A` has
-        // terminated, but while connection `A` still has some asynchronous work in flight. Then
-        // connection `A` will terminate it's session after connection `B` has started it's own
-        // session. If they use the same connection ID, then `A` will accidentally tear down `B`'s
-        // state and `B` will panic at any point it tries to access it's state. If they don't use
-        // the same connection ID, then everything will be fine.
-        fail::cfg("async_prepare", "return(true)").unwrap();
-        for i in 0..100 {
-            let http_url = http_url.clone();
-            if i % 2 == 0 {
-                let fut = reqwest::Client::new()
-                    .post(http_url)
-                    .json(&select_json)
-                    .send();
-                let time = tokio::time::sleep(Duration::from_millis(500));
-                futures::select! {
-                    _ = fut.fuse() => {},
-                    _ = time.fuse() => {},
-                }
-            } else {
-                reqwest::Client::new()
-                    .post(http_url)
-                    .json(&insert_json)
-                    .send()
-                    .await
-                    .unwrap();
-            }
-        }
-    });
-
-    let mut client = server.connect(postgres::NoTls).unwrap();
-    client.batch_execute("SELECT 1").unwrap();
+    let client = server.connect().await.unwrap();
+    client.batch_execute("SELECT 1").await.unwrap();
 }
 
 #[mz_ore::test]
@@ -2353,41 +2351,47 @@ fn test_leader_promotion() {
     }
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
-fn test_leader_promotion_always_using_deploy_generation() {
+async fn test_leader_promotion_always_using_deploy_generation() {
     let tmpdir = TempDir::new().unwrap();
-    let config = test_util::Config::default()
+    let harness = test_util::TestHarness::default()
         .unsafe_mode()
         .data_directory(tmpdir.path())
         .with_deploy_generation(Some(2));
     {
         // propose a deploy generation for the first time
-        let server = test_util::start_server(config.clone()).unwrap();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-        client.simple_query("SELECT 1").unwrap();
+        let server = harness.clone().start().await;
+        let client = server.connect().await.unwrap();
+        client.simple_query("SELECT 1").await.unwrap();
     }
     {
         // keep it the same, no need to promote the leader
-        let listeners = Listeners::new().unwrap();
-        let internal_http_addr = listeners.inner.internal_http_local_addr();
-        let server = listeners.serve(config).unwrap();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-        client.simple_query("SELECT 1").unwrap();
+        let server = harness.start().await;
+        let client = server.connect().await.unwrap();
+        client.simple_query("SELECT 1").await.unwrap();
+
+        let http_client = reqwest::Client::new();
 
         // check that we're the leader and promotion doesn't do anything
-        let status_http_url =
-            Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
-        let res = Client::new().get(status_http_url).send().unwrap();
+        let status_http_url = Url::parse(&format!(
+            "http://{}/api/leader/status",
+            server.inner.internal_http_local_addr()
+        ))
+        .unwrap();
+        let res = http_client.get(status_http_url).send().await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: LeaderStatusResponse = res.json().unwrap();
+        let response: LeaderStatusResponse = res.json().await.unwrap();
         assert_eq!(response.status, LeaderStatus::IsLeader);
 
-        let promote_http_url =
-            Url::parse(&format!("http://{}/api/leader/promote", internal_http_addr)).unwrap();
-        let res = Client::new().post(promote_http_url).send().unwrap();
+        let promote_http_url = Url::parse(&format!(
+            "http://{}/api/leader/promote",
+            server.inner.internal_http_local_addr()
+        ))
+        .unwrap();
+        let res = http_client.post(promote_http_url).send().await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: BecomeLeaderResponse = res.json().unwrap();
+        let response: BecomeLeaderResponse = res.json().await.unwrap();
         assert_eq!(
             response,
             BecomeLeaderResponse {
@@ -2442,12 +2446,11 @@ fn test_cancel_ws() {
     handle.join().unwrap();
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
-fn smoketest_webhook_source() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
-
-    let mut client = server.connect(postgres::NoTls).unwrap();
+async fn smoketest_webhook_source() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
 
     #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Clone)]
     struct WebhookEvent {
@@ -2462,12 +2465,14 @@ fn smoketest_webhook_source() {
             "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
             &[],
         )
+        .await
         .expect("failed to create cluster");
     client
         .execute(
             "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON",
             &[],
         )
+        .await
         .expect("failed to create source");
 
     let now = || {
@@ -2487,6 +2492,7 @@ fn smoketest_webhook_source() {
         })
         .collect();
 
+    let http_client = reqwest::Client::new();
     let webhook_url = Arc::new(format!(
         "http://{}/api/webhook/materialize/public/webhook_json",
         server.inner.http_local_addr()
@@ -2496,20 +2502,19 @@ fn smoketest_webhook_source() {
     for event in &events {
         let webhook_url = Arc::clone(&webhook_url);
         let event = event.clone();
-        let handle = thread::spawn(move || {
-            let http_client = Client::new();
-            let resp = http_client
+        let http_client_ = http_client.clone();
+        let handle = mz_ore::task::spawn(|| "smoketest_webhook_source_event", async move {
+            let resp = http_client_
                 .post(&*webhook_url)
                 .json(&event)
                 .send()
+                .await
                 .expect("failed to POST event");
             assert!(resp.status().is_success());
         });
         handles.push(handle);
     }
-    for handle in handles {
-        handle.join().unwrap();
-    }
+    futures::future::join_all(handles).await;
 
     let total_requests_metric = server
         .metrics_registry
@@ -2527,25 +2532,28 @@ fn smoketest_webhook_source() {
     assert_eq!(status_label.get_value(), "200");
 
     // Wait for the events to be persisted.
-    mz_ore::retry::Retry::default()
+    let (client, result) = mz_ore::retry::Retry::default()
         .max_tries(10)
-        .retry(|_| {
+        .retry_async_with_state(client, |_, client| async move {
             let cnt: i64 = client
                 .query_one("SELECT COUNT(*) FROM webhook_json", &[])
+                .await
                 .expect("failed to get count")
                 .get(0);
 
             if cnt != 100 {
-                Err(anyhow::anyhow!("not all rows present"))
+                (client, Err(anyhow::anyhow!("not all rows present")))
             } else {
-                Ok(())
+                (client, Ok(()))
             }
         })
-        .expect("failed to read events!");
+        .await;
+    result.expect("failed to read events");
 
     // Read all of our events back.
     let events_roundtrip: BTreeSet<WebhookEvent> = client
         .query("SELECT * FROM webhook_json", &[])
+        .await
         .expect("failed to query source")
         .into_iter()
         .map(|row| serde_json::from_value(row.get("body")).expect("failed to deserialize"))
@@ -2800,10 +2808,10 @@ fn test_cancel_read_then_write() {
         .unwrap();
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
-fn test_http_metrics() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+async fn test_http_metrics() {
+    let server = test_util::TestHarness::default().start().await;
 
     let http_url = Url::parse(&format!(
         "http://{}/api/sql",
@@ -2813,16 +2821,22 @@ fn test_http_metrics() {
 
     let json = r#"{ "query": "SHOW application_name;" }"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    let response = Client::new()
+    let response = reqwest::Client::new()
         .post(http_url.clone())
         .json(&json)
         .send()
+        .await
         .unwrap();
     assert!(response.status().is_success());
 
     let json = r#"{ "query": "invalid sql 123;" }"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    let response = Client::new().post(http_url).json(&json).send().unwrap();
+    let response = reqwest::Client::new()
+        .post(http_url)
+        .json(&json)
+        .send()
+        .await
+        .unwrap();
     assert!(response.status().is_client_error());
 
     let metrics = server.metrics_registry.gather();
@@ -2863,12 +2877,11 @@ fn test_http_metrics() {
     assert_eq!(failure_metric.get_label()[1].get_value(), "400");
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[cfg_attr(miri, ignore)] // too slow
-fn webhook_concurrent_actions() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
-
-    let mut client = server.connect(postgres::NoTls).unwrap();
+async fn webhook_concurrent_actions() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
     struct WebhookEvent {
@@ -2884,12 +2897,14 @@ fn webhook_concurrent_actions() {
             "CREATE CLUSTER webhook_cluster_concurrent REPLICAS (r1 (SIZE '1'));",
             &[],
         )
+        .await
         .expect("failed to create cluster");
     client
         .execute(
             &format!("CREATE SOURCE {src_name} IN CLUSTER webhook_cluster_concurrent FROM WEBHOOK BODY FORMAT JSON"),
             &[],
         )
+        .await
         .expect("failed to create source");
 
     fn now() -> u128 {
@@ -2904,13 +2919,12 @@ fn webhook_concurrent_actions() {
     // Track how many requests were resolved before we dropped the collection.
     let num_requests_before_drop = Arc::new(AtomicUsize::new(0));
 
-    // Spin up a thread that will contiously push data to the webhook.
+    // Spin up tasks that will contiously push data to the webhook.
     let keep_sending_ = Arc::clone(&keep_sending);
-    let runtime_handle = Arc::clone(&server.runtime);
     let num_requests_before_drop_ = Arc::clone(&num_requests_before_drop);
     let addr = server.inner.http_local_addr();
 
-    let poster = std::thread::spawn(move || {
+    let poster = mz_ore::task::spawn(|| "webhook_concurrent_actions-poster", async move {
         let mut i = 0;
 
         let http_client = reqwest::Client::new();
@@ -2926,7 +2940,7 @@ fn webhook_concurrent_actions() {
             let http_client_ = http_client.clone();
             let num_requests_before_drop__ = Arc::clone(&num_requests_before_drop_);
             let handle =
-                runtime_handle.spawn_named(|| "webhook_concurrent_actions-appender", async move {
+                mz_ore::task::spawn(|| "webhook_concurrent_actions-appender", async move {
                     // Create an event.
                     let event = WebhookEvent {
                         ts: now(),
@@ -2949,16 +2963,15 @@ fn webhook_concurrent_actions() {
             i += 1;
 
             // Wait before sending another request.
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         // Wait on all of the tasks to finish, then return the results.
-        let all_tasks = futures::future::join_all(tasks);
-        runtime_handle.block_on(all_tasks)
+        futures::future::join_all(tasks).await
     });
 
     // Let the posting threads run for a bit.
-    std::thread::sleep(std::time::Duration::from_secs(5));
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     // We should see at least this many successes.
     let num_requests_before_drop =
@@ -2966,13 +2979,14 @@ fn webhook_concurrent_actions() {
     // Drop the source
     client
         .execute(&format!("DROP SOURCE {src_name};"), &[])
+        .await
         .expect("failed to drop source");
 
     // Keep sending for a bit.
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     // Stop the threads.
     keep_sending.store(false, std::sync::atomic::Ordering::Relaxed);
-    let results = poster.join().expect("thread panicked!");
+    let results = poster.await.expect("thread panicked!");
 
     // Inspect the results.
     let mut results = results
@@ -3008,6 +3022,7 @@ fn webhook_concurrent_actions() {
     // Note: this doubles as a check to make sure nothing internally panicked.
     let sources: Vec<String> = client
         .query("SELECT name FROM mz_sources", &[])
+        .await
         .expect("success")
         .into_iter()
         .map(|row| row.get(0))
@@ -3015,7 +3030,9 @@ fn webhook_concurrent_actions() {
     assert!(!sources.iter().any(|name| name == src_name));
 
     // Best effort cleanup.
-    let _ = client.execute("DROP CLUSTER webhook_cluster_concurrent CASCADE", &[]);
+    let _ = client
+        .execute("DROP CLUSTER webhook_cluster_concurrent CASCADE", &[])
+        .await;
 }
 
 #[mz_ore::test]

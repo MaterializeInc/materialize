@@ -162,162 +162,167 @@ impl MockHttpServer {
     }
 }
 
-#[mz_ore::test]
-fn test_no_block() {
-    // This is better than relying on CI to time out, because an actual failure
-    // (as opposed to a CI timeout) causes `services.log` to be uploaded.
-    mz_ore::test::timeout(Duration::from_secs(120), || {
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_no_block() {
+    // We manually time out the test because it's better than relying on CI to time out, because
+    // an actual failure (as opposed to a CI timeout) causes `services.log` to be uploaded.
+    let test_case = async move {
         println!("test_no_block: starting server");
-        let server = test_util::start_server(test_util::Config::default()).unwrap();
-        server.enable_feature_flags(&["enable_connection_validation_syntax"]);
+        let server = test_util::TestHarness::default().start().await;
+        server
+            .enable_feature_flags(&["enable_connection_validation_syntax"])
+            .await;
 
-        server.runtime.block_on(async {
-            println!("test_no_block: starting mock HTTP server");
-            let mut schema_registry_server = MockHttpServer::new();
+        println!("test_no_block: starting mock HTTP server");
+        let mut schema_registry_server = MockHttpServer::new();
 
-            println!("test_no_block: connecting to server");
-            let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
+        println!("test_no_block: connecting to server");
+        let client = server.connect().await.unwrap();
 
-            let slow_task = task::spawn(|| "slow_client", async move {
-                println!("test_no_block: in thread; executing create source");
-                let result = client
+        let slow_task = task::spawn(|| "slow_client", async move {
+            println!("test_no_block: in thread; executing create source");
+            let result = client
                 .batch_execute(&format!(
                     "CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}') WITH (VALIDATE = false);",
                     schema_registry_server.addr,
                 ))
                 .await;
-                println!("test_no_block: in thread; create CSR conn done");
-                let _ = result.unwrap();
+            println!("test_no_block: in thread; create CSR conn done");
+            let _ = result.unwrap();
 
-                let result = client
+            let result = client
                     .batch_execute(&format!(
                         "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
                         &*KAFKA_ADDRS,
                     ))
                     .await;
-                println!("test_no_block: in thread; create Kafka conn done");
-                let _ = result.unwrap();
+            println!("test_no_block: in thread; create Kafka conn done");
+            let _ = result.unwrap();
 
-                let result = client
-                    .batch_execute(
-                        "CREATE SOURCE foo \
+            let result = client
+                .batch_execute(
+                    "CREATE SOURCE foo \
                         FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') \
                         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
-                    )
-                    .await;
-                println!("test_no_block: in thread; create source done");
-                // Verify that the schema registry error was returned to the client, for
-                // good measure.
-                assert_contains!(result.unwrap_err().to_string(), "server error 503");
-            });
+                )
+                .await;
+            println!("test_no_block: in thread; create source done");
+            // Verify that the schema registry error was returned to the client, for
+            // good measure.
+            assert_contains!(result.unwrap_err().to_string(), "server error 503");
+        });
 
-            // Wait for Materialize to contact the schema registry, which
-            // indicates the adapter is processing the CREATE SOURCE command. It
-            // will be unable to complete the query until we respond.
-            println!("test_no_block: accepting fake schema registry connection");
-            let response_tx = schema_registry_server.accept().await;
+        // Wait for Materialize to contact the schema registry, which
+        // indicates the adapter is processing the CREATE SOURCE command. It
+        // will be unable to complete the query until we respond.
+        println!("test_no_block: accepting fake schema registry connection");
+        let response_tx = schema_registry_server.accept().await;
 
-            // Verify that the adapter can still process other requests from
-            // other sessions.
-            println!("test_no_block: connecting to server again");
-            let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
-            println!("test_no_block: executing query");
-            let answer: i32 = client.query_one("SELECT 1 + 1", &[]).await.unwrap().get(0);
-            assert_eq!(answer, 2);
+        // Verify that the adapter can still process other requests from
+        // other sessions.
+        println!("test_no_block: connecting to server again");
+        let client = server.connect().await.unwrap();
+        println!("test_no_block: executing query");
+        let answer: i32 = client.query_one("SELECT 1 + 1", &[]).await.unwrap().get(0);
+        assert_eq!(answer, 2);
 
-            // Return an error to the adapter, so that we can shutdown cleanly.
-            println!("test_no_block: writing fake schema registry error");
-            response_tx
-                .send(StatusCode::SERVICE_UNAVAILABLE.into_response())
-                .expect("server unexpectedly closed channel");
+        // Return an error to the adapter, so that we can shutdown cleanly.
+        println!("test_no_block: writing fake schema registry error");
+        response_tx
+            .send(StatusCode::SERVICE_UNAVAILABLE.into_response())
+            .expect("server unexpectedly closed channel");
 
-            println!("test_no_block: joining task");
-            slow_task.await.unwrap();
+        println!("test_no_block: joining task");
+        slow_task.await.unwrap();
+    };
 
-            Ok(())
-        })
-    }).expect("Test timed out");
+    tokio::time::timeout(Duration::from_secs(120), test_case)
+        .await
+        .expect("Test timed out");
 }
 
 /// Test that dropping a connection while a source is undergoing purification
 /// does not crash the server.
-#[mz_ore::test]
-fn test_drop_connection_race() {
-    let server = test_util::start_server(test_util::Config::default().unsafe_mode()).unwrap();
-    server.enable_feature_flags(&["enable_connection_validation_syntax"]);
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_drop_connection_race() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start()
+        .await;
+    server
+        .enable_feature_flags(&["enable_connection_validation_syntax"])
+        .await;
     info!("test_drop_connection_race: server started");
 
-    server.runtime.block_on(async {
-        info!("test_drop_connection_race: starting mock HTTP server");
-        let mut schema_registry_server = MockHttpServer::new();
+    info!("test_drop_connection_race: starting mock HTTP server");
+    let mut schema_registry_server = MockHttpServer::new();
 
-        // Construct a source that depends on a schema registry connection.
-        let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
-        client
-            .batch_execute(&format!(
-                "CREATE CONNECTION conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}') WITH (VALIDATE = false)",
-                schema_registry_server.addr,
-            ))
-            .await
-            .unwrap();
-        client
-            .batch_execute(&format!(
-                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
-                &*KAFKA_ADDRS,
-            ))
-            .await
-            .unwrap();
-        let source_task = task::spawn(|| "source_client", async move {
-            info!("test_drop_connection_race: in task; creating connection and source");
-            let result = client
-                .batch_execute(
-                    "CREATE SOURCE foo \
+    // Construct a source that depends on a schema registry connection.
+    let client = server.connect().await.unwrap();
+    client
+        .batch_execute(&format!(
+            "CREATE CONNECTION conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}') WITH (VALIDATE = false)",
+            schema_registry_server.addr,
+        ))
+        .await
+        .unwrap();
+    client
+        .batch_execute(&format!(
+            "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
+            &*KAFKA_ADDRS,
+        ))
+        .await
+        .unwrap();
+    let source_task = task::spawn(|| "source_client", async move {
+        info!("test_drop_connection_race: in task; creating connection and source");
+        let result = client
+            .batch_execute(
+                "CREATE SOURCE foo \
                      FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') \
                      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn",
-                )
-                .await;
-            info!(
-                "test_drop_connection_race: in task; create source done: {:?}",
-                result
-            );
+            )
+            .await;
+        info!(
+            "test_drop_connection_race: in task; create source done: {:?}",
             result
-        });
-
-        // Wait for Materialize to contact the schema registry, which indicates
-        // the adapter is processing the CREATE SOURCE command. It will be
-        // unable to complete the query until we respond.
-        info!("test_drop_connection_race: accepting fake schema registry connection");
-        let response_tx = schema_registry_server.accept().await;
-
-        // Drop the connection on which the source depends.
-        info!("test_drop_connection_race: dropping connection");
-        let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
-        client.batch_execute("DROP CONNECTION conn").await.unwrap();
-
-        let schema = Json(json!({
-            "id": 1_i64,
-            "subject": "foo-value",
-            "version": 1_i64,
-            "schema": r#"{"type": "long"}"#,
-        }));
-
-        info!("test_drop_connection_race: sending fake schema registry response");
-        response_tx
-            .send(schema.clone().into_response())
-            .expect("server unexpectedly closed channel");
-        info!("test_drop_connection_race: sending fake schema registry response again");
-        let response_tx = schema_registry_server.accept().await;
-        response_tx
-            .send(schema.into_response())
-            .expect("server unexpectedly closed channel");
-
-        info!("test_drop_connection_race: asserting response");
-        let source_res = source_task.await.unwrap();
-        assert_contains!(
-            source_res.unwrap_err().to_string(),
-            "unknown catalog item 'conn'"
         );
+        result
     });
+
+    // Wait for Materialize to contact the schema registry, which indicates
+    // the adapter is processing the CREATE SOURCE command. It will be
+    // unable to complete the query until we respond.
+    info!("test_drop_connection_race: accepting fake schema registry connection");
+    let response_tx = schema_registry_server.accept().await;
+
+    // Drop the connection on which the source depends.
+    info!("test_drop_connection_race: dropping connection");
+    let client = server.connect().await.unwrap();
+    client.batch_execute("DROP CONNECTION conn").await.unwrap();
+
+    let schema = Json(json!({
+        "id": 1_i64,
+        "subject": "foo-value",
+        "version": 1_i64,
+        "schema": r#"{"type": "long"}"#,
+    }));
+
+    info!("test_drop_connection_race: sending fake schema registry response");
+    response_tx
+        .send(schema.clone().into_response())
+        .expect("server unexpectedly closed channel");
+    info!("test_drop_connection_race: sending fake schema registry response again");
+    let response_tx = schema_registry_server.accept().await;
+    response_tx
+        .send(schema.into_response())
+        .expect("server unexpectedly closed channel");
+
+    info!("test_drop_connection_race: asserting response");
+    let source_res = source_task.await.unwrap();
+    assert_contains!(
+        source_res.unwrap_err().to_string(),
+        "unknown catalog item 'conn'"
+    );
 }
 
 #[mz_ore::test]
@@ -446,22 +451,30 @@ fn test_subscribe_negative_diffs() {
     assert_eq!(row.get::<_, i64>("count"), 2);
 }
 
-#[mz_ore::test]
-fn test_empty_subscribe_notice() {
-    let config = test_util::Config::default().with_now(NOW_ZERO.clone());
-    let server = test_util::start_server(config).unwrap();
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_empty_subscribe_notice() {
+    let server = test_util::TestHarness::default()
+        .with_now(NOW_ZERO.clone())
+        .start()
+        .await;
+
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
-    let mut client = server
-        .pg_config()
+    let client = server
+        .connect()
         .notice_callback(move |notice| tx.unbounded_send(notice).unwrap())
-        .connect(postgres::NoTls)
+        .await
         .unwrap();
 
-    client.batch_execute("CREATE TABLE t (a int)").unwrap();
-    let now = test_util::get_explain_timestamp("t", &mut client);
+    client
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+    let now = test_util::get_explain_timestamp("t", &client).await;
     client
         .batch_execute(&format!("SUBSCRIBE TO t AS OF {now} UP TO {now}"))
+        .await
         .unwrap();
+
     Retry::default()
         .max_duration(Duration::from_secs(10))
         .retry(|_| {
@@ -477,16 +490,22 @@ fn test_empty_subscribe_notice() {
         .unwrap();
 }
 
-#[mz_ore::test]
-fn test_empty_subscribe_error() {
-    let config = test_util::Config::default().with_now(NOW_ZERO.clone());
-    let server = test_util::start_server(config).unwrap();
-    let mut client = server.connect(postgres::NoTls).unwrap();
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_empty_subscribe_error() {
+    let server = test_util::TestHarness::default()
+        .with_now(NOW_ZERO.clone())
+        .start()
+        .await;
+    let client = server.connect().await.unwrap();
 
-    client.batch_execute("CREATE TABLE t (a int)").unwrap();
-    let now = test_util::get_explain_timestamp("t", &mut client);
+    client
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+    let now = test_util::get_explain_timestamp("t", &client).await;
     let e = client
         .batch_execute(&format!("SUBSCRIBE TO t AS OF {now} UP TO {}", now - 1))
+        .await
         .expect_err("expected DB error");
     let e = e.as_db_error().expect("expected DB error");
     assert!(e.code().code() == "22000")
@@ -1098,38 +1117,28 @@ fn test_subscribe_empty_upper_frontier() {
 
 // Tests that a client that launches a non-terminating SUBSCRIBE and disconnects
 // does not keep the server alive forever.
-#[mz_ore::test]
-fn test_subscribe_shutdown() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn test_subscribe_shutdown() {
+    let server = test_util::TestHarness::default().start().await;
 
-    // We have to use the async PostgreSQL client so that we can ungracefully
-    // abort the connection task.
-    // See: https://github.com/sfackler/rust-postgres/issues/725
-    server
-        .runtime
-        .block_on(async {
-            let (client, conn_task) = server.connect_async(tokio_postgres::NoTls).await.unwrap();
+    let (client, conn_task) = server.connect().with_handle().await.unwrap();
 
-            // Create a table with no data that we can SUBSCRIBE. This is the simplest
-            // way to cause a SUBSCRIBE to never terminate.
-            client.batch_execute("CREATE TABLE t ()").await.unwrap();
+    // Create a table with no data that we can SUBSCRIBE. This is the simplest
+    // way to cause a SUBSCRIBE to never terminate.
+    client.batch_execute("CREATE TABLE t ()").await.unwrap();
 
-            // Launch the ill-fated subscribe.
-            client
-                .copy_out("COPY (SUBSCRIBE t) TO STDOUT")
-                .await
-                .unwrap();
-
-            // Un-gracefully abort the connection.
-            conn_task.abort();
-
-            // Need to await `conn_task` to actually deliver the `abort`. We don't
-            // care about the result though (it's probably `JoinError` with `is_cancelled` being true).
-            let _ = conn_task.await;
-
-            Ok::<_, Box<dyn Error>>(())
-        })
+    // Launch the ill-fated subscribe.
+    client
+        .copy_out("COPY (SUBSCRIBE t) TO STDOUT")
+        .await
         .unwrap();
+
+    // Un-gracefully abort the connection.
+    conn_task.abort();
+
+    // Need to await `conn_task` to actually deliver the `abort`. We don't
+    // care about the result though (it's probably `JoinError` with `is_cancelled` being true).
+    let _ = conn_task.await;
 
     // Dropping the server will initiate a graceful shutdown. We previously had
     // a bug where the server would fail to notice that the client running
@@ -1421,9 +1430,9 @@ fn test_transactional_explain_timestamps() {
 //
 // Feel free to modify this test if that product requirement changes,
 // but please at least keep _something_ that tests that custom compaction windows are working.
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18934
-fn test_utilization_hold() {
+async fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_introspection` tests indexes, `default` tests tables.
     // The bool determines whether we are testing indexes.
@@ -1440,26 +1449,28 @@ fn test_utilization_hold() {
         NowFn::from(move || *timestamp.lock().unwrap())
     };
     let data_dir = tempfile::tempdir().unwrap();
-    let config = test_util::Config::default()
-        .with_now(now_fn)
-        .data_directory(data_dir.path());
 
     // Create the server with the past time, to make sure the table is created.
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .with_now(now_fn)
+        .data_directory(data_dir.path())
+        .start()
+        .await;
 
     // Fast-forward time to make sure the table is still readable at the old time.
     *now.lock().unwrap() = now_millis;
 
-    let mut client = server.connect(postgres::NoTls).unwrap();
+    let client = server.connect().await.unwrap();
 
     for q in QUERIES_TO_TRY {
         let explain_q = &format!("EXPLAIN TIMESTAMP AS JSON FOR {q}");
         for cluster in CLUSTERS_TO_TRY {
             client
                 .execute(&format!("SET cluster={cluster}"), &[])
+                .await
                 .unwrap();
 
-            let row = client.query_one(explain_q, &[]).unwrap();
+            let row = client.query_one(explain_q, &[]).await.unwrap();
             let explain: String = row.get(0);
             let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
 
@@ -1489,22 +1500,25 @@ fn test_utilization_hold() {
     }
 
     // Check that we can turn off retention
-    let mut sys_client = server
-        .pg_config_internal()
+    let sys_client = server
+        .connect()
+        .internal()
         .user(&SYSTEM_USER.name)
-        .connect(postgres::NoTls)
+        .await
         .unwrap();
 
     sys_client
         .execute("ALTER SYSTEM SET metrics_retention='1s'", &[])
+        .await
         .unwrap();
     for q in QUERIES_TO_TRY {
         let explain_q = &format!("EXPLAIN TIMESTAMP AS JSON FOR {q}");
         for cluster in CLUSTERS_TO_TRY {
             client
                 .execute(&format!("SET cluster={cluster}"), &[])
+                .await
                 .unwrap();
-            let row = client.query_one(explain_q, &[]).unwrap();
+            let row = client.query_one(explain_q, &[]).await.unwrap();
             let explain: String = row.get(0);
             let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
             let since = explain
@@ -1524,57 +1538,54 @@ fn test_utilization_hold() {
 // forever) when a client is terminated (disconnects from the server) instead
 // of cancelled (sends a pgwire cancel request on a new connection).
 #[ignore] // TODO(necaris): Re-enable this as soon as possible
-#[mz_ore::test]
-fn test_github_12546() {
-    let config = test_util::Config::default().with_propagate_crashes(false);
-    let server = test_util::start_server(config).unwrap();
-    server.enable_feature_flags(&["enable_dangerous_functions"]);
-
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn test_github_12546() {
+    let server = test_util::TestHarness::default()
+        .with_propagate_crashes(false)
+        .start()
+        .await;
     server
-        .runtime
-        .block_on(async {
-            let (client, conn_task) = server.connect_async(tokio_postgres::NoTls).await.unwrap();
+        .enable_feature_flags(&["enable_dangerous_functions"])
+        .await;
 
-            client
-                .batch_execute("CREATE TABLE test(a text);")
-                .await
-                .unwrap();
-            client
-                .batch_execute("INSERT INTO test VALUES ('a');")
-                .await
-                .unwrap();
+    let (client, conn_task) = server.connect().with_handle().await.unwrap();
 
-            let query = client.query("SELECT mz_internal.mz_panic(a) FROM test", &[]);
-            let timeout = tokio::time::timeout(Duration::from_secs(2), query);
-            // We expect the timeout to trigger because the query should be crashing the
-            // compute instance.
-            assert_eq!(
-                timeout.await.unwrap_err().to_string(),
-                "deadline has elapsed"
-            );
-
-            // Aborting the connection should cause its pending queries to be cancelled,
-            // allowing the compute instances to stop crashing while trying to execute
-            // them.
-            conn_task.abort();
-
-            // Need to await `conn_task` to actually deliver the `abort`.
-            let _ = conn_task.await;
-
-            // Make a new connection to verify the compute instance can now start.
-            let (client, _conn_task) = server.connect_async(tokio_postgres::NoTls).await.unwrap();
-            assert_eq!(
-                client
-                    .query_one("SELECT count(*) FROM test", &[])
-                    .await
-                    .unwrap()
-                    .get::<_, i64>(0),
-                1,
-            );
-
-            Ok::<_, Box<dyn Error>>(())
-        })
+    client
+        .batch_execute("CREATE TABLE test(a text);")
+        .await
         .unwrap();
+    client
+        .batch_execute("INSERT INTO test VALUES ('a');")
+        .await
+        .unwrap();
+
+    let query = client.query("SELECT mz_internal.mz_panic(a) FROM test", &[]);
+    let timeout = tokio::time::timeout(Duration::from_secs(2), query);
+    // We expect the timeout to trigger because the query should be crashing the
+    // compute instance.
+    assert_eq!(
+        timeout.await.unwrap_err().to_string(),
+        "deadline has elapsed"
+    );
+
+    // Aborting the connection should cause its pending queries to be cancelled,
+    // allowing the compute instances to stop crashing while trying to execute
+    // them.
+    conn_task.abort();
+
+    // Need to await `conn_task` to actually deliver the `abort`.
+    let _ = conn_task.await;
+
+    // Make a new connection to verify the compute instance can now start.
+    let client = server.connect().await.unwrap();
+    assert_eq!(
+        client
+            .query_one("SELECT count(*) FROM test", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        1,
+    );
 }
 
 #[mz_ore::test]
@@ -1723,120 +1734,136 @@ fn test_read_then_write_serializability() {
     }
 }
 
-#[mz_ore::test]
-fn test_timestamp_recovery() {
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_timestamp_recovery() {
     let now = Arc::new(Mutex::new(1));
     let now_fn = {
         let timestamp = Arc::clone(&now);
         NowFn::from(move || *timestamp.lock().unwrap())
     };
     let data_dir = tempfile::tempdir().unwrap();
-    let config = test_util::Config::default()
+    let harness = test_util::TestHarness::default()
         .with_now(now_fn)
         .data_directory(data_dir.path());
 
     // Start a server and get the current global timestamp
     let global_timestamp = {
-        let server = test_util::start_server(config.clone()).unwrap();
-        let mut client = server.connect(postgres::NoTls).unwrap();
+        let server = harness.clone().start().await;
+        let client = server.connect().await.unwrap();
 
-        client.batch_execute("CREATE TABLE t1 (i1 INT)").unwrap();
-        test_util::get_explain_timestamp("t1", &mut client)
+        client
+            .batch_execute("CREATE TABLE t1 (i1 INT)")
+            .await
+            .unwrap();
+        test_util::get_explain_timestamp("t1", &client).await
     };
 
     // Rollback the current time and ensure that a value larger than the old global timestamp is
     // recovered
     {
         *now.lock().expect("lock poisoned") = 0;
-        let server = test_util::start_server(config).unwrap();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-        let recovered_timestamp = test_util::get_explain_timestamp("t1", &mut client);
+        let server = harness.clone().start().await;
+        let client = server.connect().await.unwrap();
+        let recovered_timestamp = test_util::get_explain_timestamp("t1", &client).await;
         assert!(recovered_timestamp > global_timestamp);
     }
 }
 
-#[mz_ore::test]
-fn test_timeline_read_holds() {
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_timeline_read_holds() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
         let now = Arc::clone(&now);
         NowFn::from(move || *now.lock().unwrap())
     };
-    let config = test_util::Config::default().with_now(now_fn).unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
-    let mut mz_client = server.connect(postgres::NoTls).unwrap();
+    let server = test_util::TestHarness::default()
+        .with_now(now_fn)
+        .unsafe_mode()
+        .start()
+        .await;
+    let mz_client = server.connect().await.unwrap();
 
     let view_name = "v_hold";
     let source_name = "source_hold";
-    let (mut pg_client, cleanup_fn) = test_util::create_postgres_source_with_table(
-        &server.runtime,
-        &mut mz_client,
-        view_name,
-        "(a INT)",
-        source_name,
-    )
-    .unwrap();
+    let (pg_client, cleanup_fn) =
+        test_util::create_postgres_source_with_table(&mz_client, view_name, "(a INT)", source_name)
+            .await
+            .unwrap();
 
     // Create user table in Materialize.
-    mz_client.batch_execute("DROP TABLE IF EXISTS t;").unwrap();
-    mz_client.batch_execute("CREATE TABLE t (a INT);").unwrap();
+    mz_client
+        .batch_execute("DROP TABLE IF EXISTS t;")
+        .await
+        .unwrap();
+    mz_client
+        .batch_execute("CREATE TABLE t (a INT);")
+        .await
+        .unwrap();
     test_util::insert_with_deterministic_timestamps("t", "(42)", &server, Arc::clone(&now))
+        .await
         .unwrap();
 
     // Insert data into source.
     let source_rows: i64 = 10;
     for _ in 0..source_rows {
-        let _ = server
-            .runtime
-            .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))
+        let _ = pg_client
+            .execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[])
+            .await
             .unwrap();
     }
 
-    test_util::wait_for_view_population(&mut mz_client, view_name, source_rows).unwrap();
+    test_util::wait_for_view_population(&mz_client, view_name, source_rows)
+        .await
+        .unwrap();
 
     // Make sure that the table and view are joinable immediately at some timestamp.
-    let mut mz_join_client = server.connect(postgres::NoTls).unwrap();
-    let _ = mz_ore::test::timeout(Duration::from_millis(2_000), move || {
-        Ok(mz_join_client
-            .query_one(&format!("SELECT COUNT(t.a) FROM t, {view_name};"), &[])
-            .unwrap()
-            .get::<_, i64>(0))
+    let mz_join_client = server.connect().await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_millis(2_000), async move {
+        Ok::<_, anyhow::Error>(
+            mz_join_client
+                .query_one(&format!("SELECT COUNT(t.a) FROM t, {view_name};"), &[])
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+        )
     })
+    .await
     .unwrap();
 
-    cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime).unwrap();
+    cleanup_fn(&mz_client, &pg_client).await.unwrap();
 }
 
-#[mz_ore::test]
-fn test_linearizability() {
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn test_linearizability() {
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
         let now = Arc::clone(&now);
         NowFn::from(move || *now.lock().unwrap())
     };
-    let config = test_util::Config::default().with_now(now_fn).unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
-    let mut mz_client = server.connect(postgres::NoTls).unwrap();
+    let server = test_util::TestHarness::default()
+        .with_now(now_fn)
+        .unsafe_mode()
+        .start()
+        .await;
+    let mz_client = server.connect().await.unwrap();
 
     let view_name = "v_lin";
     let source_name = "source_lin";
-    let (mut pg_client, cleanup_fn) = test_util::create_postgres_source_with_table(
-        &server.runtime,
-        &mut mz_client,
-        view_name,
-        "(a INT)",
-        source_name,
-    )
-    .unwrap();
+    let (pg_client, cleanup_fn) =
+        test_util::create_postgres_source_with_table(&mz_client, view_name, "(a INT)", source_name)
+            .await
+            .unwrap();
     // Insert value into postgres table.
-    let _ = server
-        .runtime
-        .block_on(pg_client.execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[]))
+    let _ = pg_client
+        .execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[])
+        .await
         .unwrap();
 
-    test_util::wait_for_view_population(&mut mz_client, view_name, 1).unwrap();
+    test_util::wait_for_view_population(&mz_client, view_name, 1)
+        .await
+        .unwrap();
 
     // The user table's write frontier will be close to zero because we use a deterministic
     // now function in this test. It may be slightly higher than zero because bootstrapping
@@ -1849,33 +1876,48 @@ fn test_linearizability() {
 
     mz_client
         .batch_execute("SET transaction_isolation = serializable")
+        .await
         .unwrap();
-    let view_ts = test_util::get_explain_timestamp(view_name, &mut mz_client);
+    let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
+
     // Create user table in Materialize.
-    mz_client.batch_execute("DROP TABLE IF EXISTS t;").unwrap();
-    mz_client.batch_execute("CREATE TABLE t (a INT);").unwrap();
-    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+    mz_client
+        .batch_execute("DROP TABLE IF EXISTS t;")
+        .await
+        .unwrap();
+    mz_client
+        .batch_execute("CREATE TABLE t (a INT);")
+        .await
+        .unwrap();
+    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
+
     // In serializable transaction isolation, read timestamps can go backwards.
     assert!(join_ts < view_ts);
 
     mz_client
         .batch_execute("SET transaction_isolation = 'strict serializable'")
+        .await
         .unwrap();
-    let view_ts = test_util::get_explain_timestamp(view_name, &mut mz_client);
-    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+
+    let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
+    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
+
     // Since the query on the join was done after the query on the view, it should have a higher or
     // equal timestamp in strict serializable mode.
     assert!(join_ts >= view_ts);
 
     mz_client
         .batch_execute("SET transaction_isolation = serializable")
+        .await
         .unwrap();
-    let view_ts = test_util::get_explain_timestamp(view_name, &mut mz_client);
-    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mut mz_client);
+
+    let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
+    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
+
     // If we go back to serializable, then timestamps can revert again.
     assert!(join_ts < view_ts);
 
-    cleanup_fn(&mut mz_client, &mut pg_client, &server.runtime).unwrap();
+    cleanup_fn(&mz_client, &pg_client).await.unwrap();
 }
 
 #[mz_ore::test]
