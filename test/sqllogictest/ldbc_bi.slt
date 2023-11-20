@@ -103,6 +103,9 @@ statement ok
 CREATE INDEX Forum_id ON Forum (id)
 
 statement ok
+CREATE INDEX Forum_ModeratorPersonId on Forum (ModeratorPersonId)
+
+statement ok
 CREATE TABLE Post (
     creationDate timestamp with time zone NOT NULL,
     id bigint NOT NULL,
@@ -239,6 +242,9 @@ statement ok
 CREATE INDEX Person_knows_Person_Person1id ON Person_knows_Person (Person1id)
 
 statement ok
+CREATE INDEX Person_knows_Person_Person2id ON person_knows_person (Person2id)
+
+statement ok
 CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id)
 
 ######################################################################
@@ -371,6 +377,9 @@ WITH MUTUALLY RECURSIVE
 
 statement ok
 CREATE INDEX Message_MessageId ON Message (MessageId)
+
+statement ok
+CREATE INDEX Message_ContainerForumId ON Message (ContainerForumId)
 
 statement ok
 CREATE INDEX Message_ParentMessageId ON Message (ParentMessageId)
@@ -606,19 +615,24 @@ Explained Query:
     Reduce group_by=[#0{containerforumid}, #2{title}, #1{creationdate}, #3{moderatorpersonid}] aggregates=[count(*)] // { arity: 5 }
       Project (#10, #13, #15, #16) // { arity: 4 }
         Filter (#33{name} = "China") AND (#10{containerforumid}) IS NOT NULL AND (#16{moderatorpersonid}) IS NOT NULL AND (#25{locationcityid}) IS NOT NULL AND (#31{partofcountryid}) IS NOT NULL // { arity: 37 }
-          Join on=(#1{messageid} = #36{messageid} AND #10{containerforumid} = #14{id} AND #16{moderatorpersonid} = #18{id} AND #25{locationcityid} = #28{id} AND #31{partofcountryid} = #32{id}) type=differential // { arity: 37 }
+          Join on=(#1{messageid} = #36{messageid} AND #10{containerforumid} = #14{id} AND #16{moderatorpersonid} = #18{id} AND #25{locationcityid} = #28{id} AND #31{partofcountryid} = #32{id}) type=delta // { arity: 37 }
             implementation
-              %5[#0]UKA » %0:message[#1]KA » %1:forum[#1]KA » %2:person[#1]KA » %3:city[#0]KA » %4:country[#0]KAef
-            ArrangeBy keys=[[#1{messageid}]] // { arity: 13 }
-              ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
-            ArrangeBy keys=[[#1{id}]] // { arity: 4 }
-              ReadIndex on=forum forum_id=[differential join] // { arity: 4 }
-            ArrangeBy keys=[[#1{id}]] // { arity: 11 }
-              ReadIndex on=person person_id=[differential join] // { arity: 11 }
+              %0:message » %5[#0]UKA » %1:forum[#1]KA » %2:person[#1]KA » %3:city[#0]KA » %4:country[#0]KAef
+              %1:forum » %0:message[#10]KA » %5[#0]UKA » %2:person[#1]KA » %3:city[#0]KA » %4:country[#0]KAef
+              %2:person » %1:forum[#3]KA » %0:message[#10]KA » %5[#0]UKA » %3:city[#0]KA » %4:country[#0]KAef
+              %3:city » %4:country[#0]KAef » %2:person[#8]KA » %1:forum[#3]KA » %0:message[#10]KA » %5[#0]UKA
+              %4:country » %3:city[#3]KA » %2:person[#8]KA » %1:forum[#3]KA » %0:message[#10]KA » %5[#0]UKA
+              %5 » %0:message[#1]KA » %1:forum[#1]KA » %2:person[#1]KA » %3:city[#0]KA » %4:country[#0]KAef
+            ArrangeBy keys=[[#1{messageid}], [#10{containerforumid}]] // { arity: 13 }
+              ReadIndex on=message message_messageid=[delta join 1st input (full scan)] message_containerforumid=[delta join 1st input (full scan)] // { arity: 13 }
+            ArrangeBy keys=[[#1{id}], [#3{moderatorpersonid}]] // { arity: 4 }
+              ReadIndex on=forum forum_id=[delta join lookup] forum_moderatorpersonid=[delta join lookup] // { arity: 4 }
+            ArrangeBy keys=[[#1{id}], [#8{locationcityid}]] // { arity: 11 }
+              ReadIndex on=person person_id=[delta join lookup] person_locationcityid=[delta join lookup] // { arity: 11 }
+            ArrangeBy keys=[[#0{id}], [#3{partofcountryid}]] // { arity: 4 }
+              ReadIndex on=city city_id=[delta join lookup] city_partofcountryid=[delta join lookup] // { arity: 4 }
             ArrangeBy keys=[[#0{id}]] // { arity: 4 }
-              ReadIndex on=city city_id=[differential join] // { arity: 4 }
-            ArrangeBy keys=[[#0{id}]] // { arity: 4 }
-              ReadIndex on=country country_id=[differential join] // { arity: 4 }
+              ReadIndex on=country country_id=[delta join lookup] // { arity: 4 }
             ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }
               Distinct project=[#0{messageid}] // { arity: 1 }
                 Project (#10) // { arity: 1 }
@@ -639,12 +653,16 @@ Used Indexes:
   - materialize.public.tag_id (delta join lookup)
   - materialize.public.tag_typetagclassid (delta join lookup)
   - materialize.public.tagclass_name (lookup)
-  - materialize.public.forum_id (differential join)
-  - materialize.public.person_id (differential join)
-  - materialize.public.country_id (differential join)
-  - materialize.public.city_id (differential join)
+  - materialize.public.forum_id (delta join lookup)
+  - materialize.public.forum_moderatorpersonid (delta join lookup)
+  - materialize.public.person_id (delta join lookup)
+  - materialize.public.person_locationcityid (delta join lookup)
+  - materialize.public.country_id (delta join lookup)
+  - materialize.public.city_id (delta join lookup)
+  - materialize.public.city_partofcountryid (delta join lookup)
   - materialize.public.message_hastag_tag_tagid (delta join lookup)
-  - materialize.public.message_messageid (differential join)
+  - materialize.public.message_messageid (delta join 1st input (full scan))
+  - materialize.public.message_containerforumid (delta join 1st input (full scan))
 
 EOF
 
@@ -739,12 +757,15 @@ Explained Query:
     With
       cte l3 =
         Project (#0..=#3, #5) // { arity: 5 }
-          Join on=(#1{id} = #13{creatorpersonid} AND #14{containerforumid} = #17{containerforumid} = #18{id}) type=differential // { arity: 19 }
+          Join on=(#1{id} = #13{creatorpersonid} AND #14{containerforumid} = #17{containerforumid} = #18{id}) type=delta // { arity: 19 }
             implementation
-              %0:l2[#1]K » %1:message[#9]KA » %2[#0]UKA » %3[#0]UKA
+              %0:l2 » %1:message[#9]KA » %2[#0]UKA » %3[#0]UKA
+              %1:message » %2[#0]UKA » %3[#0]UKA » %0:l2[#1]KA
+              %2 » %3[#0]UKA » %1:message[#10]KA » %0:l2[#1]KA
+              %3 » %2[#0]UKA » %1:message[#10]KA » %0:l2[#1]KA
             Get l2 // { arity: 4 }
-            ArrangeBy keys=[[#9{creatorpersonid}]] // { arity: 13 }
-              ReadIndex on=message message_creatorpersonid=[differential join] // { arity: 13 }
+            ArrangeBy keys=[[#9{creatorpersonid}], [#10{containerforumid}]] // { arity: 13 }
+              ReadIndex on=message message_containerforumid=[delta join lookup] message_creatorpersonid=[delta join lookup] // { arity: 13 }
             ArrangeBy keys=[[#0{containerforumid}]] // { arity: 1 }
               Distinct project=[#0{containerforumid}] // { arity: 1 }
                 Project (#10) // { arity: 1 }
@@ -790,7 +811,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.person_id (*** full scan ***, delta join 1st input (full scan))
   - materialize.public.forum_hasmember_person_forumid (differential join)
-  - materialize.public.message_creatorpersonid (*** full scan ***, differential join)
+  - materialize.public.message_containerforumid (delta join lookup)
+  - materialize.public.message_creatorpersonid (*** full scan ***, delta join lookup)
   - materialize.public.top100popularforumsq04_id (*** full scan ***)
 
 EOF
@@ -1688,12 +1710,15 @@ Explained Query:
                     Union // { arity: 1 }
                       Distinct project=[#0{person2id}] // { arity: 1 }
                         Project (#6) // { arity: 1 }
-                          Join on=(#0{person2id} = #2{person1id} AND #3{person2id} = #5{person1id}) type=differential // { arity: 7 }
+                          Join on=(#0{person2id} = #2{person1id} AND #3{person2id} = #5{person1id}) type=delta // { arity: 7 }
                             implementation
-                              %0:l2[#0]UKA » %1:l0[#1]KA » %2:l0[#1]KA
+                              %0:l2 » %1:person_knows_person[#1]KA » %2:l0[#1]KA
+                              %1:person_knows_person » %0:l2[#0]UKA » %2:l0[#1]KA
+                              %2:l0 » %1:person_knows_person[#2]KA » %0:l2[#0]UKA
                             ArrangeBy keys=[[#0{person2id}]] // { arity: 1 }
                               Get l2 // { arity: 1 }
-                            Get l0 // { arity: 3 }
+                            ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
+                              ReadIndex on=person_knows_person person_knows_person_person1id=[delta join lookup] person_knows_person_person2id=[delta join lookup] // { arity: 3 }
                             Get l0 // { arity: 3 }
                       Negate // { arity: 1 }
                         Get l2 // { arity: 1 }
@@ -1739,27 +1764,28 @@ Explained Query:
       cte l2 =
         Distinct project=[#0{person2id}] // { arity: 1 }
           Union // { arity: 1 }
-            Get l1 // { arity: 1 }
-            Project (#3) // { arity: 1 }
-              Join on=(#0{person2id} = #2{person1id}) type=differential // { arity: 4 }
+            Project (#2) // { arity: 1 }
+              Get l1 // { arity: 4 }
+            Project (#6) // { arity: 1 }
+              Join on=(#2{person2id} = #5{person1id}) type=differential // { arity: 7 }
                 implementation
-                  %1:l0[#1]KA » %0:l1[#0]Ke
-                ArrangeBy keys=[[#0{person2id}]] // { arity: 1 }
-                  Get l1 // { arity: 1 }
+                  %0:l1[#2]KAe » %1:l0[#1]KAe
+                ArrangeBy keys=[[#2{person2id}]] // { arity: 4 }
+                  Get l1 // { arity: 4 }
                 Get l0 // { arity: 3 }
       cte l1 =
-        Project (#2) // { arity: 1 }
-          ReadIndex on=materialize.public.person_knows_person person_knows_person_person1id=[lookup value=(6597069770479)] // { arity: 4 }
+        ReadIndex on=materialize.public.person_knows_person person_knows_person_person1id=[lookup value=(6597069770479)] // { arity: 4 }
       cte l0 =
         ArrangeBy keys=[[#1{person1id}]] // { arity: 3 }
-          ReadIndex on=person_knows_person person_knows_person_person1id=[differential join, lookup] // { arity: 3 }
+          ReadIndex on=person_knows_person person_knows_person_person1id=[differential join, delta join lookup, lookup] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.tag_id (differential join, delta join lookup)
   - materialize.public.tag_typetagclassid (delta join lookup)
   - materialize.public.tagclass_name (lookup)
   - materialize.public.person_locationcityid (delta join 1st input (full scan))
-  - materialize.public.person_knows_person_person1id (differential join, lookup)
+  - materialize.public.person_knows_person_person1id (differential join, delta join lookup, lookup)
+  - materialize.public.person_knows_person_person2id (delta join lookup)
   - materialize.public.country_id (delta join lookup)
   - materialize.public.city_id (delta join lookup)
   - materialize.public.city_partofcountryid (delta join lookup)
@@ -2274,134 +2300,143 @@ Explained Query:
               Union // { arity: 4 }
                 Negate // { arity: 4 }
                   Project (#2, #3, #0, #1) // { arity: 4 }
-                    Get l9 // { arity: 5 }
+                    Get l11 // { arity: 5 }
                 Project (#2, #3, #0, #1) // { arity: 4 }
-                  Get l1 // { arity: 4 }
+                  Get l3 // { arity: 4 }
             Project (#2, #3, #0, #1, #4) // { arity: 5 }
-              Get l9 // { arity: 5 }
+              Get l11 // { arity: 5 }
     With
-      cte l9 =
+      cte l11 =
         Project (#0..=#3, #6) // { arity: 5 }
           Join on=(#2{id} = #4 AND #3{person2id} = #5) type=differential // { arity: 7 }
             implementation
-              %1[#0, #1]UKKA » %0:l1[#2, #3]KK
+              %1[#0, #1]UKKA » %0:l3[#2, #3]KK
             ArrangeBy keys=[[#2{id}, #3{person2id}]] // { arity: 4 }
-              Get l1 // { arity: 4 }
+              Get l3 // { arity: 4 }
             ArrangeBy keys=[[#0, #1]] // { arity: 3 }
               Reduce group_by=[#1, #2] aggregates=[sum((case when #3 then case when #0 then 1 else 4 end else 0 end + case when #4 then case when #0 then 1 else 10 end else 0 end))] // { arity: 3 }
                 Project (#2..=#5, #8) // { arity: 5 }
                   Join on=(#0{id} = #6{id} AND #1{person2id} = #7{person2id}) type=differential // { arity: 9 }
                     implementation
-                      %0:l6[#0, #1]KK » %1[#0, #1]KK
+                      %0:l8[#0, #1]KK » %1[#0, #1]KK
                     ArrangeBy keys=[[#0{id}, #1{person2id}]] // { arity: 6 }
-                      Get l6 // { arity: 6 }
+                      Get l8 // { arity: 6 }
                     ArrangeBy keys=[[#0{id}, #1{person2id}]] // { arity: 3 }
                       Union // { arity: 3 }
                         Map (true) // { arity: 3 }
-                          Get l8 // { arity: 2 }
+                          Get l10 // { arity: 2 }
                         Map (false) // { arity: 3 }
                           Union // { arity: 2 }
                             Negate // { arity: 2 }
-                              Get l8 // { arity: 2 }
-                            Get l7 // { arity: 2 }
-      cte l8 =
+                              Get l10 // { arity: 2 }
+                            Get l9 // { arity: 2 }
+      cte l10 =
         Project (#0, #1) // { arity: 2 }
           Join on=(#0{id} = #2{personid} AND #1{person2id} = #3{creatorpersonid}) type=differential // { arity: 4 }
             implementation
-              %0:l7[#0, #1]UKKA » %1[#0, #1]UKKA
+              %0:l9[#0, #1]UKKA » %1[#0, #1]UKKA
             ArrangeBy keys=[[#0{id}, #1{person2id}]] // { arity: 2 }
-              Get l7 // { arity: 2 }
+              Get l9 // { arity: 2 }
             ArrangeBy keys=[[#0{personid}, #1{creatorpersonid}]] // { arity: 2 }
               Distinct project=[#1{personid}, #0{creatorpersonid}] // { arity: 2 }
                 Project (#9, #14) // { arity: 2 }
                   Join on=(#1{messageid} = #15{messageid}) type=differential // { arity: 16 }
                     implementation
-                      %0:l4[#1]KA » %1:person_likes_message[#2]KA
-                    Get l4 // { arity: 13 }
+                      %0:l6[#1]KA » %1:person_likes_message[#2]KA
+                    Get l6 // { arity: 13 }
                     ArrangeBy keys=[[#2{messageid}]] // { arity: 3 }
                       ReadIndex on=person_likes_message person_likes_message_messageid=[differential join] // { arity: 3 }
-      cte l7 =
+      cte l9 =
         Distinct project=[#0{id}, #1{person2id}] // { arity: 2 }
           Project (#0, #1) // { arity: 2 }
-            Get l6 // { arity: 6 }
-      cte l6 =
+            Get l8 // { arity: 6 }
+      cte l8 =
         Project (#0..=#4, #7) // { arity: 6 }
           Join on=(#0{id} = #5{id} AND #1{person2id} = #6{person2id}) type=differential // { arity: 8 }
             implementation
-              %0:l2[#0, #1]KK » %1[#0, #1]KK
+              %0:l4[#0, #1]KK » %1[#0, #1]KK
             ArrangeBy keys=[[#0{id}, #1{person2id}]] // { arity: 5 }
-              Get l2 // { arity: 5 }
+              Get l4 // { arity: 5 }
             ArrangeBy keys=[[#0{id}, #1{person2id}]] // { arity: 3 }
               Union // { arity: 3 }
                 Map (true) // { arity: 3 }
-                  Get l5 // { arity: 2 }
+                  Get l7 // { arity: 2 }
                 Map (false) // { arity: 3 }
                   Union // { arity: 2 }
                     Negate // { arity: 2 }
-                      Get l5 // { arity: 2 }
-                    Get l3 // { arity: 2 }
-      cte l5 =
+                      Get l7 // { arity: 2 }
+                    Get l5 // { arity: 2 }
+      cte l7 =
         Project (#0, #1) // { arity: 2 }
           Join on=(#0{id} = #2{creatorpersonid} AND #1{person2id} = #3{creatorpersonid}) type=differential // { arity: 4 }
             implementation
-              %0:l3[#0, #1]UKKA » %1[#0, #1]UKKA
+              %0:l5[#0, #1]UKKA » %1[#0, #1]UKKA
             ArrangeBy keys=[[#0{id}, #1{person2id}]] // { arity: 2 }
-              Get l3 // { arity: 2 }
+              Get l5 // { arity: 2 }
             ArrangeBy keys=[[#0{creatorpersonid}, #1{creatorpersonid}]] // { arity: 2 }
               Distinct project=[#1{creatorpersonid}, #0{creatorpersonid}] // { arity: 2 }
                 Project (#9, #22) // { arity: 2 }
                   Filter (#1{messageid}) IS NOT NULL // { arity: 26 }
                     Join on=(#1{messageid} = #25{parentmessageid}) type=differential // { arity: 26 }
                       implementation
-                        %0:l4[#1]KA » %1:message[#12]KA
-                      Get l4 // { arity: 13 }
+                        %0:l6[#1]KA » %1:message[#12]KA
+                      Get l6 // { arity: 13 }
                       ArrangeBy keys=[[#12{parentmessageid}]] // { arity: 13 }
                         ReadIndex on=message message_parentmessageid=[differential join] // { arity: 13 }
-      cte l4 =
+      cte l6 =
         ArrangeBy keys=[[#1{messageid}]] // { arity: 13 }
           ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
-      cte l3 =
+      cte l5 =
         Distinct project=[#0{id}, #1{person2id}] // { arity: 2 }
           Project (#0, #1) // { arity: 2 }
-            Get l2 // { arity: 5 }
-      cte l2 =
+            Get l4 // { arity: 5 }
+      cte l4 =
         Map (case when #2 then #1{person2id} else #0{id} end, case when #2 then #0{id} else #1{person2id} end) // { arity: 5 }
           Union // { arity: 3 }
             Project (#2..=#4) // { arity: 3 }
               Map (false) // { arity: 5 }
-                Get l1 // { arity: 4 }
+                Get l3 // { arity: 4 }
             Project (#3, #2, #4) // { arity: 3 }
               Map (true) // { arity: 5 }
-                Get l1 // { arity: 4 }
-      cte l1 =
+                Get l3 // { arity: 4 }
+      cte l3 =
         Project (#4, #5, #9, #21) // { arity: 4 }
           Filter (#1{name} = "Philippines") AND (#38{name} = "Taiwan") AND (#0{id}) IS NOT NULL AND (#4{id}) IS NOT NULL AND (#9{id}) IS NOT NULL AND (#21{person2id}) IS NOT NULL AND (#30{locationcityid}) IS NOT NULL AND (#36{partofcountryid}) IS NOT NULL // { arity: 41 }
-            Join on=(#0{id} = #7{partofcountryid} AND #4{id} = #16{locationcityid} AND #9{id} = #20{person1id} AND #21{person2id} = #23{id} AND #30{locationcityid} = #33{id} AND #36{partofcountryid} = #37{id}) type=differential // { arity: 41 }
+            Join on=(#0{id} = #7{partofcountryid} AND #4{id} = #16{locationcityid} AND #9{id} = #20{person1id} AND #21{person2id} = #23{id} AND #30{locationcityid} = #33{id} AND #36{partofcountryid} = #37{id}) type=delta // { arity: 41 }
               implementation
-                %0:l0[#0]KAef » %1:city[#3]KAef » %2:person[#8]KAef » %3:person_knows_person[#1]KAef » %4:person[#1]KAef » %5:city[#0]KAef » %6:l0[#0]KAef
+                %0:l0 » %1:l1[#3]KA » %2:l2[#8]KA » %3:person_knows_person[#1]KA » %4:l2[#1]KA » %5:l1[#0]KA » %6:l0[#0]KAef
+                %1:l1 » %0:l0[#0]KAef » %2:l2[#8]KA » %3:person_knows_person[#1]KA » %4:l2[#1]KA » %5:l1[#0]KA » %6:l0[#0]KAef
+                %2:l2 » %1:l1[#0]KA » %0:l0[#0]KAef » %3:person_knows_person[#1]KA » %4:l2[#1]KA » %5:l1[#0]KA » %6:l0[#0]KAef
+                %3:person_knows_person » %2:l2[#1]KA » %1:l1[#0]KA » %0:l0[#0]KAef » %4:l2[#1]KA » %5:l1[#0]KA » %6:l0[#0]KAef
+                %4:l2 » %3:person_knows_person[#2]KA » %2:l2[#1]KA » %1:l1[#0]KA » %0:l0[#0]KAef » %5:l1[#0]KA » %6:l0[#0]KAef
+                %5:l1 » %6:l0[#0]KAef » %4:l2[#8]KA » %3:person_knows_person[#2]KA » %2:l2[#1]KA » %1:l1[#0]KA » %0:l0[#0]KAef
+                %6:l0 » %5:l1[#3]KA » %4:l2[#8]KA » %3:person_knows_person[#2]KA » %2:l2[#1]KA » %1:l1[#0]KA » %0:l0[#0]KAef
               Get l0 // { arity: 4 }
-              ArrangeBy keys=[[#3{partofcountryid}]] // { arity: 4 }
-                ReadIndex on=city city_partofcountryid=[differential join] // { arity: 4 }
-              ArrangeBy keys=[[#8{locationcityid}]] // { arity: 11 }
-                ReadIndex on=person person_locationcityid=[differential join] // { arity: 11 }
-              ArrangeBy keys=[[#1{person1id}]] // { arity: 3 }
-                ReadIndex on=person_knows_person person_knows_person_person1id=[differential join] // { arity: 3 }
-              ArrangeBy keys=[[#1{id}]] // { arity: 11 }
-                ReadIndex on=person person_id=[differential join] // { arity: 11 }
-              ArrangeBy keys=[[#0{id}]] // { arity: 4 }
-                ReadIndex on=city city_id=[differential join] // { arity: 4 }
+              Get l1 // { arity: 4 }
+              Get l2 // { arity: 11 }
+              ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
+                ReadIndex on=person_knows_person person_knows_person_person1id=[delta join lookup] person_knows_person_person2id=[delta join lookup] // { arity: 3 }
+              Get l2 // { arity: 11 }
+              Get l1 // { arity: 4 }
               Get l0 // { arity: 4 }
+      cte l2 =
+        ArrangeBy keys=[[#1{id}], [#8{locationcityid}]] // { arity: 11 }
+          ReadIndex on=person person_id=[delta join lookup] person_locationcityid=[delta join lookup] // { arity: 11 }
+      cte l1 =
+        ArrangeBy keys=[[#0{id}], [#3{partofcountryid}]] // { arity: 4 }
+          ReadIndex on=city city_id=[delta join lookup] city_partofcountryid=[delta join lookup] // { arity: 4 }
       cte l0 =
         ArrangeBy keys=[[#0{id}]] // { arity: 4 }
-          ReadIndex on=country country_id=[differential join] // { arity: 4 }
+          ReadIndex on=country country_id=[delta join lookup, delta join 1st input (full scan)] // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.person_id (differential join)
-  - materialize.public.person_locationcityid (differential join)
-  - materialize.public.person_knows_person_person1id (differential join)
-  - materialize.public.country_id (differential join)
-  - materialize.public.city_id (differential join)
-  - materialize.public.city_partofcountryid (differential join)
+  - materialize.public.person_id (delta join lookup)
+  - materialize.public.person_locationcityid (delta join lookup)
+  - materialize.public.person_knows_person_person1id (delta join lookup)
+  - materialize.public.person_knows_person_person2id (delta join lookup)
+  - materialize.public.country_id (delta join lookup, delta join 1st input (full scan))
+  - materialize.public.city_id (delta join lookup)
+  - materialize.public.city_partofcountryid (delta join lookup)
   - materialize.public.person_likes_message_messageid (differential join)
   - materialize.public.message_messageid (differential join)
   - materialize.public.message_parentmessageid (differential join)
@@ -2566,26 +2601,22 @@ Explained Query:
                     ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
       cte l0 =
         Project (#1, #2, #13, #15, #17) // { arity: 5 }
-          Join on=(#1{person1id} = #12{creatorpersonid} AND #2{person2id} = #16{creatorpersonid} AND #4{messageid} = #18{parentmessageid}) type=delta // { arity: 19 }
+          Join on=(#1{person1id} = #12{creatorpersonid} AND #2{person2id} = #16{creatorpersonid} AND #4{messageid} = #18{parentmessageid}) type=differential // { arity: 19 }
             implementation
-              %0:person_knows_person » %1:message[#9]KA » %2:message[#0, #2]KKA
-              %1:message » %0:person_knows_person[#1]KA » %2:message[#0, #2]KKA
-              %2:message » %1:message[#1]KA » %0:person_knows_person[#1, #2]KKA
-            ArrangeBy keys=[[#1{person1id}], [#1{person1id}, #2{person2id}]] // { arity: 3 }
-              ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person1id_person2id=[delta join 1st input (full scan)] // { arity: 3 }
-            ArrangeBy keys=[[#1{messageid}], [#9{creatorpersonid}]] // { arity: 13 }
-              ReadIndex on=message message_messageid=[delta join lookup] message_creatorpersonid=[delta join lookup] // { arity: 13 }
+              %0:person_knows_person[#1]KA » %1:message[#9]KA » %2:message[#0, #2]KK
+            ArrangeBy keys=[[#1{person1id}]] // { arity: 3 }
+              ReadIndex on=person_knows_person person_knows_person_person1id=[differential join] // { arity: 3 }
+            ArrangeBy keys=[[#9{creatorpersonid}]] // { arity: 13 }
+              ReadIndex on=message message_creatorpersonid=[differential join] // { arity: 13 }
             ArrangeBy keys=[[#0{creatorpersonid}, #2{parentmessageid}]] // { arity: 3 }
               Project (#9, #10, #12) // { arity: 3 }
                 Filter (#12{parentmessageid}) IS NOT NULL // { arity: 13 }
-                  ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
+                  ReadIndex on=message message_creatorpersonid=[*** full scan ***] // { arity: 13 }
 
 Used Indexes:
   - materialize.public.forum_id (*** full scan ***)
-  - materialize.public.person_knows_person_person1id (*** full scan ***, delta join 1st input (full scan))
-  - materialize.public.person_knows_person_person1id_person2id (delta join 1st input (full scan))
-  - materialize.public.message_messageid (*** full scan ***, delta join lookup)
-  - materialize.public.message_creatorpersonid (delta join lookup)
+  - materialize.public.person_knows_person_person1id (*** full scan ***, differential join)
+  - materialize.public.message_creatorpersonid (*** full scan ***, differential join)
 
 EOF
 
@@ -2990,26 +3021,22 @@ Explained Query:
                   ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
     cte l0 =
       Project (#1, #2, #13, #15, #17) // { arity: 5 }
-        Join on=(#1{person1id} = #12{creatorpersonid} AND #2{person2id} = #16{creatorpersonid} AND #4{messageid} = #18{parentmessageid}) type=delta // { arity: 19 }
+        Join on=(#1{person1id} = #12{creatorpersonid} AND #2{person2id} = #16{creatorpersonid} AND #4{messageid} = #18{parentmessageid}) type=differential // { arity: 19 }
           implementation
-            %0:person_knows_person » %1:message[#9]KA » %2:message[#0, #2]KKA
-            %1:message » %0:person_knows_person[#1]KA » %2:message[#0, #2]KKA
-            %2:message » %1:message[#1]KA » %0:person_knows_person[#1, #2]KKA
-          ArrangeBy keys=[[#1{person1id}], [#1{person1id}, #2{person2id}]] // { arity: 3 }
-            ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person1id_person2id=[delta join 1st input (full scan)] // { arity: 3 }
-          ArrangeBy keys=[[#1{messageid}], [#9{creatorpersonid}]] // { arity: 13 }
-            ReadIndex on=message message_messageid=[delta join lookup] message_creatorpersonid=[delta join lookup] // { arity: 13 }
+            %0:person_knows_person[#1]KA » %1:message[#9]KA » %2:message[#0, #2]KK
+          ArrangeBy keys=[[#1{person1id}]] // { arity: 3 }
+            ReadIndex on=person_knows_person person_knows_person_person1id=[differential join] // { arity: 3 }
+          ArrangeBy keys=[[#9{creatorpersonid}]] // { arity: 13 }
+            ReadIndex on=message message_creatorpersonid=[differential join] // { arity: 13 }
           ArrangeBy keys=[[#0{creatorpersonid}, #2{parentmessageid}]] // { arity: 3 }
             Project (#9, #10, #12) // { arity: 3 }
               Filter (#12{parentmessageid}) IS NOT NULL // { arity: 13 }
-                ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
+                ReadIndex on=message message_creatorpersonid=[*** full scan ***] // { arity: 13 }
 
 Used Indexes:
   - materialize.public.forum_id (*** full scan ***)
-  - materialize.public.person_knows_person_person1id (*** full scan ***, delta join 1st input (full scan))
-  - materialize.public.person_knows_person_person1id_person2id (delta join 1st input (full scan))
-  - materialize.public.message_messageid (*** full scan ***, delta join lookup)
-  - materialize.public.message_creatorpersonid (delta join lookup)
+  - materialize.public.person_knows_person_person1id (*** full scan ***, differential join)
+  - materialize.public.message_creatorpersonid (*** full scan ***, differential join)
 
 EOF
 
@@ -3121,9 +3148,11 @@ Explained Query:
     With
       cte l7 =
         Project (#0, #1, #4) // { arity: 3 }
-          Join on=(#0{id} = #3{person1id} AND #4{person2id} = #5{id}) type=differential // { arity: 6 }
+          Join on=(#0{id} = #3{person1id} AND #4{person2id} = #5{id}) type=delta // { arity: 6 }
             implementation
-              %0:l6[#0]K » %1:l4[#1]KA » %2[#0]UKA
+              %0:l6 » %1:l4[#1]KA » %2[#0]UKA
+              %1:l4 » %2[#0]UKA » %0:l6[#0]KA
+              %2 » %1:l4[#2]KA » %0:l6[#0]KA
             ArrangeBy keys=[[#0{id}]] // { arity: 2 }
               Get l6 // { arity: 2 }
             Get l4 // { arity: 3 }
@@ -3154,9 +3183,11 @@ Explained Query:
                         ReadIndex on=materialize.public.tag tag_name=[lookup value=("Thailand_Noriega")] // { arity: 5 }
       cte l5 =
         Project (#0, #1, #4) // { arity: 3 }
-          Join on=(#0{id} = #3{person1id} AND #4{person2id} = #5{id}) type=differential // { arity: 6 }
+          Join on=(#0{id} = #3{person1id} AND #4{person2id} = #5{id}) type=delta // { arity: 6 }
             implementation
-              %0:l3[#0]K » %1:l4[#1]KA » %2[#0]UKA
+              %0:l3 » %1:l4[#1]KA » %2[#0]UKA
+              %1:l4 » %2[#0]UKA » %0:l3[#0]KA
+              %2 » %1:l4[#2]KA » %0:l3[#0]KA
             ArrangeBy keys=[[#0{id}]] // { arity: 2 }
               Get l3 // { arity: 2 }
             Get l4 // { arity: 3 }
@@ -3165,8 +3196,8 @@ Explained Query:
                 Project (#0) // { arity: 1 }
                   Get l3 // { arity: 2 }
       cte l4 =
-        ArrangeBy keys=[[#1{person1id}]] // { arity: 3 }
-          ReadIndex on=person_knows_person person_knows_person_person1id=[differential join] // { arity: 3 }
+        ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }
+          ReadIndex on=person_knows_person person_knows_person_person1id=[delta join lookup] person_knows_person_person2id=[delta join lookup] // { arity: 3 }
       cte l3 =
         Project (#0, #2) // { arity: 2 }
           Join on=(#0{id} = #1{creatorpersonid} AND #2{messageid} = #3{messageid}) type=differential // { arity: 4 }
@@ -3204,7 +3235,8 @@ Explained Query:
 Used Indexes:
   - materialize.public.tag_name (lookup)
   - materialize.public.person_id (*** full scan ***)
-  - materialize.public.person_knows_person_person1id (differential join)
+  - materialize.public.person_knows_person_person1id (delta join lookup)
+  - materialize.public.person_knows_person_person2id (delta join lookup)
   - materialize.public.message_hastag_tag_tagid (differential join)
   - materialize.public.message_messageid (*** full scan ***)
 
