@@ -1329,13 +1329,13 @@ COMPLETE 0
 simple conn=joe,user=joe
 SHOW CREATE TABLE t;
 ----
-materialize.public.t,CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4")
+materialize.public.t,CREATE TABLE materialize.public.t (a pg_catalog.int4);
 COMPLETE 1
 
 simple conn=child,user=child
 SHOW CREATE TABLE t;
 ----
-materialize.public.t,CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4")
+materialize.public.t,CREATE TABLE materialize.public.t (a pg_catalog.int4);
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system
@@ -1371,13 +1371,13 @@ COMPLETE 0
 simple conn=joe,user=joe
 SHOW CREATE CONNECTION csr_conn;
 ----
-materialize.public.csr_conn,CREATE CONNECTION "materialize"."public"."csr_conn" TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com')
+materialize.public.csr_conn,CREATE CONNECTION materialize.public.csr_conn TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com');
 COMPLETE 1
 
 simple conn=child,user=child
 SHOW CREATE CONNECTION csr_conn;
 ----
-materialize.public.csr_conn,CREATE CONNECTION "materialize"."public"."csr_conn" TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com')
+materialize.public.csr_conn,CREATE CONNECTION materialize.public.csr_conn TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com');
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system

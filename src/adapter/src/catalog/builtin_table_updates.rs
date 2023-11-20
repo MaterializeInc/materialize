@@ -25,6 +25,7 @@ use mz_catalog::builtin::{
     MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
+use mz_catalog::memory::objects::Table;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
@@ -344,77 +345,78 @@ impl CatalogState {
         let owner_id = entry.owner_id();
         let privileges_row = self.pack_privilege_array_row(entry.privileges());
         let privileges = privileges_row.unpack_first();
-        let mut updates = match entry.item() {
-            CatalogItem::Log(_) => self.pack_source_update(
-                id, oid, schema_id, name, "log", None, None, None, None, owner_id, privileges, diff,
-            ),
-            CatalogItem::Index(index) => {
-                self.pack_index_update(id, oid, name, owner_id, index, diff)
-            }
-            CatalogItem::Table(_) => {
-                self.pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff)
-            }
-            CatalogItem::Source(source) => {
-                let source_type = source.source_type();
-                let connection_id = source.connection_id();
-                let envelope = source.envelope();
-                let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
+        let mut updates =
+            match entry.item() {
+                CatalogItem::Log(_) => self.pack_source_update(
+                    id, oid, schema_id, name, "log", None, None, None, None, owner_id, privileges,
+                    diff, None,
+                ),
+                CatalogItem::Index(index) => {
+                    self.pack_index_update(id, oid, name, owner_id, index, diff)
+                }
+                CatalogItem::Table(table) => self
+                    .pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff, table),
+                CatalogItem::Source(source) => {
+                    let source_type = source.source_type();
+                    let connection_id = source.connection_id();
+                    let envelope = source.envelope();
+                    let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
 
-                let mut updates = self.pack_source_update(
-                    id,
-                    oid,
-                    schema_id,
-                    name,
-                    source_type,
-                    connection_id,
-                    self.get_storage_object_size(id),
-                    envelope,
-                    cluster_id.as_deref(),
-                    owner_id,
-                    privileges,
-                    diff,
-                );
+                    let mut updates = self.pack_source_update(
+                        id,
+                        oid,
+                        schema_id,
+                        name,
+                        source_type,
+                        connection_id,
+                        self.get_storage_object_size(id),
+                        envelope,
+                        cluster_id.as_deref(),
+                        owner_id,
+                        privileges,
+                        diff,
+                        (!id.is_system()).then_some(&source.create_sql),
+                    );
 
-                updates.extend(match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.connection {
-                        GenericSourceConnection::Postgres(postgres) => {
-                            self.pack_postgres_source_update(id, postgres, diff)
-                        }
-                        GenericSourceConnection::Kafka(kafka) => {
-                            self.pack_kafka_source_update(id, kafka, diff)
+                    updates.extend(match &source.data_source {
+                        DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.connection {
+                            GenericSourceConnection::Postgres(postgres) => {
+                                self.pack_postgres_source_update(id, postgres, diff)
+                            }
+                            GenericSourceConnection::Kafka(kafka) => {
+                                self.pack_kafka_source_update(id, kafka, diff)
+                            }
+                            _ => vec![],
+                        },
+                        DataSourceDesc::Webhook { .. } => {
+                            vec![self.pack_webhook_source_update(id, diff)]
                         }
                         _ => vec![],
-                    },
-                    DataSourceDesc::Webhook { .. } => {
-                        vec![self.pack_webhook_source_update(id, diff)]
-                    }
-                    _ => vec![],
-                });
+                    });
 
-                updates
-            }
-            CatalogItem::View(view) => {
-                self.pack_view_update(id, oid, schema_id, name, owner_id, privileges, view, diff)
-            }
-            CatalogItem::MaterializedView(mview) => self.pack_materialized_view_update(
-                id, oid, schema_id, name, owner_id, privileges, mview, diff,
-            ),
-            CatalogItem::Sink(sink) => {
-                self.pack_sink_update(id, oid, schema_id, name, owner_id, sink, diff)
-            }
-            CatalogItem::Type(ty) => {
-                self.pack_type_update(id, oid, schema_id, name, owner_id, privileges, ty, diff)
-            }
-            CatalogItem::Func(func) => {
-                self.pack_func_update(id, schema_id, name, owner_id, func, diff)
-            }
-            CatalogItem::Secret(_) => {
-                self.pack_secret_update(id, oid, schema_id, name, owner_id, privileges, diff)
-            }
-            CatalogItem::Connection(connection) => self.pack_connection_update(
-                id, oid, schema_id, name, owner_id, privileges, connection, diff,
-            ),
-        };
+                    updates
+                }
+                CatalogItem::View(view) => self
+                    .pack_view_update(id, oid, schema_id, name, owner_id, privileges, view, diff),
+                CatalogItem::MaterializedView(mview) => self.pack_materialized_view_update(
+                    id, oid, schema_id, name, owner_id, privileges, mview, diff,
+                ),
+                CatalogItem::Sink(sink) => {
+                    self.pack_sink_update(id, oid, schema_id, name, owner_id, sink, diff)
+                }
+                CatalogItem::Type(ty) => {
+                    self.pack_type_update(id, oid, schema_id, name, owner_id, privileges, ty, diff)
+                }
+                CatalogItem::Func(func) => {
+                    self.pack_func_update(id, schema_id, name, owner_id, func, diff)
+                }
+                CatalogItem::Secret(_) => {
+                    self.pack_secret_update(id, oid, schema_id, name, owner_id, privileges, diff)
+                }
+                CatalogItem::Connection(connection) => self.pack_connection_update(
+                    id, oid, schema_id, name, owner_id, privileges, connection, diff,
+                ),
+            };
 
         if !entry.item().is_temporary() {
             // Populate or clean up the `mz_object_dependencies` table.
@@ -464,6 +466,7 @@ impl CatalogState {
         owner_id: &RoleId,
         privileges: Datum,
         diff: Diff,
+        table: &Table,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_TABLES),
@@ -474,6 +477,11 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                if !id.is_system() {
+                    Datum::String(&table.create_sql)
+                } else {
+                    Datum::Null
+                },
             ]),
             diff,
         }]
@@ -493,6 +501,7 @@ impl CatalogState {
         owner_id: &RoleId,
         privileges: Datum,
         diff: Diff,
+        create_sql: Option<&str>,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SOURCES),
@@ -508,6 +517,11 @@ impl CatalogState {
                 Datum::from(cluster_id),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                if let Some(create_sql) = create_sql {
+                    Datum::String(create_sql)
+                } else {
+                    Datum::Null
+                },
             ]),
             diff,
         }]
@@ -577,6 +591,7 @@ impl CatalogState {
                 }),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                Datum::String(&connection.create_sql),
             ]),
             diff,
         }];
@@ -714,6 +729,7 @@ impl CatalogState {
                 Datum::String(&query_string),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                Datum::String(&view.create_sql),
             ]),
             diff,
         }]
@@ -755,6 +771,7 @@ impl CatalogState {
                 Datum::String(&query_string),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                Datum::String(&mview.create_sql),
             ]),
             diff,
         }]
@@ -801,6 +818,7 @@ impl CatalogState {
                 Datum::from(envelope),
                 Datum::String(&sink.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
+                Datum::String(&sink.create_sql),
             ]),
             diff,
         });
@@ -839,6 +857,7 @@ impl CatalogState {
                 Datum::String(&index.on.to_string()),
                 Datum::String(&index.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
+                Datum::String(&index.create_sql),
             ]),
             diff,
         });
@@ -904,6 +923,7 @@ impl CatalogState {
                 Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                Datum::String(&typ.create_sql),
             ]),
             diff,
         });
