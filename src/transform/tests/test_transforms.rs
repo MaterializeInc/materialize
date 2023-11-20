@@ -289,6 +289,7 @@ fn apply_transform<T: mz_transform::Transform>(
         indexes: &mz_transform::EmptyIndexOracle,
         stats: &mz_transform::EmptyStatisticsOracle,
         global_id: None,
+        enable_eager_delta_joins: false,
         dataflow_metainfo: &mut dataflow_metainfo,
     };
 

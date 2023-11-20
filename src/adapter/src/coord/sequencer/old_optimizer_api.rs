@@ -536,7 +536,12 @@ impl Coordinator {
         );
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        let dataflow_metainfo = mz_transform::optimize_dataflow(&mut dataflow, &builder, &*stats)?;
+        let dataflow_metainfo = mz_transform::optimize_dataflow(
+            &mut dataflow,
+            &builder,
+            &*stats,
+            session.vars().enable_eager_delta_joins(),
+        )?;
 
         Ok(PeekStageTimestampDeprecated {
             validity,
@@ -1066,6 +1071,7 @@ impl Coordinator {
                 &mut df,
                 &self.index_oracle(target_cluster_id),
                 stats.as_ref(),
+                session.vars().enable_eager_delta_joins(),
             )?;
 
             Ok::<_, AdapterError>((df, df_metainfo))

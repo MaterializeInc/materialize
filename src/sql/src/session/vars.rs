@@ -2072,6 +2072,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_eager_delta_joins,
+        desc: "Plan delta joins when it would require no more arrangements than a differential join.",
+        default: &false,
+        internal: false,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Represents the input to a variable.
