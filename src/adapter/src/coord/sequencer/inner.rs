@@ -1079,7 +1079,7 @@ impl Coordinator {
                 )
                 .await;
 
-                self.ship_dataflow_new(df_desc, cluster_id).await;
+                self.ship_dataflow(df_desc, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -1184,7 +1184,7 @@ impl Coordinator {
                 let since = self.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since);
 
-                self.ship_dataflow_new(df_desc, cluster_id).await;
+                self.ship_dataflow(df_desc, cluster_id).await;
 
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
@@ -2866,7 +2866,7 @@ impl Coordinator {
 
         let (df_desc, _df_meta) = global_lir_plan.unapply();
 
-        self.ship_dataflow_new(df_desc, cluster_id).await;
+        self.ship_dataflow(df_desc, cluster_id).await;
 
         if let Some(target) = target_replica {
             self.controller

@@ -1315,7 +1315,7 @@ impl Coordinator {
                     let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
                     df_desc.set_as_of(as_of);
 
-                    self.ship_dataflow_new(df_desc, mview.cluster_id).await;
+                    self.ship_dataflow(df_desc, mview.cluster_id).await;
                 }
                 CatalogItem::Sink(sink) => {
                     let id = entry.id();
