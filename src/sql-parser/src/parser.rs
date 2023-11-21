@@ -3617,24 +3617,47 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_alias(&mut self) -> Result<Option<Ident>, ParserError> {
+        self.parse_keyword(AS)
+            .then(|| self.parse_identifier())
+            .transpose()
+    }
+
     fn parse_source_include_metadata(&mut self) -> Result<Vec<SourceIncludeMetadata>, ParserError> {
         if self.parse_keyword(INCLUDE) {
             self.parse_comma_separated(|parser| {
-                let ty = match parser
-                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS])?
+                let metadata = match parser
+                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS, HEADER])?
                 {
-                    KEY => SourceIncludeMetadataType::Key,
-                    TIMESTAMP => SourceIncludeMetadataType::Timestamp,
-                    PARTITION => SourceIncludeMetadataType::Partition,
-                    OFFSET => SourceIncludeMetadataType::Offset,
-                    HEADERS => SourceIncludeMetadataType::Headers,
+                    KEY => SourceIncludeMetadata::Key {
+                        alias: parser.parse_alias()?,
+                    },
+                    TIMESTAMP => SourceIncludeMetadata::Timestamp {
+                        alias: parser.parse_alias()?,
+                    },
+                    PARTITION => SourceIncludeMetadata::Partition {
+                        alias: parser.parse_alias()?,
+                    },
+                    OFFSET => SourceIncludeMetadata::Offset {
+                        alias: parser.parse_alias()?,
+                    },
+                    HEADERS => SourceIncludeMetadata::Headers {
+                        alias: parser.parse_alias()?,
+                    },
+                    HEADER => {
+                        let key: String = parser.parse_literal_string()?;
+                        parser.expect_keyword(AS)?;
+                        let alias = parser.parse_identifier()?;
+                        let use_bytes = parser.parse_keyword(BYTES);
+                        SourceIncludeMetadata::Header {
+                            alias,
+                            key,
+                            use_bytes,
+                        }
+                    }
                     _ => unreachable!("only explicitly allowed items can be parsed"),
                 };
-                let alias = parser
-                    .parse_keyword(AS)
-                    .then(|| parser.parse_identifier())
-                    .transpose()?;
-                Ok(SourceIncludeMetadata { ty, alias })
+                Ok(metadata)
             })
         } else {
             Ok(vec![])
