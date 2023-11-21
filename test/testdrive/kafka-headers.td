@@ -266,4 +266,4 @@ contains:Found ill-formed byte sequence in header 'header1' that cannot be decod
   ENVELOPE UPSERT
 
 ! SELECT key, header2 from missing_headers
-contains:The header 'header2' is not present in the message headers
+contains:A header with key 'header2' was not found in the message headers

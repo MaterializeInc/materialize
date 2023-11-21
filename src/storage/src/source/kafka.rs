@@ -11,7 +11,6 @@ use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::fmt::Display;
 use std::rc::Rc;
 use std::str::{self};
 use std::sync::{Arc, Mutex};
@@ -1040,7 +1039,7 @@ fn construct_source_message(
                                 }
                                 None => Ok(Datum::Null),
                             })
-                            .unwrap_or(Err(KafkaHeaderParseError::HeaderKeyNotPresent {
+                            .unwrap_or(Err(KafkaHeaderParseError::KeyNotFound {
                                 key: key.clone(),
                             }));
                         match d {
@@ -1293,17 +1292,8 @@ fn fetch_partition_info<C: ClientContext>(
 
 #[derive(Debug, thiserror::Error)]
 pub enum KafkaHeaderParseError {
-    HeaderKeyNotPresent { key: String },
+    #[error("A header with key '{key}' was not found in the message headers")]
+    KeyNotFound { key: String },
+    #[error("Found ill-formed byte sequence in header '{key}' that cannot be decoded as valid utf-8 (original bytes: {raw:x?})")]
     Utf8Error { key: String, raw: Vec<u8> },
-}
-
-impl Display for KafkaHeaderParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::HeaderKeyNotPresent { key } => {
-                write!(f, "The header '{key}' is not present in the message headers")
-            }
-            Self::Utf8Error { key, raw } => write!(f, "Found ill-formed byte sequence in header '{}' that cannot be decoded as valid utf-8 (original bytes: {:x?})", key, raw),
-        }
-    }
 }
