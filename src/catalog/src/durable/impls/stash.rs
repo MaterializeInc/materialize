@@ -38,7 +38,7 @@ use crate::durable::objects::{
     TimelineTimestamp, TimestampValue,
 };
 use crate::durable::transaction::{Transaction, TransactionBatch};
-use crate::durable::upgrade::upgrade;
+use crate::durable::upgrade::stash::upgrade;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DebugCatalogState, DurableCatalogError,
     DurableCatalogState, Epoch, OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
@@ -93,8 +93,7 @@ pub const SYSTEM_PRIVILEGES_COLLECTION: TypedCollection<
     proto::SystemPrivilegesValue,
 > = TypedCollection::new("system_privileges");
 // If you add a new collection, then don't forget to write a migration that initializes the
-// collection either with some initial values or as empty. See
-// [`mz_stash::upgrade::v17_to_v18`] as an example.
+// collection either with some initial values or as empty.
 
 /// Configuration needed to connect to the stash.
 #[derive(Derivative, Clone)]
