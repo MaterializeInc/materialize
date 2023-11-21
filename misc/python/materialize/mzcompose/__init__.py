@@ -77,6 +77,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # "persist_fast_path_limit": "1000",
     "enable_alter_swap": "true",
     "timestamp_oracle": "postgres",
+    "default_idle_arrangement_merge_effort": "0",
+    "default_arrangement_exert_proportionality": "16",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
