@@ -226,12 +226,6 @@ class PSUploadSources(PreImage):
 
     def run(self) -> None:
         super().run()
-        polar_signals_api_token = os.getenv("POLAR_SIGNALS_API_TOKEN")
-        if polar_signals_api_token is None or not self.rd.stable:
-            print(
-                "This is not a stable build or we don't have a PolarSignals token; not uploading sources"
-            )
-            return
         with open(self.bin_path, "rb") as bin:
             build_id = get_build_id(bin)
 
@@ -257,19 +251,21 @@ class PSUploadSources(PreImage):
             if p.returncode:
                 raise subprocess.CalledProcessError(p.returncode, p.args)
 
-        print("Attempting to upload sources to polar signals")
-        spawn.runv(
-            [
-                "/usr/local/bin/parca-debuginfo",
-                "upload",
-                "--store-address=grpc.polarsignals.com:443",
-                "--type=sources",
-                f"--build-id={build_id}",
-                self.out_path,
-            ],
-            cwd=self.rd.root,
-            env={"PARCA_DEBUGINFO_BEARER_TOKEN": polar_signals_api_token},
-        )
+        polar_signals_api_token = os.getenv("POLAR_SIGNALS_API_TOKEN")
+        if self.rd.stable and polar_signals_api_token is not None:
+            print("Attempting to upload sources to polar signals")
+            spawn.runv(
+                [
+                    "/usr/local/bin/parca-debuginfo",
+                    "upload",
+                    "--store-address=grpc.polarsignals.com:443",
+                    "--type=sources",
+                    f"--build-id={build_id}",
+                    self.out_path,
+                ],
+                cwd=self.rd.root,
+                env={"PARCA_DEBUGINFO_BEARER_TOKEN": polar_signals_api_token},
+            )
 
     def inputs(self) -> set[str]:
         return {self.bin_path}
