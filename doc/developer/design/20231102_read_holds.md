@@ -14,16 +14,6 @@ This happens because the compaction window is 1 second for all user objects.
 
 `SUBSCRIBE` must be usable without data loss across server restarts or client reconnections.
 
-## Out of Scope
-
-<!--
-What does a solution to this problem not need to address in order to be
-successful?
-
-It's important to be clear about what parts of a problem we won't be solving
-and why. This leads to crisper designs, and it aids in focusing the reviewer.
--->
-
 ## Solution Proposal
 
 Add a new `HOLD` object that acquires controller read holds on listed objects at a specific timestamp.
@@ -35,9 +25,9 @@ The `HOLD` can be created by:
 ```
 CREATE HOLD <name>
 ON <object1>[, <object2> ...]
-[AT <time>]
 [WITH (
-    ERROR_IF_OLDER_THAN = '24h'::INTERVAL
+    AT TIME = <time>,
+    MAX LAG = '3h'::INTERVAL,
 )]
 ```
 
@@ -45,22 +35,25 @@ A `HOLD` can be created on indexes, materialized views, tables, and sources.
 It cannot exist on sinks or unmaterialized views.
 If a `HOLD` exists for a directly queryable object (i.e., not indexes) at time `t`, `SELECT` and `SUBSCRIBE` on that object `AS OF t` will successfully execute.
 If a `HOLD` exists for an index, the same is true if the index satisfies the query.
-A `HOLD` on any non-index object will not also create the `HOLD` on those indexes.
+A `HOLD` on any non-index object will not also create the `HOLD` on any indexes of the object.
+An `AS OF` query will restrict the indexes it considers to those that are valid for the requested time.
+TODO: Figure out what "offer to plan around those indexes" means and add more about that here.
+
 Because this may be surprising to users, if an `AS OF` query whose plan uses an index errors because the `AS OF` is less than the index's read frontier and a `HOLD` exists on the index's object,
 a helpful error message will be produced telling the user that their `HOLD` must be on the index, not the underlying object.
 
 The objects the `HOLD` is created on do not need to be in the same schema or database.
 The `HOLD` can be created in any schema on which the user has a `CREATE` privilege (see (Alternatives)[#Alternatives] for other takes on this).
-The user must have a `READ` privilege on all objects.
+The user must have a `SELECT` privilege on all objects.
 
 Definitions:
 - **physical read frontier**: the read frontier of an object excluding `HOLD`s and any running queries or transactions.
 - **logical read frontier**: the read frontier of an object including `HOLD`s and any running queries or transactions.
 
-If `AT <time>` is specified, the read hold is created at that time.
+If `AT TIME` is specified, the read hold is created at that time.
 It is an error if that time is less than any object's logical frontier.
 Due to the use of the logical frontier, a new `HOLD` can be created while at the time of an existing `HOLD` (say, because the object set of a `HOLD` needs to be changed by creating a new one).
-If `AT <time>` is not specified, Materialize automatically chooses the least common physical read frontier of all objects.
+If `AT TIME` is not specified, Materialize automatically chooses the least common physical read frontier of all objects.
 
 `HOLD`s are destroyed by:
 
@@ -82,15 +75,15 @@ ALTER HOLD <name> ADVANCE [TO <time>]
 ```
 
 If `TO <time>` is specified, the new time will be created at that time.
-It is an error if that time is less than any object's logical read frontier.
-If `TO <time>` is not specified, the new time is the least common physical read frontier of all objects.
+It is an error if that time is less than any object's logical read frontier or less than the existing `HOLD`'s time.
+If `TO <time>` is not specified, the new time is the least common physical read frontier of all objects named in the `HOLD`.
 The `HOLD` releases its current read hold and aquires a new read hold at the new time.
 
-The `ERROR_IF_OLDER_THAN` option (required, but defaults to `'24h'`) is a duration.
-If difference between the least common physical read frontier of the objects and the `HOLD` time is greater than `ERROR_IF_OLDER_THAN`, the `HOLD`'s read hold is released and the `HOLD` enters an error state.
+The `MAX LAG` option (required, but defaults to `'3h'`) is a duration.
+Its upper bound is limited by a LD-configured setting.
+If difference between the write frontier (TODO: maybe another frontier?) of the objects and the `HOLD` time is greater than `MAX LAG`, the `HOLD`'s time is automatically advanced to `write frontier - MAX HOLD`.
 (Transactions and `SUBSCRIBE` are not affected, as in the `ALTER HOLD ADVANCE` case.)
-In the error state, `ALTER HOLD ADVANCE` will return an error.
-`SELECT` and `SUBSCRIBE` `AS OF` a time that is between the erroring `HOLD`'s time and the least common physical read frontier will return a helpful error message that the `HOLD` errored because it was not advanced.
+`SELECT` and `SUBSCRIBE` `AS OF` a time that is before a `HOLD`'s time will return a helpful error message that a `HOLD` exists but is in advance of the `AS OF` time.
 
 It is an error to `DROP` an object that is part of a `HOLD` unless the `DROP` is `CASCADE`.
 If the `DROP` is `CASCADE`, any `HOLD`s on the dropped object are also dropped (even if the `HOLD` is also over other objects).
@@ -100,18 +93,23 @@ If the `DROP` is `CASCADE`, any `HOLD`s on the dropped object are also dropped (
 To monitor `HOLD`s, a new `mz_catalog.mz_holds` table will be maintained with structure:
 
 - `id text`: the `HOLD`'s id
-- `database_id text`
 - `schema_id text`
 - `name text`
 - `on text[]`: an array of the object ids in the `HOLD`
 - `at uint8`: the `HOLD`'s time
 
+A `mz_catalog.mz_hold_objects` describes objects belonging to a `HOLD`
+
+- `hold_id text`: the `HOLD`'s id
+- `on_id text`: the object's id
+
 ### Implementation of time tracking
 
 The `HOLD` object has an associated time that must be written down somewhere on creation then updated on advancement.
 This will use a persist shard to back it, and is thus similar to a 1-row table.
-As a result of not storing it in the catalog (see Alternatives for the motivation), the `AT <time>` syntax must not be part of the `create_sql` of the `HOLD` object and must be purified away.
+As a result of not storing it in the catalog (see Alternatives for the motivation), the `AT TIME` syntax must not be part of the `create_sql` of the `HOLD` object and must be purified away.
 On coordinator bootstrap, a `HOLD` will do a 1-time fetch of its state from the shard to resume its operation.
+`HOLD`s must also be accounted for in `bootstrap_index_as_of` and `bootstrap_materialized_view_as_of`.
 
 ## Minimal Viable Prototype
 
