@@ -7,21 +7,100 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
+import ssl
+import uuid
+
+from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import InterfaceError
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.balancerd import Balancerd
+from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.test_certs import TestCerts
+
+TENANT_ID = str(uuid.uuid4())
+ADMIN_USER = "u1"
+OTHER_USER = "u2"
+USERS = {
+    ADMIN_USER: {
+        "client": str(uuid.uuid4()),
+        "password": str(uuid.uuid4()),
+    },
+    OTHER_USER: {
+        "client": str(uuid.uuid4()),
+        "password": str(uuid.uuid4()),
+    },
+}
+ADMIN_ROLE = "admin"
+ROLES = {ADMIN_USER: ["users", ADMIN_ROLE], OTHER_USER: ["users"]}
+FRONTEGG_URL = "http://frontegg-mock:6880/"
 
 SERVICES = [
-    Balancerd(),
+    TestCerts(),
+    Balancerd(
+        command=[
+            "service",
+            "--pgwire-listen-addr=0.0.0.0:6875",
+            "--https-listen-addr=0.0.0.0:6876",
+            "--internal-http-listen-addr=0.0.0.0:6878",
+            "--frontegg-resolver-template=materialized:6880",
+            "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+            f"--frontegg-api-token-url={FRONTEGG_URL}",
+            f"--frontegg-admin-role={ADMIN_ROLE}",
+            "--https-resolver-template='materialized:6881'",
+            "--tls-key=/secrets/balancerd.key",
+            "--tls-cert=/secrets/balancerd.crt",
+        ],
+        depends_on=["test-certs"],
+        volumes=[
+            "secrets:/secrets",
+        ],
+    ),
+    FronteggMock(
+        tenant_id=TENANT_ID,
+        encoding_key_file="/secrets/frontegg-mock.key",
+        users=json.dumps(USERS),
+        roles=json.dumps(ROLES),
+        depends_on=["test-certs"],
+        volumes=[
+            "secrets:/secrets",
+        ],
+    ),
     Materialized(
+        options=[
+            # Enable TLS on the public port to verify that balancerd is connecting to the balancerd
+            # port.
+            "--tls-mode=require",
+            "--tls-key=/secrets/materialized.key",
+            "--tls-cert=/secrets/materialized.crt",
+            f"--frontegg-tenant={TENANT_ID}",
+            "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+            f"--frontegg-api-token-url={FRONTEGG_URL}",
+            f"--frontegg-admin-role={ADMIN_ROLE}",
+        ],
         # We do not do anything interesting on the Mz side
         # to justify the extra restarts
-        sanity_restart=False
+        sanity_restart=False,
+        depends_on=["test-certs"],
+        volumes_extra=[
+            "secrets:/secrets",
+        ],
     ),
 ]
+
+
+def sql_cursor(c: Composition, service="balancerd", user="u1") -> Cursor:
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    creds = USERS[user]
+    password = "mzp_" + creds["client"] + creds["password"]
+    return c.sql_cursor(
+        service=service, user=user, password=password, ssl_context=ssl_context
+    )
 
 
 def workflow_default(c: Composition) -> None:
@@ -37,9 +116,9 @@ def workflow_default(c: Composition) -> None:
 def workflow_wide_result(c: Composition) -> None:
     """Test passthrough of wide rows"""
     # Start balancerd without Materialize
-    c.up("balancerd", "materialized")
+    c.up("balancerd", "frontegg-mock", "materialized")
 
-    cursor = c.sql_cursor(service="balancerd")
+    cursor = sql_cursor(c)
     cursor.execute("SELECT 'ABC' || REPEAT('x', 1024 * 1024 * 96) || 'XYZ'")
     rows = cursor.fetchall()
     assert len(rows) == 1
@@ -53,9 +132,9 @@ def workflow_wide_result(c: Composition) -> None:
 
 def workflow_long_result(c: Composition) -> None:
     """Test passthrough of long results"""
-    c.up("balancerd", "materialized")
+    c.up("balancerd", "frontegg-mock", "materialized")
 
-    cursor = c.sql_cursor(service="balancerd")
+    cursor = sql_cursor(c)
     cursor.execute(
         "SELECT 'ABC', generate_series, 'XYZ' FROM generate_series(1, 10 * 1024 * 1024)"
     )
@@ -70,9 +149,9 @@ def workflow_long_result(c: Composition) -> None:
 
 def workflow_long_query(c: Composition) -> None:
     """Test passthrough of a long SQL query."""
-    c.up("balancerd", "materialized")
+    c.up("balancerd", "frontegg-mock", "materialized")
 
-    cursor = c.sql_cursor(service="balancerd")
+    cursor = sql_cursor(c)
     small_pad_size = 512 * 1024
     small_pad = "x" * small_pad_size
     cursor.execute(f"SELECT 'ABC{small_pad}XYZ';")
@@ -106,7 +185,7 @@ def workflow_long_query(c: Composition) -> None:
         assert False, "execute() threw an unexpected exception"
 
     # Confirm that balancerd remains up
-    cursor = c.sql_cursor(service="balancerd")
+    cursor = sql_cursor(c)
     cursor.execute("SELECT 1;")
 
 
@@ -115,9 +194,9 @@ def workflow_mz_restarted(c: Composition) -> None:
     This protects against the client not being informed
     that their transaction has been aborted on the Mz side
     """
-    c.up("materialized", "balancerd")
+    c.up("balancerd", "frontegg-mock", "materialized")
 
-    cursor = c.sql_cursor(service="balancerd")
+    cursor = sql_cursor(c)
 
     cursor.execute("CREATE TABLE restart_mz (f1 INTEGER)")
     cursor.execute("START TRANSACTION")
@@ -133,14 +212,14 @@ def workflow_mz_restarted(c: Composition) -> None:
         assert False, "execute() threw an unexpected exception"
 
     # Future connections work
-    c.sql_cursor(service="balancerd")
+    sql_cursor(c)
 
 
 def workflow_balancerd_restarted(c: Composition) -> None:
     """Existing connections should fail if balancerd is restarted"""
-    c.up("materialized", "balancerd")
+    c.up("balancerd", "frontegg-mock", "materialized")
 
-    cursor = c.sql_cursor(service="balancerd")
+    cursor = sql_cursor(c)
 
     cursor.execute("CREATE TABLE restart_balancerd (f1 INTEGER)")
     cursor.execute("START TRANSACTION")
@@ -156,35 +235,39 @@ def workflow_balancerd_restarted(c: Composition) -> None:
         assert False, "execute() threw an unexpected exception"
 
     # Future connections work
-    c.sql_cursor(service="balancerd")
+    sql_cursor(c)
 
 
 def workflow_mz_not_running(c: Composition) -> None:
     """New connections should fail if Mz is down"""
-    c.up("balancerd", "materialized")
+    c.up("balancerd", "frontegg-mock", "materialized")
     c.kill("materialized")
     try:
-        c.sql_cursor(service="balancerd")
+        sql_cursor(c)
         assert False, "connect() expected to fail"
     except ProgrammingError as e:
         assert any(
             expected in str(e)
-            for expected in ["No route to host", "Connection timed out"]
+            for expected in [
+                "No route to host",
+                "Connection timed out",
+                "failure in name resolution",
+            ]
         )
     except:
         assert False, "connect() threw an unexpected exception"
 
     # Things should work now
     c.up("materialized")
-    c.sql_cursor(service="balancerd")
+    sql_cursor(c)
 
 
 def workflow_user(c: Composition) -> None:
     """Test that the user is passed all the way to Mz itself."""
-    c.up("balancerd", "materialized")
+    c.up("balancerd", "frontegg-mock", "materialized")
 
-    # This is expected to succeed
-    cursor = c.sql_cursor(service="balancerd", user="foo")
+    # Non-admin user.
+    cursor = sql_cursor(c, user=OTHER_USER)
 
     try:
         cursor.execute("DROP DATABASE materialize CASCADE")
@@ -195,17 +278,17 @@ def workflow_user(c: Composition) -> None:
         assert False, "execute() threw an unexpected exception"
 
     cursor.execute("SELECT current_user()")
-    assert "foo" in str(cursor.fetchall())
+    assert OTHER_USER in str(cursor.fetchall())
 
 
 def workflow_many_connections(c: Composition) -> None:
-    c.up("balancerd", "materialized")
+    c.up("balancerd", "frontegg-mock", "materialized")
 
     cursors = []
     connections = 1000 - 10  #  Go almost to the limit, but not above
     print(f"Opening {connections} connections.")
     for i in range(connections):
-        cursor = c.sql_cursor(service="balancerd")
+        cursor = sql_cursor(c)
         cursors.append(cursor)
 
     for cursor in cursors:

@@ -135,7 +135,7 @@ create_cert() {
         -passout pass:$SSL_SECRET
 }
 
-for i in materialized producer postgres certuser
+for i in materialized producer postgres certuser balancerd frontegg-mock
 do
     create_cert $i "ca" $i
 

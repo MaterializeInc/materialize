@@ -92,13 +92,12 @@ use hyper::http::uri::Scheme;
 use hyper::{body, Body, Request, Response, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
-use mz_environmentd::test_util::{
-    self, make_header, make_pg_tls, start_mzcloud, wait_for_refresh, Ca,
-};
+use mz_environmentd::test_util::{self, make_header, make_pg_tls, Ca};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig, Claims,
 };
+use mz_frontegg_mock::FronteggMockServer;
 use mz_ore::assert_contains;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -502,13 +501,12 @@ fn test_auth_expiry() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -553,8 +551,8 @@ fn test_auth_expiry() {
     );
 
     // Wait for a couple refreshes to happen.
-    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
-    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
+    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
     assert_eq!(
         pg_client
             .query_one("SELECT current_user", &[])
@@ -567,7 +565,7 @@ fn test_auth_expiry() {
     frontegg_server
         .enable_refresh
         .store(false, Ordering::Relaxed);
-    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
     // Sleep until the expiry future should resolve.
     std::thread::sleep(Duration::from_secs(EXPIRES_IN_SECS + 1));
     assert!(pg_client.query_one("SELECT current_user", &[]).is_err());
@@ -646,13 +644,12 @@ fn test_auth_base_require_tls_frontegg() {
         &encoding_key,
     )
     .unwrap();
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         now.clone(),
         1_000,
         None,
@@ -1386,13 +1383,12 @@ fn test_auth_admin_non_superuser() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1495,13 +1491,12 @@ fn test_auth_admin_superuser() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1604,13 +1599,12 @@ fn test_auth_admin_superuser_revoked() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    let (role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1655,10 +1649,11 @@ fn test_auth_admin_superuser_revoked() {
         "off"
     );
 
-    role_tx
+    frontegg_server
+        .role_updates_tx
         .send((frontegg_user.to_string(), vec![admin_role.to_string()]))
         .unwrap();
-    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
 
     assert_eq!(
         pg_client
@@ -1668,10 +1663,11 @@ fn test_auth_admin_superuser_revoked() {
         "on"
     );
 
-    role_tx
+    frontegg_server
+        .role_updates_tx
         .send((frontegg_user.to_string(), Vec::new()))
         .unwrap();
-    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
 
     assert_eq!(
         pg_client
@@ -1702,13 +1698,12 @@ fn test_auth_deduplication() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         Some(2),
@@ -1784,7 +1779,7 @@ fn test_auth_deduplication() {
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 1);
 
     // Wait for a refresh to occur.
-    wait_for_refresh(&frontegg_server, 10);
+    frontegg_server.wait_for_refresh(10);
     assert_eq!(*frontegg_server.refreshes.lock().unwrap(), 1);
 
     // Both clients should still be queryable.
@@ -1823,13 +1818,12 @@ fn test_refresh_task_metrics() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,

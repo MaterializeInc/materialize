@@ -23,6 +23,7 @@ import inspect
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import time
@@ -487,10 +488,17 @@ class Composition:
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> Connection:
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
-        conn = pg8000.connect(host="localhost", user=user, password=password, port=port)
+        conn = pg8000.connect(
+            host="localhost",
+            user=user,
+            password=password,
+            port=port,
+            ssl_context=ssl_context,
+        )
         conn.autocommit = True
         return conn
 
@@ -500,9 +508,10 @@ class Composition:
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
-        conn = self.sql_connection(service, user, port, password)
+        conn = self.sql_connection(service, user, port, password, ssl_context)
         return conn.cursor()
 
     def sql(
