@@ -22,6 +22,7 @@ mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
+mz-persist-txn = { path = "../persist-txn" }
 mz-proto = { path = "../proto", features = ["tokio-postgres"] }
 mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }

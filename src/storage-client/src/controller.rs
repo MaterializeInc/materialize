@@ -30,6 +30,7 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::SnapshotStats;
+use mz_persist_txn::txn_read::DataSnapshot;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
@@ -38,6 +39,7 @@ use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData, SourceEnvelope};
 use serde::{Deserialize, Serialize};
+use timely::order::TotalOrder;
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc::error::TrySendError;
@@ -172,6 +174,60 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub sink: StorageSinkDesc<MetadataUnfilled, T>,
     /// The ID of the instance in which to install the export.
     pub instance_id: StorageInstanceId,
+}
+
+/// When obtaining a [`SnapshotCursor`] we need to first obtain a snapshot of a collection. This
+/// can take an arbitrarily long amount of time, e.g. if we're trying to obtain a snapshot ahead
+/// of the write frontier of the specified collection.
+///
+/// A [`PendingSnapshotCursor`] contains everything needed to get this initial snapshot, and thus
+/// allows us to move the work to a separate task/thread.
+pub enum PendingSnapshotCursor<T: Codec64 + Timestamp + Lattice> {
+    Normal {
+        read_handle: ReadHandle<SourceData, (), T, Diff>,
+        as_of: T,
+        id: GlobalId,
+    },
+    Transaction {
+        read_handle: ReadHandle<SourceData, (), T, Diff>,
+        data_snapshot: DataSnapshot<T>,
+        id: GlobalId,
+    },
+}
+
+impl<T: Codec64 + Timestamp + Lattice + TotalOrder> PendingSnapshotCursor<T> {
+    pub async fn init(self) -> Result<SnapshotCursor<T>, StorageError> {
+        match self {
+            PendingSnapshotCursor::Normal {
+                mut read_handle,
+                as_of,
+                id,
+            } => {
+                let cursor = read_handle
+                    .snapshot_cursor(Antichain::from_elem(as_of))
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                Ok(SnapshotCursor {
+                    _read_handle: read_handle,
+                    cursor,
+                })
+            }
+            PendingSnapshotCursor::Transaction {
+                mut read_handle,
+                data_snapshot,
+                id,
+            } => {
+                let cursor = data_snapshot
+                    .snapshot_cursor(&mut read_handle)
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                Ok(SnapshotCursor {
+                    _read_handle: read_handle,
+                    cursor,
+                })
+            }
+        }
+    }
 }
 
 /// A cursor over a snapshot, allowing us to read just part of a snapshot in its
@@ -379,7 +435,7 @@ pub trait StorageController: Debug + Send {
         &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
+    ) -> Result<PendingSnapshotCursor<Self::Timestamp>, StorageError>
     where
         Self::Timestamp: Codec64 + Timestamp + Lattice;
 

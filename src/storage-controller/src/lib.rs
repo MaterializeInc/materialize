@@ -119,7 +119,7 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
-    ExportState, IntrospectionType, MonotonicAppender, ReadPolicy, SnapshotCursor,
+    ExportState, IntrospectionType, MonotonicAppender, PendingSnapshotCursor, ReadPolicy,
     StorageController,
 };
 use mz_storage_client::healthcheck::{
@@ -1271,7 +1271,7 @@ where
         &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
-    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
+    ) -> Result<PendingSnapshotCursor<Self::Timestamp>, StorageError>
     where
         Self::Timestamp: Timestamp + Lattice + Codec64,
     {
@@ -1279,14 +1279,11 @@ where
         // See the comments in Self::snapshot for what's going on here.
         let cursor = match metadata.txns_shard.as_ref() {
             None => {
-                let mut handle = self.read_handle_for_snapshot(id).await?;
-                let cursor = handle
-                    .snapshot_cursor(Antichain::from_elem(as_of))
-                    .await
-                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
-                SnapshotCursor {
-                    _read_handle: handle,
-                    cursor,
+                let read_handle = self.read_handle_for_snapshot(id).await?;
+                PendingSnapshotCursor::Normal {
+                    read_handle,
+                    as_of,
+                    id,
                 }
             }
             Some(txns_id) => {
@@ -1300,14 +1297,11 @@ where
                 .await;
                 txns_cache.update_gt(&as_of).await;
                 let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
-                let mut handle = self.read_handle_for_snapshot(id).await?;
-                let cursor = data_snapshot
-                    .snapshot_cursor(&mut handle)
-                    .await
-                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
-                SnapshotCursor {
-                    _read_handle: handle,
-                    cursor,
+                let read_handle = self.read_handle_for_snapshot(id).await?;
+                PendingSnapshotCursor::Transaction {
+                    read_handle,
+                    data_snapshot,
+                    id,
                 }
             }
         };
