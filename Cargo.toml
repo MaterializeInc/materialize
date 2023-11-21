@@ -210,3 +210,6 @@ reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.gi
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.
 columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
+
+[workspace.metadata.vet]
+store = { path = "misc/cargo-vet" }

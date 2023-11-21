@@ -403,6 +403,37 @@ acceptable for:
     entry. Changes to Materialize very rarely require changes in rust-dec, so
     maintaining the two separately does not introduce much overhead.
 
+## Dependency management and auditing
+
+We use the Mozilla-developed native Rust cargo-vet tool for dependency auditing
+to help ensure the security and reliability of external dependencies. Cargo-vet
+allows developers to audit their dependencies by checking for known security
+vulnerabilities, licensing issues, and overall health of the dependencies, which
+include factors like maintenance status, version stability, and community trust.
+
+For a developer, the basic workflow with cargo-vet starts with integrating it
+into their Rust development process. After installing cargo-vet locally, the
+developer runs it against their project’s Cargo.toml and Cargo.lock files.
+Cargo-vet will then analyze the list of dependencies and output a report
+detailing the status of each dependency.
+
+All crates currently in use have been added to the audited list, but CI will
+fail on PRs with new unaudited dependencies (or after 'cargo update'). Complete
+information on using cargo-vet are available in the book at
+https://mozilla.github.io/cargo-vet/how-it-works.html but in summary:
+
+  * cargo vet inspect some-crate
+  * cargo vet certify some-crate
+
+The 'certify' step will record an entry in the audits.toml file certifying the crate has been reviewed and is appropriate to use. Example:
+
+```toml
+[[audits.aws-sdk-s3]]
+who = "Matt Arthur <matthewleearthur@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.26.0"
+```
+
 ## Developer tools
 
 ### Editors and IDEs

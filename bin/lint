@@ -45,6 +45,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)(Cargo|askama)\.toml$' \
     -e '^\.cargo/config$' \
     -e '^\.config/hakari.toml$' \
+    -e '^.devcontainer/.*' \
     -e '(^|/)Cargo\.lock$' \
     -e '^about\.toml$' \
     -e '^deny\.toml$' \
@@ -60,21 +61,22 @@ copyright_files=$(grep -vE \
     -e '^ci/builder/(ssh_known_hosts|crosstool-.+\.defconfig)$' \
     -e '^ci/www/public/_redirects$' \
     -e '^ci/test/lint-deps/' \
-    -e 'test/chbench/chbench' \
-    -e 'src/pid-file/libbsd' \
-    -e 'src/pgtz/tznames/.*' \
-    -e 'test/sqllogictest/postgres/testdata/.*\.data' \
-    -e 'test/pgtest/.*\.pt' \
-    -e 'test/pgtest-mz/.*\.pt' \
-    -e 'test/coordtest/.*\.ct' \
-    -e 'test/ldbc-bi/.*\.sql' \
-    -e 'gen/.*\.rs' \
-    -e 'misc/python/MANIFEST\.in' \
-    -e 'misc/completions/.*' \
-    -e 'supply-chain/.*' \
-    -e '.devcontainer/.*' \
-    -e 'snapshots/.*\.snap' \
-    -e 'src/environmentd/tests/testdata/timezones/.*\.csv' \
+    -e '^misc/cargo-vet/config.toml$' \
+    -e '^misc/cargo-vet/audits.toml$' \
+    -e '^misc/cargo-vet/imports.toml$' \
+    -e '^misc/cargo-vet/imports.lock$' \
+    -e '^misc/completions/.*' \
+    -e '^misc/python/MANIFEST\.in' \
+    -e '^test/chbench/chbench' \
+    -e '^src/pid-file/libbsd' \
+    -e '^src/pgtz/tznames/.*' \
+    -e '^test/sqllogictest/postgres/testdata/.*\.data' \
+    -e '^test/pgtest/.*\.pt' \
+    -e '^test/pgtest-mz/.*\.pt' \
+    -e '^test/coordtest/.*\.ct' \
+    -e '^test/ldbc-bi/.*\.sql' \
+    -e '^src/catalog/tests/snapshots/.*\.snap' \
+    -e '^src/environmentd/tests/testdata/timezones/.*\.csv' \
     <<< "$files"
 )
 
