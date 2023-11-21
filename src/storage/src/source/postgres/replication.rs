@@ -291,8 +291,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 // capability at minimum, because that is the timestamp rewinds are
                                 // produced at.
                                 if rewinds.is_empty() {
-                                    upper_cap_set.downgrade(&[new_upper]);
-                                    data_cap_set.downgrade(&[new_upper]);
+                                    upper_cap_set.downgrade([new_upper]);
+                                    data_cap_set.downgrade([new_upper]);
                                 }
                             }
                         },
@@ -315,8 +315,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     // capability at minimum, because that is the timestamp rewinds are
                     // produced at.
                     if rewinds.is_empty() {
-                        upper_cap_set.downgrade(&[new_upper]);
-                        data_cap_set.downgrade(&[new_upper]);
+                        upper_cap_set.downgrade([new_upper]);
+                        data_cap_set.downgrade([new_upper]);
                     }
                 }
             }
