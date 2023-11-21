@@ -211,21 +211,20 @@ impl<T: StateUpdateKindAlias> PersistHandle<T> {
         self.snapshot(as_of)
             .await
             .rev()
-            // TODO(jkosh44) WRONG
+            // Configs can never be migrated so we know that they will always convert successfully
+            // from binary.
             .filter_map(|update| {
+                soft_assert_eq!(update.diff, 1, "snapshot returns consolidated results");
                 let kind: Option<StateUpdateKind> = update.kind.try_into().ok();
                 kind
             })
-            .filter_map(|StateUpdate { kind, ts: _, diff }| {
-                soft_assert_eq!(1, diff);
-                match kind {
-                    StateUpdateKind::Config(k, v) => {
-                        let k = k.into_rust().expect("invalid config key persisted");
-                        let v = v.into_rust().expect("invalid config value persisted");
-                        Some(Config::from_key_value(k, v))
-                    }
-                    _ => None,
+            .filter_map(|kind| match kind {
+                StateUpdateKind::Config(k, v) => {
+                    let k = k.into_rust().expect("invalid config key persisted");
+                    let v = v.into_rust().expect("invalid config value persisted");
+                    Some(Config::from_key_value(k, v))
                 }
+                _ => None,
             })
     }
 
@@ -239,17 +238,21 @@ impl<T: StateUpdateKindAlias> PersistHandle<T> {
 
     /// Get epoch at `as_of`.
     async fn get_epoch(&mut self, as_of: Timestamp) -> Epoch {
-        let epochs =
-            self.snapshot(as_of)
-                .await
-                .rev()
-                .filter_map(|StateUpdate { kind, ts: _, diff }| {
-                    soft_assert_eq!(1, diff);
-                    match kind {
-                        StateUpdateKind::Epoch(epoch) => Some(epoch),
-                        _ => None,
-                    }
-                });
+        let epochs = self
+            .snapshot(as_of)
+            .await
+            .rev()
+            // The epoch can never be migrated so we know that it will always convert successfully
+            // from binary.
+            .filter_map(|update| {
+                soft_assert_eq!(update.diff, 1, "snapshot returns consolidated results");
+                let kind: Option<StateUpdateKind> = update.kind.try_into().ok();
+                kind
+            })
+            .filter_map(|kind| match kind {
+                StateUpdateKind::Epoch(epoch) => Some(epoch),
+                _ => None,
+            });
         // There must always be a single epoch.
         epochs.into_element()
     }
@@ -378,23 +381,13 @@ impl PersistHandle<StateUpdateKind> {
         catalog.sync(upper).await?;
 
         let txn = if is_initialized {
-            debug!("initial snapshot: {initial_snapshot:?}");
-
-            // Update in-memory contents with with persist snapshot.
-            catalog.apply_updates(initial_snapshot)?;
-
-            let mut txn = catalog.transaction().await?;
-
             if !read_only {
-                // Commit empty transaction to fence out previous catalogs.
-                txn.commit().await?;
                 let user_version = user_version
                     .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))?;
                 if user_version != CATALOG_VERSION {
                     let mut migrator = catalog.migrator().await;
                     upgrade(&mut migrator, user_version).await?;
                 }
-                txn = catalog.transaction().await?;
             }
 
             let mut txn = catalog.transaction().await?;

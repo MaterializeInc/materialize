@@ -153,7 +153,7 @@ impl StateUpdate {
 ///
 /// The entire catalog is serialized as bytes and saved in a single persist shard. We use this
 /// enum to determine what collection something in the catalog belongs to.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
 pub enum StateUpdateKind {
     AuditLog(proto::AuditLogKey, ()),
     Cluster(proto::ClusterKey, proto::ClusterValue),
@@ -650,18 +650,17 @@ mod tests {
     use crate::durable::impls::persist::state_update::StateUpdateKindBinary;
     use crate::durable::impls::persist::StateUpdateKind;
 
-    // TODO(jkosh44) Uncomment when Arbitrary is implemented for NonZeroI64
     proptest! {
-        // #[mz_ore::test]
-        // #[cfg_attr(miri, ignore)] // slow
-        // fn proptest_state_update_kind_round_trip(kind: StateUpdateKind) {
-        //     let mut binary = Vec::new();
-        //     kind.encode(&mut binary);
-        //
-        //     let decoded = StateUpdateKind::decode(&binary).expect("should be valid StateUpdateKind");
-        //
-        //     prop_assert_eq!(kind, decoded);
-        // }
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn proptest_state_update_kind_round_trip(kind: StateUpdateKind) {
+            let mut binary = Vec::new();
+            kind.encode(&mut binary);
+
+            let decoded = StateUpdateKind::decode(&binary).expect("should be valid StateUpdateKind");
+
+            prop_assert_eq!(kind, decoded);
+        }
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // slow
@@ -674,17 +673,17 @@ mod tests {
             prop_assert_eq!(kind, decoded);
         }
 
-        // #[mz_ore::test]
-        // #[cfg_attr(miri, ignore)] // slow
-        // fn proptest_state_update_kind_binary_equivalence(kind: StateUpdateKind) {
-        //     let mut kind_encoded = Vec::new();
-        //     kind.encode(&mut kind_encoded);
-        //
-        //     let kind_binary: StateUpdateKindBinary = kind.into();
-        //     let mut kind_binary_encoded = Vec::new();
-        //     kind_binary.encode(&mut kind_binary_encoded);
-        //
-        //     prop_assert_eq!(kind_encoded, kind_binary_encoded);
-        // }
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn proptest_state_update_kind_binary_equivalence(kind: StateUpdateKind) {
+            let mut kind_encoded = Vec::new();
+            kind.encode(&mut kind_encoded);
+
+            let kind_binary: StateUpdateKindBinary = kind.into();
+            let mut kind_binary_encoded = Vec::new();
+            kind_binary.encode(&mut kind_binary_encoded);
+
+            prop_assert_eq!(kind_encoded, kind_binary_encoded);
+        }
     }
 }
