@@ -29,7 +29,7 @@ use timely::dataflow::operators::OkErr;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::{Refines, Timestamp};
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::{HeapSize, MzArrange};
 use crate::render::context::{
     ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
     SpecializedArrangementImport,
@@ -140,7 +140,7 @@ where
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
+    G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
     T: Timestamp + Lattice + Columnation,
 {
     pub(crate) fn render_join(
