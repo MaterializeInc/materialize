@@ -26,14 +26,14 @@ SELECT pretty_sql('select 1,2,3', 100)
 ----
 SELECT 1, 2, 3;
 
-query error db error: ERROR: invalid width
+query error invalid width
 SELECT pretty_sql('select 1,2,3', -1)
 
-query error db error: ERROR: expected exactly one statement
+query error expected exactly one statement
 SELECT pretty_sql('select 1; select 2')
 
-query error db error: ERROR: expected exactly one statement
+query error expected exactly one statement
 SELECT pretty_sql('')
 
-query error db error: ERROR: expected exactly one statement
+query error expected exactly one statement
 SELECT pretty_sql(';')
