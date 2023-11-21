@@ -34,7 +34,7 @@ tests=(
     test/sqllogictest/transform/*.slt \
     test/sqllogictest/special/* \
 )
-tests_without_views=(
+tests_without_views_and_replica=(
     # errors:
     test/sqllogictest/list.slt # https://github.com/MaterializeInc/materialize/issues/20534
 
@@ -50,9 +50,15 @@ tests_without_views=(
     test/sqllogictest/object_ownership.slt # different indexes auto-created
     test/sqllogictest/interval.slt # https://github.com/MaterializeInc/materialize/issues/20110
     test/sqllogictest/operator.slt # https://github.com/MaterializeInc/materialize/issues/20110
+
+    # specific replica size tested:
+    test/sqllogictest/managed_cluster.slt
+    test/sqllogictest/web-console.slt
+    test/sqllogictest/show_clusters.slt
 )
-# Exclude tests_without_views from tests
-for f in "${tests_without_views[@]}"; do
+
+# Exclude tests_without_views_and_replica from tests
+for f in "${tests_without_views_and_replica[@]}"; do
     tests=("${tests[@]/$f}")
 done
 # Remove empty entries from tests, since
@@ -66,7 +72,7 @@ done
 tests=("${temp[@]}")
 
 sqllogictest -v --auto-index-selects "$@" "${tests[@]}" | tee -a target/slt.log
-sqllogictest -v "$@" "${tests_without_views[@]}" | tee -a target/slt.log
+sqllogictest -v "$@" --replicas=2 "${tests_without_views_and_replica[@]}" | tee -a target/slt.log
 
 # Due to performance issues (see below), we pick two selected SLTs from
 # the SQLite corpus that we can reasonably run with --auto-index-selects

@@ -834,20 +834,24 @@ impl<'a> Runner<'a> {
             )
             .await?
         {
-            match (row.get("name"), row.get("size")) {
-                ("r1", "1") => needs_default_replica = false,
-                (name, _) => {
-                    inner
-                        .system_client
-                        .batch_execute(&format!("DROP CLUSTER REPLICA default.{name}"))
-                        .await?
-                }
+            let name: &str = row.get("name");
+            let size: &str = row.get("size");
+            if name == "r1" && size == self.config.replicas.to_string() {
+                needs_default_replica = false;
+            } else {
+                inner
+                    .system_client
+                    .batch_execute(&format!("DROP CLUSTER REPLICA default.{}", name))
+                    .await?;
             }
         }
         if needs_default_replica {
             inner
                 .system_client
-                .batch_execute("CREATE CLUSTER REPLICA default.r1 SIZE '1'")
+                .batch_execute(&format!(
+                    "CREATE CLUSTER REPLICA default.r1 SIZE '{}'",
+                    self.config.replicas
+                ))
                 .await?;
         }
 
@@ -1019,8 +1023,8 @@ impl<'a> RunnerInner<'a> {
             now,
             environment_id,
             cluster_replica_sizes: Default::default(),
-            bootstrap_default_cluster_replica_size: "1".into(),
-            bootstrap_builtin_cluster_replica_size: "1".into(),
+            bootstrap_default_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_builtin_cluster_replica_size: config.replicas.to_string(),
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
                 params.insert(
@@ -1753,6 +1757,7 @@ pub struct RunConfig<'a> {
     ///   shut down, and may panic if their storage is delete out from under them.
     /// - It's safe for different databases to reference the same state: all data is scoped by UUID.
     pub persist_dir: TempDir,
+    pub replicas: usize,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {

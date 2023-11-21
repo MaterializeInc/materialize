@@ -436,10 +436,10 @@ CREATE CLUSTER REPLICA default.size_1 SIZE '1';
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default r1 1
-default size_1 1
-mz_introspection r1 1
-mz_system r1 1
+default  r1  2
+default  size_1  1
+mz_introspection  r1  2
+mz_system  r1  2
 
 statement ok
 CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_2 (SIZE '2'))
@@ -447,12 +447,12 @@ CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_2 (SIZE '2'))
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default r1 1
-default size_1 1
-foo size_1 1
-foo size_2 2
-mz_introspection r1 1
-mz_system r1 1
+default  r1  2
+default  size_1  1
+foo  size_1  1
+foo  size_2  2
+mz_introspection  r1  2
+mz_system  r1  2
 
 statement ok
 DROP CLUSTER REPLICA IF EXISTS default.bar
@@ -475,9 +475,9 @@ DROP CLUSTER REPLICA foo.size_1, foo.size_2
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default r1 1
-mz_introspection r1 1
-mz_system r1 1
+default  r1  2
+mz_introspection  r1  2
+mz_system  r1  2
 
 statement ok
 CREATE CLUSTER REPLICA default.foo_bar SIZE '1'
@@ -630,9 +630,9 @@ CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (S
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
 ----
-r1  1  1  18446744073709000000  18446744073709551615  1  1
-r1  1  1  18446744073709000000  18446744073709551615  1  1
-r1  1  1  18446744073709000000  18446744073709551615  1  1
+r1  2  1  18446744073709000000  18446744073709551615  2  1
+r1  2  1  18446744073709000000  18446744073709551615  2  1
+r1  2  1  18446744073709000000  18446744073709551615  2  1
 size_1  1  1  18446744073709000000  18446744073709551615  1  1
 size_1_8g  1-8G  1  18446744073709000000  8589934592  1  1
 size_2_2  2-2  2  18446744073709000000  18446744073709551615  2  2
@@ -694,7 +694,7 @@ db error: ERROR: cannot modify managed cluster t1
 query TTTTT
 SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id LIKE 'u%'
 ----
-u1  r1  u1  1  s1
+u1  r1  u1  2  s1
 u2  r1  u2  1  u1
 u4  free  u2  2  u1
 u3  billed  u2  2  u1
@@ -766,7 +766,7 @@ DROP CLUSTER REPLICA t1.r2
 query TTTTT
 SELECT id, name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id LIKE 'u%'
 ----
-u1  r1  u1  1  s1
+u1  r1  u1  2  s1
 u7  r1  u4  1  u1
 u8  free  u4  2  u1
 
