@@ -49,10 +49,6 @@ use crate::durable::initialize::USER_VERSION_KEY;
 use crate::durable::objects::serialization::proto;
 use crate::durable::{upgrade, CONFIG_COLLECTION};
 
-mod v35_to_v36;
-mod v36_to_v37;
-mod v37_to_v38;
-mod v38_to_v39;
 mod v39_to_v40;
 mod v40_to_v41;
 mod v41_to_v42;
@@ -71,7 +67,7 @@ macro_rules! objects {
         }
     }
 
-objects!(v35, v36, v37, v38, v39, v40, v41, v42, v43, v44);
+objects!(v39, v40, v41, v42, v43, v44);
 
 /// The current version of the `Catalog`.
 ///
@@ -83,7 +79,7 @@ pub const CATALOG_VERSION: u64 = 44;
 /// The minimum `Catalog` version number that we support migrating from.
 ///
 /// After bumping this we can delete the old migrations.
-pub const MIN_CATALOG_VERSION: u64 = 35;
+pub const MIN_CATALOG_VERSION: u64 = 39;
 
 #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
 pub async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
@@ -111,10 +107,6 @@ pub async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
                     match version {
                         ..=TOO_OLD_VERSION => return Err(incompatible),
 
-                        35 => upgrade::v35_to_v36::upgrade(&tx).await?,
-                        36 => upgrade::v36_to_v37::upgrade(),
-                        37 => upgrade::v37_to_v38::upgrade(&tx).await?,
-                        38 => upgrade::v38_to_v39::upgrade(&tx).await?,
                         39 => upgrade::v39_to_v40::upgrade(&tx).await?,
                         40 => upgrade::v40_to_v41::upgrade(),
                         41 => upgrade::v41_to_v42::upgrade(),
