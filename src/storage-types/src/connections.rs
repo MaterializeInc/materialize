@@ -391,6 +391,13 @@ impl KafkaConnection {
         T: FromClientConfigAndContext<TunnelingClientContext<C>>,
     {
         let mut options = self.options.clone();
+
+        // Ensure that Kafka topics are *not* automatically created when
+        // consuming, producing, or fetching metadata for a topic. This ensures
+        // that we don't accidentally create topics with the wrong number of
+        // partitions.
+        options.insert("allow.auto.create.topics".into(), "false".into());
+
         options.insert(
             "bootstrap.servers".into(),
             self.brokers.iter().map(|b| &b.address).join(",").into(),

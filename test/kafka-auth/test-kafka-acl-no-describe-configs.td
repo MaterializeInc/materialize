@@ -22,7 +22,9 @@
     SECURITY PROTOCOL SASL_PLAINTEXT
   );
 
-> CREATE MATERIALIZED VIEW mv AS SELECT DISTINCT column1 FROM (VALUES (1), (2));
+> CREATE TABLE t (column1 integer)
+> INSERT INTO t VALUES (1), (2)
+> CREATE MATERIALIZED VIEW mv AS SELECT DISTINCT column1 FROM t
 
 # ==> Test. <==
 
@@ -39,6 +41,15 @@ $ kafka-verify-data format=json key=false sink=materialize.public.nonexisting so
 {"column1": 1}
 {"column1": 2}
 
+# Ensure that the sink never entered the `stalled` status. Previously we had a
+# glitch where the sink would stall once before becoming healthy due to a glitch
+# in the topic creation code path when access to `DescribeConfigs` is banned.
+> SELECT DISTINCT status FROM mz_sinks
+  JOIN mz_internal.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
+  WHERE mz_sinks.name = 'nonexisting'
+starting
+running
+
 # Creating the sink after creating the topic outside of Materialize should
 # succeed, because Materialize no longer needs to run DescribeConfigs to
 # determine the replication factor/number of partitions to use.
@@ -53,3 +64,12 @@ $ kafka-create-topic topic=no-describe-configs
 $ kafka-verify-data format=json key=false sink=materialize.public.preexisting sort-messages=true
 {"column1": 1}
 {"column1": 2}
+
+# Ensure that the sink never entered the `stalled` status. Previously we had a
+# glitch where the sink would stall once before becoming healthy due to a glitch
+# in the topic creation code path when access to `DescribeConfigs` is banned.
+> SELECT DISTINCT status FROM mz_sinks
+  JOIN mz_internal.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
+  WHERE mz_sinks.name = 'preexisting'
+starting
+running

@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use maplit::btreemap;
 use mz_kafka_util::client::{
-    MzClientContext, TunnelingClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
+    GetPartitionsError, MzClientContext, TunnelingClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
@@ -417,17 +417,24 @@ pub async fn determine_latest_progress_record(
         C: ConsumerContext,
     {
         // ensure the progress topic has exactly one partition
-        let partitions = mz_kafka_util::client::get_partitions(
+        let partitions = match mz_kafka_util::client::get_partitions(
             progress_client.client(),
             progress_topic,
             timeout,
-        )
-        .with_context(|| {
-            format!(
-                "Unable to fetch metadata about progress topic {}",
-                progress_topic
-            )
-        })?;
+        ) {
+            Ok(partitions) => partitions,
+            Err(GetPartitionsError::TopicDoesNotExist) => {
+                // The progress topic doesn't exist, which indicates there is
+                // no committed timestamp.
+                return Ok(None);
+            }
+            e => e.with_context(|| {
+                format!(
+                    "Unable to fetch metadata about progress topic {}",
+                    progress_topic
+                )
+            })?,
+        };
 
         if partitions.len() != 1 {
             bail!(
