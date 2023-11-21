@@ -713,6 +713,18 @@ where
             return;
         }
 
+        let healthchecker = HealthOutputHandle {
+            health_cap,
+            handle: Mutex::new(health_output),
+        };
+
+        let _ = halt_on_err(
+            &healthchecker,
+            util::build_kafka(id, &connection, &connection_context).await,
+            None,
+        )
+        .await;
+
         let mut s = KafkaSinkState::new(
             id,
             connection,
@@ -722,10 +734,7 @@ where
             &metrics,
             &connection_context,
             Rc::clone(&shared_gate_ts),
-            HealthOutputHandle {
-                health_cap,
-                handle: Mutex::new(health_output),
-            },
+            healthchecker,
         )
         .await;
 
@@ -1017,7 +1026,12 @@ where
 
         let _ = halt_on_err(
             &healthchecker,
-            util::build_kafka(sink_id, &mut connection, &connection_context).await,
+            util::publish_schemas(
+                &connection_context,
+                &mut connection.format,
+                &connection.topic,
+            )
+            .await,
             None,
         )
         .await;

@@ -249,6 +249,38 @@ async fn publish_kafka_schemas(
     Ok((key_schema_id, value_schema_id))
 }
 
+pub async fn publish_schemas(
+    connection_cx: &ConnectionContext,
+    format: &mut KafkaSinkFormat,
+    topic: &str,
+) -> Result<(), ContextCreationError> {
+    if let KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
+        key_schema,
+        value_schema,
+        csr_connection,
+    }) = format
+    {
+        let ccsr = csr_connection.connect(connection_cx).await?;
+        let (key_schema_id, value_schema_id) = publish_kafka_schemas(
+            &ccsr,
+            topic,
+            key_schema.as_deref(),
+            Some(mz_ccsr::SchemaType::Avro),
+            value_schema,
+            mz_ccsr::SchemaType::Avro,
+        )
+        .await
+        .context("error publishing kafka schemas for sink")?;
+
+        *format = KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::Published {
+            key_schema_id,
+            value_schema_id,
+        });
+    }
+
+    Ok(())
+}
+
 /// Ensures that the Kafka sink's data and consistency collateral exist.
 ///
 /// # Errors
@@ -256,7 +288,7 @@ async fn publish_kafka_schemas(
 ///   contains data for this sink, but the sink's data topic does not exist.
 pub async fn build_kafka(
     sink_id: mz_repr::GlobalId,
-    connection: &mut KafkaSinkConnection,
+    connection: &KafkaSinkConnection,
     connection_cx: &ConnectionContext,
 ) -> Result<(), ContextCreationError> {
     let client: AdminClient<_> = connection
@@ -330,32 +362,6 @@ pub async fn build_kafka(
     .await
     .check_ssh_status(client.inner().context())
     .add_context("error registering kafka topic for sink")?;
-
-    match &connection.format {
-        KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
-            key_schema,
-            value_schema,
-            csr_connection,
-        }) => {
-            let ccsr = csr_connection.connect(connection_cx).await?;
-            let (key_schema_id, value_schema_id) = publish_kafka_schemas(
-                &ccsr,
-                &connection.topic,
-                key_schema.as_deref(),
-                Some(mz_ccsr::SchemaType::Avro),
-                value_schema,
-                mz_ccsr::SchemaType::Avro,
-            )
-            .await
-            .context("error publishing kafka schemas for sink")?;
-
-            connection.format = KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::Published {
-                key_schema_id,
-                value_schema_id,
-            })
-        }
-        KafkaSinkFormat::Avro(_) | KafkaSinkFormat::Json => {}
-    }
 
     match &connection.consistency_config {
         KafkaConsistencyConfig::Progress { topic } => ensure_kafka_topic(
