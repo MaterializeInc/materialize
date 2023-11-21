@@ -7,5 +7,5 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-/// No-op migration for adding support for `COMMENT ON` for more types.
+/// No-op migration for updating a comment in the proto file.
 pub fn upgrade() {}

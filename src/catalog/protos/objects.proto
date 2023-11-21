@@ -10,8 +10,8 @@
 // This protobuf file defines the types we store in the Stash.
 //
 // Before and after modifying this file, make sure you have a snapshot of the before version,
-// e.g. a copy of this file named 'objects_v{STASH_VERSION}.proto', and a snapshot of the file
-// after your modifications, e.g. 'objects_v{STASH_VERSION + 1}.proto'. Then you can write a
+// e.g. a copy of this file named 'objects_v{CATALOG_VERSION}.proto', and a snapshot of the file
+// after your modifications, e.g. 'objects_v{CATALOG_VERSION + 1}.proto'. Then you can write a
 // migration using these two files, and no matter how they types change in the future, we'll always
 // have these snapshots to facilitate the migration.
 

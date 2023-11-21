@@ -10,15 +10,16 @@
 // This protobuf file defines the types we store in the Stash.
 //
 // Before and after modifying this file, make sure you have a snapshot of the before version,
-// e.g. a copy of this file named 'objects_v{STASH_VERSION}.proto', and a snapshot of the file
-// after your modifications, e.g. 'objects_v{STASH_VERSION + 1}.proto'. Then you can write a
+// e.g. a copy of this file named 'objects_v{CATALOG_VERSION}.proto', and a snapshot of the file
+// after your modifications, e.g. 'objects_v{CATALOG_VERSION + 1}.proto'. Then you can write a
 // migration using these two files, and no matter how they types change in the future, we'll always
 // have these snapshots to facilitate the migration.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
 
 syntax = "proto3";
 
-package objects_v35;
+package objects_v44;
 
 message ConfigKey {
     string key = 1;
@@ -128,6 +129,7 @@ message RoleValue {
     string name = 1;
     RoleAttributes attributes = 2;
     RoleMembership membership = 3;
+    RoleVars vars = 4;
 }
 
 message TimestampKey {
@@ -165,28 +167,23 @@ message StorageUsageKey {
     }
 }
 
-message SinkAsOf {
-    TimestampAntichain frontier = 1;
-    bool strict = 2;
-}
-
-message DurableCollectionMetadata {
-    reserved 1;
-    reserved "remap_shard";
-
-    // StringWrapper remap_shard = 1;
-    string data_shard = 2;
-}
-
-message DurableExportMetadata {
-    SinkAsOf initial_as_of = 1;
-}
-
 message CommentKey {
-    // TODO(parkmycar): Support comments on more kinds of objects.
     oneof object {
         GlobalId table = 1;
         GlobalId view = 2;
+        GlobalId materialized_view = 4;
+        GlobalId source = 5;
+        GlobalId sink = 6;
+        GlobalId index = 7;
+        GlobalId func = 8;
+        GlobalId connection = 9;
+        GlobalId type = 10;
+        GlobalId secret = 11;
+        RoleId role = 12;
+        DatabaseId database = 13;
+        ResolvedSchema schema = 14;
+        ClusterId cluster = 15;
+        ClusterReplicaId cluster_replica = 16;
     }
     oneof sub_component {
         uint64 column_pos = 3;
@@ -271,6 +268,13 @@ message DatabaseId {
     }
 }
 
+message ResolvedDatabaseSpecifier {
+    oneof spec {
+        Empty ambient = 1;
+        DatabaseId id = 2;
+    }
+}
+
 message SchemaId {
     oneof value {
         uint64 system = 1;
@@ -278,11 +282,28 @@ message SchemaId {
     }
 }
 
+message SchemaSpecifier {
+    oneof spec {
+        Empty temporary = 1;
+        SchemaId id = 2;
+    }
+}
+
+message ResolvedSchema {
+    ResolvedDatabaseSpecifier database = 1;
+    SchemaSpecifier schema = 2;
+}
+
 message ReplicaId {
     oneof value {
         uint64 system = 1;
         uint64 user = 2;
     }
+}
+
+message ClusterReplicaId {
+    ClusterId cluster_id = 1;
+    ReplicaId replica_id = 2;
 }
 
 message ReplicaLogging {
@@ -323,6 +344,8 @@ message ReplicaConfig {
         string size = 1;
         optional string availability_zone = 2;
         bool disk = 4;
+        bool internal = 5;
+        optional string billed_as = 6;
     }
 
     oneof location {
@@ -354,6 +377,22 @@ message RoleMembership {
     repeated Entry map = 1;
 }
 
+message RoleVars {
+    message SqlSet {
+        repeated string entries = 1;
+    }
+
+    message Entry {
+        string key = 1;
+        oneof val {
+            string flat = 2;
+            SqlSet sql_set = 3;
+        }
+    }
+
+    repeated Entry entries = 1;
+}
+
 message AclMode {
     // A bit flag representing all the privileges that can be granted to a role.
     uint64 bitflags = 1;
@@ -363,10 +402,6 @@ message MzAclItem {
     RoleId grantee = 1;
     RoleId grantor = 2;
     AclMode acl_mode = 3;
-}
-
-message TimestampAntichain {
-    repeated Timestamp elements = 1;
 }
 
 enum ObjectType {
@@ -481,6 +516,8 @@ message AuditLogEventV1 {
         string replica_name = 4;
         string logical_size = 5;
         bool disk = 6;
+        optional string billed_as = 7;
+        bool internal = 8;
     }
 
     message DropClusterReplicaV1 {
@@ -575,6 +612,13 @@ message AuditLogEventV1 {
         StringWrapper database_name = 3;
     }
 
+    message RenameSchemaV1 {
+        string id = 1;
+        optional string database_name = 2;
+        string old_name = 3;
+        string new_name = 4;
+    }
+
     message UpdateItemV1 {
         string id = 1;
         FullNameV1 name = 2;
@@ -586,7 +630,7 @@ message AuditLogEventV1 {
     StringWrapper user = 4;
     EpochMillis occurred_at = 5;
 
-    // next-id: 27
+    // next-id: 28
     oneof details {
         CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
         DropClusterReplicaV1 drop_cluster_replica_v1 = 7;
@@ -608,6 +652,124 @@ message AuditLogEventV1 {
         IdNameV1 id_name_v1 = 17;
         SchemaV1 schema_v1 = 18;
         SchemaV2 schema_v2 = 19;
+        RenameSchemaV1 rename_schema_v1 = 27;
         UpdateItemV1 update_item_v1 = 26;
+    }
+}
+
+// Wrapper of key-values used by the persist implementation to serialize the catalog.
+message StateUpdateKind {
+    message AuditLog {
+        AuditLogKey key = 1;
+    }
+
+    message Cluster {
+        ClusterKey key = 1;
+        ClusterValue value = 2;
+    }
+
+    message ClusterReplica {
+        ClusterReplicaKey key = 1;
+        ClusterReplicaValue value = 2;
+    }
+
+    message Comment {
+        CommentKey key = 1;
+        CommentValue value = 2;
+    }
+
+    message Config {
+        ConfigKey key = 1;
+        ConfigValue value = 2;
+    }
+
+    message Database {
+        DatabaseKey key = 1;
+        DatabaseValue value = 2;
+    }
+
+    message DefaultPrivileges {
+        DefaultPrivilegesKey key = 1;
+        DefaultPrivilegesValue value = 2;
+    }
+
+    message Epoch {
+        int64 epoch = 1;
+    }
+
+    message IdAlloc {
+        IdAllocKey key = 1;
+        IdAllocValue value = 2;
+    }
+
+    message ClusterIntrospectionSourceIndex {
+        ClusterIntrospectionSourceIndexKey key = 1;
+        ClusterIntrospectionSourceIndexValue value = 2;
+    }
+
+    message Item {
+        ItemKey key = 1;
+        ItemValue value = 2;
+    }
+
+    message Role {
+        RoleKey key = 1;
+        RoleValue value = 2;
+    }
+
+    message Schema {
+        SchemaKey key = 1;
+        SchemaValue value = 2;
+    }
+
+    message Setting {
+        SettingKey key = 1;
+        SettingValue value = 2;
+    }
+
+    message StorageUsage {
+        StorageUsageKey key = 1;
+    }
+
+    message ServerConfiguration {
+        ServerConfigurationKey key = 1;
+        ServerConfigurationValue value = 2;
+    }
+
+    message GidMapping {
+        GidMappingKey key = 1;
+        GidMappingValue value = 2;
+    }
+
+    message SystemPrivileges {
+        SystemPrivilegesKey key = 1;
+        SystemPrivilegesValue value = 2;
+    }
+
+    message Timestamp {
+        TimestampKey key = 1;
+        TimestampValue value = 2;
+    }
+
+    oneof kind {
+        AuditLog audit_log = 1;
+        Cluster cluster = 2;
+        ClusterReplica cluster_replica = 3;
+        Comment comment = 4;
+        Config config = 5;
+        Database database = 6;
+        DefaultPrivileges default_privileges = 7;
+        Epoch epoch = 8;
+        IdAlloc id_alloc = 9;
+        ClusterIntrospectionSourceIndex cluster_introspection_source_index = 10;
+        Item item = 11;
+        Role role = 12;
+        Schema schema = 13;
+        Setting setting = 14;
+        StorageUsage storage_usage = 15;
+        ServerConfiguration server_configuration = 16;
+        GidMapping gid_mapping = 17;
+        SystemPrivileges system_privileges = 18;
+        Timestamp timestamp = 19;
     }
 }

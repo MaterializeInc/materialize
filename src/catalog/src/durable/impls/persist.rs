@@ -44,7 +44,7 @@ use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, U
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
-use crate::durable::upgrade::STASH_VERSION;
+use crate::durable::upgrade::CATALOG_VERSION;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
     OpenableDurableCatalogState, ReadOnlyDurableCatalogState, TimelineTimestamp, Transaction,
@@ -225,7 +225,7 @@ impl PersistHandle {
             if !read_only {
                 let user_version = user_version
                     .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))?;
-                if user_version != STASH_VERSION {
+                if user_version != CATALOG_VERSION {
                     // TODO(jkosh44) Implement migrations.
                     panic!("the persist catalog does not know how to perform migrations yet");
                 }

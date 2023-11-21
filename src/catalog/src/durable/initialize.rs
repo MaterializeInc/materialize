@@ -28,7 +28,7 @@ use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_storage_types::sources::Timeline;
 
 use crate::builtin::BUILTIN_ROLES;
-use crate::durable::upgrade::STASH_VERSION;
+use crate::durable::upgrade::CATALOG_VERSION;
 use crate::durable::{
     BootstrapArgs, CatalogError, ClusterConfig, ClusterVariant, ClusterVariantManaged,
     DefaultPrivilege, ReplicaConfig, ReplicaLocation, Role, Schema, Transaction,
@@ -580,7 +580,7 @@ pub async fn initialize(
     }
 
     for (key, value) in [
-        (USER_VERSION_KEY.to_string(), STASH_VERSION),
+        (USER_VERSION_KEY.to_string(), CATALOG_VERSION),
         (
             DEPLOY_GENERATION.to_string(),
             deploy_generation.unwrap_or(0),

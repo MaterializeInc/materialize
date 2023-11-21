@@ -2115,7 +2115,7 @@ mod tests {
     use mz_proto::RustType;
     use proptest::prelude::*;
 
-    use crate::durable::upgrade::{MIN_STASH_VERSION, STASH_VERSION};
+    use crate::durable::upgrade::{CATALOG_VERSION, MIN_CATALOG_VERSION};
 
     // Note: Feel free to update this path if the protos move.
     const PROTO_DIRECTORY: &str = "protos";
@@ -2134,7 +2134,7 @@ mod tests {
         assert!(filenames.remove("objects.proto"));
 
         // Assert snapshots exist for all of the versions we support.
-        for version in MIN_STASH_VERSION..=STASH_VERSION {
+        for version in MIN_CATALOG_VERSION..=CATALOG_VERSION {
             let filename = format!("objects_v{version}.proto");
             assert!(
                 filenames.remove(&filename),
@@ -2142,20 +2142,20 @@ mod tests {
             );
         }
 
-        // Common case. Check to make sure the user bumped the STASH_VERSION.
+        // Common case. Check to make sure the user bumped the CATALOG_VERSION.
         if !filenames.is_empty()
-            && filenames.remove(&format!("objects_v{}.proto", STASH_VERSION + 1))
+            && filenames.remove(&format!("objects_v{}.proto", CATALOG_VERSION + 1))
         {
             panic!(
-                "Found snapshot for v{}, please also bump `STASH_VERSION`.",
-                STASH_VERSION + 1
+                "Found snapshot for v{}, please also bump `CATALOG_VERSION`.",
+                CATALOG_VERSION + 1
             )
         }
 
         // Assert there aren't any extra snapshots.
         assert!(
             filenames.is_empty(),
-            "Found snapshots for unsupported Stash versions {filenames:?}.\nIf you just increased `MIN_STASH_VERSION`, then please delete the old snapshots. If you created a new snapshot, please bump `STASH_VERSION`."
+            "Found snapshots for unsupported Stash versions {filenames:?}.\nIf you just increased `MIN_CATALOG_VERSION`, then please delete the old snapshots. If you created a new snapshot, please bump `CATALOG_VERSION`."
         );
     }
 
@@ -2165,9 +2165,11 @@ mod tests {
         let current = fs::File::open(format!("{PROTO_DIRECTORY}/objects.proto"))
             .map(BufReader::new)
             .expect("read current");
-        let snapshot = fs::File::open(format!("{PROTO_DIRECTORY}/objects_v{STASH_VERSION}.proto"))
-            .map(BufReader::new)
-            .expect("read snapshot");
+        let snapshot = fs::File::open(format!(
+            "{PROTO_DIRECTORY}/objects_v{CATALOG_VERSION}.proto"
+        ))
+        .map(BufReader::new)
+        .expect("read snapshot");
 
         // Read in all of the lines so we can compare the content of †he files.
         let current: Vec<_> = current
@@ -2180,11 +2182,11 @@ mod tests {
             .lines()
             .map(|r| r.expect("failed to read line from current"))
             // Filter out the package name, since we expect that to be different.
-            .filter(|line| line != &format!("package objects_v{STASH_VERSION};"))
+            .filter(|line| line != &format!("package objects_v{CATALOG_VERSION};"))
             .collect();
 
-        // Note: objects.proto and objects_v<STASH_VERSION>.proto should be exactly the same. The
-        // reason being, when bumping the Stash to the next version, STASH_VERSION + 1, we need a
+        // Note: objects.proto and objects_v<CATALOG_VERSION>.proto should be exactly the same. The
+        // reason being, when bumping the Stash to the next version, CATALOG_VERSION + 1, we need a
         // snapshot to migrate _from_, which should be a snapshot of how the protos are today.
         // Hence why the two files should be exactly the same.
         similar_asserts::assert_eq!(current, snapshot);
