@@ -38,8 +38,8 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
-use crate::durable::impls::persist::state_update::StateUpdateKindSchema;
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
+use crate::durable::impls::persist::state_update::{StateUpdateKindAlias, StateUpdateKindSchema};
 use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, USER_VERSION_KEY};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, Config, DurableType, Snapshot, StorageUsageKey};
@@ -69,18 +69,18 @@ enum Mode {
 /// Production users should call [`Self::expire`] before dropping a [`PersistHandle`] so that it
 /// can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 #[derive(Debug)]
-pub struct PersistHandle {
+pub struct PersistHandle<T: StateUpdateKindAlias = StateUpdateKind> {
     /// Write handle to persist.
-    write_handle: WriteHandle<StateUpdateKind, (), Timestamp, Diff>,
+    write_handle: WriteHandle<T, (), Timestamp, Diff>,
     /// Read handle to persist.
-    read_handle: ReadHandle<StateUpdateKind, (), Timestamp, Diff>,
+    read_handle: ReadHandle<T, (), Timestamp, Diff>,
     /// Handle for connecting to persist.
     persist_client: PersistClient,
     /// Catalog shard ID.
     shard_id: ShardId,
 }
 
-impl PersistHandle {
+impl<T: StateUpdateKindAlias> PersistHandle<T> {
     /// Deterministically generate the a ID for the given `organization_id` and `seed`.
     fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
         let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
@@ -89,6 +89,100 @@ impl PersistHandle {
         ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
     }
 
+    /// Fetch the current upper of the catalog state.
+    async fn current_upper(&mut self) -> Timestamp {
+        current_upper(&mut self.write_handle).await
+    }
+
+    /// Generates a timestamp for reading from the catalog that is as fresh as possible, given
+    /// `upper`.
+    fn as_of(&self, upper: Timestamp) -> Timestamp {
+        as_of(&self.read_handle, upper)
+    }
+
+    /// Reports if the catalog state has been initialized, and the current upper.
+    async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
+        let upper = self.current_upper().await;
+        let is_initialized = if upper == Timestamp::minimum() {
+            false
+        } else {
+            let as_of = self.as_of(upper);
+            self.get_configs(as_of).await.next().is_some()
+        };
+        (is_initialized, upper)
+    }
+
+    /// Generates a [`Vec<StateUpdate>`] that contain all updates to the catalog
+    /// state.
+    ///
+    /// The output is consolidated and sorted by timestamp in ascending order and the current upper.
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn current_snapshot(&mut self) -> (Vec<StateUpdate<T>>, Timestamp) {
+        let current_upper = self.current_upper().await;
+        if current_upper != Timestamp::minimum() {
+            let as_of = self.as_of(current_upper);
+            let snapshot = self.snapshot(as_of).await.collect();
+            (snapshot, current_upper)
+        } else {
+            (Vec::new(), current_upper)
+        }
+    }
+
+    /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
+    /// state up to, and including, `as_of`.
+    ///
+    /// The output is consolidated and sorted by timestamp in ascending order.
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn snapshot(
+        &mut self,
+        as_of: Timestamp,
+    ) -> impl Iterator<Item = StateUpdate<T>> + DoubleEndedIterator {
+        snapshot(&mut self.read_handle, as_of).await
+    }
+
+    /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
+    /// catalog state up to, and including, `as_of`.
+    async fn snapshot_unconsolidated(
+        &mut self,
+        as_of: Timestamp,
+    ) -> impl Iterator<Item = StateUpdate<T>> + DoubleEndedIterator {
+        let mut snapshot = Vec::new();
+        let mut stream = Box::pin(
+            // We use `snapshot_and_stream` because it guarantees unconsolidated output.
+            self.read_handle
+                .snapshot_and_stream(Antichain::from_elem(as_of))
+                .await
+                .expect("we have advanced the restart_as_of by the since"),
+        );
+        while let Some(update) = stream.next().await {
+            snapshot.push(update)
+        }
+        snapshot
+            .into_iter()
+            .map(|((kind, _unit), ts, diff)| StateUpdate {
+                kind: kind.expect("kind decoding error"),
+                ts,
+                diff,
+            })
+    }
+
+    /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
+    /// iff the current global upper of the catalog is `current_upper`.
+    async fn compare_and_append(
+        &mut self,
+        updates: Vec<StateUpdate<T>>,
+        current_upper: Timestamp,
+        next_upper: Timestamp,
+    ) -> Result<(), CatalogError> {
+        compare_and_append(&mut self.write_handle, updates, current_upper, next_upper).await?;
+        self.read_handle
+            .downgrade_since(&Antichain::from_elem(current_upper))
+            .await;
+        Ok(())
+    }
+}
+
+impl PersistHandle<StateUpdateKind> {
     /// Create a new [`PersistHandle`] to the catalog state associated with `organization_id`.
     #[tracing::instrument(level = "debug", skip(persist_client))]
     pub(crate) async fn new(persist_client: PersistClient, organization_id: Uuid) -> PersistHandle {
@@ -241,83 +335,6 @@ impl PersistHandle {
         }
 
         Ok(Box::new(catalog))
-    }
-
-    /// Fetch the current upper of the catalog state.
-    async fn current_upper(&mut self) -> Timestamp {
-        current_upper(&mut self.write_handle).await
-    }
-
-    /// Generates a timestamp for reading from the catalog that is as fresh as possible, given
-    /// `upper`.
-    fn as_of(&self, upper: Timestamp) -> Timestamp {
-        as_of(&self.read_handle, upper)
-    }
-
-    /// Reports if the catalog state has been initialized, and the current upper.
-    async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
-        let upper = self.current_upper().await;
-        let is_initialized = if upper == Timestamp::minimum() {
-            false
-        } else {
-            let as_of = self.as_of(upper);
-            self.get_configs(as_of).await.next().is_some()
-        };
-        (is_initialized, upper)
-    }
-
-    /// Generates a [`Vec<StateUpdate>`] that contain all updates to the catalog
-    /// state.
-    ///
-    /// The output is consolidated and sorted by timestamp in ascending order and the current upper.
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn current_snapshot(&mut self) -> (Vec<StateUpdate>, Timestamp) {
-        let current_upper = self.current_upper().await;
-        if current_upper != Timestamp::minimum() {
-            let as_of = self.as_of(current_upper);
-            let snapshot = self.snapshot(as_of).await.collect();
-            (snapshot, current_upper)
-        } else {
-            (Vec::new(), current_upper)
-        }
-    }
-
-    /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
-    /// state up to, and including, `as_of`.
-    ///
-    /// The output is consolidated and sorted by timestamp in ascending order.
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn snapshot(
-        &mut self,
-        as_of: Timestamp,
-    ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-        snapshot(&mut self.read_handle, as_of).await
-    }
-
-    /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
-    /// catalog state up to, and including, `as_of`.
-    async fn snapshot_unconsolidated(
-        &mut self,
-        as_of: Timestamp,
-    ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-        let mut snapshot = Vec::new();
-        let mut stream = Box::pin(
-            // We use `snapshot_and_stream` because it guarantees unconsolidated output.
-            self.read_handle
-                .snapshot_and_stream(Antichain::from_elem(as_of))
-                .await
-                .expect("we have advanced the restart_as_of by the since"),
-        );
-        while let Some(update) = stream.next().await {
-            snapshot.push(update)
-        }
-        snapshot
-            .into_iter()
-            .map(|((kind, _unit), ts, diff)| StateUpdate {
-                kind: kind.expect("kind decoding error"),
-                ts,
-                diff,
-            })
     }
 
     /// Get the current value of config `key`.
@@ -953,8 +970,8 @@ fn diagnostics() -> Diagnostics {
 }
 
 /// Fetch the current upper of the catalog state.
-async fn current_upper(
-    write_handle: &mut WriteHandle<StateUpdateKind, (), Timestamp, Diff>,
+async fn current_upper<T: StateUpdateKindAlias>(
+    write_handle: &mut WriteHandle<T, (), Timestamp, Diff>,
 ) -> Timestamp {
     write_handle
         .fetch_recent_upper()
@@ -966,8 +983,8 @@ async fn current_upper(
 
 /// Generates a timestamp for reading from `read_handle` that is as fresh as possible, given
 /// `upper`.
-fn as_of(
-    read_handle: &ReadHandle<StateUpdateKind, (), Timestamp, Diff>,
+fn as_of<T: StateUpdateKindAlias>(
+    read_handle: &ReadHandle<T, (), Timestamp, Diff>,
     upper: Timestamp,
 ) -> Timestamp {
     soft_assert!(
@@ -982,9 +999,9 @@ fn as_of(
 
 /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
 /// iff the current global upper of the catalog is `current_upper`.
-async fn compare_and_append(
-    write_handle: &mut WriteHandle<StateUpdateKind, (), Timestamp, Diff>,
-    updates: Vec<StateUpdate>,
+async fn compare_and_append<T: StateUpdateKindAlias>(
+    write_handle: &mut WriteHandle<T, (), Timestamp, Diff>,
+    updates: Vec<StateUpdate<T>>,
     current_upper: Timestamp,
     next_upper: Timestamp,
 ) -> Result<(), CatalogError> {
@@ -1013,10 +1030,10 @@ async fn compare_and_append(
 ///
 /// The output is consolidated and sorted by timestamp in ascending order.
 #[tracing::instrument(level = "debug", skip(read_handle))]
-async fn snapshot(
-    read_handle: &mut ReadHandle<StateUpdateKind, (), Timestamp, Diff>,
+async fn snapshot<T: StateUpdateKindAlias>(
+    read_handle: &mut ReadHandle<T, (), Timestamp, Diff>,
     as_of: Timestamp,
-) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
+) -> impl Iterator<Item = StateUpdate<T>> + DoubleEndedIterator {
     let snapshot = read_handle
         .snapshot_and_fetch(Antichain::from_elem(as_of))
         .await

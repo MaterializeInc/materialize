@@ -21,11 +21,39 @@ use crate::durable::objects::serialization::proto;
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::Epoch;
 
+/// Marker trait for an object that can be converted to/from a `StateUpdateKind` and can be used to
+/// read/write to persist.
+pub trait StateUpdateKindAlias:
+    Into<StateUpdateKind>
+    + From<StateUpdateKind>
+    + Codec
+    + PartialEq
+    + Eq
+    + PartialOrd
+    + Ord
+    + Debug
+    + Clone
+{
+}
+impl<
+        T: Into<StateUpdateKind>
+            + From<StateUpdateKind>
+            + Codec
+            + PartialEq
+            + Eq
+            + PartialOrd
+            + Ord
+            + Debug
+            + Clone,
+    > StateUpdateKindAlias for T
+{
+}
+
 /// A single update to the catalog state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdate {
+pub struct StateUpdate<T: StateUpdateKindAlias = StateUpdateKind> {
     /// They kind and contents of the state update.
-    pub(super) kind: StateUpdateKind,
+    pub(super) kind: T,
     /// The timestamp at which the update occurred.
     pub(super) ts: Timestamp,
     /// Record count difference for the update.
