@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use proptest_derive::Arbitrary;
 use prost::Message;
 use std::fmt::Debug;
 
@@ -24,19 +25,14 @@ use crate::durable::Epoch;
 /// Marker trait for an object that can be converted to/from a `StateUpdateKind` and can be used to
 /// read/write to persist.
 pub trait StateUpdateKindAlias:
-    Into<StateUpdateKind>
-    + From<StateUpdateKind>
-    + Codec
-    + PartialEq
-    + Eq
-    + PartialOrd
-    + Ord
-    + Debug
-    + Clone
+    From<StateUpdateKind> + Codec + PartialEq + Eq + PartialOrd + Ord + Debug + Clone
 {
+    type Error: Debug;
+
+    fn try_into(self) -> Result<StateUpdateKind, Self::Error>;
 }
 impl<
-        T: Into<StateUpdateKind>
+        T: TryInto<StateUpdateKind>
             + From<StateUpdateKind>
             + Codec
             + PartialEq
@@ -46,7 +42,14 @@ impl<
             + Debug
             + Clone,
     > StateUpdateKindAlias for T
+where
+    T::Error: Debug,
 {
+    type Error = T::Error;
+
+    fn try_into(self) -> Result<StateUpdateKind, Self::Error> {
+        <T as TryInto<StateUpdateKind>>::try_into(self)
+    }
 }
 
 /// A single update to the catalog state.
@@ -574,5 +577,116 @@ impl mz_persist_types::columnar::Schema<StateUpdateKind> for StateUpdateKindSche
             StateUpdateKind::encode(val, &mut buf);
             mz_persist_types::columnar::ColumnPush::<Vec<u8>>::push(col, &buf)
         })
+    }
+}
+
+// TODO(jkosh44) Is it bad that this Ord probably does not match StateUpdateKind Ord.
+/// Binary version of [`StateUpdateKind`] to allow reading/writing raw binary from/to persist.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
+pub(crate) struct StateUpdateKindBinary(Vec<u8>);
+
+impl From<StateUpdateKind> for StateUpdateKindBinary {
+    fn from(value: StateUpdateKind) -> Self {
+        Self(value.into_proto().encode_to_vec())
+    }
+}
+
+impl TryFrom<StateUpdateKindBinary> for StateUpdateKind {
+    type Error = String;
+
+    fn try_from(value: StateUpdateKindBinary) -> Result<Self, Self::Error> {
+        let kind =
+            proto::StateUpdateKind::decode(value.0.as_slice()).map_err(|err| err.to_string())?;
+        kind.into_rust().map_err(|err| err.to_string())
+    }
+}
+impl Codec for StateUpdateKindBinary {
+    type Schema = StateUpdateKindSchema;
+
+    fn codec_name() -> String {
+        "StateUpdateProto".to_string()
+    }
+
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: bytes::BufMut,
+    {
+        buf.put(self.0.as_slice());
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        Ok(Self(buf.to_vec()))
+    }
+}
+
+impl mz_persist_types::columnar::Schema<StateUpdateKindBinary> for StateUpdateKindSchema {
+    type Encoder<'a> = SimpleEncoder<'a, StateUpdateKindBinary, Vec<u8>>;
+
+    type Decoder<'a> = SimpleDecoder<'a, StateUpdateKindBinary, Vec<u8>>;
+
+    fn columns(&self) -> DynStructCfg {
+        SimpleSchema::<StateUpdateKindBinary, Vec<u8>>::columns(&())
+    }
+
+    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        SimpleSchema::<StateUpdateKindBinary, Vec<u8>>::decoder(cols, |val, ret| {
+            *ret =
+                StateUpdateKindBinary::decode(val).expect("should be valid StateUpdateKindBinary")
+        })
+    }
+
+    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        SimpleSchema::<StateUpdateKindBinary, Vec<u8>>::push_encoder(cols, |col, val| {
+            let mut buf = Vec::new();
+            StateUpdateKindBinary::encode(val, &mut buf);
+            mz_persist_types::columnar::ColumnPush::<Vec<u8>>::push(col, &buf)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_persist_types::Codec;
+    use proptest::prelude::*;
+
+    use crate::durable::impls::persist::state_update::StateUpdateKindBinary;
+    use crate::durable::impls::persist::StateUpdateKind;
+
+    // TODO(jkosh44) Uncomment when Arbitrary is implemented for NonZeroI64
+    proptest! {
+        // #[mz_ore::test]
+        // #[cfg_attr(miri, ignore)] // slow
+        // fn proptest_state_update_kind_round_trip(kind: StateUpdateKind) {
+        //     let mut binary = Vec::new();
+        //     kind.encode(&mut binary);
+        //
+        //     let decoded = StateUpdateKind::decode(&binary).expect("should be valid StateUpdateKind");
+        //
+        //     prop_assert_eq!(kind, decoded);
+        // }
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn proptest_state_update_kind_binary_round_trip(kind: StateUpdateKindBinary) {
+            let mut binary = Vec::new();
+            kind.encode(&mut binary);
+
+            let decoded = StateUpdateKindBinary::decode(&binary).expect("should be valid StateUpdateKindBinary");
+
+            prop_assert_eq!(kind, decoded);
+        }
+
+        // #[mz_ore::test]
+        // #[cfg_attr(miri, ignore)] // slow
+        // fn proptest_state_update_kind_binary_equivalence(kind: StateUpdateKind) {
+        //     let mut kind_encoded = Vec::new();
+        //     kind.encode(&mut kind_encoded);
+        //
+        //     let kind_binary: StateUpdateKindBinary = kind.into();
+        //     let mut kind_binary_encoded = Vec::new();
+        //     kind_binary.encode(&mut kind_binary_encoded);
+        //
+        //     prop_assert_eq!(kind_encoded, kind_binary_encoded);
+        // }
     }
 }
