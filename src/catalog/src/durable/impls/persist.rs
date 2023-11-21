@@ -196,13 +196,23 @@ impl PersistHandle {
         catalog.sync(upper).await?;
 
         let txn = if is_initialized {
+            debug!("initial snapshot: {initial_snapshot:?}");
+
+            // Update in-memory contents with with persist snapshot.
+            catalog.apply_updates(initial_snapshot)?;
+
+            let mut txn = catalog.transaction().await?;
+
             if !read_only {
+                // Commit empty transaction to fence out previous catalogs.
+                txn.commit().await?;
                 let user_version = user_version
                     .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))?;
                 if user_version != CATALOG_VERSION {
                     // TODO(jkosh44) Implement migrations.
                     panic!("the persist catalog does not know how to perform migrations yet");
                 }
+                txn = catalog.transaction().await?;
             }
 
             let mut txn = catalog.transaction().await?;
