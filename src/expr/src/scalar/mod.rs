@@ -2450,6 +2450,7 @@ pub enum EvalError {
     LengthTooLarge,
     AclArrayNullElement,
     MzAclArrayNullElement,
+    PrettyError(String),
 }
 
 impl fmt::Display for EvalError {
@@ -2549,6 +2550,7 @@ impl fmt::Display for EvalError {
                 f.write_str("unterminated escape sequence in LIKE")
             }
             EvalError::Parse(e) => e.fmt(f),
+            EvalError::PrettyError(e) => e.fmt(f),
             EvalError::ParseHex(e) => e.fmt(f),
             EvalError::Internal(s) => write!(f, "internal error: {}", s),
             EvalError::InfinityOutOfDomain(s) => {
@@ -2841,6 +2843,7 @@ impl RustType<ProtoEvalError> for EvalError {
             }),
             EvalError::UnterminatedLikeEscapeSequence => UnterminatedLikeEscapeSequence(()),
             EvalError::Parse(error) => Parse(error.into_proto()),
+            EvalError::PrettyError(error) => PrettyError(error.into_proto()),
             EvalError::ParseHex(error) => ParseHex(error.into_proto()),
             EvalError::Internal(v) => Internal(v.clone()),
             EvalError::InfinityOutOfDomain(v) => InfinityOutOfDomain(v.clone()),
@@ -3018,6 +3021,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 AclArrayNullElement(()) => Ok(EvalError::AclArrayNullElement),
                 MzAclArrayNullElement(()) => Ok(EvalError::MzAclArrayNullElement),
                 InvalidIanaTimezoneId(s) => Ok(EvalError::InvalidIanaTimezoneId(s)),
+                PrettyError(s) => Ok(EvalError::PrettyError(s)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

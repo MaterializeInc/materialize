@@ -4278,6 +4278,7 @@ dependencies = [
  "mz-regexp",
  "mz-repr",
  "mz-sql-parser",
+ "mz-sql-pretty",
  "num",
  "num_enum",
  "once_cell",
@@ -5431,6 +5432,7 @@ dependencies = [
  "mz-ore",
  "mz-sql-parser",
  "pretty",
+ "thiserror",
  "workspace-hack",
 ]
 
