@@ -25,11 +25,16 @@ use crate::durable::Epoch;
 /// Marker trait for an object that can be converted to/from a `StateUpdateKind` and can be used to
 /// read/write to persist.
 pub trait StateUpdateKindAlias:
-    From<StateUpdateKind> + Codec + PartialEq + Eq + PartialOrd + Ord + Debug + Clone
+    TryInto<StateUpdateKind>
+    + From<StateUpdateKind>
+    + Codec
+    + PartialEq
+    + Eq
+    + PartialOrd
+    + Ord
+    + Debug
+    + Clone
 {
-    type Error: Debug;
-
-    fn try_into(self) -> Result<StateUpdateKind, Self::Error>;
 }
 impl<
         T: TryInto<StateUpdateKind>
@@ -42,14 +47,7 @@ impl<
             + Debug
             + Clone,
     > StateUpdateKindAlias for T
-where
-    T::Error: Debug,
 {
-    type Error = T::Error;
-
-    fn try_into(self) -> Result<StateUpdateKind, Self::Error> {
-        <T as TryInto<StateUpdateKind>>::try_into(self)
-    }
 }
 
 /// A single update to the catalog state.

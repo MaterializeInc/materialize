@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-mod state_update;
+pub(crate) mod state_update;
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -39,11 +39,14 @@ use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
-use crate::durable::impls::persist::state_update::{StateUpdateKindAlias, StateUpdateKindSchema};
+use crate::durable::impls::persist::state_update::{
+    StateUpdateKindAlias, StateUpdateKindBinary, StateUpdateKindSchema,
+};
 use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, USER_VERSION_KEY};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, Config, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
+use crate::durable::upgrade::persist::upgrade;
 use crate::durable::upgrade::CATALOG_VERSION;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
@@ -51,7 +54,7 @@ use crate::durable::{
 };
 
 /// New-type used to represent timestamps in persist.
-type Timestamp = mz_repr::Timestamp;
+pub(crate) type Timestamp = mz_repr::Timestamp;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug)]
@@ -96,12 +99,12 @@ impl<T: StateUpdateKindAlias> PersistHandle<T> {
 
     /// Generates a timestamp for reading from the catalog that is as fresh as possible, given
     /// `upper`.
-    fn as_of(&self, upper: Timestamp) -> Timestamp {
+    pub(crate) fn as_of(&self, upper: Timestamp) -> Timestamp {
         as_of(&self.read_handle, upper)
     }
 
     /// Reports if the catalog state has been initialized, and the current upper.
-    async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
+    pub(crate) async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
         let upper = self.current_upper().await;
         let is_initialized = if upper == Timestamp::minimum() {
             false
@@ -208,6 +211,11 @@ impl<T: StateUpdateKindAlias> PersistHandle<T> {
         self.snapshot(as_of)
             .await
             .rev()
+            // TODO(jkosh44) WRONG
+            .filter_map(|update| {
+                let kind: Option<StateUpdateKind> = update.kind.try_into().ok();
+                kind
+            })
             .filter_map(|StateUpdate { kind, ts: _, diff }| {
                 soft_assert_eq!(1, diff);
                 match kind {
@@ -225,7 +233,7 @@ impl<T: StateUpdateKindAlias> PersistHandle<T> {
     ///
     /// The user version is used to determine if a migration is needed.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn get_user_version(&mut self, as_of: Timestamp) -> Option<u64> {
+    pub(crate) async fn get_user_version(&mut self, as_of: Timestamp) -> Option<u64> {
         self.get_config(USER_VERSION_KEY, as_of).await
     }
 
@@ -383,8 +391,8 @@ impl PersistHandle<StateUpdateKind> {
                 let user_version = user_version
                     .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))?;
                 if user_version != CATALOG_VERSION {
-                    // TODO(jkosh44) Implement migrations.
-                    panic!("the persist catalog does not know how to perform migrations yet");
+                    let mut migrator = catalog.migrator().await;
+                    upgrade(&mut migrator, user_version).await?;
                 }
                 txn = catalog.transaction().await?;
             }
@@ -735,6 +743,27 @@ impl PersistCatalogState {
             )
             .await
             .expect("invalid usage")
+    }
+
+    /// Creates a `PersistHandle` capable of migrating the catalog.
+    async fn migrator(&self) -> PersistHandle<StateUpdateKindBinary> {
+        debug!("new migrator persist handle");
+        let (write_handle, read_handle) = self
+            .persist_client
+            .open(
+                self.shard_id,
+                Arc::new(StateUpdateKindSchema::default()),
+                Arc::new(UnitSchema::default()),
+                diagnostics(),
+            )
+            .await
+            .expect("invalid usage");
+        PersistHandle {
+            write_handle,
+            read_handle,
+            persist_client: self.persist_client.clone(),
+            shard_id: self.shard_id.clone(),
+        }
     }
 }
 

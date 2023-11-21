@@ -29,11 +29,13 @@
 //! 6. Add `v<CATALOG_VERSION>` to the call to the `objects!` macro in this file.
 //! 7. Add a new file to `catalog/src/durable/upgrade`, which is where we'll put the new migration
 //!    path.
-//! 8. Write an upgrade function using the the two versions of the protos we now have, e.g.
+//! 8. Write upgrade functions using the the two versions of the protos we now have, e.g.
 //!    `objects_v15.proto` and `objects_v16.proto`. In this migration code you __should not__
 //!    import any defaults or constants from elsewhere in the codebase, because then a future
-//!    change could then impact a previous migration.
-//! 9. Call your upgrade function in [`crate::durable::upgrade::stash::upgrade()`].
+//!    change could then impact a previous migration. You will need to write one upgrade function
+//!    for the Stash and one for Persist.
+//! 9. Call your upgrade function in [`crate::durable::upgrade::stash::upgrade()`] and
+//!    [`crate::durable::upgrade::persist::upgrade()`].
 //!
 //! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
 
@@ -61,12 +63,16 @@ objects!(v39, v40, v41, v42, v43, v44);
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 44;
+pub(crate) const CATALOG_VERSION: u64 = 44;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
 /// After bumping this we can delete the old migrations.
-pub const MIN_CATALOG_VERSION: u64 = 39;
+pub(crate) const MIN_CATALOG_VERSION: u64 = 39;
+// Note(parkmycar): Ideally we wouldn't have to define these extra constants,
+// but const expressions aren't yet supported in match statements.
+const TOO_OLD_VERSION: u64 = MIN_CATALOG_VERSION - 1;
+const FUTURE_VERSION: u64 = CATALOG_VERSION + 1;
 
 pub(crate) mod stash {
     use crate::durable::initialize::USER_VERSION_KEY;
@@ -76,7 +82,9 @@ pub(crate) mod stash {
     use mz_stash::Stash;
     use mz_stash_types::{InternalStashError, StashError};
 
-    use crate::durable::upgrade::{CATALOG_VERSION, MIN_CATALOG_VERSION};
+    use crate::durable::upgrade::{
+        CATALOG_VERSION, FUTURE_VERSION, MIN_CATALOG_VERSION, TOO_OLD_VERSION,
+    };
 
     mod v39_to_v40;
     mod v40_to_v41;
@@ -85,7 +93,7 @@ pub(crate) mod stash {
     mod v43_to_v44;
 
     #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
-    pub async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
+    pub(crate) async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
         // Run migrations until we're up-to-date.
         while run_upgrade(stash).await? < CATALOG_VERSION {}
 
@@ -95,10 +103,6 @@ pub(crate) mod stash {
                     async move {
                         let version = version(&tx).await?;
 
-                        // Note(parkmycar): Ideally we wouldn't have to define these extra constants,
-                        // but const expressions aren't yet supported in match statements.
-                        const TOO_OLD_VERSION: u64 = MIN_CATALOG_VERSION - 1;
-                        const FUTURE_VERSION: u64 = CATALOG_VERSION + 1;
                         let incompatible = StashError {
                             inner: InternalStashError::IncompatibleVersion {
                                 found_version: version,
@@ -167,6 +171,66 @@ pub(crate) mod stash {
                 vec![action]
             })
             .await?;
+
+        Ok(())
+    }
+}
+
+pub(crate) mod persist {
+    use crate::durable::impls::persist::state_update::StateUpdateKindBinary;
+    use crate::durable::impls::persist::{PersistHandle, Timestamp};
+    use crate::durable::upgrade::{
+        CATALOG_VERSION, FUTURE_VERSION, MIN_CATALOG_VERSION, TOO_OLD_VERSION,
+    };
+    use crate::durable::DurableCatalogError;
+    use mz_ore::soft_assert;
+
+    #[tracing::instrument(name = "persist::upgrade", level = "debug", skip_all)]
+    pub(crate) async fn upgrade(
+        migrator: &mut PersistHandle<StateUpdateKindBinary>,
+        mut version: u64,
+    ) -> Result<(), DurableCatalogError> {
+        let (is_initialized, mut upper) = migrator.is_initialized_inner().await;
+        soft_assert!(is_initialized, "cannot upgrade uninitialized catalog");
+
+        // Run migrations until we're up-to-date.
+        while version < CATALOG_VERSION {
+            let (new_version, new_upper) = run_upgrade(migrator, upper).await?;
+            version = new_version;
+            upper = new_upper;
+        }
+
+        async fn run_upgrade(
+            migrator: &mut PersistHandle<StateUpdateKindBinary>,
+            upper: Timestamp,
+        ) -> Result<(u64, Timestamp), DurableCatalogError> {
+            let as_of = migrator.as_of(upper);
+            let version = migrator
+                .get_user_version(as_of)
+                .await
+                .expect("initialized catalog must have a version");
+
+            let incompatible = DurableCatalogError::IncompatibleVersion {
+                found_version: version,
+                min_catalog_version: MIN_CATALOG_VERSION,
+                catalog_version: CATALOG_VERSION,
+            };
+
+            match version {
+                ..=TOO_OLD_VERSION => return Err(incompatible),
+
+                // TODO(jkosh44) Implement migrations.
+                39 => panic!("upgrades not implemented"),
+                40 => panic!("upgrades not implemented"),
+                41 => panic!("upgrades not implemented"),
+                42 => panic!("upgrades not implemented"),
+                43 => panic!("upgrades not implemented"),
+
+                // Up-to-date, no migration needed!
+                CATALOG_VERSION => return Ok((CATALOG_VERSION, upper)),
+                FUTURE_VERSION.. => return Err(incompatible),
+            };
+        }
 
         Ok(())
     }
