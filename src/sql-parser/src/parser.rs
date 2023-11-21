@@ -3248,7 +3248,7 @@ impl<'a> Parser<'a> {
             },
             REFRESH => {
                 self.expect_keyword(EVERY)?;
-                MaterializedViewOptionName::RefreshInterval
+                MaterializedViewOptionName::Refresh
             },
             _ => unreachable!(),
         };

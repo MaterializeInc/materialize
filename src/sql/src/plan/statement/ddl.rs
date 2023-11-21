@@ -41,7 +41,7 @@ use mz_sql_parser::ast::{
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
     DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
     MaterializedViewOptionName, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    UnresolvedSchemaName, Value, MaterializedViewOption, MaterializedViewOptionName, RefreshOptionValue
 };
 use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
@@ -2082,26 +2082,34 @@ pub fn plan_create_materialized_view(
 
     let MaterializedViewOptionExtracted {
         assert_not_null,
-        refresh_interval,
+        refresh,
         seen: _,
     }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
 
-    let refresh_schedule = refresh_interval.try_map(|interval| {
-        scx.require_feature_flag(&ENABLE_REFRESH_EVERY_MVS)?;
-        if interval.as_microseconds() <= 0 {
-            sql_bail!(
-                "REFRESH INTERVAL must be positive; got: {}",
-                interval
-            );
-        }
-        if interval.as_microseconds() > Interval::new(12, 0, 0).as_microseconds() {
-            sql_bail!(
-                "REFRESH INTERVAL too big: {}",
-                interval
-            );
-        }
-        Ok(RefreshSchedule {interval: interval.clone()})
-    })?;
+    let xx: Vec<RefreshOptionValue<Aug>> = refresh;
+
+    // let refresh_schedule = match refresh {
+    //
+    // };
+
+    let refresh_schedule = None;
+
+    // let refresh_schedule = refresh.try_map(|interval| {
+    //     scx.require_feature_flag(&ENABLE_REFRESH_EVERY_MVS)?;
+    //     if interval.as_microseconds() <= 0 {
+    //         sql_bail!(
+    //             "REFRESH INTERVAL must be positive; got: {}",
+    //             interval
+    //         );
+    //     }
+    //     if interval.as_microseconds() > Interval::new(12, 0, 0).as_microseconds() {
+    //         sql_bail!(
+    //             "REFRESH INTERVAL too big: {}",
+    //             interval
+    //         );
+    //     }
+    //     Ok(RefreshSchedule {interval: interval.clone()})
+    // })?;
 
     if !assert_not_null.is_empty() {
         scx.require_feature_flag(&crate::session::vars::ENABLE_ASSERT_NOT_NULL)?;
@@ -2203,8 +2211,7 @@ pub fn plan_create_materialized_view(
 generate_extracted_config!(
     MaterializedViewOption,
     (AssertNotNull, Ident, AllowMultiple),
-    (RefreshInterval, Interval)
-    //(FirstRefresh, chrono::DateTime::<chrono::Utc>) ///// todo
+    (Refresh, RefreshOptionValue<Aug>, AllowMultiple) ///// todo: , Default(RefreshOptionValue::OnCommit)
 );
 
 pub fn describe_create_sink(

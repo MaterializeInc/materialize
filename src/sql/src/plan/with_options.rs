@@ -11,7 +11,7 @@
 
 use mz_repr::adt::interval::Interval;
 use mz_repr::{strconv, GlobalId};
-use mz_sql_parser::ast::{Ident, KafkaBroker, ReplicaDefinition};
+use mz_sql_parser::ast::{Ident, KafkaBroker, RefreshOptionValue, ReplicaDefinition};
 use mz_storage_types::connections::StringOrSecret;
 use serde::{Deserialize, Serialize};
 
@@ -506,5 +506,24 @@ impl TryFromValue<WithOptionValue<Aug>> for Vec<KafkaBroker<Aug>> {
 impl ImpliedValue for Vec<KafkaBroker<Aug>> {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide a kafka broker")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for RefreshOptionValue<Aug> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match v {
+            WithOptionValue::Refresh(r) => Ok(r),
+            _ => sql_bail!("cannot use value for a refresh option"),
+        }
+    }
+
+    fn name() -> String {
+        "refresh option value".to_string()
+    }
+}
+
+impl ImpliedValue for RefreshOptionValue<Aug> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a refresh option value")
     }
 }

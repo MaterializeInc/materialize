@@ -52,7 +52,7 @@ use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{AppendWebhookResponse, AppendWebhookValidator};
-use crate::{catalog, metrics, ExecuteContext};
+use crate::{catalog, metrics, ExecuteContext, TimestampProvider};
 
 use super::ExecuteContextExtra;
 
