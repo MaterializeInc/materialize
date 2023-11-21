@@ -162,14 +162,18 @@ Having permission to an S3 bucket might not mean that RDS access is set up corre
 a validate connection will not be comprehensive and we'll probably do some additional check
 with the intended resources when we actually make use of this connection.
 
-Hence, potentially later we can extend `VALIDATE CONNECTION` sql to optionally specify an S3 or a database url,
+To properly validate the connection we should ask the user to actually use the connection,
+something like `COPY (SELECT 1) TO S3 USING aws_conn`.
+
+We could also extend `VALIDATE CONNECTION` sql to optionally specify an S3 or a database url,
 like, `VALIDATE CONNECTION aws_conn WITH (S3 PATH = 's3://prefix')` so the user can
-validate if the policies are set up correctly on their end in AWS.
+validate if the policies are set up correctly on their end in AWS. One reason this might be
+difficult though, because the only permissions we should require is `ListBucket` and `PutObject`. And to test if we can write something to the prefix without `RemoveObject`, we end up with leaked
+objects which we can't clean.
 
 Alternatively, we could have a higher level S3 connection using this AWS connection,something
 like `CREATE CONNECTION s3_conn TO S3 ( PREFIX = 'url') USING AWS CONNECTION aws_conn`.
 Validating s3_conn could verify if we are able to list the prefix, create and
-remove a file there. This seems like an overkill though and a `VALIDATE CONNECTION ... WITH`
-mentioned above would probably be better.
+remove a file there. This seems like an overkill though and the approach above would probably be better.
 
 We will revisit this when designing the `COPY ... TO S3` feature.
