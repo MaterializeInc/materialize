@@ -1900,9 +1900,12 @@ impl Coordinator {
         async move {
             // Watcher that listens for and reports cluster service status changes.
             let mut cluster_events = self.controller.events_stream();
+            let last_message_kind = Arc::new(Mutex::new("none"));
 
             let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
             let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
+            let last_message_kind_watchdog = Arc::clone(&last_message_kind);
+
             spawn(|| "coord watchdog", async move {
                 // Every 5 seconds, attempt to measure how long it takes for the
                 // coord select loop to be empty, because this message is the last
@@ -1926,8 +1929,12 @@ impl Coordinator {
                     let Ok(maybe_permit) = timeout else {
                         // Only log the error if we're newly stuck, to prevent logging repeatedly.
                         if !coord_stuck {
+                            let last_message = last_message_kind_watchdog
+                                .lock()
+                                .map(|g| *g)
+                                .unwrap_or("poisoned");
                             tracing::error!(
-                                "Coordinator is stuck, did not respond after {duration:?}"
+                                "Coordinator is stuck on {last_message}, did not respond after {duration:?}"
                             );
                         }
                         coord_stuck = true;
@@ -2038,6 +2045,11 @@ impl Coordinator {
                 let msg_kind = msg.kind();
                 let span = span!(Level::DEBUG, "coordinator processing", kind = msg_kind);
                 let otel_context = span.context().span().span_context().clone();
+
+                // Record the last kind of message incase we get stuck.
+                if let Ok(mut guard) = last_message_kind.lock() {
+                    *guard = msg_kind;
+                }
 
                 let start = Instant::now();
                 self.handle_message(msg)
