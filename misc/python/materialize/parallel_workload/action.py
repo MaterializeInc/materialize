@@ -43,6 +43,7 @@ from materialize.parallel_workload.database import (
     ClusterReplica,
     Database,
     DBObject,
+    Index,
     KafkaSink,
     KafkaSource,
     PostgresSource,
@@ -415,35 +416,41 @@ class CreateIndexAction(Action):
         columns = self.rng.sample(obj.columns, len(obj.columns))
         columns_str = "_".join(column.name() for column in columns)
         # columns_str may exceed 255 characters, so it is converted to a positive number with hash
-        index_name = f"idx_{obj.name()}_{abs(hash(columns_str))}"
+        index = Index(f"idx_{obj.name()}_{abs(hash(columns_str))}")
         index_elems = []
         for column in columns:
             order = self.rng.choice(["ASC", "DESC"])
             index_elems.append(f"{column.name(True)} {order}")
         index_str = ", ".join(index_elems)
-        query = f"CREATE INDEX {identifier(index_name)} ON {obj} ({index_str})"
+        query = f"CREATE INDEX {index} ON {obj} ({index_str})"
         exe.execute(query)
         with exe.db.lock:
-            exe.db.indexes.add(index_name)
+            exe.db.indexes.add(index)
         return True
 
 
 class DropIndexAction(Action):
     def run(self, exe: Executor) -> bool:
-        if not exe.db.indexes:
-            return False
-        index_name = self.rng.choice(list(exe.db.indexes))
-        query = f"DROP INDEX {identifier(index_name)}"
-        try:
-            exe.execute(query)
-        except QueryError as e:
-            # expected, see #20465
-            if exe.db.scenario != Scenario.Kill or (
-                "unknown catalog item" not in e.msg and "unknown schema" not in e.msg
-            ):
-                raise e
-        exe.db.indexes.remove(index_name)
-        return True
+        with exe.db.lock:
+            if not exe.db.indexes:
+                return False
+            index = self.rng.choice(list(exe.db.indexes))
+        with index.lock:
+            if index not in exe.db.indexes:
+                return False
+
+            query = f"DROP INDEX {index}"
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if exe.db.scenario != Scenario.Kill or (
+                    "unknown catalog item" not in e.msg
+                    and "unknown schema" not in e.msg
+                ):
+                    raise e
+            exe.db.indexes.remove(index)
+            return True
 
 
 class CreateTableAction(Action):

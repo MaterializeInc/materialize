@@ -621,6 +621,21 @@ class PostgresSource(DBObject):
         self.executor.create()
 
 
+class Index:
+    _name: str
+    lock: threading.Lock
+
+    def __init__(self, name: str):
+        self._name = name
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return self._name
+
+    def __str__(self) -> str:
+        return identifier(self.name())
+
+
 class Role:
     role_id: int
     lock: threading.Lock
@@ -733,7 +748,7 @@ class Database:
     role_id: int
     clusters: list[Cluster]
     cluster_id: int
-    indexes: set[str]
+    indexes: set[Index]
     webhook_sources: list[WebhookSource]
     webhook_source_id: int
     kafka_sources: list[KafkaSource]
