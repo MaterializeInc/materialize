@@ -12,10 +12,4 @@ description: Ingress balancer.
 pre-image:
   - type: cargo-build
     bin: [mz-balancerd]
-    strip: true
-    split_debuginfo: true
-  - type: s3-upload-debuginfo
-    bin: mz-balancerd
-    bucket: materialize-debuginfo
-  - type: ps-upload-sources
-    bin: mz-balancerd.debug
+    strip: false
