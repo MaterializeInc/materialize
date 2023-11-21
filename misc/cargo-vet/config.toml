@@ -278,6 +278,10 @@ criteria = "safe-to-deploy"
 version = "0.13.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.base64]]
+version = "0.21.5"
+criteria = "safe-to-deploy"
+
 [[exemptions.base64-simd]]
 version = "0.8.0"
 criteria = "safe-to-deploy"
@@ -304,6 +308,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.block-buffer]]
 version = "0.10.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.btoi]]
+version = "0.4.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.built]]
@@ -356,6 +364,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.cc]]
 version = "1.0.78"
+criteria = "safe-to-deploy"
+
+[[exemptions.cc]]
+version = "1.0.83"
 criteria = "safe-to-deploy"
 
 [[exemptions.chrono]]
@@ -482,12 +494,24 @@ criteria = "safe-to-deploy"
 version = "0.14.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.darling]]
+version = "0.20.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.darling_core]]
 version = "0.14.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.darling_core]]
+version = "0.20.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.darling_macro]]
 version = "0.14.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.darling_macro]]
+version = "0.20.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.dashmap]]
@@ -714,6 +738,10 @@ criteria = "safe-to-deploy"
 version = "0.2.7"
 criteria = "safe-to-deploy"
 
+[[exemptions.getrandom]]
+version = "0.2.10"
+criteria = "safe-to-deploy"
+
 [[exemptions.gimli]]
 version = "0.26.1"
 criteria = "safe-to-deploy"
@@ -854,6 +882,10 @@ criteria = "safe-to-deploy"
 version = "0.19.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.k8s-openapi]]
+version = "0.20.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.keyed_priority_queue]]
 version = "0.4.1"
 criteria = "safe-to-deploy"
@@ -862,20 +894,44 @@ criteria = "safe-to-deploy"
 version = "0.85.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.kube]]
+version = "0.87.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.kube-client]]
 version = "0.85.0@git:838a7981483005e1af7c1338c48a4d0540a33ce4"
+criteria = "safe-to-deploy"
+
+[[exemptions.kube-client]]
+version = "0.87.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.kube-core]]
 version = "0.85.0@git:838a7981483005e1af7c1338c48a4d0540a33ce4"
 criteria = "safe-to-deploy"
 
+[[exemptions.kube-core]]
+version = "0.87.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.kube-derive]]
 version = "0.85.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.kube-derive]]
+version = "0.87.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.kube-runtime]]
 version = "0.85.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.kube-runtime]]
+version = "0.87.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.launchdarkly-server-sdk]]
+version = "1.0.0@git:31107de131a81c7edf4c830027b70c9b1e5382a0"
 criteria = "safe-to-deploy"
 
 [[exemptions.launchdarkly-server-sdk]]
@@ -958,6 +1014,10 @@ criteria = "safe-to-deploy"
 version = "0.11.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.lru]]
+version = "0.12.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.lsp-types]]
 version = "0.94.1"
 criteria = "safe-to-deploy"
@@ -1022,8 +1082,16 @@ criteria = "safe-to-deploy"
 version = "0.32.2@git:ce4066497b0b60598199e4c99d7c2a8968ee3c2e"
 criteria = "safe-to-deploy"
 
+[[exemptions.mysql_async]]
+version = "0.33.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.mysql_common]]
 version = "0.30.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.mysql_common]]
+version = "0.31.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.mz-avro]]
@@ -1182,6 +1250,10 @@ criteria = "safe-to-deploy"
 version = "2.0.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.pem]]
+version = "3.0.2"
+criteria = "safe-to-deploy"
+
 [[exemptions.pem-rfc7468]]
 version = "0.6.0"
 criteria = "safe-to-deploy"
@@ -1300,6 +1372,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.proc-macro-error]]
 version = "1.0.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.proc-macro2]]
+version = "1.0.69"
 criteria = "safe-to-deploy"
 
 [[exemptions.prometheus]]
@@ -1562,8 +1638,16 @@ criteria = "safe-to-deploy"
 version = "2.1.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.serde_with]]
+version = "2.3.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.serde_with_macros]]
 version = "2.1.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.serde_with_macros]]
+version = "2.3.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.sha1_smol]]
@@ -1676,6 +1760,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.symbolic-demangle]]
 version = "10.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.syn]]
+version = "2.0.39"
 criteria = "safe-to-deploy"
 
 [[exemptions.sync_wrapper]]
@@ -2046,6 +2134,18 @@ criteria = "safe-to-deploy"
 version = "1.5.7"
 criteria = "safe-to-deploy"
 
+[[exemptions.zstd]]
+version = "0.12.4"
+criteria = "safe-to-deploy"
+
+[[exemptions.zstd-safe]]
+version = "6.0.6"
+criteria = "safe-to-deploy"
+
 [[exemptions.zstd-sys]]
 version = "2.0.1+zstd.1.5.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.zstd-sys]]
+version = "2.0.9+zstd.1.5.5"
 criteria = "safe-to-deploy"
