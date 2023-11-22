@@ -25,8 +25,8 @@ The `HOLD` can be created by:
 ```
 CREATE HOLD <name>
 ON <object1>[, <object2> ...]
+[AT <time>]
 [WITH (
-    AT TIME = <time>,
     MAX LAG = '3h'::INTERVAL,
 )]
 ```
@@ -36,8 +36,7 @@ It cannot exist on sinks or unmaterialized views.
 If a `HOLD` exists for a directly queryable object (i.e., not indexes) at time `t`, `SELECT` and `SUBSCRIBE` on that object `AS OF t` will successfully execute.
 If a `HOLD` exists for an index, the same is true if the index satisfies the query.
 A `HOLD` on any non-index object will not also create the `HOLD` on any indexes of the object.
-An `AS OF` query will restrict the indexes it considers to those that are valid for the requested time.
-TODO: Figure out what "offer to plan around those indexes" means and add more about that here.
+An `AS OF` query will restrict the indexes or object it considers to those that are valid for the requested time.
 
 Because this may be surprising to users, if an `AS OF` query whose plan uses an index errors because the `AS OF` is less than the index's read frontier and a `HOLD` exists on the index's object,
 a helpful error message will be produced telling the user that their `HOLD` must be on the index, not the underlying object.
@@ -46,14 +45,16 @@ The objects the `HOLD` is created on do not need to be in the same schema or dat
 The `HOLD` can be created in any schema on which the user has a `CREATE` privilege (see (Alternatives)[#Alternatives] for other takes on this).
 The user must have a `SELECT` privilege on all objects.
 
-Definitions:
-- **physical read frontier**: the read frontier of an object excluding `HOLD`s and any running queries or transactions.
-- **logical read frontier**: the read frontier of an object including `HOLD`s and any running queries or transactions.
+Terminology side note:
+Both the compute and storage controllers expose a `CollectionState` with `read_capabilities` and `implied_capability`.
+Although reading these are both exposed in the API, `read_capabilities` should never be read by the adapter, which should limit itself to reading only `implied_capability`.
+When this document uses the terms "read frontier" or "since", it is referring to the `implied_capability`.
 
-If `AT TIME` is specified, the read hold is created at that time.
-It is an error if that time is less than any object's logical frontier.
-Due to the use of the logical frontier, a new `HOLD` can be created while at the time of an existing `HOLD` (say, because the object set of a `HOLD` needs to be changed by creating a new one).
-If `AT TIME` is not specified, Materialize automatically chooses the least common physical read frontier of all objects.
+If `AT <time>` is specified, the read hold is created at that time.
+For each object in the `HOLD`, the time must be in advance of that object's read frontier *or* any other `HOLD`'s time on that object, otherwise an error occurs.
+We want to support safe swapping out of one `HOLD` for another, and since we only reference a collection's `implied_capability` (which is not aware of any read holds),
+it is necessary to call out specifically that other `HOLD`s times are valid for new `HOLD`s.
+If `AT <time>` is not specified, Materialize automatically chooses the least valid read frontier among all objects of the `HOLD`.
 
 `HOLD`s are destroyed by:
 
@@ -88,6 +89,20 @@ If difference between the write frontier (TODO: maybe another frontier?) of the 
 It is an error to `DROP` an object that is part of a `HOLD` unless the `DROP` is `CASCADE`.
 If the `DROP` is `CASCADE`, any `HOLD`s on the dropped object are also dropped (even if the `HOLD` is also over other objects).
 
+`HOLD`s cannot be mutated (objects added or removed) after creation, but they can be renamed in a transaction like other objects, and so can achieve the same goal.
+
+In order to specify a `HOLD` on a new index or materialized view whose underlying object may have a long history,
+`HOLD`s support a special multi-statement DDL of the form
+
+```
+BEGIN;
+CREATE INDEX i ...;
+CREATE READ HOLD ON i;
+COMMIT;
+```
+
+In a transaction, exactly one `CREATE HOLD` statement is allowed to follow a `CREATE` statement if the `HOLD` names exactly and only the created object.
+
 ### Monitoring
 
 To monitor `HOLD`s, a new `mz_catalog.mz_holds` table will be maintained with structure:
@@ -106,9 +121,10 @@ A `mz_catalog.mz_hold_objects` describes objects belonging to a `HOLD`
 ### Implementation of time tracking
 
 The `HOLD` object has an associated time that must be written down somewhere on creation then updated on advancement.
-This will use a persist shard to back it, and is thus similar to a 1-row table.
-As a result of not storing it in the catalog (see Alternatives for the motivation), the `AT TIME` syntax must not be part of the `create_sql` of the `HOLD` object and must be purified away.
-On coordinator bootstrap, a `HOLD` will do a 1-time fetch of its state from the shard to resume its operation.
+The time will be stored in the catalog, so a DDL operation is performed.
+Due to performance concerns of users simultaneously advancing many `HOLD`s at once, and DDLs needing to be serialized, we will batch all incoming `ADVANCE` requests.
+Although these are DDL operations, this design doc does *not* propose batching all DDLs together, only `ADVANCE`s.
+This should produce a natural rate limit of a few per second and scale as usage grows.
 `HOLD`s must also be accounted for in `bootstrap_index_as_of` and `bootstrap_materialized_view_as_of`.
 
 ## Minimal Viable Prototype
@@ -128,8 +144,8 @@ Or, we could support multiple objects, but they must all be in the same schema a
 This has problems: the window could be too short for recovery or too long and overuse resources, OOMing a cluster.
 Having users routinely advance a `HOLD` should scale the extra resource use to exactly how far behind a user is.
 
-- The stored time could be stored in the catalog instead of persist.
-This would cause a full catalog transaction on any `ALTER HOLD ADVANCE` across the entire customer region, which will eventually not scale (failing our use case isolation goal) since those operations must be serially ordered (even with platform v2).
+- The stored time could be stored in one or many persist shards.
+This might scale better than using the catalog, but has the downside of separating the full state of a `HOLD` from its catalog entry.
 
 ## Open questions
 
@@ -138,15 +154,3 @@ Allowing this could put the introspection cluster at risk, but then again so can
 
 - What are the actual resource increases for a `HOLD`?
 Do indexes take more memory, and all the others only take more s3 but not more memory?
-
-- Should we support adding or removing objects to `HOLD`s?
-Removes seem like an easy yes.
-Additions could be ok if the read frontier is compatible.
-
-- Should the backing persist shard be for all `HOLD`s?
-
-- Should the backing persist shard participate in the persist-txn shard?
-Are there future scaling limitations if yes?
-
-- Instead of a using a dedicated persist shard, should the `mz_holds` table be used to discover the previous time of a `HOLD`?
-This seems dangerous because we don't use anything there as system-of-record, and we might forget in the future that we cannot wipe it.
