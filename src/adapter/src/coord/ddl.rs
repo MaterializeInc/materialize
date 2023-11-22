@@ -1102,10 +1102,36 @@ impl Coordinator {
                         }
                     }
                 },
+                Op::UpdateItem {
+                    name: _,
+                    id,
+                    to_item,
+                } => match to_item {
+                    CatalogItem::Source(source) => {
+                        let current_source = self
+                            .catalog()
+                            .get_entry(id)
+                            .source()
+                            .expect("source update is for source item");
+
+                        new_sources += source.user_controllable_persist_shard_count()
+                            - current_source.user_controllable_persist_shard_count();
+                    }
+                    CatalogItem::Connection(_)
+                    | CatalogItem::Table(_)
+                    | CatalogItem::Sink(_)
+                    | CatalogItem::MaterializedView(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Log(_)
+                    | CatalogItem::View(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_) => {}
+                },
                 Op::AlterRole { .. }
                 | Op::AlterSink { .. }
-                | Op::AlterSource { .. }
                 | Op::AlterSetCluster { .. }
+                | Op::AlterSource { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
@@ -1121,7 +1147,6 @@ impl Coordinator {
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
-                | Op::UpdateItem { .. }
                 | Op::UpdateRotatedKeys { .. }
                 | Op::Comment { .. } => {}
             }
