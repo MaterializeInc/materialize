@@ -320,7 +320,7 @@ pub async fn build_kafka(
                     MzClientContext::default(),
                     &btreemap! {
                         "group.id" => SinkGroupId::new(sink_id),
-                        "isolation.level" => "read_committed".into(),
+                        "isolation.level" => "read_uncommitted".into(),
                         "enable.auto.commit" => "false".into(),
                         "auto.offset.reset" => "earliest".into(),
                         "enable.partition.eof" => "true".into(),
