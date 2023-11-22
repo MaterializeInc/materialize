@@ -50,15 +50,40 @@ impl<
 {
 }
 
+/// Trait for objects that can be converted to/from a [`StateUpdateKindBinary`].
+pub(crate) trait IntoStateUpdateKindBinary:
+    Into<StateUpdateKindBinary>
+    + TryFrom<StateUpdateKindBinary>
+    + PartialEq
+    + Eq
+    + PartialOrd
+    + Ord
+    + Debug
+    + Clone
+{
+}
+impl<
+        T: Into<StateUpdateKindBinary>
+            + TryFrom<StateUpdateKindBinary>
+            + PartialEq
+            + Eq
+            + PartialOrd
+            + Ord
+            + Debug
+            + Clone,
+    > IntoStateUpdateKindBinary for T
+{
+}
+
 /// A single update to the catalog state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StateUpdate<T: StateUpdateKindAlias = StateUpdateKind> {
     /// They kind and contents of the state update.
-    pub(super) kind: T,
+    pub(crate) kind: T,
     /// The timestamp at which the update occurred.
-    pub(super) ts: Timestamp,
+    pub(crate) ts: Timestamp,
     /// Record count difference for the update.
-    pub(super) diff: Diff,
+    pub(crate) diff: Diff,
 }
 
 impl StateUpdate {
@@ -146,6 +171,15 @@ impl StateUpdate {
             .chain(audit_logs)
             .chain(storage_usage_updates)
             .collect()
+    }
+}
+
+impl From<StateUpdate<StateUpdateKind>> for StateUpdate<StateUpdateKindBinary> {
+    fn from(
+        StateUpdate { kind, ts, diff }: StateUpdate<StateUpdateKind>,
+    ) -> StateUpdate<StateUpdateKindBinary> {
+        let kind = kind.into();
+        StateUpdate { kind, ts, diff }
     }
 }
 

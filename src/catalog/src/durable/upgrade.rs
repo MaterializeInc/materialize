@@ -174,3 +174,127 @@ pub(crate) mod stash {
         Ok(())
     }
 }
+
+pub(crate) mod persist {
+    use mz_ore::soft_assert_ne;
+    use timely::progress::Timestamp as TimelyTimestamp;
+
+    use crate::durable::impls::persist::state_update::{
+        IntoStateUpdateKindBinary, StateUpdateKindBinary,
+    };
+    use crate::durable::impls::persist::{PersistHandle, StateUpdate, Timestamp};
+    use crate::durable::upgrade::{
+        CATALOG_VERSION, FUTURE_VERSION, MIN_CATALOG_VERSION, TOO_OLD_VERSION,
+    };
+    use crate::durable::DurableCatalogError;
+
+    #[allow(unused)]
+    enum MigrationAction<V1: IntoStateUpdateKindBinary, V2: IntoStateUpdateKindBinary> {
+        /// Deletes the provided key.
+        Delete(V1),
+        /// Inserts the provided key-value pair. The key must not currently exist!
+        Insert(V2),
+        /// Update the key-value pair for the provided key.
+        Update(V1, V2),
+    }
+
+    impl<V1: IntoStateUpdateKindBinary, V2: IntoStateUpdateKindBinary> MigrationAction<V1, V2> {
+        fn _into_updates(self, upper: Timestamp) -> Vec<StateUpdate<StateUpdateKindBinary>> {
+            match self {
+                MigrationAction::Delete(kind) => {
+                    vec![StateUpdate {
+                        kind: kind.into(),
+                        ts: upper,
+                        diff: -1,
+                    }]
+                }
+                MigrationAction::Insert(kind) => {
+                    vec![StateUpdate {
+                        kind: kind.into(),
+                        ts: upper,
+                        diff: 1,
+                    }]
+                }
+                MigrationAction::Update(old_kind, new_kind) => {
+                    vec![
+                        StateUpdate {
+                            kind: old_kind.into(),
+                            ts: upper,
+                            diff: -1,
+                        },
+                        StateUpdate {
+                            kind: new_kind.into(),
+                            ts: upper,
+                            diff: 1,
+                        },
+                    ]
+                }
+            }
+        }
+    }
+
+    #[tracing::instrument(name = "persist::upgrade", level = "debug", skip_all)]
+    pub(crate) async fn upgrade(
+        migrator: &mut PersistHandle<StateUpdateKindBinary>,
+        mut upper: Timestamp,
+    ) -> Result<Timestamp, DurableCatalogError> {
+        soft_assert_ne!(
+            upper,
+            Timestamp::minimum(),
+            "cannot upgrade uninitialized catalog"
+        );
+
+        let as_of = migrator.as_of(upper);
+        let mut version = migrator
+            .get_user_version(as_of)
+            .await
+            .expect("initialized catalog must have a version");
+        // Run migrations until we're up-to-date.
+        while version < CATALOG_VERSION {
+            let (new_version, new_upper) = run_upgrade(migrator, upper, version).await?;
+            version = new_version;
+            upper = new_upper;
+        }
+
+        async fn run_upgrade(
+            _migrator: &mut PersistHandle<StateUpdateKindBinary>,
+            upper: Timestamp,
+            version: u64,
+        ) -> Result<(u64, Timestamp), DurableCatalogError> {
+            let incompatible = DurableCatalogError::IncompatibleVersion {
+                found_version: version,
+                min_catalog_version: MIN_CATALOG_VERSION,
+                catalog_version: CATALOG_VERSION,
+            };
+
+            // Each migration from vX to vY will take the following steps:
+            //
+            //   1. Read in a snapshot of type `Vec<StateUpdate<StateUpdateKindBinary>>`.
+            //   2. Deserialize the snapshot into
+            //      `Vec<(objects_vX::StateUpdateKind, Timestamp, Diff)>`.
+            //   3. Pass the deserialized snapshot to the upgrade function
+            //      `vX_to_vY::upgrade(snapshot).await?`.
+            //   4. Get back a `Vec<MigrationAction<vX::StateUpdateKind, vY::StateUpdateKind>`.
+            //   5. Convert the migration actions to `Vec<StateUpdate<StateUpdateKindBinary>>`.
+            //   6. Add an update to bump the user version to the update vec.
+            //   7. Compare and append the updates.
+
+            match version {
+                ..=TOO_OLD_VERSION => Err(incompatible),
+
+                // TODO(jkosh44) Implement migrations.
+                39 => panic!("upgrades not implemented"),
+                40 => panic!("upgrades not implemented"),
+                41 => panic!("upgrades not implemented"),
+                42 => panic!("upgrades not implemented"),
+                43 => panic!("upgrades not implemented"),
+
+                // Up-to-date, no migration needed!
+                CATALOG_VERSION => Ok((CATALOG_VERSION, upper)),
+                FUTURE_VERSION.. => Err(incompatible),
+            }
+        }
+
+        Ok(upper)
+    }
+}
