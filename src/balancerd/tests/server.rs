@@ -126,7 +126,6 @@ async fn test_balancer() {
         None,
     )
     .unwrap();
-    task::spawn(|| "test_balancer-frontegg_future", frontegg_future);
 
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {

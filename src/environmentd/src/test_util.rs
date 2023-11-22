@@ -1051,7 +1051,7 @@ pub async fn create_postgres_source_with_table<'a>(
     let password = pg_config.get_password();
 
     mz_ore::task::spawn(|| "postgres-source-connection", async move {
-        while let Err(e) = connection.await {
+        if let Err(e) = connection.await {
             panic!("connection error: {}", e);
         }
     });

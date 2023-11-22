@@ -515,7 +515,6 @@ async fn test_auth_expiry() {
         None,
     )
     .unwrap();
-    mz_ore::task::spawn(|| "mzcloud-frontegg", frontegg_future);
 
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
@@ -667,7 +666,6 @@ async fn test_auth_base_require_tls_frontegg() {
         None,
     )
     .unwrap();
-    mz_ore::task::spawn(|| "mzcloud-frontegg", frontegg_future);
 
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
@@ -1423,7 +1421,6 @@ async fn test_auth_admin_non_superuser() {
         None,
     )
     .unwrap();
-    mz_ore::task::spawn(|| "mzcloud-frontegg", frontegg_future);
 
     let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(
@@ -1535,7 +1532,6 @@ async fn test_auth_admin_superuser() {
         None,
     )
     .unwrap();
-    mz_ore::task::spawn(|| "mzcloud-frontegg", frontegg_future);
 
     let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(
@@ -1647,7 +1643,6 @@ async fn test_auth_admin_superuser_revoked() {
         None,
     )
     .unwrap();
-    mz_ore::task::spawn(|| "mzcloud-frontegg", frontegg_future);
 
     let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(
@@ -1753,7 +1748,6 @@ async fn test_auth_deduplication() {
         Some(2),
     )
     .unwrap();
-    mz_ore::task::spawn(|| "mz_cloud-frontegg", frontegg_future);
 
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
@@ -1871,7 +1865,6 @@ async fn test_refresh_task_metrics() {
         None,
     )
     .unwrap();
-    mz_ore::task::spawn(|| "mz_cloud-frontegg", frontegg_future);
 
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
