@@ -441,14 +441,12 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         fs::create_dir_all(&run_dir)
             .await
             .context("creating run directory")?;
-        let scratch_dir = if disk {
+        let scratch_dir = {
             let scratch_dir = self.scratch_directory.join(&full_id);
             fs::create_dir_all(&scratch_dir)
                 .await
                 .context("creating scratch directory")?;
             Some(fs::canonicalize(&scratch_dir).await?)
-        } else {
-            None
         };
 
         {
@@ -582,7 +580,7 @@ impl NamespacedProcessOrchestrator {
             ports,
             memory_limit,
             cpu_limit,
-            disk,
+            disk: _,
             launch_spec,
         }: ServiceProcessConfig,
     ) -> impl Future<Output = ()> {
@@ -611,15 +609,13 @@ impl NamespacedProcessOrchestrator {
         let mut args = args(&listen_addrs);
         args.push(format!("--pid-file-location={}", pid_file.display()));
 
-        let scratch_directory = if disk {
+        let scratch_directory = {
             if let Some(scratch) = &scratch_dir {
                 args.push(format!("--scratch-directory={}", scratch.display()));
             } else {
                 panic!("internal error: service requested disk but no scratch directory was configured");
             }
             scratch_dir
-        } else {
-            None
         };
 
         async move {
