@@ -254,7 +254,7 @@ class PSUploadSources(PreImage):
             p1.stdout.close()
 
         for p in [p1, p2]:
-            if p.returncode:
+            if p.returncode != 0:
                 raise subprocess.CalledProcessError(p.returncode, p.args)
 
         print("Attempting to upload sources to polar signals")
