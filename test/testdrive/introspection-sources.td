@@ -355,8 +355,8 @@ true true true true true
 
 > SELECT
     records > 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size > (68 + 68) * 1000 AND size < 1.1 * (68 + 68) * 1000,
-    capacity > (68 + 68) * 1000 AND capacity < 1.1 * (68 + 68) * 1000,
+    size > (84 + 84) * 1000 AND size < 1.1 * (84 + 84) * 1000,
+    capacity > (84 + 84) * 1000 AND capacity < 1.1 * (84 + 84) * 1000,
     allocations > 0
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c1%';
@@ -364,8 +364,8 @@ true true true true
 
 > SELECT
     records > 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size > (172 + 72) * 1000 AND size < 1.1 * (180 + 72) * 1000,
-    capacity > (172 + 72) * 1000 AND capacity < 1.1 * (180 + 72) * 1000,
+    size > (188 + 88) * 1000 AND size < 1.1 * (196 + 88) * 1000,
+    capacity > (188 + 88) * 1000 AND capacity < 1.1 * (196 + 88) * 1000,
     allocations > 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c2%';
@@ -399,10 +399,10 @@ true true true true
 
 > SELECT
     records > (4 * 2 + 2 * 3) * 1000 AND records < 1.1 * (4 * 2 + 2 * 3) * 1000,
-    size > (3 * 72 * 2 + 62 * 3 + 106 * 2 + 68 * 3) * 1000
-      AND size < 1.1 * (3 * 80 * 2 + 70 * 3 + 114 * 2 + 76 * 3) * 1000,
-    capacity > (3 * 72 * 2 + 62 * 3 + 106 * 2 + 68 * 3) * 1000
-      AND capacity < 1.1 * (3 * 80 * 2 + 70 * 3 + 114 * 2 + 76 * 3) * 1000,
+    size > (3 * 80 * 2 + 70 * 3 + 114 * 2 + 76 * 3) * 1000
+      AND size < 1.1 * (3 * 80 * 2 + 78 * 3 + 114 * 2 + 76 * 3) * 1000,
+    capacity > (3 * 80 * 2 + 70 * 3 + 114 * 2 + 76 * 3) * 1000
+      AND capacity < 1.1 * (3 * 88 * 2 + 78 * 3 + 122 * 2 + 84 * 3) * 1000,
     allocations > (4 * 2 + 2 * 3) * 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%rec%';
@@ -437,8 +437,8 @@ true true true true
 
 > SELECT
     records >= 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size >= (124 + 72) * 1000 AND size < 1.1 * (124 + 72) * 1000,
-    capacity >= (124 + 72) * 1000 AND capacity < 1.1 * (124 + 72) * 1000,
+    size >= (140 + 96) * 1000 AND size < 1.1 * (140 + 96) * 1000,
+    capacity >= (140 + 96) * 1000 AND capacity < 1.1 * (140 + 96) * 1000,
     allocations > 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_minmax%';
@@ -446,8 +446,8 @@ true true true true
 
 > SELECT
     records >= 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size >= (104 + 72) * 1000 AND size < 1.1 * (104 + 72) * 1000,
-    capacity >= (104 + 72) * 1000 AND capacity < 1.1 * (104 + 72) * 1000,
+    size >= (112 + 96) * 1000 AND size < 1.1 * (112 + 96) * 1000,
+    capacity >= (112 + 96) * 1000 AND capacity < 1.1 * (112 + 96) * 1000,
     allocations > 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_top1%';
