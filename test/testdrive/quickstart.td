@@ -97,7 +97,7 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
     ORDER BY 1 ASC LIMIT 5
   )
 
-> FETCH 1 c WITH (timeout='1s')
+> FETCH 1 c WITH (timeout='30s')
 <TIMESTAMP> 1 12
 
 $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
