@@ -77,7 +77,6 @@
 
 //! Integration tests for pgwire functionality.
 
-use std::error::Error;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -85,26 +84,24 @@ use std::time::Duration;
 
 use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
-use futures::future;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
 use mz_environmentd::test_util::{self, PostgresErrorExt};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
-use mz_ore::task;
 use mz_pgrepr::{Numeric, Record};
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
 use postgres::types::Type;
 use postgres::SimpleQueryMessage;
 use postgres_array::{Array, Dimension};
-use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 #[mz_ore::test]
 #[ignore]
 fn test_bind_params() {
-    let config = test_util::Config::default().unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
@@ -171,7 +168,7 @@ fn test_bind_params() {
 
 #[mz_ore::test]
 fn test_partial_read() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     let query = "VALUES ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7')";
 
@@ -197,7 +194,7 @@ fn test_partial_read() {
 
 #[mz_ore::test]
 fn test_read_many_rows() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     let query = "VALUES (1), (2), (3)";
 
@@ -209,15 +206,16 @@ fn test_read_many_rows() {
     assert_eq!(rows.len(), 3, "row len should be all values");
 }
 
-#[mz_ore::test]
-fn test_conn_startup() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
-    let mut client = server.connect(postgres::NoTls).unwrap();
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_conn_startup() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
 
     // The default database should be `materialize`.
     assert_eq!(
         client
             .query_one("SHOW database", &[])
+            .await
             .unwrap()
             .get::<_, String>(0),
         DEFAULT_DATABASE_NAME,
@@ -225,71 +223,51 @@ fn test_conn_startup() {
 
     // Connecting to a nonexistent database should work, and creating that
     // database should work.
-    //
-    // TODO(benesch): we can use the sync client when this issue is fixed:
-    // https://github.com/sfackler/rust-postgres/issues/404.
-    Runtime::new()
-        .unwrap()
-        .block_on(async {
-            let (client, mut conn) = server
-                .pg_config_async()
-                .dbname("newdb")
-                .connect(postgres::NoTls)
-                .await
-                .unwrap();
-            let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
-            task::spawn(|| "test_conn_startup", async move {
-                while let Some(msg) = future::poll_fn(|cx| conn.poll_message(cx)).await {
-                    match msg {
-                        Ok(msg) => notice_tx.send(msg).unwrap(),
-                        Err(e) => panic!("{}", e),
-                    }
-                }
-            });
+    {
+        let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
+        let client = server
+            .connect()
+            .notice_callback(move |notice| notice_tx.send(notice).unwrap())
+            .dbname("newdb")
+            .await
+            .unwrap();
 
-            assert_eq!(
-                client
-                    .query_one("SHOW database", &[])
-                    .await
-                    .unwrap()
-                    .get::<_, String>(0),
-                "newdb",
-            );
-            client.batch_execute("CREATE DATABASE newdb").await.unwrap();
+        assert_eq!(
             client
-                .batch_execute("CREATE TABLE v (i INT)")
+                .query_one("SHOW database", &[])
                 .await
-                .unwrap();
-            client
-                .batch_execute("INSERT INTO v VALUES (1)")
-                .await
-                .unwrap();
+                .unwrap()
+                .get::<_, String>(0),
+            "newdb",
+        );
+        client.batch_execute("CREATE DATABASE newdb").await.unwrap();
+        client
+            .batch_execute("CREATE TABLE v (i INT)")
+            .await
+            .unwrap();
+        client
+            .batch_execute("INSERT INTO v VALUES (1)")
+            .await
+            .unwrap();
 
-            match notice_rx.recv().await {
-                Some(tokio_postgres::AsyncMessage::Notice(n)) => {
-                    assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
-                    assert_eq!(n.message(), "session database \"newdb\" does not exist");
-                }
-                _ => panic!("missing database notice not generated"),
+        match notice_rx.recv().await {
+            Some(n) => {
+                assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
+                assert_eq!(n.message(), "session database \"newdb\" does not exist");
             }
-
-            Ok::<_, Box<dyn Error>>(())
-        })
-        .unwrap();
+            _ => panic!("missing database notice not generated"),
+        }
+    }
 
     // Connecting to an existing database should work.
     {
-        let mut client = server
-            .pg_config()
-            .dbname("newdb")
-            .connect(postgres::NoTls)
-            .unwrap();
-
+        let client = server.connect().dbname("newdb").await.unwrap();
         assert_eq!(
             // `v` here should refer to the `v` in `newdb.public` that we
             // created above.
             client
                 .query_one("SELECT * FROM v", &[])
+                .await
                 .unwrap()
                 .get::<_, i32>(0),
             1,
@@ -298,14 +276,11 @@ fn test_conn_startup() {
 
     // Setting the application name at connection time should be respected.
     {
-        let mut client = server
-            .pg_config()
-            .application_name("hello")
-            .connect(postgres::NoTls)
-            .unwrap();
+        let client = server.connect().application_name("hello").await.unwrap();
         assert_eq!(
             client
                 .query_one("SHOW application_name", &[])
+                .await
                 .unwrap()
                 .get::<_, String>(0),
             "hello",
@@ -359,7 +334,7 @@ fn test_conn_startup() {
 
 #[mz_ore::test]
 fn test_conn_user() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // This sometimes returns a network error, so retry until we get a db error.
     let err = Retry::default()
@@ -393,7 +368,7 @@ fn test_conn_user() {
 
 #[mz_ore::test]
 fn test_simple_query_no_hang() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     assert!(client.simple_query("asdfjkl;").is_err());
     // This will hang if #2880 is not fixed.
@@ -402,7 +377,7 @@ fn test_simple_query_no_hang() {
 
 #[mz_ore::test]
 fn test_copy() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Ensure empty COPY result sets work. We used to mishandle this with binary
@@ -451,7 +426,9 @@ fn test_copy() {
 
 #[mz_ore::test]
 fn test_arrays() {
-    let server = test_util::start_server(test_util::Config::default().unsafe_mode()).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     let row = client
@@ -498,7 +475,7 @@ fn test_arrays() {
 
 #[mz_ore::test]
 fn test_record_types() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     let row = client.query_one("SELECT ROW()", &[]).unwrap();
@@ -547,7 +524,9 @@ fn test_record_types() {
 fn pg_test_inner(dir: PathBuf, flags: &[&'static str]) {
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
-        let server = test_util::start_server(test_util::Config::default().unsafe_mode()).unwrap();
+        let server = test_util::TestHarness::default()
+            .unsafe_mode()
+            .start_blocking();
         server.enable_feature_flags(flags);
         let config = server.pg_config();
         let addr = match &config.get_hosts()[0] {

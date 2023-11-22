@@ -89,15 +89,14 @@ use mz_frontegg_auth::{
 use mz_frontegg_mock::FronteggMockServer;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_ore::task::RuntimeExt;
+use mz_ore::task;
 use mz_server_core::TlsCertConfig;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
-use postgres::Client;
 use uuid::Uuid;
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
-fn test_balancer() {
+async fn test_balancer() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -127,6 +126,7 @@ fn test_balancer() {
         None,
     )
     .unwrap();
+
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.url.clone(),
@@ -141,21 +141,28 @@ fn test_balancer() {
     let frontegg_user = "user@_.com";
     let frontegg_password = format!("mzp_{client_id}{secret}");
 
-    let config = test_util::Config::default()
+    let envd_server = test_util::TestHarness::default()
         // Enable SSL on the main port. There should be a balancerd port with no SSL.
         .with_tls(server_cert.clone(), server_key.clone())
         .with_frontegg(&frontegg_auth)
-        .with_metrics_registry(metrics_registry);
-    let envd_server = test_util::start_server(config).unwrap();
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
 
     // Ensure we could connect directly to envd without SSL on the balancer port.
-    let mut pg_client_envd = envd_server
-        .pg_config_balancer()
+    let pg_client_envd = envd_server
+        .connect()
+        .balancer()
         .user(frontegg_user)
         .password(&frontegg_password)
-        .connect(tokio_postgres::NoTls)
+        .await
         .unwrap();
-    let res: i32 = pg_client_envd.query_one("SELECT 4", &[]).unwrap().get(0);
+
+    let res: i32 = pg_client_envd
+        .query_one("SELECT 4", &[])
+        .await
+        .unwrap()
+        .get(0);
     assert_eq!(res, 4);
 
     let resolvers = vec![
@@ -181,15 +188,13 @@ fn test_balancer() {
             cert_config.clone(),
             MetricsRegistry::new(),
         );
-        let balancer_server = envd_server
-            .runtime
-            .block_on(async { BalancerService::new(balancer_cfg).await.unwrap() });
+        let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
         let balancer_pgwire_listen = balancer_server.pgwire.0.local_addr();
-        envd_server.runtime.spawn_named(|| "balancer", async {
+        task::spawn(|| "balancer", async {
             balancer_server.serve().await.unwrap();
         });
 
-        let mut pg_client = Client::connect(
+        let (pg_client, conn) = tokio_postgres::connect(
             &format!(
                 "user={frontegg_user} password={frontegg_password} host={} port={} sslmode=require",
                 balancer_pgwire_listen.ip(),
@@ -199,9 +204,13 @@ fn test_balancer() {
                 Ok(b.set_verify(SslVerifyMode::NONE))
             })),
         )
+        .await
         .unwrap();
+        task::spawn(|| "balancer-pg_client", async move {
+            conn.await.expect("balancer-pg_client")
+        });
 
-        let res: i32 = pg_client.query_one("SELECT 2", &[]).unwrap().get(0);
+        let res: i32 = pg_client.query_one("SELECT 2", &[]).await.unwrap().get(0);
         assert_eq!(res, 2);
     }
 }

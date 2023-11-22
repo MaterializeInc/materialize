@@ -89,8 +89,6 @@ use jsonwebtoken::EncodingKey;
 use mz_frontegg_auth::{ApiTokenArgs, ApiTokenResponse, Claims, RefreshToken, REFRESH_SUFFIX};
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
-use mz_ore::task::RuntimeExt;
-use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -102,11 +100,12 @@ pub struct FronteggMockServer {
     pub auth_requests: Arc<Mutex<u64>>,
     pub role_updates_tx: UnboundedSender<(String, Vec<String>)>,
     pub handle: JoinHandle<Result<(), hyper::Error>>,
-    _runtime: Arc<Runtime>,
 }
 
 impl FronteggMockServer {
-    // Users is a mapping from (client, secret) -> email address.
+    /// Starts a [`FronteggMockServer`], must be started from within a [`tokio::runtime::Runtime`].
+    ///
+    /// Users is a mapping from (client, secret) -> email address.
     pub fn start(
         addr: Option<&SocketAddr>,
         encoding_key: EncodingKey,
@@ -136,8 +135,6 @@ impl FronteggMockServer {
             auth_requests: Arc::clone(&auth_requests),
         };
 
-        let runtime = Arc::new(Runtime::new()?);
-        let _guard = runtime.enter();
         let service = make_service_fn(move |_conn| {
             let mut context = context.clone();
             let service = service_fn(move |req| {
@@ -154,7 +151,8 @@ impl FronteggMockServer {
         };
         let server = HyperServer::bind(&addr).serve(service);
         let url = format!("http://{}/", server.local_addr());
-        let handle = runtime.spawn_named(|| "mzcloud-mock-server", server);
+        let handle = mz_ore::task::spawn(|| "mzcloud-mock-server", server);
+
         Ok(FronteggMockServer {
             url,
             refreshes,
@@ -162,7 +160,6 @@ impl FronteggMockServer {
             auth_requests,
             role_updates_tx,
             handle,
-            _runtime: runtime,
         })
     }
 
