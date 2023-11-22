@@ -665,6 +665,8 @@ impl KafkaTxProducer {
                     // big difference.
                     "queue.buffering.max.ms" => format!("{}", 10),
                     "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
+                    // Time out transactions after 10 seconds
+                    "transaction.timeout.ms" => format!("{}", 10_000),
                 },
             )
             .await?;
