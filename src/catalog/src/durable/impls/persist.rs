@@ -585,85 +585,111 @@ impl PersistCatalogState {
         &mut self,
         updates: impl IntoIterator<Item = StateUpdate>,
     ) -> Result<(), DurableCatalogError> {
-        fn apply<K: Ord, V: Ord>(map: &mut BTreeMap<K, V>, key: K, value: V, diff: Diff) {
+        fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: V, diff: Diff)
+        where
+            K: Ord,
+            V: Ord + Debug,
+        {
             if diff == 1 {
-                map.insert(key, value);
+                let prev = map.insert(key, value);
+                soft_assert_eq!(
+                    prev,
+                    None,
+                    "values must be explicitly retracted before inserting a new value"
+                );
             } else if diff == -1 {
-                map.remove(&key);
+                let prev = map.remove(&key);
+                soft_assert_eq!(
+                    prev,
+                    Some(value),
+                    "retraction does not match existing value"
+                );
             }
         }
 
-        for update in updates {
-            debug!("applying catalog update: {update:?}");
-            match update {
-                StateUpdate { kind, ts: _, diff } if diff == 1 || diff == -1 => match kind {
-                    StateUpdateKind::AuditLog(_, _) => {
-                        // We can ignore audit log updates since it's not cached in memory.
+        let mut updates: Vec<_> = updates
+            .into_iter()
+            .map(|update| (update.kind, update.ts, update.diff))
+            .collect();
+        // Consolidation is required for correctness. It guarantees that for a single key, there is
+        // at most a single retraction and a single insertion per timestamp. Otherwise, we would
+        // need to match the retractions and insertions up by value and manually figure out what the
+        // end value should be.
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+        // Updates must be applied in timestamp order. Within a timestamp retractions must be
+        // applied before insertions or we might end up retracting the wrong value.
+        updates.sort_by(|(_, ts1, diff1), (_, ts2, diff2)| ts1.cmp(ts2).then(diff1.cmp(diff2)));
+
+        for (kind, ts, diff) in updates {
+            if diff != 1 && diff != -1 {
+                panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
+            }
+
+            debug!("applying catalog update: ({kind:?}, {ts:?}, {diff:?})");
+            match kind {
+                StateUpdateKind::AuditLog(_, _) => {
+                    // We can ignore audit log updates since it's not cached in memory.
+                }
+                StateUpdateKind::Cluster(key, value) => {
+                    apply(&mut self.snapshot.clusters, key, value, diff);
+                }
+                StateUpdateKind::ClusterReplica(key, value) => {
+                    apply(&mut self.snapshot.cluster_replicas, key, value, diff);
+                }
+                StateUpdateKind::Comment(key, value) => {
+                    apply(&mut self.snapshot.comments, key, value, diff);
+                }
+                StateUpdateKind::Config(key, value) => {
+                    apply(&mut self.snapshot.configs, key, value, diff);
+                }
+                StateUpdateKind::Database(key, value) => {
+                    apply(&mut self.snapshot.databases, key, value, diff);
+                }
+                StateUpdateKind::DefaultPrivilege(key, value) => {
+                    apply(&mut self.snapshot.default_privileges, key, value, diff);
+                }
+                StateUpdateKind::Epoch(epoch) => {
+                    // Explicitly check for diff == 1 so that we don't return an error when the
+                    // previous epoch is retracted.
+                    if diff == 1 && epoch != self.epoch {
+                        return Err(DurableCatalogError::Fence(format!(
+                            "current catalog epoch {} fenced by new catalog epoch {}",
+                            self.epoch, epoch
+                        )));
                     }
-                    StateUpdateKind::Cluster(key, value) => {
-                        apply(&mut self.snapshot.clusters, key, value, diff);
-                    }
-                    StateUpdateKind::ClusterReplica(key, value) => {
-                        apply(&mut self.snapshot.cluster_replicas, key, value, diff);
-                    }
-                    StateUpdateKind::Comment(key, value) => {
-                        apply(&mut self.snapshot.comments, key, value, diff);
-                    }
-                    StateUpdateKind::Config(key, value) => {
-                        apply(&mut self.snapshot.configs, key, value, diff);
-                    }
-                    StateUpdateKind::Database(key, value) => {
-                        apply(&mut self.snapshot.databases, key, value, diff);
-                    }
-                    StateUpdateKind::DefaultPrivilege(key, value) => {
-                        apply(&mut self.snapshot.default_privileges, key, value, diff);
-                    }
-                    StateUpdateKind::Epoch(epoch) => {
-                        // Explicitly check for diff == 1 so that we don't return an error when the
-                        // previous epoch is retracted.
-                        if diff == 1 && epoch != self.epoch {
-                            return Err(DurableCatalogError::Fence(format!(
-                                "current catalog epoch {} fenced by new catalog epoch {}",
-                                self.epoch, epoch
-                            )));
-                        }
-                    }
-                    StateUpdateKind::IdAllocator(key, value) => {
-                        apply(&mut self.snapshot.id_allocator, key, value, diff);
-                    }
-                    StateUpdateKind::IntrospectionSourceIndex(key, value) => {
-                        apply(&mut self.snapshot.introspection_sources, key, value, diff);
-                    }
-                    StateUpdateKind::Item(key, value) => {
-                        apply(&mut self.snapshot.items, key, value, diff);
-                    }
-                    StateUpdateKind::Role(key, value) => {
-                        apply(&mut self.snapshot.roles, key, value, diff);
-                    }
-                    StateUpdateKind::Schema(key, value) => {
-                        apply(&mut self.snapshot.schemas, key, value, diff);
-                    }
-                    StateUpdateKind::Setting(key, value) => {
-                        apply(&mut self.snapshot.settings, key, value, diff);
-                    }
-                    StateUpdateKind::StorageUsage(_, _) => {
-                        // We can ignore storage usage since it's not cached in memory.
-                    }
-                    StateUpdateKind::SystemConfiguration(key, value) => {
-                        apply(&mut self.snapshot.system_configurations, key, value, diff);
-                    }
-                    StateUpdateKind::SystemObjectMapping(key, value) => {
-                        apply(&mut self.snapshot.system_object_mappings, key, value, diff);
-                    }
-                    StateUpdateKind::SystemPrivilege(key, value) => {
-                        apply(&mut self.snapshot.system_privileges, key, value, diff);
-                    }
-                    StateUpdateKind::Timestamp(key, value) => {
-                        apply(&mut self.snapshot.timestamps, key, value, diff);
-                    }
-                },
-                invalid_update => {
-                    panic!("invalid update in consolidated trace: {:?}", invalid_update);
+                }
+                StateUpdateKind::IdAllocator(key, value) => {
+                    apply(&mut self.snapshot.id_allocator, key, value, diff);
+                }
+                StateUpdateKind::IntrospectionSourceIndex(key, value) => {
+                    apply(&mut self.snapshot.introspection_sources, key, value, diff);
+                }
+                StateUpdateKind::Item(key, value) => {
+                    apply(&mut self.snapshot.items, key, value, diff);
+                }
+                StateUpdateKind::Role(key, value) => {
+                    apply(&mut self.snapshot.roles, key, value, diff);
+                }
+                StateUpdateKind::Schema(key, value) => {
+                    apply(&mut self.snapshot.schemas, key, value, diff);
+                }
+                StateUpdateKind::Setting(key, value) => {
+                    apply(&mut self.snapshot.settings, key, value, diff);
+                }
+                StateUpdateKind::StorageUsage(_, _) => {
+                    // We can ignore storage usage since it's not cached in memory.
+                }
+                StateUpdateKind::SystemConfiguration(key, value) => {
+                    apply(&mut self.snapshot.system_configurations, key, value, diff);
+                }
+                StateUpdateKind::SystemObjectMapping(key, value) => {
+                    apply(&mut self.snapshot.system_object_mappings, key, value, diff);
+                }
+                StateUpdateKind::SystemPrivilege(key, value) => {
+                    apply(&mut self.snapshot.system_privileges, key, value, diff);
+                }
+                StateUpdateKind::Timestamp(key, value) => {
+                    apply(&mut self.snapshot.timestamps, key, value, diff);
                 }
             }
         }
