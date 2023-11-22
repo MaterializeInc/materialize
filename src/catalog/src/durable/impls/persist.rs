@@ -93,7 +93,7 @@ impl<T: StateUpdateKindAlias> PersistHandle<T> {
     }
 
     /// Fetch the current upper of the catalog state.
-    async fn current_upper(&mut self) -> Timestamp {
+    pub(crate) async fn current_upper(&mut self) -> Timestamp {
         current_upper(&mut self.write_handle).await
     }
 
@@ -104,7 +104,7 @@ impl<T: StateUpdateKindAlias> PersistHandle<T> {
     }
 
     /// Reports if the catalog state has been initialized, and the current upper.
-    pub(crate) async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
+    async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
         let upper = self.current_upper().await;
         let is_initialized = if upper == Timestamp::minimum() {
             false

@@ -183,15 +183,15 @@ pub(crate) mod persist {
         CATALOG_VERSION, FUTURE_VERSION, MIN_CATALOG_VERSION, TOO_OLD_VERSION,
     };
     use crate::durable::DurableCatalogError;
-    use mz_ore::soft_assert;
+    use mz_ore::{soft_assert, soft_assert_ne};
 
     #[tracing::instrument(name = "persist::upgrade", level = "debug", skip_all)]
     pub(crate) async fn upgrade(
         migrator: &mut PersistHandle<StateUpdateKindBinary>,
         mut version: u64,
     ) -> Result<(), DurableCatalogError> {
-        let (is_initialized, mut upper) = migrator.is_initialized_inner().await;
-        soft_assert!(is_initialized, "cannot upgrade uninitialized catalog");
+        let mut upper = migrator.current_upper().await;
+        soft_assert_ne!(upper, Timestamp::minimum() "cannot upgrade uninitialized catalog");
 
         // Run migrations until we're up-to-date.
         while version < CATALOG_VERSION {
