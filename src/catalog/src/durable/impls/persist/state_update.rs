@@ -51,11 +51,11 @@ impl<
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StateUpdate<T: IntoStateUpdateKindBinary = StateUpdateKind> {
     /// They kind and contents of the state update.
-    pub(super) kind: T,
+    pub(crate) kind: T,
     /// The timestamp at which the update occurred.
-    pub(super) ts: Timestamp,
+    pub(crate) ts: Timestamp,
     /// Record count difference for the update.
-    pub(super) diff: Diff,
+    pub(crate) diff: Diff,
 }
 
 impl StateUpdate {
@@ -143,6 +143,18 @@ impl StateUpdate {
             .chain(audit_logs)
             .chain(storage_usage_updates)
             .collect()
+    }
+}
+
+impl TryFrom<StateUpdate<StateUpdateKindBinary>> for StateUpdate<StateUpdateKind> {
+    type Error = String;
+
+    fn try_from(update: StateUpdate<StateUpdateKindBinary>) -> Result<Self, Self::Error> {
+        Ok(StateUpdate {
+            kind: update.kind.try_into()?,
+            ts: update.ts,
+            diff: update.diff,
+        })
     }
 }
 
