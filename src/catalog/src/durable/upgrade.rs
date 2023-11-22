@@ -75,16 +75,16 @@ const TOO_OLD_VERSION: u64 = MIN_CATALOG_VERSION - 1;
 const FUTURE_VERSION: u64 = CATALOG_VERSION + 1;
 
 pub(crate) mod stash {
-    use crate::durable::initialize::USER_VERSION_KEY;
-    use crate::durable::objects::serialization::proto;
-    use crate::durable::CONFIG_COLLECTION;
     use futures::FutureExt;
     use mz_stash::Stash;
     use mz_stash_types::{InternalStashError, StashError};
 
+    use crate::durable::initialize::USER_VERSION_KEY;
+    use crate::durable::objects::serialization::proto;
     use crate::durable::upgrade::{
         CATALOG_VERSION, FUTURE_VERSION, MIN_CATALOG_VERSION, TOO_OLD_VERSION,
     };
+    use crate::durable::CONFIG_COLLECTION;
 
     mod v39_to_v40;
     mod v40_to_v41;
@@ -177,13 +177,62 @@ pub(crate) mod stash {
 }
 
 pub(crate) mod persist {
-    use crate::durable::impls::persist::state_update::StateUpdateKindBinary;
-    use crate::durable::impls::persist::{PersistHandle, Timestamp};
+    use mz_ore::soft_assert_ne;
+    use timely::progress::Timestamp as TimelyTimestamp;
+
+    use crate::durable::impls::persist::state_update::{
+        IntoStateUpdateKindBinary, StateUpdateKindBinary,
+    };
+    use crate::durable::impls::persist::{PersistHandle, StateUpdate, Timestamp};
     use crate::durable::upgrade::{
         CATALOG_VERSION, FUTURE_VERSION, MIN_CATALOG_VERSION, TOO_OLD_VERSION,
     };
     use crate::durable::DurableCatalogError;
-    use mz_ore::{soft_assert, soft_assert_ne};
+
+    #[allow(unused)]
+    enum MigrationAction<V1: IntoStateUpdateKindBinary, V2: IntoStateUpdateKindBinary> {
+        /// Deletes the provided key.
+        Delete(V1),
+        /// Inserts the provided key-value pair. The key must not currently exist!
+        Insert(V2),
+        /// Update the key-value pair for the provided key.
+        Update(V1, V2),
+    }
+
+    impl<V1: IntoStateUpdateKindBinary, V2: IntoStateUpdateKindBinary> MigrationAction<V1, V2> {
+        fn _into_updates(self, upper: Timestamp) -> Vec<StateUpdate<StateUpdateKindBinary>> {
+            match self {
+                MigrationAction::Delete(kind) => {
+                    vec![StateUpdate {
+                        kind: kind.into(),
+                        ts: upper,
+                        diff: -1,
+                    }]
+                }
+                MigrationAction::Insert(kind) => {
+                    vec![StateUpdate {
+                        kind: kind.into(),
+                        ts: upper,
+                        diff: 1,
+                    }]
+                }
+                MigrationAction::Update(old_kind, new_kind) => {
+                    vec![
+                        StateUpdate {
+                            kind: old_kind.into(),
+                            ts: upper,
+                            diff: -1,
+                        },
+                        StateUpdate {
+                            kind: new_kind.into(),
+                            ts: upper,
+                            diff: 1,
+                        },
+                    ]
+                }
+            }
+        }
+    }
 
     #[tracing::instrument(name = "persist::upgrade", level = "debug", skip_all)]
     pub(crate) async fn upgrade(
@@ -191,7 +240,11 @@ pub(crate) mod persist {
         mut version: u64,
     ) -> Result<(), DurableCatalogError> {
         let mut upper = migrator.current_upper().await;
-        soft_assert_ne!(upper, Timestamp::minimum() "cannot upgrade uninitialized catalog");
+        soft_assert_ne!(
+            upper,
+            Timestamp::minimum(),
+            "cannot upgrade uninitialized catalog"
+        );
 
         // Run migrations until we're up-to-date.
         while version < CATALOG_VERSION {
@@ -217,7 +270,7 @@ pub(crate) mod persist {
             };
 
             match version {
-                ..=TOO_OLD_VERSION => return Err(incompatible),
+                ..=TOO_OLD_VERSION => Err(incompatible),
 
                 // TODO(jkosh44) Implement migrations.
                 39 => panic!("upgrades not implemented"),
@@ -227,9 +280,9 @@ pub(crate) mod persist {
                 43 => panic!("upgrades not implemented"),
 
                 // Up-to-date, no migration needed!
-                CATALOG_VERSION => return Ok((CATALOG_VERSION, upper)),
-                FUTURE_VERSION.. => return Err(incompatible),
-            };
+                CATALOG_VERSION => Ok((CATALOG_VERSION, upper)),
+                FUTURE_VERSION.. => Err(incompatible),
+            }
         }
 
         Ok(())

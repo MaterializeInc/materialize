@@ -22,12 +22,38 @@ use crate::durable::objects::serialization::proto;
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::Epoch;
 
-/// Marker trait for an object that can be converted to/from a `StateUpdateKind` and can be used to
+/// Trait for objects that can be converted to/from a `StateUpdateKind` and can be used to
 /// read/write to persist.
 pub trait StateUpdateKindAlias:
     TryInto<StateUpdateKind>
     + From<StateUpdateKind>
+    + PartialEq
+    + Eq
+    + PartialOrd
+    + Ord
+    + Debug
+    + Clone
     + Codec
+{
+}
+impl<
+        T: TryInto<StateUpdateKind>
+            + From<StateUpdateKind>
+            + PartialEq
+            + Eq
+            + PartialOrd
+            + Ord
+            + Debug
+            + Clone
+            + Codec,
+    > StateUpdateKindAlias for T
+{
+}
+
+/// Trait for objects that can be converted to/from a [`StateUpdateKindBinary`].
+pub(crate) trait IntoStateUpdateKindBinary:
+    Into<StateUpdateKindBinary>
+    + TryFrom<StateUpdateKindBinary>
     + PartialEq
     + Eq
     + PartialOrd
@@ -37,16 +63,15 @@ pub trait StateUpdateKindAlias:
 {
 }
 impl<
-        T: TryInto<StateUpdateKind>
-            + From<StateUpdateKind>
-            + Codec
+        T: Into<StateUpdateKindBinary>
+            + TryFrom<StateUpdateKindBinary>
             + PartialEq
             + Eq
             + PartialOrd
             + Ord
             + Debug
             + Clone,
-    > StateUpdateKindAlias for T
+    > IntoStateUpdateKindBinary for T
 {
 }
 
@@ -54,11 +79,11 @@ impl<
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StateUpdate<T: StateUpdateKindAlias = StateUpdateKind> {
     /// They kind and contents of the state update.
-    pub(super) kind: T,
+    pub(crate) kind: T,
     /// The timestamp at which the update occurred.
-    pub(super) ts: Timestamp,
+    pub(crate) ts: Timestamp,
     /// Record count difference for the update.
-    pub(super) diff: Diff,
+    pub(crate) diff: Diff,
 }
 
 impl StateUpdate {
