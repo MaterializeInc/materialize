@@ -19,11 +19,10 @@ use std::time::Duration;
 use anyhow::anyhow;
 use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
-use maplit::btreemap;
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
-use mz_kafka_util::client::{MzClientContext, TunnelingClientContext};
+use mz_kafka_util::client::MzClientContext;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
@@ -39,7 +38,6 @@ use mz_storage_types::sinks::{
 };
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use prometheus::core::AtomicU64;
-use rdkafka::consumer::BaseConsumer;
 use rdkafka::error::{KafkaError, RDKafkaError, RDKafkaErrorCode};
 use rdkafka::message::{Header, Message, OwnedHeaders, ToBytes};
 use rdkafka::producer::{BaseRecord, Producer};
@@ -194,7 +192,6 @@ struct KafkaSinkState {
 
     progress_topic: String,
     progress_key: String,
-    progress_client: Option<Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>>,
 
     healthchecker: HealthOutputHandle,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
@@ -264,26 +261,6 @@ impl KafkaSinkState {
         )
         .await;
 
-        let progress_client = halt_on_err(
-            &healthchecker,
-            connection
-                .connection
-                .create_with_context(
-                    connection_context,
-                    MzClientContext::default(),
-                    &btreemap! {
-                        "group.id" => util::SinkGroupId::new(sink_id),
-                        "isolation.level" => "read_committed".into(),
-                        "enable.auto.commit" => "false".into(),
-                        "auto.offset.reset" => "earliest".into(),
-                        "enable.partition.eof" => "true".into(),
-                    },
-                )
-                .await,
-            None,
-        )
-        .await;
-
         KafkaSinkState {
             name: sink_name,
             topic: connection.topic,
@@ -296,7 +273,6 @@ impl KafkaSinkState {
                 KafkaConsistencyConfig::Progress { topic } => topic,
             },
             progress_key: util::ProgressKey::new(sink_id),
-            progress_client: Some(Arc::new(progress_client)),
             healthchecker,
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
