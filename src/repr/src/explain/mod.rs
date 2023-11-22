@@ -155,8 +155,14 @@ impl From<serde_json::Error> for ExplainError {
 pub struct ExplainConfig {
     /// Show the number of columns.
     pub arity: bool,
+    /// Show cardinality information.
+    pub cardinality: bool,
+    /// Show inferred column names.
+    pub column_names: bool,
     /// Render implemented MIR `Join` nodes in a way which reflects the implementation.
     pub join_impls: bool,
+    /// Use inferred column names when rendering scalar and aggregate expressions.
+    pub humanized_exprs: bool,
     /// Show the sets of unique keys.
     pub keys: bool,
     /// Restrict output trees to linear chains. Ignored if `raw_plans` is set.
@@ -166,6 +172,8 @@ pub struct ExplainConfig {
     /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
     /// Enforced if `timing` is set.
     pub no_fast_path: bool,
+    /// Don't print optimizer hints.
+    pub no_notices: bool,
     /// Don't normalize plans before explaining them.
     pub raw_plans: bool,
     /// Disable virtual syntax in the explanation.
@@ -178,12 +186,9 @@ pub struct ExplainConfig {
     pub types: bool,
     /// Show MFP pushdown information.
     pub filter_pushdown: bool,
-    /// Show cardinality information.
-    pub cardinality: bool,
-    /// Show inferred column names.
-    pub column_names: bool,
-    /// Use inferred column names when rendering scalar and aggregate expressions.
-    pub humanized_exprs: bool,
+    // -------------
+    // Feature flags
+    // -------------
     /// Enable outer join lowering implemented in #22347 and #22348.
     pub enable_new_outer_join_lowering: Option<bool>,
 }
@@ -192,20 +197,21 @@ impl Default for ExplainConfig {
     fn default() -> Self {
         Self {
             arity: false,
+            cardinality: false,
+            column_names: false,
+            filter_pushdown: false,
+            humanized_exprs: false,
             join_impls: true,
             keys: false,
             linear_chains: false,
-            non_negative: false,
             no_fast_path: true,
+            no_notices: false,
+            non_negative: false,
             raw_plans: true,
             raw_syntax: false,
             subtree_size: false,
             timing: false,
             types: false,
-            filter_pushdown: false,
-            cardinality: false,
-            column_names: false,
-            humanized_exprs: false,
             enable_new_outer_join_lowering: None,
         }
     }
@@ -234,20 +240,21 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
         }
         let result = ExplainConfig {
             arity: flags.remove("arity"),
+            cardinality: flags.remove("cardinality"),
+            column_names: flags.remove("column_names"),
+            filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
+            humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
             join_impls: flags.remove("join_impls"),
             keys: flags.remove("keys"),
             linear_chains: flags.remove("linear_chains") && !flags.contains("raw_plans"),
-            non_negative: flags.remove("non_negative"),
             no_fast_path: flags.remove("no_fast_path") || flags.contains("timing"),
+            no_notices: flags.remove("no_notices"),
+            non_negative: flags.remove("non_negative"),
             raw_plans: flags.remove("raw_plans"),
             raw_syntax: flags.remove("raw_syntax"),
             subtree_size: flags.remove("subtree_size"),
             timing: flags.remove("timing"),
             types: flags.remove("types"),
-            filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
-            cardinality: flags.remove("cardinality"),
-            column_names: flags.remove("column_names"),
-            humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
             enable_new_outer_join_lowering: parse_flag(&mut flags, "new_outer_join_lowering")?,
         };
         if flags.is_empty() {
@@ -910,20 +917,21 @@ mod tests {
         let format = ExplainFormat::Text;
         let config = &ExplainConfig {
             arity: false,
+            cardinality: false,
+            column_names: false,
+            filter_pushdown: false,
+            humanized_exprs: false,
             join_impls: false,
             keys: false,
             linear_chains: false,
-            non_negative: false,
             no_fast_path: false,
+            no_notices: false,
+            non_negative: false,
             raw_plans: false,
             raw_syntax: false,
             subtree_size: false,
             timing: true,
             types: false,
-            filter_pushdown: false,
-            cardinality: false,
-            column_names: false,
-            humanized_exprs: false,
             enable_new_outer_join_lowering: None,
         };
         let context = ExplainContext {

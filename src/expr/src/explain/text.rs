@@ -145,7 +145,7 @@ where
             self.context.used_indexes.fmt_text(f, &mut ctx)?;
         }
 
-        if !self.context.optimizer_notices.is_empty() {
+        if !(self.context.config.no_notices || self.context.optimizer_notices.is_empty()) {
             writeln!(f)?;
             writeln!(f, "Notices:")?;
             for notice in self.context.optimizer_notices.iter() {
