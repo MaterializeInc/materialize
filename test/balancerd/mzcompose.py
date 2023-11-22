@@ -252,6 +252,8 @@ def workflow_mz_not_running(c: Composition) -> None:
                 "No route to host",
                 "Connection timed out",
                 "failure in name resolution",
+                "failed to lookup address information",
+                "Name or service not known",
             ]
         )
     except:
