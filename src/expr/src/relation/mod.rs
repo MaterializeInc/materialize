@@ -35,7 +35,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::container::columnation::{Columnation, CopyRegion};
 
-use crate::explain::HumanizedExpr;
+use crate::explain::{HumanizedExplain, HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::visit::{Visit, VisitChildren};
 use crate::Id::Local;
@@ -2296,11 +2296,14 @@ impl RustType<ProtoColumnOrder> for ColumnOrder {
 
 impl fmt::Display for ColumnOrder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        HumanizedExpr::new(self, None).fmt(f)
+        HumanizedExplain::new(self, None).fmt(f)
     }
 }
 
-impl<'a> fmt::Display for HumanizedExpr<'a, ColumnOrder> {
+impl<'a, M> fmt::Display for HumanizedExpr<'a, ColumnOrder, M>
+where
+    M: HumanizerMode,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // If you modify this, then please also attend to Display for ColumnOrderWithExpr!
         write!(
