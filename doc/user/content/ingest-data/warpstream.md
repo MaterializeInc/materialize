@@ -10,6 +10,9 @@ menu:
     name: "WarpStream"
 ---
 
+[//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
+with the Postgres ones. We should include spill to disk in the guidance then."
+
 This guide goes through the necessary steps to connect Materialize to [WarpStream](https://www.warpstream.com/), an Apache Kafka® protocol compatible data streaming platform.
 
 WarpStream runs on commodity object stores (e.g., AWS S3, GCP GCS, Azure Blob Storage) and offers benefits such as no inter-AZ bandwidth costs and no local disks management. This guide highlights its integration with Materialize using [Fly.io](https://fly.io/).
