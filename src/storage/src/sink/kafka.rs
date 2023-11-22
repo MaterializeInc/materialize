@@ -35,8 +35,8 @@ use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_client::sink::ProgressRecord;
-use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::errors::{ContextCreationError, DataflowError};
+use mz_storage_types::connections::{ConnectionContext, KafkaConnection};
+use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkAsOf,
     SinkEnvelope, StorageSinkDesc,
@@ -250,6 +250,15 @@ impl ProducerContext for SinkProducerContext {
     }
 }
 
+struct KafkaTxProducerConfig<'a> {
+    name: String,
+    connection: &'a KafkaConnection,
+    connection_context: &'a ConnectionContext,
+    producer_context: SinkProducerContext,
+    sink_id: GlobalId,
+    worker_id: String,
+}
+
 #[derive(Clone)]
 struct KafkaTxProducer {
     name: String,
@@ -258,6 +267,66 @@ struct KafkaTxProducer {
 }
 
 impl KafkaTxProducer {
+    async fn new<'a>(
+        KafkaTxProducerConfig {
+            name,
+            connection,
+            connection_context,
+            producer_context,
+            sink_id,
+            worker_id,
+        }: KafkaTxProducerConfig<'a>,
+    ) -> Result<KafkaTxProducer, ContextCreationError> {
+        let producer = connection
+            .create_with_context(
+                connection_context,
+                producer_context,
+                &btreemap! {
+                    // Ensure that messages are sinked in order and without
+                    // duplicates. Note that this only applies to a single
+                    // instance of a producer - in the case of restarts, all
+                    // bets are off and full exactly once support is required.
+                    "enable.idempotence" => "true".into(),
+                    // Increase limits for the Kafka producer's internal
+                    // buffering of messages Currently we don't have a great
+                    // backpressure mechanism to tell indexes or views to slow
+                    // down, so the only thing we can do with a message that we
+                    // can't immediately send is to put it in a buffer and
+                    // there's no point having buffers within the dataflow layer
+                    // and Kafka If the sink starts falling behind and the
+                    // buffers start consuming too much memory the best thing to
+                    // do is to drop the sink Sets the buffer size to be 16 GB
+                    // (note that this setting is in KB)
+                    "queue.buffering.max.kbytes" => format!("{}", 16 << 20),
+                    // Set the max messages buffered by the producer at any time
+                    // to 10MM which is the maximum allowed value.
+                    "queue.buffering.max.messages" => format!("{}", 10_000_000),
+                    // Make the Kafka producer wait at least 10 ms before
+                    // sending out MessageSets TODO(rkhaitan): experiment with
+                    // different settings for this value to see if it makes a
+                    // big difference.
+                    "queue.buffering.max.ms" => format!("{}", 10),
+                    "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
+                    // Time out transactions after 10 seconds
+                    "transaction.timeout.ms" => format!("{}", 10_000),
+                },
+            )
+            .await?;
+
+        let producer = KafkaTxProducer {
+            name,
+            inner: Arc::new(producer),
+            timeout: Duration::from_secs(5),
+        };
+
+        producer
+            .retry_on_txn_error(|p| p.init_transactions())
+            .await
+            .check_ssh_status(producer.inner.client().context())?;
+
+        Ok(producer)
+    }
+
     fn init_transactions(&self) -> impl Future<Output = KafkaResult<()>> {
         let self_producer = Arc::clone(&self.inner);
         let self_timeout = self.timeout;
@@ -407,7 +476,7 @@ impl KafkaSinkState {
     // Until `try` blocks, we need this for using `fail_point!` correctly.
     async fn new(
         sink_id: GlobalId,
-        connection: &KafkaSinkConnection,
+        connection: KafkaSinkConnection,
         sink_name: String,
         worker_id: String,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
@@ -415,7 +484,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
         healthchecker: HealthOutputHandle,
-    ) -> Self {
+    ) -> (Self, Option<Timestamp>) {
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
             &connection.topic,
@@ -439,69 +508,52 @@ impl KafkaSinkState {
                     ContextCreationError::Other(anyhow::anyhow!("synthetic error"))
                 ));
 
-                connection
-                    .connection
-                    .create_with_context(
-                        connection_context,
-                        producer_context,
-                        &btreemap! {
-                            // Ensure that messages are sinked in order and without
-                            // duplicates. Note that this only applies to a single
-                            // instance of a producer - in the case of restarts, all
-                            // bets are off and full exactly once support is required.
-                            "enable.idempotence" => "true".into(),
-                            // Increase limits for the Kafka producer's internal
-                            // buffering of messages Currently we don't have a great
-                            // backpressure mechanism to tell indexes or views to slow
-                            // down, so the only thing we can do with a message that we
-                            // can't immediately send is to put it in a buffer and
-                            // there's no point having buffers within the dataflow layer
-                            // and Kafka If the sink starts falling behind and the
-                            // buffers start consuming too much memory the best thing to
-                            // do is to drop the sink Sets the buffer size to be 16 GB
-                            // (note that this setting is in KB)
-                            "queue.buffering.max.kbytes" => format!("{}", 16 << 20),
-                            // Set the max messages buffered by the producer at any time
-                            // to 10MM which is the maximum allowed value.
-                            "queue.buffering.max.messages" => format!("{}", 10_000_000),
-                            // Make the Kafka producer wait at least 10 ms before
-                            // sending out MessageSets TODO(rkhaitan): experiment with
-                            // different settings for this value to see if it makes a
-                            // big difference.
-                            "queue.buffering.max.ms" => format!("{}", 10),
-                            "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
-                        },
-                    )
-                    .await
+                KafkaTxProducer::new(KafkaTxProducerConfig {
+                    name: sink_name.clone(),
+                    connection: &connection.connection,
+                    connection_context,
+                    producer_context,
+                    sink_id,
+                    worker_id,
+                })
+                .await
             })()
             .await,
             None,
         )
         .await;
 
-        let producer = KafkaTxProducer {
-            name: sink_name.clone(),
-            inner: Arc::new(producer),
-            timeout: Duration::from_secs(5),
-        };
+        // Note that where this lies in the rendering cycle means that we might
+        // create the collateral topics each time the sink is rendered, e.g. if
+        // the broker's admin deleted the progress and data topics. For more
+        // details, see `mz_storage_client::sink::build_kafka`.
+        let latest_ts = halt_on_err(
+            &healthchecker,
+            mz_storage_client::sink::build_kafka(sink_id, &connection, connection_context).await,
+            None,
+        )
+        .await;
 
-        KafkaSinkState {
-            name: sink_name,
-            topic: connection.topic.clone(),
-            metrics,
-            producer,
-            pending_rows: BTreeMap::new(),
-            ready_rows: VecDeque::new(),
-            retry_manager,
-            progress_topic: match &connection.consistency_config {
-                KafkaConsistencyConfig::Progress { topic } => topic.clone(),
+        (
+            KafkaSinkState {
+                name: sink_name,
+                topic: connection.topic,
+                metrics,
+                producer,
+                pending_rows: BTreeMap::new(),
+                ready_rows: VecDeque::new(),
+                retry_manager,
+                progress_topic: match connection.consistency_config {
+                    KafkaConsistencyConfig::Progress { topic } => topic,
+                },
+                progress_key: ProgressKey::new(sink_id),
+                healthchecker,
+                gate_ts,
+                latest_progress_ts: Timestamp::minimum(),
+                write_frontier,
             },
-            progress_key: ProgressKey::new(sink_id),
-            healthchecker,
-            gate_ts,
-            latest_progress_ts: Timestamp::minimum(),
-            write_frontier,
-        }
+            latest_ts,
+        )
     }
 
     async fn send<'a, K, P>(&self, mut record: BaseRecord<'a, K, P>)
@@ -913,9 +965,9 @@ where
             return;
         }
 
-        let mut s = KafkaSinkState::new(
+        let (mut s, latest_ts) = KafkaSinkState::new(
             id,
-            &connection,
+            connection,
             name,
             worker_id.to_string(),
             write_frontier,
@@ -926,20 +978,6 @@ where
                 health_cap,
                 handle: Mutex::new(health_output),
             },
-        )
-        .await;
-
-        s.halt_on_err(
-            s.producer
-                .retry_on_txn_error(|p| p.init_transactions())
-                .await,
-        )
-        .await;
-
-        let latest_ts = halt_on_err(
-            &s.healthchecker,
-            mz_storage_client::sink::build_kafka(id, &connection, &connection_context).await,
-            None,
         )
         .await;
 
