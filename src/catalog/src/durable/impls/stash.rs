@@ -38,7 +38,7 @@ use crate::durable::objects::{
     TimelineTimestamp, TimestampValue,
 };
 use crate::durable::transaction::{Transaction, TransactionBatch};
-use crate::durable::upgrade::upgrade;
+use crate::durable::upgrade::stash::upgrade;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DebugCatalogState, DurableCatalogError,
     DurableCatalogState, Epoch, OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
