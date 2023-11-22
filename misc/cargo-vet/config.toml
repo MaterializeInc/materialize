@@ -1383,11 +1383,11 @@ version = "0.13.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.proptest]]
-version = "1.0.0@git:fc9660f0f45ad49949d42341f964597a44e5fce0"
+version = "1.0.0@git:4d8c406c32260484747c828050016de599b9f3a4"
 criteria = "safe-to-deploy"
 
 [[exemptions.proptest-derive]]
-version = "0.3.0@git:fc9660f0f45ad49949d42341f964597a44e5fce0"
+version = "0.3.0@git:4d8c406c32260484747c828050016de599b9f3a4"
 criteria = "safe-to-deploy"
 
 [[exemptions.prost]]
