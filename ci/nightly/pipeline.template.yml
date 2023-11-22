@@ -944,15 +944,6 @@ steps:
           composition: cluster
           run: test-incident-70
 
-  - id: incident-72-remediation
-    label: "Remediation of incident 72"
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: incident-72
-
   - id: balancerd
     label: "Tests for balancerd"
     agents:
