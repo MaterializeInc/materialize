@@ -289,10 +289,11 @@ pub async fn publish_schemas(
 /// # Errors
 /// - If the [`KafkaSinkConnection`]'s consistency collateral exists and
 ///   contains data for this sink, but the sink's data topic does not exist.
-pub async fn build_kafka(
+pub(super) async fn build_kafka(
     sink_id: mz_repr::GlobalId,
     connection: &KafkaSinkConnection,
     connection_cx: &ConnectionContext,
+    producer: &KafkaTxProducer,
 ) -> Result<Option<Timestamp>, ContextCreationError> {
     let client: AdminClient<_> = connection
         .connection
@@ -334,6 +335,7 @@ pub async fn build_kafka(
                 topic.to_string(),
                 ProgressKey::new(sink_id),
                 Arc::clone(&progress_client),
+                producer,
             )
             .await
             .check_ssh_status(progress_client.client().context())?;
@@ -389,12 +391,19 @@ pub struct ProgressRecord {
 
 /// Determines the latest progress record from the specified topic for the given
 /// key (e.g. akin to a sink's GlobalId).
-pub async fn determine_latest_progress_record(
+pub(super) async fn determine_latest_progress_record(
     name: String,
     progress_topic: String,
     progress_key: String,
     progress_client: Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>,
+    producer: &KafkaTxProducer,
 ) -> Result<Option<Timestamp>, anyhow::Error> {
+    // Ensure that the producer has initialized transactions and is the current
+    // holder of its transaction ID. We need this to ensure that we get the most
+    // recent offsets from the progress topic.
+    producer.begin_transaction().await?;
+    producer.abort_transaction().await?;
+
     // Polls a message from a Kafka Source.  Blocking so should always be called on background
     // thread.
     fn get_next_message<C>(

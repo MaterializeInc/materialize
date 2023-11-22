@@ -222,7 +222,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
         healthchecker: HealthOutputHandle,
-    ) -> Self {
+    ) -> (Self, Option<Timestamp>) {
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
             &connection.topic,
@@ -261,23 +261,37 @@ impl KafkaSinkState {
         )
         .await;
 
-        KafkaSinkState {
-            name: sink_name,
-            topic: connection.topic,
-            metrics,
-            producer,
-            pending_rows: BTreeMap::new(),
-            ready_rows: VecDeque::new(),
-            retry_manager,
-            progress_topic: match connection.consistency_config {
-                KafkaConsistencyConfig::Progress { topic } => topic,
+        // Note that where this lies in the rendering cycle means that we might
+        // create the collateral topics each time the sink is rendered, e.g. if
+        // the broker's admin deleted the progress and data topics. For more
+        // details, see `mz_storage_client::sink::build_kafka`.
+        let latest_ts = halt_on_err(
+            &healthchecker,
+            util::build_kafka(sink_id, &connection, connection_context, &producer).await,
+            None,
+        )
+        .await;
+
+        (
+            KafkaSinkState {
+                name: sink_name,
+                topic: connection.topic,
+                metrics,
+                producer,
+                pending_rows: BTreeMap::new(),
+                ready_rows: VecDeque::new(),
+                retry_manager,
+                progress_topic: match connection.consistency_config {
+                    KafkaConsistencyConfig::Progress { topic } => topic,
+                },
+                progress_key: util::ProgressKey::new(sink_id),
+                healthchecker,
+                gate_ts,
+                latest_progress_ts: Timestamp::minimum(),
+                write_frontier,
             },
-            progress_key: util::ProgressKey::new(sink_id),
-            healthchecker,
-            gate_ts,
-            latest_progress_ts: Timestamp::minimum(),
-            write_frontier,
-        }
+            latest_ts,
+        )
     }
 
     async fn send<'a, K, P>(&self, mut record: BaseRecord<'a, K, P>)
@@ -694,18 +708,7 @@ where
             handle: Mutex::new(health_output),
         };
 
-        // Note that where this lies in the rendering cycle means that we might
-        // create the collateral topics each time the sink is rendered, e.g. if
-        // the broker's admin deleted the progress and data topics. For more
-        // details, see `mz_storage_client::sink::build_kafka`.
-        let latest_ts = halt_on_err(
-            &healthchecker,
-            util::build_kafka(id, &connection, &connection_context).await,
-            None,
-        )
-        .await;
-
-        let mut s = KafkaSinkState::new(
+        let (mut s, latest_ts) = KafkaSinkState::new(
             id,
             connection,
             name,
