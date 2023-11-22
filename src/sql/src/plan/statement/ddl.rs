@@ -45,8 +45,8 @@ use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
-    KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
+    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionRetention, KafkaSinkFormat,
+    SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -2629,11 +2629,11 @@ fn kafka_sink_builder(
                 .key_writer_schema()
                 .map(|key_schema| key_schema.to_string());
 
-            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
+            KafkaSinkFormat::Avro {
                 key_schema,
                 value_schema,
                 csr_connection,
-            })
+            }
         }
         Some(Format::Json) => KafkaSinkFormat::Json,
         Some(format) => bail_unsupported!(format!("sink format {:?}", format)),

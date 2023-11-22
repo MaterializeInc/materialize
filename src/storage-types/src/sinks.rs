@@ -544,112 +544,19 @@ impl RustType<ProtoKafkaSinkConnectionRetention> for KafkaSinkConnectionRetentio
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum KafkaSinkAvroFormatState<C: ConnectionAccess = InlinedConnection> {
-    /// If we haven't yet communicated with the CSR, we don't yet know if we
-    /// have a schema and value ID. It's possible that this schema was already
-    /// published.
-    UnpublishedMaybe {
+pub enum KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
+    Avro {
         key_schema: Option<String>,
         value_schema: String,
         csr_connection: C::Csr,
     },
-    /// After communicating with the CSR, the IDs we've been given for the
-    /// schemas.
-    Published {
-        key_schema_id: Option<i32>,
-        value_schema_id: i32,
-    },
-}
-
-impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkAvroFormatState, R>
-    for KafkaSinkAvroFormatState<ReferencedConnection>
-{
-    fn into_inline_connection(self, r: R) -> KafkaSinkAvroFormatState {
-        match self {
-            Self::UnpublishedMaybe {
-                key_schema,
-                value_schema,
-                csr_connection,
-            } => KafkaSinkAvroFormatState::UnpublishedMaybe {
-                key_schema,
-                value_schema,
-                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
-            },
-            Self::Published {
-                key_schema_id,
-                value_schema_id,
-            } => KafkaSinkAvroFormatState::Published {
-                key_schema_id,
-                value_schema_id,
-            },
-        }
-    }
-}
-
-impl RustType<proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState> for KafkaSinkAvroFormatState {
-    fn into_proto(&self) -> proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState {
-        use proto_kafka_sink_format::proto_kafka_sink_avro_format_state::{
-            Kind, ProtoPublished, ProtoUnpublishedMaybe,
-        };
-        use proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState;
-
-        ProtoKafkaSinkAvroFormatState {
-            kind: Some(match self {
-                KafkaSinkAvroFormatState::UnpublishedMaybe {
-                    key_schema,
-                    value_schema,
-                    csr_connection,
-                } => Kind::UnpublishedMaybe(ProtoUnpublishedMaybe {
-                    key_schema: key_schema.clone(),
-                    value_schema: value_schema.clone(),
-                    csr_connection: Some(csr_connection.into_proto()),
-                }),
-                KafkaSinkAvroFormatState::Published {
-                    key_schema_id,
-                    value_schema_id,
-                } => Kind::Published(ProtoPublished {
-                    key_schema_id: *key_schema_id,
-                    value_schema_id: *value_schema_id,
-                }),
-            }),
-        }
-    }
-
-    fn from_proto(
-        proto: proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState,
-    ) -> Result<Self, TryFromProtoError> {
-        use proto_kafka_sink_format::proto_kafka_sink_avro_format_state::Kind;
-
-        let kind = proto.kind.ok_or_else(|| {
-            TryFromProtoError::missing_field("ProtoKafkaSinkAvroFormatState::kind")
-        })?;
-
-        Ok(match kind {
-            Kind::UnpublishedMaybe(proto) => Self::UnpublishedMaybe {
-                key_schema: proto.key_schema,
-                value_schema: proto.value_schema,
-                csr_connection: proto
-                    .csr_connection
-                    .into_rust_if_some("ProtoKafkaSinkAvroFormatState::csr_connection")?,
-            },
-            Kind::Published(proto) => Self::Published {
-                key_schema_id: proto.key_schema_id,
-                value_schema_id: proto.value_schema_id,
-            },
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
-    Avro(KafkaSinkAvroFormatState<C>),
     Json,
 }
 
-impl KafkaSinkFormat {
+impl<C: ConnectionAccess> KafkaSinkFormat<C> {
     pub fn get_format_name(&self) -> &str {
         match self {
-            Self::Avro(_) => "avro",
+            Self::Avro { .. } => "avro",
             Self::Json => "json",
         }
     }
@@ -660,7 +567,15 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormat, R>
 {
     fn into_inline_connection(self, r: R) -> KafkaSinkFormat {
         match self {
-            Self::Avro(avro) => KafkaSinkFormat::Avro(avro.into_inline_connection(r)),
+            Self::Avro {
+                key_schema,
+                value_schema,
+                csr_connection,
+            } => KafkaSinkFormat::Avro {
+                key_schema,
+                value_schema,
+                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
+            },
             Self::Json => KafkaSinkFormat::Json,
         }
     }
@@ -671,7 +586,15 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
         use proto_kafka_sink_format::Kind;
         ProtoKafkaSinkFormat {
             kind: Some(match self {
-                Self::Avro(avro) => Kind::Avro(avro.into_proto()),
+                Self::Avro {
+                    key_schema,
+                    value_schema,
+                    csr_connection,
+                } => Kind::Avro(proto_kafka_sink_format::ProtoKafkaSinkAvroFormat {
+                    key_schema: key_schema.clone(),
+                    value_schema: value_schema.clone(),
+                    csr_connection: Some(csr_connection.into_proto()),
+                }),
                 Self::Json => Kind::Json(()),
             }),
         }
@@ -684,7 +607,13 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaSinkFormat::kind"))?;
 
         Ok(match kind {
-            Kind::Avro(avro) => Self::Avro(avro.into_rust()?),
+            Kind::Avro(proto) => Self::Avro {
+                key_schema: proto.key_schema,
+                value_schema: proto.value_schema,
+                csr_connection: proto
+                    .csr_connection
+                    .into_rust_if_some("ProtoKafkaSinkAvroFormat::csr_connection")?,
+            },
             Kind::Json(()) => Self::Json,
         })
     }

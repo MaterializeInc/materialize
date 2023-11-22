@@ -26,9 +26,7 @@ use mz_sql_parser::ast::{
     IfExistsBehavior, OrderByExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
-use mz_storage_types::sinks::{
-    KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection,
-};
+use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -447,11 +445,11 @@ pub fn plan_explain_schema(
         Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {
             StorageSinkConnection::Kafka(KafkaSinkConnection {
                 format:
-                    KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
+                    KafkaSinkFormat::Avro {
                         key_schema,
                         value_schema,
                         ..
-                    }),
+                    },
                 ..
             }) => {
                 let schema = match schema_for {
