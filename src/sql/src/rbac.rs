@@ -1558,7 +1558,7 @@ fn check_object_privileges(
             .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode));
         if !role_privileges.contains(acl_mode) {
             return Err(UnauthorizedError::Privilege {
-                object_description: ErrorMessageObjectDescription::from_id(&object_id, catalog),
+                object_description: ErrorMessageObjectDescription::from_sys_id(&object_id, catalog),
             });
         }
     }

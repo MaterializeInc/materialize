@@ -527,7 +527,7 @@ fn plan_update_privilege(
         let invalid_privileges = acl_mode.difference(all_object_privileges);
         if !invalid_privileges.is_empty() {
             let object_description =
-                ErrorMessageObjectDescription::from_id(&target_id, scx.catalog);
+                ErrorMessageObjectDescription::from_sys_id(&target_id, scx.catalog);
             return Err(PlanError::InvalidPrivilegeTypes {
                 invalid_privileges,
                 object_description,
