@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use prost::Message;
 use std::fmt::Debug;
 
 use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
@@ -15,17 +14,44 @@ use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use mz_persist_types::Codec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Diff;
+use proptest_derive::Arbitrary;
+use prost::Message;
 
 use crate::durable::impls::persist::Timestamp;
 use crate::durable::objects::serialization::proto;
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::Epoch;
 
+/// Trait for objects that can be converted to/from a [`StateUpdateKindBinary`].
+pub(crate) trait IntoStateUpdateKindBinary:
+    Into<StateUpdateKindBinary>
+    + TryFrom<StateUpdateKindBinary>
+    + PartialEq
+    + Eq
+    + PartialOrd
+    + Ord
+    + Debug
+    + Clone
+{
+}
+impl<
+        T: Into<StateUpdateKindBinary>
+            + TryFrom<StateUpdateKindBinary>
+            + PartialEq
+            + Eq
+            + PartialOrd
+            + Ord
+            + Debug
+            + Clone,
+    > IntoStateUpdateKindBinary for T
+{
+}
+
 /// A single update to the catalog state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdate {
+pub struct StateUpdate<T: IntoStateUpdateKindBinary = StateUpdateKind> {
     /// They kind and contents of the state update.
-    pub(super) kind: StateUpdateKind,
+    pub(super) kind: T,
     /// The timestamp at which the update occurred.
     pub(super) ts: Timestamp,
     /// Record count difference for the update.
@@ -124,7 +150,7 @@ impl StateUpdate {
 ///
 /// The entire catalog is serialized as bytes and saved in a single persist shard. We use this
 /// enum to determine what collection something in the catalog belongs to.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
 pub enum StateUpdateKind {
     AuditLog(proto::AuditLogKey, ()),
     Cluster(proto::ClusterKey, proto::ClusterValue),
@@ -501,10 +527,29 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
     }
 }
 
+/// Binary version of [`StateUpdateKind`] to allow reading/writing raw binary from/to persist.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
+pub(crate) struct StateUpdateKindBinary(Vec<u8>);
+
 #[derive(Debug, Clone, Default)]
 pub struct StateUpdateKindSchema;
 
-impl Codec for StateUpdateKind {
+impl From<StateUpdateKind> for StateUpdateKindBinary {
+    fn from(value: StateUpdateKind) -> Self {
+        Self(value.into_proto().encode_to_vec())
+    }
+}
+
+impl TryFrom<StateUpdateKindBinary> for StateUpdateKind {
+    type Error = String;
+
+    fn try_from(value: StateUpdateKindBinary) -> Result<Self, Self::Error> {
+        let kind =
+            proto::StateUpdateKind::decode(value.0.as_slice()).map_err(|err| err.to_string())?;
+        kind.into_rust().map_err(|err| err.to_string())
+    }
+}
+impl Codec for StateUpdateKindBinary {
     type Schema = StateUpdateKindSchema;
 
     fn codec_name() -> String {
@@ -515,36 +560,91 @@ impl Codec for StateUpdateKind {
     where
         B: bytes::BufMut,
     {
-        let bytes = self.into_proto().encode_to_vec();
-        buf.put(bytes.as_slice());
+        buf.put(self.0.as_slice());
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let kind = proto::StateUpdateKind::decode(buf).map_err(|err| err.to_string())?;
-        kind.into_rust().map_err(|err| err.to_string())
+        Ok(Self(buf.to_vec()))
     }
 }
 
-impl mz_persist_types::columnar::Schema<StateUpdateKind> for StateUpdateKindSchema {
-    type Encoder<'a> = SimpleEncoder<'a, StateUpdateKind, Vec<u8>>;
+impl mz_persist_types::columnar::Schema<StateUpdateKindBinary> for StateUpdateKindSchema {
+    type Encoder<'a> = SimpleEncoder<'a, StateUpdateKindBinary, Vec<u8>>;
 
-    type Decoder<'a> = SimpleDecoder<'a, StateUpdateKind, Vec<u8>>;
+    type Decoder<'a> = SimpleDecoder<'a, StateUpdateKindBinary, Vec<u8>>;
 
     fn columns(&self) -> DynStructCfg {
-        SimpleSchema::<StateUpdateKind, Vec<u8>>::columns(&())
+        SimpleSchema::<StateUpdateKindBinary, Vec<u8>>::columns(&())
     }
 
     fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
-        SimpleSchema::<StateUpdateKind, Vec<u8>>::decoder(cols, |val, ret| {
-            *ret = StateUpdateKind::decode(val).expect("should be valid StateUpdateKind")
+        SimpleSchema::<StateUpdateKindBinary, Vec<u8>>::decoder(cols, |val, ret| {
+            *ret =
+                StateUpdateKindBinary::decode(val).expect("should be valid StateUpdateKindBinary")
         })
     }
 
     fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        SimpleSchema::<StateUpdateKind, Vec<u8>>::push_encoder(cols, |col, val| {
+        SimpleSchema::<StateUpdateKindBinary, Vec<u8>>::push_encoder(cols, |col, val| {
             let mut buf = Vec::new();
-            StateUpdateKind::encode(val, &mut buf);
+            StateUpdateKindBinary::encode(val, &mut buf);
             mz_persist_types::columnar::ColumnPush::<Vec<u8>>::push(col, &buf)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_persist_types::Codec;
+    use mz_proto::ProtoType;
+    use mz_proto::RustType;
+    use proptest::prelude::*;
+    use prost::Message;
+
+    use crate::durable::impls::persist::state_update::StateUpdateKindBinary;
+    use crate::durable::impls::persist::StateUpdateKind;
+    use crate::durable::objects::serialization::proto;
+
+    proptest! {
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn proptest_state_update_kind_roundtrip(kind: StateUpdateKind) {
+            // Roundtrip through `Vec<u8>`.
+            let encoded = kind.into_proto().encode_to_vec();
+            let decoded = proto::StateUpdateKind::decode(encoded.as_slice())
+                .expect("decode error")
+                .into_rust()
+                .expect("decode error");
+
+            prop_assert_eq!(&kind, &decoded);
+
+            // Roundtrip through `StateUpdateKindBinary`.
+            let kind_binary: StateUpdateKindBinary = kind.clone().into();
+            let kind_roundtrip = StateUpdateKind::try_from(kind_binary).expect("should roundtrip");
+
+            prop_assert_eq!(kind, kind_roundtrip);
+        }
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn proptest_state_update_kind_binary_roundtrip(kind: StateUpdateKindBinary) {
+            let mut binary = Vec::new();
+            kind.encode(&mut binary);
+            let decoded = StateUpdateKindBinary::decode(&binary).expect("should be valid StateUpdateKindBinary");
+
+            prop_assert_eq!(kind, decoded);
+        }
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn proptest_state_update_kind_binary_equivalence(kind: StateUpdateKind) {
+            let kind_encoded = kind.into_proto().encode_to_vec();
+
+            let kind_binary: StateUpdateKindBinary = kind.into();
+            let mut kind_binary_encoded = Vec::new();
+            kind_binary.encode(&mut kind_binary_encoded);
+
+            prop_assert_eq!(kind_encoded, kind_binary_encoded);
+        }
     }
 }

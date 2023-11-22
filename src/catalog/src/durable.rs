@@ -164,6 +164,8 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError>;
 
     /// Get all audit log events.
+    ///
+    /// Results are guaranteed to be sorted by ID.
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError>;
 
     /// Get the next ID of `id_type`, without allocating it.
@@ -203,6 +205,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Gets all storage usage events and permanently deletes from the catalog those
     /// that happened more than the retention period ago from boot_ts.
+    ///
+    /// Results are guaranteed to be sorted by ID.
     async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
