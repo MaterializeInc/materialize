@@ -671,11 +671,17 @@ impl KafkaTxProducer {
             )
             .await?;
 
-        Ok(KafkaTxProducer {
+        let producer = KafkaTxProducer {
             name,
             inner: Arc::new(producer),
             timeout: Duration::from_secs(5),
-        })
+        };
+
+        producer
+            .retry_on_txn_error(|p| p.init_transactions())
+            .await?;
+
+        Ok(producer)
     }
 
     pub fn init_transactions(&self) -> impl Future<Output = KafkaResult<()>> {

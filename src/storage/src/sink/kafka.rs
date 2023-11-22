@@ -718,13 +718,6 @@ where
         )
         .await;
 
-        s.halt_on_err(
-            s.producer
-                .retry_on_txn_error(|p| p.init_transactions())
-                .await,
-        )
-        .await;
-
         info!(
             "{}: initial as_of: {:?}, latest progress record: {:?}",
             s.name, as_of.frontier, latest_ts
