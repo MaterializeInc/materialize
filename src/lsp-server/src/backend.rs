@@ -16,6 +16,10 @@
 // The original source code is subject to the terms of the <APACHE|MIT> license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
+use std::ops::DerefMut;
+
+use mz_sql_lexer::keywords::Keyword;
+use mz_sql_lexer::lexer::{self, Token};
 use ::serde::Deserialize;
 use mz_ore::collections::HashMap;
 use mz_sql_parser::ast::{statement_kind_label_value, Raw, Statement};
@@ -29,6 +33,7 @@ use tower_lsp::jsonrpc::{Error, ErrorCode, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
+use crate::functions::FUNCTIONS;
 use crate::{PKG_NAME, PKG_VERSION};
 
 /// Default formatting width to use in the [Backend::formatting] implementation.
@@ -91,8 +96,37 @@ pub struct Backend {
     /// prior to save the file.
     pub parse_results: Mutex<HashMap<Url, ParseResult>>,
 
+    /// Contains the latest content for each file.
+    pub content: Mutex<HashMap<Url, Rope>>,
+
     /// Formatting width to use in mz- prettier
     pub formatting_width: Mutex<usize>,
+
+    /// Schema available in the client
+    /// used for completion suggestions.
+    pub schema: Mutex<Option<Schema>>
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SchemaObjectColumn {
+    name: String,
+    #[serde(rename = "type")]
+    _type: String
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SchemaObject {
+    #[serde(rename = "type")]
+    _type: String,
+    name: String,
+    columns: Vec<SchemaObjectColumn>
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Schema {
+    schema: String,
+    database: String,
+    objects: Vec<SchemaObject>
 }
 
 /// Contains customizable options send by the client.
@@ -101,12 +135,13 @@ pub struct Backend {
 pub struct InitializeOptions {
     /// Represents the width used to format text using [mz_sql_pretty].
     formatting_width: Option<usize>,
+    schema: Option<Schema>
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        // Load the formatting width option sent by the client.
+        // Load the formatting width and schema option sent by the client.
         if let Some(value_options) = params.initialization_options {
             match serde_json::from_value(value_options) {
                 Ok(options) => {
@@ -122,6 +157,11 @@ impl LanguageServer for Backend {
                         let mut mutex_changer = self.formatting_width.lock().await;
                         *mutex_changer = formatting_width;
                     }
+
+                    if let Some(schema) = options.schema {
+                        let mut mutex_changer = self.schema.lock().await;
+                        *mutex_changer = Some(schema);
+                    };
                 }
                 Err(err) => {
                     self.client
@@ -150,6 +190,13 @@ impl LanguageServer for Backend {
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: None,
                     },
+                }),
+                completion_provider: Some(CompletionOptions {
+                    resolve_provider: Some(false),
+                    trigger_characters: Some(vec![".".to_string()]),
+                    work_done_progress_options: Default::default(),
+                    all_commit_characters: None,
+                    completion_item: None,
                 }),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
@@ -225,6 +272,32 @@ impl LanguageServer for Backend {
                     return Err(build_error("Missing command args."));
                 }
             }
+            "optionsUpdate" => {
+                let json_args = command_params.arguments.get(0);
+
+                if let Some(json_args) = json_args {
+                    self.client
+                    .log_message(MessageType::INFO, format!("Json args: {:?}", json_args))
+                    .await;
+
+                    let args = serde_json::from_value::<InitializeOptions>(json_args.clone())
+                        .map_err(|_| build_error("Error deserializing parse args as InitializeOptions."))?;
+
+                    if let Some(formatting_width) = args.formatting_width  {
+                        let mut formatting_width_guard = self.formatting_width.lock().await;
+                        *formatting_width_guard = formatting_width;
+                    }
+
+                    if let Some(schema) = args.schema  {
+                        let mut schema_guard = self.schema.lock().await;
+                        *schema_guard = Some(schema);
+                    }
+
+                    return Ok(None);
+                } else {
+                    return Err(build_error("Missing command args."));
+                }
+            }
             _ => {
                 return Err(build_error("Unknown command."));
             }
@@ -269,15 +342,6 @@ impl LanguageServer for Backend {
             .await;
     }
 
-    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let _uri = params.text_document_position.text_document.uri;
-        let _position = params.text_document_position.position;
-
-        // TODO: Re enable when position is correct.
-        // Ok(completions.map(CompletionResponse::Array))
-        Ok(None)
-    }
-
     async fn code_lens(&self, _params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
         let _lenses: Vec<CodeLens> = vec![CodeLens {
             range: Range {
@@ -295,6 +359,112 @@ impl LanguageServer for Backend {
         // TODO: Re enable when position is correct.
         // Ok(Some(lenses))
         Ok(None)
+    }
+
+    /// Completion implementation.
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let _uri = params.text_document_position.text_document.uri;
+        let _position = params.text_document_position.position;
+
+        let content = self.content.lock().await;
+        let content = content.get(&_uri);
+
+        if let Some(content) = content {
+            // Get the lex token.
+            let lex_results = lexer::lex(&content.to_string()).map_err(|_| build_error("Error getting lex tokens."))?;
+            let offset = position_to_offset(_position, &content).ok_or(build_error("Error getting completion offset."))?;
+            let mut last_keyword: Option<Keyword> = None;
+            lex_results
+                .iter()
+                .enumerate()
+                .find(|(_, x)| {
+                    match x.kind {
+                        Token::Keyword(k) => {
+                            match k {
+                                Keyword::Select => {
+                                    last_keyword = Some(k);
+                                }
+                                Keyword::From => {
+                                    last_keyword = Some(k);
+                                }
+                                _ => {}
+                            }
+                        }
+                        // Skip the rest for now.
+                        _ => {}
+                    };
+
+                    return x.offset >= offset;
+                });
+
+            if let Some(keyword) = last_keyword {
+                let completions = match keyword {
+                    Keyword::Select => {
+                        // Return columns and function
+                        let mut schema = self.schema.lock().await;
+                        let mut completions = FUNCTIONS.clone();
+
+                        self.client
+                        .log_message(MessageType::INFO, format!("Schema: {:?}", schema))
+                        .await;
+
+                        if let Some(schema) = schema.deref_mut() {
+                            schema.objects.iter().for_each(|object| {
+                                // Columns
+                                object.columns.iter().for_each(|column| {
+                                    completions.push(CompletionItem {
+                                        label: column.name.to_string(),
+                                        label_details: Some(CompletionItemLabelDetails {
+                                            detail: Some(column._type.to_string()),
+                                            description: Some(column._type.to_string()),
+                                        }),
+                                        kind: Some(CompletionItemKind::FIELD),
+                                        detail: Some(format!("From {} {}", object.name, object._type).to_string()),
+                                        documentation: None,
+                                        deprecated: Some(false),
+                                        ..Default::default()
+                                    });
+                                });
+                            });
+                        }
+
+                        completions
+                    }
+                    Keyword::From => {
+                        let mut completions = FUNCTIONS.clone();
+                        let mut schema = self.schema.lock().await;
+
+                        if let Some(schema) = schema.deref_mut() {
+                            // Objects (tables, views, materialized views)
+                            schema.objects.iter().for_each(|object| {
+                                completions.push(CompletionItem {
+                                    label: object.name.to_string(),
+                                    label_details: Some(CompletionItemLabelDetails {
+                                        detail: None,
+                                        description: Some(object._type.to_string()),
+                                    }),
+                                    kind: Some(CompletionItemKind::FUNCTION),
+                                    detail: None,
+                                    documentation: None,
+                                    deprecated: Some(false),
+                                    ..Default::default()
+                                });
+                            });
+                        }
+
+                        completions
+                    }
+                    // Skip the rest for now.
+                    _ => { vec![] }
+                };
+
+                return Ok(Some(CompletionResponse::Array(completions)));
+            }
+
+            return Ok(None);
+        } else {
+            return Ok(None);
+        }
     }
 
     /// Formats the code using [mz_sql_pretty].
@@ -340,6 +510,9 @@ impl Backend {
             .log_message(MessageType::INFO, format!("on_change {:?}", params.uri))
             .await;
         let rope = ropey::Rope::from_str(&params.text);
+
+        let mut content = self.content.lock().await;
+        content.insert(params.uri.clone(), rope.clone());
 
         let mut parse_results = self.parse_results.lock().await;
         // Parse the text
@@ -410,7 +583,25 @@ impl Backend {
     }
 }
 
-/// This functions is a helper function that converts an offset in the file to a (line, column).
+
+/// This function converts a (line, column) position in the text to an offset in the file.
+///
+/// It is the inverse of the `offset_to_position` function.
+fn position_to_offset(position: Position, rope: &Rope) -> Option<usize> {
+    // Convert line and column from u32 back to usize
+    let line = position.line as usize;
+    let column = position.character as usize;
+
+    // Get the offset of the first character of the line
+    let first_char_of_line_offset = rope.try_line_to_char(line).ok()?;
+
+    // Calculate the offset by adding the column number to the first character of the line's offset
+    let offset = first_char_of_line_offset + column;
+
+    Some(offset)
+}
+
+/// This function is a helper function that converts an offset in the file to a (line, column).
 ///
 /// It is useful when translating an ofsset returned by [mz_sql_parser::parser::parse_statements]
 /// to an (x,y) position in the text to represent the error in the correct token.

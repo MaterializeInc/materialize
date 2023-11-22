@@ -97,6 +97,8 @@ async fn main() {
         client,
         parse_results: Mutex::new(HashMap::new()),
         formatting_width: DEFAULT_FORMATTING_WIDTH.into(),
+        schema: Mutex::new(None),
+        content: Mutex::new(HashMap::new()),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }

@@ -150,6 +150,7 @@ mod tests {
         test_simple_query(&mut req_client, &mut resp_client).await;
         test_jinja_query(&mut req_client, &mut resp_client).await;
         test_execute_command(&mut req_client, &mut resp_client).await;
+        test_completion(&mut req_client, &mut resp_client).await;
     }
 
     /// Builds the file containing a simple query
@@ -188,6 +189,73 @@ mod tests {
             {% endif %}
         "#;
         test_query(query, None, req_client, resp_client).await;
+    }
+
+    /// Asserts the the server can return completions varying the context
+    async fn test_completion(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
+        let request = format!(
+            r#"{{
+            "jsonrpc":"2.0",
+            "id": 2,
+            "method":"textDocument/completion",
+            "params": {{
+                "options": {{
+                    "tabSize": 1,
+                    "insertSpaces": true
+                }},
+                "textDocument": {{
+                    "uri": "{}"
+                }}
+            }}
+        }}"#,
+            get_file_uri()
+        );
+
+        // This field was "mixed-in" from TextDocumentPositionParams
+        // #[serde(flatten)]
+        // pub text_document_position: TextDocumentPositionParams,
+        // #[serde(flatten)]
+        // pub work_done_progress_params: WorkDoneProgressParams,
+        // #[serde(flatten)]
+        // pub partial_result_params: PartialResultParams,
+        // // CompletionParams properties:
+        // #[serde(skip_serializing_if = "Option::is_none")]
+        // pub context: Option<CompletionContext>,
+
+        let expected_response = vec![LspMessage::<(), ExecuteCommandParseResponse> {
+            jsonrpc: "2.0".to_string(),
+            id: Some(2),
+            result: Some(ExecuteCommandParseResponse {
+                statements: vec![
+                    ExecuteCommandParseStatement {
+                        sql: "SELECT 100".to_string(),
+                        kind: "select".to_string(),
+                    },
+                    ExecuteCommandParseStatement {
+                        sql: "SELECT 200".to_string(),
+                        kind: "select".to_string(),
+                    },
+                    ExecuteCommandParseStatement {
+                        sql: "CREATE TABLE A (A INT)".to_string(),
+                        kind: "create_table".to_string(),
+                    },
+                ],
+            }),
+            method: None,
+            params: None,
+            error: None,
+        }];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            &request,
+            expected_response,
+        )
+        .await;
+
+
     }
 
     /// Asserts that the server can parse a sql text file by using "workspace/executeCommand".
@@ -513,6 +581,8 @@ mod tests {
             client,
             parse_results: Mutex::new(HashMap::new()),
             formatting_width: DEFAULT_FORMATTING_WIDTH.into(),
+            schema: Mutex::new(None),
+            content: Mutext::new(HashMap::new()),
         });
 
         mz_ore::task::spawn(
