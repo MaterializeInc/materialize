@@ -75,7 +75,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_specialized_arrangements": "true",
     "persist_fast_path_limit": "1000",
     "enable_alter_swap": "true",
-    "enable_rename_schema": "true",
     "timestamp_oracle": "postgres",
 }
 
