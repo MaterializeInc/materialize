@@ -91,6 +91,186 @@ impl PersistHandle {
         ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
     }
 
+    /// Fetch the current upper of the catalog state.
+    async fn current_upper(&mut self) -> Timestamp {
+        current_upper(&mut self.write_handle).await
+    }
+
+    /// Generates a timestamp for reading from the catalog that is as fresh as possible, given
+    /// `upper`.
+    fn as_of(&self, upper: Timestamp) -> Timestamp {
+        as_of(&self.read_handle, upper)
+    }
+
+    /// Reports if the catalog state has been initialized, and the current upper.
+    async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
+        let upper = self.current_upper().await;
+        let is_initialized = if upper == Timestamp::minimum() {
+            false
+        } else {
+            let as_of = self.as_of(upper);
+            self.get_configs(as_of).await.next().is_some()
+        };
+        (is_initialized, upper)
+    }
+
+    /// Generates a [`Vec<StateUpdate>`] that contain all updates to the catalog
+    /// state.
+    ///
+    /// The output is consolidated and sorted by timestamp in ascending order and the current upper.
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn current_snapshot(&mut self) -> (&Vec<StateUpdate>, Timestamp) {
+        static EMPTY_SNAPSHOT: Vec<StateUpdate> = Vec::new();
+        let current_upper = self.current_upper().await;
+        if current_upper != Timestamp::minimum() {
+            let as_of = self.as_of(current_upper);
+            let snapshot = self.snapshot(as_of).await;
+            (snapshot, current_upper)
+        } else {
+            (&EMPTY_SNAPSHOT, current_upper)
+        }
+    }
+
+    /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
+    /// state up to, and including, `as_of`.
+    ///
+    /// The output is consolidated and sorted by timestamp in ascending order.
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn snapshot<'a>(&'a mut self, as_of: Timestamp) -> &'a Vec<StateUpdate> {
+        match &self.snapshot_cache {
+            Some((cached_as_of, _)) if as_of == *cached_as_of => {}
+            _ => {
+                let snapshot: Vec<_> = snapshot(&mut self.read_handle, as_of).await.collect();
+                self.snapshot_cache = Some((as_of, snapshot));
+            }
+        }
+
+        &self.snapshot_cache.as_ref().expect("populated above").1
+    }
+
+    /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
+    /// catalog state up to, and including, `as_of`.
+    async fn snapshot_unconsolidated(
+        &mut self,
+        as_of: Timestamp,
+    ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
+        let mut snapshot = Vec::new();
+        let mut stream = Box::pin(
+            // We use `snapshot_and_stream` because it guarantees unconsolidated output.
+            self.read_handle
+                .snapshot_and_stream(Antichain::from_elem(as_of))
+                .await
+                .expect("we have advanced the restart_as_of by the since"),
+        );
+        while let Some(update) = stream.next().await {
+            snapshot.push(update)
+        }
+        snapshot
+            .into_iter()
+            .map(|((kind, _unit), ts, diff)| StateUpdate {
+                kind: kind.expect("kind decoding error"),
+                ts,
+                diff,
+            })
+    }
+
+    /// Get the current value of config `key`.
+    ///
+    /// Some configs need to be read before the catalog is opened for bootstrapping.
+    async fn get_current_config(&mut self, key: &str) -> Option<u64> {
+        let current_upper = self.current_upper().await;
+        if current_upper != Timestamp::minimum() {
+            let as_of = self.as_of(current_upper);
+            self.get_config(key, as_of).await
+        } else {
+            None
+        }
+    }
+
+    /// Get value of config `key` at `as_of`.
+    ///
+    /// Some configs need to be read before the catalog is opened for bootstrapping.
+    async fn get_config(&mut self, key: &str, as_of: Timestamp) -> Option<u64> {
+        let mut configs: Vec<_> = self
+            .get_configs(as_of)
+            .await
+            .filter_map(|config| {
+                if key == &config.key {
+                    Some(config.value)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        soft_assert!(
+            configs.len() <= 1,
+            "multiple configs should not share the same key: {configs:?}"
+        );
+        configs.pop()
+    }
+
+    /// Get all Configs.
+    ///
+    /// Some configs need to be read before the catalog is opened for bootstrapping.
+    async fn get_configs(&mut self, as_of: Timestamp) -> impl Iterator<Item = Config> {
+        self.snapshot(as_of)
+            .await
+            .rev()
+            .filter_map(|StateUpdate { kind, ts: _, diff }| {
+                soft_assert_eq!(1, diff);
+                match kind {
+                    StateUpdateKind::Config(k, v) => {
+                        let k = k.into_rust().expect("invalid config key persisted");
+                        let v = v.into_rust().expect("invalid config value persisted");
+                        Some(Config::from_key_value(k, v))
+                    }
+                    _ => None,
+                }
+            })
+    }
+
+    /// Get the user version of this instance.
+    ///
+    /// The user version is used to determine if a migration is needed.
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn get_user_version(&mut self, as_of: Timestamp) -> Option<u64> {
+        self.get_config(USER_VERSION_KEY, as_of).await
+    }
+
+    /// Get epoch at `as_of`.
+    async fn get_epoch(&mut self, as_of: Timestamp) -> Epoch {
+        let epochs =
+            self.snapshot(as_of)
+                .await
+                .rev()
+                .filter_map(|StateUpdate { kind, ts: _, diff }| {
+                    soft_assert_eq!(1, diff);
+                    match kind {
+                        StateUpdateKind::Epoch(epoch) => Some(epoch),
+                        _ => None,
+                    }
+                });
+        // There must always be a single epoch.
+        epochs.into_element()
+    }
+
+    /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
+    /// iff the current global upper of the catalog is `current_upper`.
+    async fn compare_and_append(
+        &mut self,
+        updates: Vec<StateUpdate>,
+        current_upper: Timestamp,
+        next_upper: Timestamp,
+    ) -> Result<(), CatalogError> {
+        compare_and_append(&mut self.write_handle, updates, current_upper, next_upper).await?;
+        self.read_handle
+            .downgrade_since(&Antichain::from_elem(current_upper))
+            .await;
+        Ok(())
+    }
+}
+
+impl PersistHandle {
     /// Create a new [`PersistHandle`] to the catalog state associated with `organization_id`.
     #[tracing::instrument(level = "debug", skip(persist_client))]
     pub(crate) async fn new(persist_client: PersistClient, organization_id: Uuid) -> PersistHandle {
@@ -279,184 +459,6 @@ impl PersistHandle {
         }
 
         Ok(Box::new(catalog))
-    }
-
-    /// Fetch the current upper of the catalog state.
-    async fn current_upper(&mut self) -> Timestamp {
-        current_upper(&mut self.write_handle).await
-    }
-
-    /// Generates a timestamp for reading from the catalog that is as fresh as possible, given
-    /// `upper`.
-    fn as_of(&self, upper: Timestamp) -> Timestamp {
-        as_of(&self.read_handle, upper)
-    }
-
-    /// Reports if the catalog state has been initialized, and the current upper.
-    async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
-        let upper = self.current_upper().await;
-        let is_initialized = if upper == Timestamp::minimum() {
-            false
-        } else {
-            let as_of = self.as_of(upper);
-            self.get_configs(as_of).await.next().is_some()
-        };
-        (is_initialized, upper)
-    }
-
-    /// Generates a [`Vec<StateUpdate>`] that contain all updates to the catalog
-    /// state.
-    ///
-    /// The output is consolidated and sorted by timestamp in ascending order and the current upper.
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn current_snapshot(&mut self) -> (&Vec<StateUpdate>, Timestamp) {
-        static EMPTY_SNAPSHOT: Vec<StateUpdate> = Vec::new();
-        let current_upper = self.current_upper().await;
-        if current_upper != Timestamp::minimum() {
-            let as_of = self.as_of(current_upper);
-            let snapshot = self.snapshot(as_of).await;
-            (snapshot, current_upper)
-        } else {
-            (&EMPTY_SNAPSHOT, current_upper)
-        }
-    }
-
-    /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
-    /// state up to, and including, `as_of`.
-    ///
-    /// The output is consolidated and sorted by timestamp in ascending order.
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn snapshot<'a>(&'a mut self, as_of: Timestamp) -> &'a Vec<StateUpdate> {
-        match &self.snapshot_cache {
-            Some((cached_as_of, _)) if as_of == *cached_as_of => {}
-            _ => {
-                let snapshot: Vec<_> = snapshot(&mut self.read_handle, as_of).await.collect();
-                self.snapshot_cache = Some((as_of, snapshot));
-            }
-        }
-
-        &self.snapshot_cache.as_ref().expect("populated above").1
-    }
-
-    /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
-    /// catalog state up to, and including, `as_of`.
-    async fn snapshot_unconsolidated(
-        &mut self,
-        as_of: Timestamp,
-    ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-        let mut snapshot = Vec::new();
-        let mut stream = Box::pin(
-            // We use `snapshot_and_stream` because it guarantees unconsolidated output.
-            self.read_handle
-                .snapshot_and_stream(Antichain::from_elem(as_of))
-                .await
-                .expect("we have advanced the restart_as_of by the since"),
-        );
-        while let Some(update) = stream.next().await {
-            snapshot.push(update)
-        }
-        snapshot
-            .into_iter()
-            .map(|((kind, _unit), ts, diff)| StateUpdate {
-                kind: kind.expect("kind decoding error"),
-                ts,
-                diff,
-            })
-    }
-
-    /// Get the current value of config `key`.
-    ///
-    /// Some configs need to be read before the catalog is opened for bootstrapping.
-    async fn get_current_config(&mut self, key: &str) -> Option<u64> {
-        let current_upper = self.current_upper().await;
-        if current_upper != Timestamp::minimum() {
-            let as_of = self.as_of(current_upper);
-            self.get_config(key, as_of).await
-        } else {
-            None
-        }
-    }
-
-    /// Get value of config `key` at `as_of`.
-    ///
-    /// Some configs need to be read before the catalog is opened for bootstrapping.
-    async fn get_config(&mut self, key: &str, as_of: Timestamp) -> Option<u64> {
-        let mut configs: Vec<_> = self
-            .get_configs(as_of)
-            .await
-            .filter_map(|config| {
-                if key == &config.key {
-                    Some(config.value)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        soft_assert!(
-            configs.len() <= 1,
-            "multiple configs should not share the same key: {configs:?}"
-        );
-        configs.pop()
-    }
-
-    /// Get all Configs.
-    ///
-    /// Some configs need to be read before the catalog is opened for bootstrapping.
-    async fn get_configs(&mut self, as_of: Timestamp) -> impl Iterator<Item = Config> {
-        self.snapshot(as_of)
-            .await
-            .rev()
-            .filter_map(|StateUpdate { kind, ts: _, diff }| {
-                soft_assert_eq!(1, diff);
-                match kind {
-                    StateUpdateKind::Config(k, v) => {
-                        let k = k.into_rust().expect("invalid config key persisted");
-                        let v = v.into_rust().expect("invalid config value persisted");
-                        Some(Config::from_key_value(k, v))
-                    }
-                    _ => None,
-                }
-            })
-    }
-
-    /// Get the user version of this instance.
-    ///
-    /// The user version is used to determine if a migration is needed.
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn get_user_version(&mut self, as_of: Timestamp) -> Option<u64> {
-        self.get_config(USER_VERSION_KEY, as_of).await
-    }
-
-    /// Get epoch at `as_of`.
-    async fn get_epoch(&mut self, as_of: Timestamp) -> Epoch {
-        let epochs =
-            self.snapshot(as_of)
-                .await
-                .rev()
-                .filter_map(|StateUpdate { kind, ts: _, diff }| {
-                    soft_assert_eq!(1, diff);
-                    match kind {
-                        StateUpdateKind::Epoch(epoch) => Some(epoch),
-                        _ => None,
-                    }
-                });
-        // There must always be a single epoch.
-        epochs.into_element()
-    }
-
-    /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
-    /// iff the current global upper of the catalog is `current_upper`.
-    async fn compare_and_append(
-        &mut self,
-        updates: Vec<StateUpdate>,
-        current_upper: Timestamp,
-        next_upper: Timestamp,
-    ) -> Result<(), CatalogError> {
-        compare_and_append(&mut self.write_handle, updates, current_upper, next_upper).await?;
-        self.read_handle
-            .downgrade_since(&Antichain::from_elem(current_upper))
-            .await;
-        Ok(())
     }
 }
 
