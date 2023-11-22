@@ -10,8 +10,11 @@
 //! Types for describing dataflows.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+use std::time::Duration;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationType};
 use mz_storage_types::controller::CollectionMetadata;
@@ -65,19 +68,35 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
 impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
     /// Tests if the dataflow refers to a single timestamp, namely
     /// that `as_of` has a single coordinate and that the `until`
-    /// value corresponds to the `as_of` value plus one.
+    /// value corresponds to the `as_of` value plus one, or `as_of`
+    /// is the maximum timestamp and is thus single.
     pub fn is_single_time(&self) -> bool {
         // TODO: this would be much easier to check if `until` was a strict lower bound,
         // and we would be testing that `until == as_of`.
+
+        let until = &self.until;
+
+        // IF `as_of` is not set at all this can't be a single time dataflow.
         let Some(as_of) = self.as_of.as_ref() else {
             return false;
         };
-        !as_of.is_empty()
-            && as_of
-                .as_option()
-                .and_then(|as_of| as_of.checked_add(1))
-                .as_ref()
-                == self.until.as_option()
+        // Ensure that as_of <= until.
+        soft_assert_or_log!(
+            timely::PartialOrder::less_equal(as_of, until),
+            "expected empty `as_of ≤ until`, got `{as_of:?} ≰ {until:?}`",
+        );
+        // IF `as_of` is not a single timestamp this can't be a single time dataflow.
+        let Some(as_of) = as_of.as_option() else {
+            return false;
+        };
+        // Ensure that `as_of = MAX` implies `until.is_empty()`.
+        soft_assert_or_log!(
+            as_of != &mz_repr::Timestamp::MAX || until.is_empty(),
+            "expected `until = {{}}` due to `as_of = MAX`, got `until = {until:?}`",
+        );
+        // Note that the `(as_of = MAX, until = {})` case also returns `true`
+        // here (as expected) since we are going to compare two `None` values.
+        as_of.try_step_forward().as_ref() == until.as_option()
     }
 }
 
@@ -171,33 +190,6 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             || self.source_imports.keys().any(|i| i == id)
     }
 
-    /// Assigns the `as_of` frontier to the supplied argument.
-    ///
-    /// This method allows the dataflow to indicate a frontier up through
-    /// which all times should be advanced. This can be done for at least
-    /// two reasons: 1. correctness and 2. performance.
-    ///
-    /// Correctness may require an `as_of` to ensure that historical detail
-    /// is consolidated at representative times that do not present specific
-    /// detail that is not specifically correct. For example, updates may be
-    /// compacted to times that are no longer the source times, but instead
-    /// some byproduct of when compaction was executed; we should not present
-    /// those specific times as meaningfully different from other equivalent
-    /// times.
-    ///
-    /// Performance may benefit from an aggressive `as_of` as it reduces the
-    /// number of distinct moments at which collections vary. Differential
-    /// dataflow will refresh its outputs at each time its inputs change and
-    /// to moderate that we can minimize the volume of distinct input times
-    /// as much as possible.
-    ///
-    /// Generally, one should consider setting `as_of` at least to the `since`
-    /// frontiers of contributing data sources and as aggressively as the
-    /// computation permits.
-    pub fn set_as_of(&mut self, as_of: Antichain<T>) {
-        self.as_of = Some(as_of);
-    }
-
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
         for (source_id, (source, _monotonic)) in self.source_imports.iter() {
@@ -246,12 +238,47 @@ impl<P, S, T> DataflowDescription<P, S, T>
 where
     P: CollectionPlan,
 {
+    /// Assigns the `as_of` frontier to the supplied argument.
+    ///
+    /// This method allows the dataflow to indicate a frontier up through
+    /// which all times should be advanced. This can be done for at least
+    /// two reasons: 1. correctness and 2. performance.
+    ///
+    /// Correctness may require an `as_of` to ensure that historical detail
+    /// is consolidated at representative times that do not present specific
+    /// detail that is not specifically correct. For example, updates may be
+    /// compacted to times that are no longer the source times, but instead
+    /// some byproduct of when compaction was executed; we should not present
+    /// those specific times as meaningfully different from other equivalent
+    /// times.
+    ///
+    /// Performance may benefit from an aggressive `as_of` as it reduces the
+    /// number of distinct moments at which collections vary. Differential
+    /// dataflow will refresh its outputs at each time its inputs change and
+    /// to moderate that we can minimize the volume of distinct input times
+    /// as much as possible.
+    ///
+    /// Generally, one should consider setting `as_of` at least to the `since`
+    /// frontiers of contributing data sources and as aggressively as the
+    /// computation permits.
+    pub fn set_as_of(&mut self, as_of: Antichain<T>) {
+        self.as_of = Some(as_of);
+    }
+
+    /// Identifiers of imported objects (indexes and sources).
+    pub fn import_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
+        self.index_imports
+            .keys()
+            .chain(self.source_imports.keys())
+            .copied()
+    }
+
     /// Identifiers of exported objects (indexes and sinks).
-    pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+    pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
         self.index_exports
             .keys()
             .chain(self.sink_exports.keys())
-            .cloned()
+            .copied()
     }
 
     /// Identifiers of exported subscribe sinks.
@@ -262,6 +289,23 @@ where
                 ComputeSinkConnection::Subscribe(_) => Some(*id),
                 _ => None,
             })
+    }
+
+    /// Produce a `Display`able value containing the import IDs of this dataflow.
+    pub fn display_import_ids(&self) -> impl fmt::Display + '_ {
+        use mz_ore::str::{bracketed, separated};
+        bracketed("[", "]", separated(", ", self.import_ids()))
+    }
+
+    /// Produce a `Display`able value containing the export IDs of this dataflow.
+    pub fn display_export_ids(&self) -> impl fmt::Display + '_ {
+        use mz_ore::str::{bracketed, separated};
+        bracketed("[", "]", separated(", ", self.export_ids()))
+    }
+
+    /// Whether this dataflow installs transient collections.
+    pub fn is_transient(&self) -> bool {
+        self.export_ids().all(|id| id.is_transient())
     }
 
     /// Returns the description of the object to build with the specified
@@ -636,6 +680,31 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
         Ok(BuildDesc {
             id: x.id.into_rust_if_some("ProtoBuildDesc::id")?,
             plan: x.plan.into_rust_if_some("ProtoBuildDesc::plan")?,
+        })
+    }
+}
+
+/// Specification of a dataflow operator's yielding behavior.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct YieldSpec {
+    /// Yield after the given amount of work was performed.
+    pub after_work: Option<usize>,
+    /// Yield after the given amount of time has elapsed.
+    pub after_time: Option<Duration>,
+}
+
+impl RustType<ProtoYieldSpec> for YieldSpec {
+    fn into_proto(&self) -> ProtoYieldSpec {
+        ProtoYieldSpec {
+            after_work: self.after_work.into_proto(),
+            after_time: self.after_time.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoYieldSpec) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            after_work: proto.after_work.into_rust()?,
+            after_time: proto.after_time.into_rust()?,
         })
     }
 }

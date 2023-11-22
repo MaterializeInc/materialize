@@ -32,7 +32,7 @@ $ kafka-ingest format=avro topic=topic-compression key-format=avro key-schema=${
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE topic_compression
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic-compression-${testdrive.seed}')

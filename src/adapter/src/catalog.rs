@@ -11,14 +11,16 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{atomic, Arc};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::Future;
 use itertools::Itertools;
-use tokio::sync::mpsc::{self, UnboundedSender};
+use mz_adapter_types::connection::ConnectionId;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
 use tracing::{info, trace};
+use uuid::Uuid;
 
 use mz_audit_log::{EventDetails, EventType, FullNameV1, IdFullNameV1, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
@@ -26,28 +28,36 @@ use mz_catalog::builtin::{
     BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
-use mz_catalog::{
-    debug_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig,
-    Transaction,
+use mz_catalog::durable::{
+    test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig, Transaction,
 };
+pub use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
+pub use mz_catalog::memory::objects::{
+    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
+    ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
+    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
+    Table, Type, View,
+};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
-    ClusterEvent, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation,
-    ReplicaConfig, ReplicaLocation, UnmanagedReplicaLocation,
+    ClusterEvent, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::option::FallibleMapExt;
 use mz_ore::result::ResultExt as _;
+use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{Diff, GlobalId, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::catalog::{
@@ -63,13 +73,12 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig,
-    StatementDesc,
+    PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
-use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
-use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput, SystemVars};
+use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
+use mz_sql::session::vars::{
+    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, ENABLE_PERSIST_TXN_TABLES,
+};
 use mz_sql::{plan, rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{
     CreateSinkOption, CreateSourceOption, QualifiedReplica, Statement, WithOptionValue,
@@ -78,42 +87,25 @@ use mz_stash::{DebugStashFactory, StashFactory};
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::Optimizer;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
-pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
-pub use crate::catalog::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
-    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
-    StorageSinkConnectionState, Table, Type, View,
-};
+pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config, StateConfig};
 pub use crate::catalog::open::BuiltinMigrationMetadata;
 pub use crate::catalog::state::CatalogState;
-use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::coord::{ConnMeta, TargetCluster};
-use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
+use crate::session::{PreparedStatement, Session};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
 mod config;
 pub(crate) mod consistency;
-mod error;
 mod migrate;
 
 mod inner;
-mod objects;
 mod open;
 mod state;
-
-pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);
-
-const CREATE_SQL_TODO: &str = "TODO";
-
-pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -141,7 +133,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 pub struct Catalog {
     state: CatalogState,
     plans: CatalogPlans,
-    storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::DurableCatalogState>>>,
+    storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
 }
 
@@ -410,7 +402,7 @@ impl Catalog {
             details: CatalogTypeDetails {
                 array_id: builtin.details.array_id,
                 typ,
-                typreceive_oid: builtin.details.typreceive_oid,
+                pg_metadata: builtin.details.pg_metadata.clone(),
             },
         }
     }
@@ -422,7 +414,7 @@ impl Catalog {
         self.transient_revision
     }
 
-    /// Creates a debug catalog from a debug stash based on the current
+    /// Creates a debug catalog from the current
     /// `COCKROACH_URL` with parameters set appropriately for debug contexts,
     /// like in tests.
     ///
@@ -439,27 +431,49 @@ impl Catalog {
         Fut: Future<Output = T>,
     {
         let debug_stash_factory = DebugStashFactory::new().await;
-        let catalog = Self::open_debug_stash_catalog_factory(&debug_stash_factory, now)
-            .await
-            .expect("unable to open debug stash");
+        let persist_client = PersistClient::new_for_tests().await;
+        let environmentd_id = Uuid::new_v4();
+        let catalog = Self::open_debug_catalog(
+            &debug_stash_factory,
+            persist_client,
+            environmentd_id,
+            now,
+            None,
+        )
+        .await
+        .expect("unable to open debug stash");
         let res = f(catalog).await;
         debug_stash_factory.drop().await;
         res
     }
 
-    /// Opens a debug stash backed catalog using `debug_stash_factory`.
+    /// Opens a debug catalog.
     ///
     /// See [`Catalog::with_debug`].
-    pub async fn open_debug_stash_catalog_factory(
+    pub async fn open_debug_catalog(
         debug_stash_factory: &DebugStashFactory,
+        persist_client: PersistClient,
+        organization_id: Uuid,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
-        let mut openable_storage =
-            mz_catalog::debug_stash_backed_catalog_state(debug_stash_factory);
+        let openable_storage = Box::new(
+            mz_catalog::durable::shadow_catalog_state(
+                StashConfig {
+                    stash_factory: debug_stash_factory.stash_factory().clone(),
+                    stash_url: debug_stash_factory.url().to_string(),
+                    schema: Some(debug_stash_factory.schema().to_string()),
+                    tls: debug_stash_factory.tls().clone(),
+                },
+                persist_client,
+                organization_id,
+            )
+            .await,
+        );
         let storage = openable_storage
-            .open(now.clone(), &debug_bootstrap_args(), None)
+            .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
     /// Opens a debug stash backed catalog at `url`, using `schema` as the connection's search_path.
@@ -469,6 +483,7 @@ impl Catalog {
         url: String,
         schema: String,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new())
             .expect("unable to create TLS connector");
@@ -479,11 +494,13 @@ impl Catalog {
             schema: Some(schema),
             tls,
         };
-        let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
+            stash_config,
+        ));
         let storage = openable_storage
-            .open(now.clone(), &debug_bootstrap_args(), None)
+            .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
     /// Opens a read only debug stash backed catalog defined by `stash_config`.
@@ -492,117 +509,117 @@ impl Catalog {
     pub async fn open_debug_read_only_stash_catalog_config(
         stash_config: StashConfig,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
-        let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
+            stash_config,
+        ));
         let storage = openable_storage
-            .open_read_only(now.clone(), &debug_bootstrap_args())
+            .open_read_only(now(), &test_bootstrap_args())
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
-    async fn open_debug_stash_catalog(
-        storage: impl DurableCatalogState + 'static,
+    /// Opens a read only debug persist backed catalog defined by `persist_client` and
+    /// `organization_id`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_persist_catalog_config(
+        persist_client: PersistClient,
         now: NowFn,
+        environment_id: EnvironmentId,
+    ) -> Result<Catalog, anyhow::Error> {
+        let openable_storage = Box::new(
+            mz_catalog::durable::persist_backed_catalog_state(
+                persist_client,
+                environment_id.organization_id(),
+            )
+            .await,
+        );
+        let storage = openable_storage
+            .open_read_only(now(), &test_bootstrap_args())
+            .await?;
+        Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
+    }
+
+    /// Opens a read only debug persist backed catalog defined by `stash_config`, `persist_client`
+    /// and `organization_id`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_shadow_catalog_config(
+        stash_config: StashConfig,
+        persist_client: PersistClient,
+        now: NowFn,
+        environment_id: EnvironmentId,
+    ) -> Result<Catalog, anyhow::Error> {
+        let openable_storage = Box::new(
+            mz_catalog::durable::shadow_catalog_state(
+                stash_config,
+                persist_client,
+                environment_id.organization_id(),
+            )
+            .await,
+        );
+        let storage = openable_storage
+            .open_read_only(now(), &test_bootstrap_args())
+            .await?;
+        Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
+    }
+
+    async fn open_debug_catalog_inner(
+        storage: Box<dyn DurableCatalogState>,
+        now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let storage = Box::new(storage);
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
-        let variable_length_row_encoding =
-            if mz_repr::VARIABLE_LENGTH_ROW_ENCODING.load(atomic::Ordering::SeqCst) {
-                "true"
-            } else {
-                "false"
-            };
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
-            unsafe_mode: true,
-            all_features: false,
-            build_info: &DUMMY_BUILD_INFO,
-            environment_id: EnvironmentId::for_tests(),
-            now,
-            skip_migrations: true,
             metrics_registry,
-            cluster_replica_sizes: Default::default(),
-            default_storage_cluster_size: None,
-            system_parameter_defaults: [(
-                "variable_length_row_encoding".to_string(),
-                variable_length_row_encoding.to_string(),
-            )]
-            .into_iter()
-            .collect(),
-            availability_zones: vec![],
             secrets_reader,
-            egress_ips: vec![],
-            aws_principal_context: None,
-            aws_privatelink_availability_zones: None,
-            system_parameter_sync_config: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
-            http_host_name: None,
-            connection_context: None,
-            active_connection_count,
+            state: StateConfig {
+                unsafe_mode: true,
+                all_features: false,
+                build_info: &DUMMY_BUILD_INFO,
+                environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
+                now,
+                skip_migrations: true,
+                cluster_replica_sizes: Default::default(),
+                default_storage_cluster_size: None,
+                builtin_cluster_replica_size: "1".into(),
+                system_parameter_defaults: Default::default(),
+                availability_zones: vec![],
+                egress_ips: vec![],
+                aws_principal_context: None,
+                aws_privatelink_availability_zones: None,
+                system_parameter_sync_config: None,
+                http_host_name: None,
+                connection_context: None,
+                active_connection_count,
+            },
         })
         .await?;
         Ok(catalog)
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
-        Self::for_session_state(&self.state, session)
-    }
-
-    pub fn for_session_state<'a>(state: &'a CatalogState, session: &'a Session) -> ConnCatalog<'a> {
-        let search_path = state.resolve_search_path(session);
-        let database = state
-            .database_by_name
-            .get(session.vars().database())
-            .map(|id| id.clone());
-        ConnCatalog {
-            state: Cow::Borrowed(state),
-            unresolvable_ids: BTreeSet::new(),
-            conn_id: session.conn_id().clone(),
-            cluster: session.vars().cluster().into(),
-            database,
-            search_path,
-            role_id: session.current_role_id().clone(),
-            prepared_statements: Some(session.prepared_statements()),
-            notices_tx: session.retain_notice_transmitter(),
-        }
+        self.state.for_session(session)
     }
 
     pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
-        Self::for_sessionless_user_state(&self.state, role_id)
-    }
-
-    pub fn for_sessionless_user_state(state: &CatalogState, role_id: RoleId) -> ConnCatalog {
-        let (notices_tx, _notices_rx) = mpsc::unbounded_channel();
-        ConnCatalog {
-            state: Cow::Borrowed(state),
-            unresolvable_ids: BTreeSet::new(),
-            conn_id: SYSTEM_CONN_ID.clone(),
-            cluster: "default".into(),
-            database: state
-                .resolve_database(DEFAULT_DATABASE_NAME)
-                .ok()
-                .map(|db| db.id()),
-            // Leaving the system's search path empty allows us to catch issues
-            // where catalog object names have not been normalized correctly.
-            search_path: Vec::new(),
-            role_id,
-            prepared_statements: None,
-            notices_tx,
-        }
+        self.state.for_sessionless_user(role_id)
     }
 
     pub fn for_system_session(&self) -> ConnCatalog {
-        Self::for_system_session_state(&self.state)
+        self.state.for_system_session()
     }
 
-    pub fn for_system_session_state(state: &CatalogState) -> ConnCatalog {
-        Self::for_sessionless_user_state(state, MZ_SYSTEM_ROLE_ID)
-    }
-
-    async fn storage<'a>(&'a self) -> MutexGuard<'a, Box<dyn mz_catalog::DurableCatalogState>> {
+    async fn storage<'a>(
+        &'a self,
+    ) -> MutexGuard<'a, Box<dyn mz_catalog::durable::DurableCatalogState>> {
         self.storage.lock().await
     }
 
@@ -650,7 +667,7 @@ impl Catalog {
             .get_timestamps()
             .await?
             .into_iter()
-            .map(|mz_catalog::TimelineTimestamp { timeline, ts }| (timeline, ts))
+            .map(|mz_catalog::durable::TimelineTimestamp { timeline, ts }| (timeline, ts))
             .collect())
     }
 
@@ -907,26 +924,7 @@ impl Catalog {
         conn_id: &ConnectionId,
         owner_id: RoleId,
     ) -> Result<(), Error> {
-        let oid = self.allocate_oid()?;
-        self.state.temporary_schemas.insert(
-            conn_id.clone(),
-            Schema {
-                name: QualifiedSchemaName {
-                    database: ResolvedDatabaseSpecifier::Ambient,
-                    schema: MZ_TEMP_SCHEMA.into(),
-                },
-                id: SchemaSpecifier::Temporary,
-                oid,
-                items: BTreeMap::new(),
-                functions: BTreeMap::new(),
-                owner_id,
-                privileges: PrivilegeMap::from_mz_acl_items(vec![rbac::owner_privilege(
-                    mz_sql::catalog::ObjectType::Schema,
-                    owner_id,
-                )]),
-            },
-        );
-        Ok(())
+        self.state.create_temporary_schema(conn_id, owner_id)
     }
 
     fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
@@ -987,11 +985,6 @@ impl Catalog {
         let mut seen = BTreeSet::new();
         self.state
             .cluster_replica_dependents(cluster_id, replica_id, &mut seen)
-    }
-
-    pub(crate) fn item_dependents(&self, item_id: GlobalId) -> Vec<ObjectId> {
-        let mut seen = BTreeSet::new();
-        self.state.item_dependents(item_id, &mut seen)
     }
 
     /// Gets GlobalIds of temporary items to be created, checks for name collisions
@@ -1066,72 +1059,12 @@ impl Catalog {
 
     pub fn concretize_replica_location(
         &self,
-        location: mz_catalog::ReplicaLocation,
+        location: mz_catalog::durable::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
     ) -> Result<ReplicaLocation, AdapterError> {
-        let location = match location {
-            mz_catalog::ReplicaLocation::Unmanaged {
-                storagectl_addrs,
-                storage_addrs,
-                computectl_addrs,
-                compute_addrs,
-                workers,
-            } => {
-                if allowed_availability_zones.is_some() {
-                    coord_bail!(
-                        "internal error: tried concretize unmanaged replica \
-                        with specific availability_zones"
-                    );
-                }
-                ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                    storagectl_addrs,
-                    storage_addrs,
-                    computectl_addrs,
-                    compute_addrs,
-                    workers,
-                })
-            }
-            mz_catalog::ReplicaLocation::Managed {
-                size,
-                availability_zone,
-                disk,
-                billed_as,
-                internal,
-            } => {
-                if allowed_availability_zones.is_some() && availability_zone.is_some() {
-                    coord_bail!(
-                        "internal error: tried concretize managed replica with \
-                        specific availability zones and availability zone"
-                    );
-                }
-                self.ensure_valid_replica_size(allowed_sizes, &size)?;
-                let cluster_replica_sizes = &self.state.cluster_replica_sizes;
-
-                ReplicaLocation::Managed(ManagedReplicaLocation {
-                    allocation: cluster_replica_sizes
-                        .0
-                        .get(&size)
-                        .expect("catalog out of sync")
-                        .clone(),
-                    availability_zones: match (availability_zone, allowed_availability_zones) {
-                        (Some(az), _) => ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
-                        (None, Some(azs)) if azs.is_empty() => {
-                            ManagedReplicaAvailabilityZones::FromCluster(None)
-                        }
-                        (None, Some(azs)) => {
-                            ManagedReplicaAvailabilityZones::FromCluster(Some(azs.to_vec()))
-                        }
-                        (None, None) => ManagedReplicaAvailabilityZones::FromReplica(None),
-                    },
-                    size,
-                    disk,
-                    billed_as,
-                    internal,
-                })
-            }
-        };
-        Ok(location)
+        self.state
+            .concretize_replica_location(location, allowed_sizes, allowed_availability_zones)
     }
 
     pub(crate) fn ensure_valid_replica_size(
@@ -1139,37 +1072,7 @@ impl Catalog {
         allowed_sizes: &[String],
         size: &String,
     ) -> Result<(), AdapterError> {
-        let cluster_replica_sizes = &self.state.cluster_replica_sizes;
-
-        if !cluster_replica_sizes.0.contains_key(size)
-            || (!allowed_sizes.is_empty() && !allowed_sizes.contains(size))
-            || cluster_replica_sizes.0[size].disabled
-        {
-            let mut entries = cluster_replica_sizes
-                .enabled_allocations()
-                .collect::<Vec<_>>();
-
-            if !allowed_sizes.is_empty() {
-                let allowed_sizes = BTreeSet::<&String>::from_iter(allowed_sizes.iter());
-                entries.retain(|(name, _)| allowed_sizes.contains(name));
-            }
-
-            entries.sort_by_key(
-                |(
-                    _name,
-                    ReplicaAllocation {
-                        scale, cpu_limit, ..
-                    },
-                )| (scale, cpu_limit),
-            );
-
-            Err(AdapterError::InvalidClusterReplicaSize {
-                size: size.to_owned(),
-                expected: entries.into_iter().map(|(name, _)| name.clone()).collect(),
-            })
-        } else {
-            Ok(())
-        }
+        self.state.ensure_valid_replica_size(allowed_sizes, size)
     }
 
     pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
@@ -1254,7 +1157,6 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             &mut state,
-            &drop_ids,
         )?;
 
         let result = f(&state)?;
@@ -1294,9 +1196,6 @@ impl Catalog {
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &mut CatalogState,
-        // Provide all of the IDs that are being dropped in this transaction so we can provide
-        // stronger invariants about when we change items' dependencies.
-        drop_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         // NOTE(benesch): to support altering legacy sized sources and sinks
         // (those with linked clusters), we need to generate retractions for
@@ -1366,7 +1265,6 @@ impl Catalog {
                     tx,
                     builtin_table_updates,
                     oracle_write_ts,
-                    drop_ids,
                     audit_events,
                     session,
                     id,
@@ -1461,14 +1359,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    Self::update_item(
-                        state,
-                        builtin_table_updates,
-                        id,
-                        to_name,
-                        sink.item,
-                        drop_ids,
-                    )?;
+                    Self::update_item(state, builtin_table_updates, id, to_name, sink.item)?;
                 }
                 Op::AlterSource { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -1561,14 +1452,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    Self::update_item(
-                        state,
-                        builtin_table_updates,
-                        id,
-                        to_name,
-                        source.item,
-                        drop_ids,
-                    )?;
+                    Self::update_item(state, builtin_table_updates, id, to_name, source.item)?;
                 }
                 Op::CreateDatabase {
                     name,
@@ -1977,9 +1861,23 @@ impl Catalog {
                             item.typ().into(),
                         )
                         .map(|item| item.mz_acl_item(owner_id));
-                    let privileges: Vec<_> =
-                        merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
-                            .collect();
+                    // mz_support can read all progress sources.
+                    let progress_source_privilege = if item.is_progress_source() {
+                        Some(MzAclItem {
+                            grantee: MZ_SUPPORT_ROLE_ID,
+                            grantor: owner_id,
+                            acl_mode: AclMode::SELECT,
+                        })
+                    } else {
+                        None
+                    };
+                    let privileges: Vec<_> = merge_mz_acl_items(
+                        owner_privileges
+                            .into_iter()
+                            .chain(default_privileges)
+                            .chain(progress_source_privilege),
+                    )
+                    .collect();
 
                     if item.is_temporary() {
                         if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
@@ -2384,9 +2282,6 @@ impl Catalog {
                         }
                     }
                 }
-                Op::DropTimeline(timeline) => {
-                    tx.remove_timestamp(timeline);
-                }
                 Op::GrantRole {
                     role_id,
                     member_id,
@@ -2647,13 +2542,18 @@ impl Catalog {
                         ),
                     )?;
                 }
-                Op::RenameCluster { id, name, to_name } => {
+                Op::RenameCluster {
+                    id,
+                    name,
+                    to_name,
+                    check_reserved_names,
+                } => {
                     if id.is_system() {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReadOnlyCluster(name.clone()),
                         )));
                     }
-                    if is_reserved_name(&to_name) {
+                    if check_reserved_names && is_reserved_name(&to_name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedClusterName(to_name),
                         )));
@@ -2832,14 +2732,162 @@ impl Catalog {
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     updates.push((id, to_qualified_name, new_entry.item));
                     for (id, to_name, to_item) in updates {
-                        Self::update_item(
-                            state,
-                            builtin_table_updates,
-                            id,
-                            to_name,
-                            to_item,
-                            drop_ids,
-                        )?;
+                        Self::update_item(state, builtin_table_updates, id, to_name, to_item)?;
+                    }
+                }
+                Op::RenameSchema {
+                    database_spec,
+                    schema_spec,
+                    new_name,
+                    check_reserved_names,
+                } => {
+                    if check_reserved_names && is_reserved_name(&new_name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedSchemaName(new_name),
+                        )));
+                    }
+
+                    let conn_id = session
+                        .map(|session| session.conn_id())
+                        .unwrap_or(&SYSTEM_CONN_ID);
+
+                    let schema = state.get_schema(&database_spec, &schema_spec, conn_id);
+                    let cur_name = schema.name().schema.clone();
+
+                    let ResolvedDatabaseSpecifier::Id(database_id) = database_spec else {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::AmbientSchemaRename(cur_name),
+                        )));
+                    };
+                    let database = state.get_database(&database_id);
+                    let database_name = &database.name;
+
+                    let mut updates = Vec::new();
+                    let mut already_updated = HashSet::new();
+
+                    let mut update_item = |id| {
+                        if already_updated.contains(id) {
+                            return Ok(());
+                        }
+
+                        let entry = state.get_entry(id);
+
+                        // Update our item.
+                        let mut new_entry = entry.clone();
+                        new_entry.item = entry
+                            .item
+                            .rename_schema_refs(database_name, &cur_name, &new_name)
+                            .map_err(|(s, _i)| {
+                                Error::new(ErrorKind::from(AmbiguousRename {
+                                    depender: state
+                                        .resolve_full_name(entry.name(), entry.conn_id())
+                                        .to_string(),
+                                    dependee: format!("{database_name}.{cur_name}"),
+                                    message: format!("ambiguous reference to schema named {s}"),
+                                }))
+                            })?;
+
+                        // Update the Stash and Builtin Tables.
+                        if !new_entry.item().is_temporary() {
+                            tx.update_item(*id, new_entry.clone().into())?;
+                        }
+                        builtin_table_updates.extend(state.pack_item_update(*id, -1));
+                        updates.push((id.clone(), entry.name().clone(), new_entry.item));
+
+                        // Track which IDs we update.
+                        already_updated.insert(id);
+
+                        Ok::<_, AdapterError>(())
+                    };
+
+                    // Update all of the items in the schema.
+                    for (_name, item_id) in &schema.items {
+                        // Update the item itself.
+                        update_item(item_id)?;
+
+                        // Update everything that depends on this item.
+                        for id in state.get_entry(item_id).used_by() {
+                            update_item(id)?;
+                        }
+                    }
+
+                    // Renaming temporary schemas is not supported.
+                    let SchemaSpecifier::Id(schema_id) = *schema.id() else {
+                        let schema_name = schema.name().schema.clone();
+                        return Err(AdapterError::Catalog(crate::catalog::Error::new(
+                            crate::catalog::ErrorKind::ReadOnlySystemSchema(schema_name),
+                        )));
+                    };
+                    // Delete the old schema from the builtin table.
+                    builtin_table_updates.push(state.pack_schema_update(
+                        &database_spec,
+                        &schema_id,
+                        -1,
+                    ));
+
+                    // Add an entry to the audit log.
+                    let database_name = database_spec
+                        .id()
+                        .map(|id| state.get_database(&id).name.clone());
+                    let details = EventDetails::RenameSchemaV1(mz_audit_log::RenameSchemaV1 {
+                        id: schema_id.to_string(),
+                        old_name: schema.name().schema.clone(),
+                        new_name: new_name.clone(),
+                        database_name,
+                    });
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Alter,
+                        mz_audit_log::ObjectType::Schema,
+                        details,
+                    )?;
+
+                    // Update the schema itself.
+                    let schema = state.get_schema_mut(&database_spec, &schema_spec, conn_id);
+                    let old_name = schema.name().schema.clone();
+                    schema.name.schema = new_name.clone();
+                    let new_schema = schema.clone().into_durable_schema(database_spec.id());
+                    tx.update_schema(schema_id, new_schema)?;
+
+                    // Update the references to this schema.
+                    match (&database_spec, &schema_spec) {
+                        (ResolvedDatabaseSpecifier::Id(db_id), SchemaSpecifier::Id(_)) => {
+                            let database = state.get_database_mut(db_id);
+                            let Some(prev_id) = database.schemas_by_name.remove(&old_name) else {
+                                panic!("Catalog state inconsistency! Expected to find schema with name {old_name}");
+                            };
+                            database.schemas_by_name.insert(new_name.clone(), prev_id);
+                        }
+                        (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(_)) => {
+                            let Some(prev_id) = state.ambient_schemas_by_name.remove(&old_name)
+                            else {
+                                panic!("Catalog state inconsistency! Expected to find schema with name {old_name}");
+                            };
+                            state
+                                .ambient_schemas_by_name
+                                .insert(new_name.clone(), prev_id);
+                        }
+                        (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => {
+                            // No external references to rename.
+                        }
+                        (ResolvedDatabaseSpecifier::Id(_), SchemaSpecifier::Temporary) => {
+                            unreachable!("temporary schemas are in the ambient database")
+                        }
+                    }
+
+                    // Update the new schema in the builtin table.
+                    builtin_table_updates.push(state.pack_schema_update(
+                        &database_spec,
+                        &schema_id,
+                        1,
+                    ));
+
+                    for (id, new_name, new_item) in updates {
+                        Self::update_item(state, builtin_table_updates, id, new_name, new_item)?;
                     }
                 }
                 Op::UpdateOwner { id, new_owner } => {
@@ -3026,7 +3074,6 @@ impl Catalog {
                         id,
                         name.clone(),
                         to_item.clone(),
-                        drop_ids,
                     )?;
                     let entry = state.get_entry(&id);
                     tx.update_item(id, entry.clone().into())?;
@@ -3066,9 +3113,7 @@ impl Catalog {
                     )?;
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
-                    state.insert_system_configuration(&name, value.borrow())?;
-                    let var = state.get_system_configuration(&name)?;
-                    tx.upsert_system_config(&name, var.value())?;
+                    Self::update_system_configuration(state, tx, &name, value.borrow())?;
                 }
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
@@ -3127,9 +3172,6 @@ impl Catalog {
         id: GlobalId,
         to_name: QualifiedItemName,
         to_item: CatalogItem,
-        // This lets us understand which items are dropped in this transaction so we can account
-        // for changes in dependencies.
-        drop_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
         info!(
@@ -3139,25 +3181,6 @@ impl Catalog {
             id
         );
 
-        // Ensure any removal from the uses is accompanied by a drop.
-        let to_item_uses_and_dropped_ids: BTreeSet<&GlobalId> =
-            drop_ids.iter().chain(&to_item.uses().0).collect();
-
-        assert!(
-            old_entry
-                .uses()
-                .0
-                .iter()
-                .all(|id| to_item_uses_and_dropped_ids.contains(id)),
-            "all of the old entries used items must be accompanied by a drop \
-                old_entry.uses: {:?}\
-                to_item.uses: {:?}\
-                drop_ids {:?}",
-            old_entry.uses(),
-            to_item.uses(),
-            drop_ids,
-        );
-
         let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema = state.get_schema_mut(
             &old_entry.name().qualifiers.database_spec,
@@ -3165,6 +3188,14 @@ impl Catalog {
             conn_id,
         );
         schema.items.remove(&old_entry.name().item);
+
+        // Dropped deps
+        let dropped_deps: Vec<_> = old_entry
+            .uses()
+            .0
+            .difference(&to_item.uses().0)
+            .cloned()
+            .collect();
 
         // We only need to install this item on items in the `used_by` of new
         // dependencies.
@@ -3181,6 +3212,14 @@ impl Catalog {
 
         schema.items.insert(new_entry.name().item.clone(), id);
 
+        for u in dropped_deps {
+            // OK if we no longer have this entry because we are dropping our
+            // dependency on it.
+            if let Some(metadata) = state.entry_by_id.get_mut(&u) {
+                metadata.used_by.retain(|dep_id| *dep_id != id)
+            }
+        }
+
         for u in new_deps {
             match state.entry_by_id.get_mut(&u) {
                 Some(metadata) => metadata.used_by.push(new_entry.id()),
@@ -3194,6 +3233,26 @@ impl Catalog {
 
         state.entry_by_id.insert(id, new_entry);
         builtin_table_updates.extend(state.pack_item_update(id, 1));
+        Ok(())
+    }
+
+    pub(crate) fn update_system_configuration(
+        state: &mut CatalogState,
+        tx: &mut Transaction,
+        name: &str,
+        value: VarInput,
+    ) -> Result<(), AdapterError> {
+        state.insert_system_configuration(name, value)?;
+        let var = state.get_system_configuration(name)?;
+        tx.upsert_system_config(name, var.value())?;
+        // This mirrors the `enabled_persist_txn_tables` "system var" into the
+        // catalog stash "config" collection so that we can toggle the flag with
+        // Launch Darkly, but use it in boot before Launch Darkly is available.
+        if name == ENABLE_PERSIST_TXN_TABLES.name() {
+            tx.set_enable_persist_txn_tables(
+                state.system_configuration.enable_persist_txn_tables(),
+            )?;
+        }
         Ok(())
     }
 
@@ -3306,17 +3365,7 @@ impl Catalog {
         Ok(self.storage().await.confirm_leadership().await?)
     }
 
-    fn deserialize_item(
-        &self,
-        id: GlobalId,
-        create_sql: String,
-    ) -> Result<CatalogItem, AdapterError> {
-        // TODO - The `None` needs to be changed if we ever allow custom
-        // logical compaction windows in user-defined objects.
-        self.parse_item(id, create_sql, Some(&PlanContext::zero()), false, None)
-    }
-
-    // Parses the given SQL string into a `CatalogItem`.
+    /// Parses the given SQL string into a `CatalogItem`.
     #[tracing::instrument(level = "info", skip(self, pcx))]
     fn parse_item(
         &self,
@@ -3326,175 +3375,13 @@ impl Catalog {
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<Duration>,
     ) -> Result<CatalogItem, AdapterError> {
-        let mut session_catalog = self.for_system_session();
-        // Enable catalog features that might be required during planning in
-        // [Catalog::open]. Existing catalog items might have been created while a
-        // specific feature flag turned on, so we need to ensure that this is also the
-        // case during catalog rehydration in order to avoid panics.
-        // WARNING / CONTRACT: The session catalog with all features enabled should be used
-        // exclusively for parsing and obtaining an mz_sql::plan::Plan. After this step,
-        // feature flag configuration must not be overridden.
-        session_catalog.system_vars_mut().enable_all_feature_flags();
-
-        let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
-        let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-        let plan =
-            mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
-        Ok(match plan {
-            Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
-                create_sql: table.create_sql,
-                desc: table.desc,
-                defaults: table.defaults,
-                conn_id: None,
-                resolved_ids,
-                custom_logical_compaction_window,
-                is_retained_metrics_object,
-            }),
-            Plan::CreateSource(CreateSourcePlan {
-                source,
-                timeline,
-                cluster_config,
-                ..
-            }) => CatalogItem::Source(Source {
-                create_sql: source.create_sql,
-                data_source: match source.data_source {
-                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
-                        DataSourceDesc::ingestion(
-                            id,
-                            ingestion,
-                            match cluster_config {
-                                plan::SourceSinkClusterConfig::Existing { id } => id,
-                                plan::SourceSinkClusterConfig::Linked { .. }
-                                | plan::SourceSinkClusterConfig::Undefined => {
-                                    self.state.clusters_by_linked_object_id[&id]
-                                }
-                            },
-                        )
-                    }
-                    mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
-                    mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
-                    mz_sql::plan::DataSourceDesc::Webhook {
-                        validate_using,
-                        headers,
-                    } => {
-                        let plan::SourceSinkClusterConfig::Existing { id } = cluster_config else {
-                            unreachable!("webhook sources must use an existing cluster");
-                        };
-                        DataSourceDesc::Webhook {
-                            validate_using,
-                            headers,
-                            cluster_id: id,
-                        }
-                    }
-                },
-                desc: source.desc,
-                timeline,
-                resolved_ids,
-                custom_logical_compaction_window,
-                is_retained_metrics_object,
-            }),
-            Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let optimizer =
-                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-                let raw_expr = view.expr;
-                let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
-                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
-                let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
-                CatalogItem::View(View {
-                    create_sql: view.create_sql,
-                    optimized_expr,
-                    desc,
-                    conn_id: None,
-                    resolved_ids,
-                })
-            }
-            Plan::CreateMaterializedView(CreateMaterializedViewPlan {
-                materialized_view, ..
-            }) => {
-                let optimizer =
-                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-                let raw_expr = materialized_view.expr;
-                let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
-                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
-                let mut typ = optimized_expr.typ();
-                for &i in &materialized_view.non_null_assertions {
-                    typ.column_types[i].nullable = false;
-                }
-                let desc = RelationDesc::new(typ, materialized_view.column_names);
-                CatalogItem::MaterializedView(MaterializedView {
-                    create_sql: materialized_view.create_sql,
-                    optimized_expr,
-                    desc,
-                    resolved_ids,
-                    cluster_id: materialized_view.cluster_id,
-                    non_null_assertions: materialized_view.non_null_assertions,
-                })
-            }
-            Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
-                create_sql: index.create_sql,
-                on: index.on,
-                keys: index.keys,
-                conn_id: None,
-                resolved_ids,
-                cluster_id: index.cluster_id,
-                custom_logical_compaction_window,
-                is_retained_metrics_object,
-            }),
-            Plan::CreateSink(CreateSinkPlan {
-                sink,
-                with_snapshot,
-                cluster_config,
-                ..
-            }) => CatalogItem::Sink(Sink {
-                create_sql: sink.create_sql,
-                from: sink.from,
-                connection: StorageSinkConnectionState::Pending(sink.connection_builder),
-                envelope: sink.envelope,
-                with_snapshot,
-                resolved_ids,
-                cluster_id: match cluster_config {
-                    plan::SourceSinkClusterConfig::Existing { id } => id,
-                    plan::SourceSinkClusterConfig::Linked { .. }
-                    | plan::SourceSinkClusterConfig::Undefined => {
-                        self.state.clusters_by_linked_object_id[&id]
-                    }
-                },
-            }),
-            Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
-                create_sql: typ.create_sql,
-                details: CatalogTypeDetails {
-                    array_id: None,
-                    typ: typ.inner,
-                    typreceive_oid: None,
-                },
-                resolved_ids,
-            }),
-            Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
-                create_sql: secret.create_sql,
-            }),
-            Plan::CreateConnection(CreateConnectionPlan {
-                connection:
-                    mz_sql::plan::Connection {
-                        create_sql,
-                        connection,
-                    },
-                ..
-            }) => CatalogItem::Connection(Connection {
-                create_sql,
-                connection,
-                resolved_ids,
-            }),
-            _ => {
-                return Err(Error::new(ErrorKind::Corruption {
-                    detail: "catalog entry generated inappropriate plan".to_string(),
-                })
-                .into())
-            }
-        })
-    }
-
-    pub fn uses_tables(&self, id: GlobalId) -> bool {
-        self.state.uses_tables(id)
+        self.state.parse_item(
+            id,
+            create_sql,
+            pcx,
+            is_retained_metrics_object,
+            custom_logical_compaction_window,
+        )
     }
 
     /// Return the ids of all log sources the given object depends on.
@@ -3834,7 +3721,6 @@ pub enum Op {
         comment: Option<String>,
     },
     DropObject(ObjectId),
-    DropTimeline(Timeline),
     GrantRole {
         role_id: RoleId,
         member_id: RoleId,
@@ -3844,6 +3730,7 @@ pub enum Op {
         id: ClusterId,
         name: String,
         to_name: String,
+        check_reserved_names: bool,
     },
     RenameClusterReplica {
         cluster_id: ClusterId,
@@ -3855,6 +3742,12 @@ pub enum Op {
         id: GlobalId,
         current_full_name: FullItemName,
         to_name: String,
+    },
+    RenameSchema {
+        database_spec: ResolvedDatabaseSpecifier,
+        schema_spec: SchemaSpecifier,
+        new_name: String,
+        check_reserved_names: bool,
     },
     UpdateOwner {
         id: ObjectId,
@@ -4017,7 +3910,6 @@ impl ExprHumanizer for ConnCatalog<'_> {
             .try_map(|entry| {
                 Ok::<_, SqlCatalogError>(
                     entry
-                        .item()
                         .desc(&self.resolve_full_name(entry.name()))?
                         .iter_names()
                         .cloned()
@@ -4443,6 +4335,7 @@ mod tests {
     use itertools::Itertools;
     use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
+    use uuid::Uuid;
 
     use mz_catalog::builtin::{Builtin, BuiltinType, BUILTINS};
     use mz_controller_types::{ClusterId, ReplicaId};
@@ -4450,7 +4343,8 @@ mod tests {
     use mz_ore::collections::CollectionExt;
     use mz_ore::now::{to_datetime, NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
-    use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
+    use mz_persist_client::PersistClient;
+    use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
@@ -4548,6 +4442,7 @@ mod tests {
                     tc.normal_output
                 );
             }
+            catalog.expire().await;
         })
         .await
     }
@@ -4556,11 +4451,18 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_catalog_revision() {
         let debug_stash_factory = DebugStashFactory::new().await;
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
         {
-            let mut catalog =
-                Catalog::open_debug_stash_catalog_factory(&debug_stash_factory, NOW_ZERO.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let mut catalog = Catalog::open_debug_catalog(
+                &debug_stash_factory,
+                persist_client.clone(),
+                organization_id.clone(),
+                NOW_ZERO.clone(),
+                None,
+            )
+            .await
+            .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
@@ -4577,14 +4479,21 @@ mod tests {
                 .await
                 .expect("failed to transact");
             assert_eq!(catalog.transient_revision(), 2);
+            catalog.expire().await;
         }
         {
-            let catalog =
-                Catalog::open_debug_stash_catalog_factory(&debug_stash_factory, NOW_ZERO.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let catalog = Catalog::open_debug_catalog(
+                &debug_stash_factory,
+                persist_client,
+                organization_id,
+                NOW_ZERO.clone(),
+                None,
+            )
+            .await
+            .expect("unable to open debug catalog");
             // Re-opening the same stash resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
+            catalog.expire().await;
         }
         debug_stash_factory.drop().await;
     }
@@ -4731,6 +4640,7 @@ mod tests {
                 conn_catalog.effective_search_path(true),
                 vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
             );
+            catalog.expire().await;
         })
         .await
     }
@@ -4739,8 +4649,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_normalized_create() {
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
-            let catalog = catalog.for_system_session();
-            let scx = &mut StatementContext::new(None, &catalog);
+            let conn_catalog = catalog.for_system_session();
+            let scx = &mut StatementContext::new(None, &conn_catalog);
 
             let parsed = mz_sql_parser::parser::parse_statements(
                 "create view public.foo as select 1 as bar",
@@ -4756,6 +4666,7 @@ mod tests {
                 r#"CREATE VIEW "materialize"."public"."foo" AS SELECT 1 AS "bar""#,
                 mz_sql::normalize::create_statement(scx, stmt).expect(""),
             );
+            catalog.expire().await;
         })
         .await;
     }
@@ -4777,11 +4688,16 @@ mod tests {
         assert!(mz_sql_parser::parser::parse_statements_with_limit(&create_sql).is_err());
 
         let debug_stash_factory = DebugStashFactory::new().await;
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
         let id = GlobalId::User(1);
         {
-            let mut catalog = Catalog::open_debug_stash_catalog_factory(
+            let mut catalog = Catalog::open_debug_catalog(
                 &debug_stash_factory,
+                persist_client.clone(),
+                organization_id.clone(),
                 SYSTEM_TIME.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4810,11 +4726,15 @@ mod tests {
                 )
                 .await
                 .expect("failed to transact");
+            catalog.expire().await;
         }
         {
-            let catalog = Catalog::open_debug_stash_catalog_factory(
+            let catalog = Catalog::open_debug_catalog(
                 &debug_stash_factory,
+                persist_client,
+                organization_id,
                 SYSTEM_TIME.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4824,6 +4744,7 @@ mod tests {
                 CatalogItem::View(view) => assert_eq!(create_sql_check, view.create_sql),
                 item => panic!("expected view, got {}", item.typ()),
             }
+            catalog.expire().await;
         }
         debug_stash_factory.drop().await;
     }
@@ -4911,19 +4832,20 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_object_type() {
         Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
-            let catalog = catalog.for_system_session();
+            let conn_catalog = catalog.for_system_session();
 
             assert_eq!(
                 mz_sql::catalog::ObjectType::ClusterReplica,
-                catalog.get_object_type(&ObjectId::ClusterReplica((
+                conn_catalog.get_object_type(&ObjectId::ClusterReplica((
                     ClusterId::User(1),
                     ReplicaId::User(1)
                 )))
             );
             assert_eq!(
                 mz_sql::catalog::ObjectType::Role,
-                catalog.get_object_type(&ObjectId::Role(RoleId::User(1)))
+                conn_catalog.get_object_type(&ObjectId::Role(RoleId::User(1)))
             );
+            catalog.expire().await;
         })
         .await;
     }
@@ -4932,19 +4854,21 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_get_privileges() {
         Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
-            let catalog = catalog.for_system_session();
+            let conn_catalog = catalog.for_system_session();
 
             assert_eq!(
                 None,
-                catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
+                conn_catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
                     ClusterId::User(1),
                     ReplicaId::User(1),
                 ))))
             );
             assert_eq!(
                 None,
-                catalog.get_privileges(&SystemObjectId::Object(ObjectId::Role(RoleId::User(1))))
+                conn_catalog
+                    .get_privileges(&SystemObjectId::Object(ObjectId::Role(RoleId::User(1))))
             );
+            catalog.expire().await;
         })
         .await;
     }
@@ -4983,7 +4907,8 @@ mod tests {
                 ty: String,
                 elem: u32,
                 array: u32,
-                receive: Option<u32>,
+                input: u32,
+                receive: u32,
             }
 
             struct PgOper {
@@ -5020,7 +4945,7 @@ mod tests {
 
             let pg_type: BTreeMap<_, _> = client
                 .query(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, nullif(typreceive::oid, 0) as typreceive FROM pg_type",
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type",
                     &[],
                 )
                 .await
@@ -5033,6 +4958,7 @@ mod tests {
                         ty: row.get("typtype"),
                         elem: row.get("typelem"),
                         array: row.get("typarray"),
+                        input: row.get("typinput"),
                         receive: row.get("typreceive"),
                     };
                     (oid, pg_type)
@@ -5122,13 +5048,29 @@ mod tests {
                             ty.oid, pg_ty.name, ty.name,
                         );
 
+                        let (typinput_oid, typreceive_oid) = match &ty.details.pg_metadata {
+                            None => (0, 0),
+                            Some(pgmeta) => (pgmeta.typinput_oid, pgmeta.typreceive_oid),
+                        };
                         assert_eq!(
-                            ty.details.typreceive_oid, pg_ty.receive,
-                            "type {} has typreceive OID {:?} in mz but {:?} in pg",
-                            ty.name, ty.details.typreceive_oid, pg_ty.receive,
+                            typinput_oid, pg_ty.input,
+                            "type {} has typinput OID {:?} in mz but {:?} in pg",
+                            ty.name, typinput_oid, pg_ty.input,
                         );
-
-                        if let Some(typreceive_oid) = ty.details.typreceive_oid {
+                        assert_eq!(
+                            typreceive_oid, pg_ty.receive,
+                            "type {} has typreceive OID {:?} in mz but {:?} in pg",
+                            ty.name, typreceive_oid, pg_ty.receive,
+                        );
+                        if typinput_oid != 0 {
+                            assert!(
+                                func_oids.contains(&typinput_oid),
+                                "type {} has typinput OID {} that does not exist in pg_proc",
+                                ty.name,
+                                typinput_oid,
+                            );
+                        }
+                        if typreceive_oid != 0 {
                             assert!(
                                 func_oids.contains(&typreceive_oid),
                                 "type {} has typreceive OID {} that does not exist in pg_proc",
@@ -5235,6 +5177,13 @@ mod tests {
                                 imp.oid
                             );
 
+                            assert!(
+                                imp.oid < FIRST_USER_OID,
+                                "built-in function {} erroneously has OID in user space ({})",
+                                func.name,
+                                imp.oid,
+                            );
+
                             // For functions that have a postgres counterpart, verify that the name and
                             // oid match.
                             let pg_fn = if imp.oid >= FIRST_UNPINNED_OID {
@@ -5316,6 +5265,7 @@ mod tests {
                     }
                 }
             }
+            catalog.expire().await;
         }
 
         Catalog::with_debug(NOW_ZERO.clone(), inner).await
@@ -5507,6 +5457,7 @@ mod tests {
         let prep_style = ExprPrepStyle::OneShot {
             logical_time: EvalTime::Time(Timestamp::MIN),
             session: &session,
+            catalog_state: &catalog.state,
         };
 
         // Execute the function as much as possible, ensuring no panics occur, but
@@ -5516,8 +5467,7 @@ mod tests {
         if let Ok(hir) = res {
             if let Ok(mut mir) = hir.lower_uncorrelated() {
                 // Populate unmaterialized functions.
-                prep_scalar_expr(&catalog.state, &mut mir, prep_style.clone())
-                    .expect("must succeed");
+                prep_scalar_expr(&mut mir, prep_style.clone()).expect("must succeed");
 
                 if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
                     if let Some(return_styp) = return_styp {
@@ -5686,6 +5636,7 @@ mod tests {
                     }
                 }
             }
+            catalog.expire().await;
         })
         .await
     }

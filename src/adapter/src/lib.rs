@@ -122,11 +122,11 @@ pub mod metrics;
 pub mod session;
 pub mod statement_logging;
 pub mod telemetry;
+pub mod webhook;
 
 pub use crate::client::{Client, Handle, SessionClient};
 pub use crate::command::{
-    AppendWebhookError, AppendWebhookResponse, AppendWebhookValidator, Canceled, ExecuteResponse,
-    ExecuteResponseKind, RowsFuture, StartupResponse,
+    Canceled, ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupResponse,
 };
 pub use crate::coord::id_bundle::CollectionIdBundle;
 pub use crate::coord::peek::PeekResponseUnary;
@@ -139,3 +139,4 @@ pub use crate::coord::ExecuteContextExtra;
 pub use crate::coord::{serve, Config};
 pub use crate::error::AdapterError;
 pub use crate::notice::AdapterNotice;
+pub use crate::webhook::{AppendWebhookError, AppendWebhookResponse, AppendWebhookValidator};

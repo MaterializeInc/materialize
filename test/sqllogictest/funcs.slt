@@ -1549,13 +1549,24 @@ NULL
 query III
 SELECT mz_row_size((1, 2)), mz_row_size((1, 2, 3, 4)), mz_row_size((1, 2, 3, 4, 5))
 ----
-32  32  32
+24  24  24
+
+statement ok
+CREATE TABLE ts_size (t TEXT)
+
+statement ok
+INSERT INTO ts_size VALUES ('2023-10-30T13:47:11Z')
+
+query I
+SELECT mz_row_size(ts_size.*) FROM ts_size
+----
+24
 
 query III
 SELECT a, b, mz_row_size(col_size.*) FROM col_size ORDER BY a
 ----
-1  2  71
-NULL  NULL  32
+1  2  63
+NULL  NULL  24
 
 query error mz_errored
 SELECT mz_internal.mz_error_if_null(NULL, 'mz_errored')

@@ -44,10 +44,11 @@ def workflow_default(c: Composition) -> None:
 
     This workflow just runs all the other ones
     """
-    c.workflow("start-confluents")
-    c.workflow("versioned-mz")
-    c.workflow("two-mz")
-    c.workflow("mz-with-options")
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def workflow_start_confluents(c: Composition) -> None:

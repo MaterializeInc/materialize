@@ -32,7 +32,18 @@ use crate::config::SystemParameterSyncConfig;
 #[derive(Debug)]
 pub struct Config<'a> {
     /// The connection to the stash.
-    pub storage: Box<dyn mz_catalog::DurableCatalogState>,
+    pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    /// The registry that catalog uses to report metrics.
+    pub metrics_registry: &'a MetricsRegistry,
+    /// A handle to a secrets manager that can only read secrets.
+    pub secrets_reader: Arc<dyn SecretsReader>,
+    /// How long to retain storage usage records
+    pub storage_usage_retention_period: Option<Duration>,
+    pub state: StateConfig,
+}
+
+#[derive(Debug)]
+pub struct StateConfig {
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether the build is a local dev build.
@@ -45,18 +56,16 @@ pub struct Config<'a> {
     pub now: mz_ore::now::NowFn,
     /// Whether or not to skip catalog migrations.
     pub skip_migrations: bool,
-    /// The registry that catalog uses to report metrics.
-    pub metrics_registry: &'a MetricsRegistry,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Default storage cluster size. Must be a key from cluster_replica_sizes.
     pub default_storage_cluster_size: Option<String>,
+    /// Builtin cluster replica size.
+    pub builtin_cluster_replica_size: String,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
-    /// A handle to a secrets manager that can only read secrets.
-    pub secrets_reader: Arc<dyn SecretsReader>,
     /// IP Addresses which will be used for egress.
     pub egress_ips: Vec<Ipv4Addr>,
     /// Context for generating an AWS Principal.
@@ -67,8 +76,6 @@ pub struct Config<'a> {
     /// Catalog::open. A `None` value indicates that the initial sync should be
     /// skipped.
     pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
-    /// How long to retain storage usage records
-    pub storage_usage_retention_period: Option<Duration>,
     /// Host name or URL for connecting to the HTTP server of this instance.
     pub http_host_name: Option<String>,
     /// Needed only for migrating PG source column metadata. If `None`, will
@@ -120,20 +127,29 @@ impl Default for ClusterReplicaSizeMap {
         //     "mem-16": { "memory_limit": 16Gb },
         // }
         let mut inner = (0..=5)
-            .map(|i| {
+            .flat_map(|i| {
                 let workers: u8 = 1 << i;
-                (
-                    workers.to_string(),
-                    ReplicaAllocation {
-                        memory_limit: None,
-                        cpu_limit: None,
-                        disk_limit: None,
-                        scale: 1,
-                        workers: workers.into(),
-                        credits_per_hour: 1.into(),
-                        disabled: false,
-                    },
-                )
+                [
+                    (workers.to_string(), None),
+                    (format!("{workers}-4G"), Some(4)),
+                    (format!("{workers}-8G"), Some(8)),
+                    (format!("{workers}-16G"), Some(16)),
+                    (format!("{workers}-32G"), Some(32)),
+                ]
+                .map(|(name, memory_limit)| {
+                    (
+                        name,
+                        ReplicaAllocation {
+                            memory_limit: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
+                            cpu_limit: None,
+                            disk_limit: None,
+                            scale: 1,
+                            workers: workers.into(),
+                            credits_per_hour: 1.into(),
+                            disabled: false,
+                        },
+                    )
+                })
             })
             .collect::<BTreeMap<_, _>>();
 

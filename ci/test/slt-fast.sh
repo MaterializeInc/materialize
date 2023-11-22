@@ -121,6 +121,7 @@ tests_without_views=(
     test/sqllogictest/pgcli.slt
     test/sqllogictest/pgcrypto.slt
     test/sqllogictest/postgres-incompatibility.slt
+    test/sqllogictest/pretty.slt
     test/sqllogictest/privilege_checks.slt
     test/sqllogictest/privilege_grants.slt
     test/sqllogictest/privileges_pg.slt

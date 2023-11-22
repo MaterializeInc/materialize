@@ -52,8 +52,8 @@ impl CheckedRecursion for NonNullRequirements {
 
 impl crate::Transform for NonNullRequirements {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "non_null_requirements")
     )]

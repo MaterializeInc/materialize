@@ -31,7 +31,7 @@ use tracing::{debug, error, info};
 use crate::{persist_handles, StorageError};
 
 // Note(parkmycar): The capacity here was chosen arbitrarily.
-const CHANNEL_CAPACITY: usize = 255;
+const CHANNEL_CAPACITY: usize = 2048;
 // Default rate at which we append data and advance the uppers of managed collections.
 const DEFAULT_TICK: Duration = Duration::from_secs(1);
 
@@ -107,6 +107,7 @@ where
     ///
     /// Also waits until the `CollectionManager` has completed all outstanding work to ensure that
     /// it has stopped referencing the provided `id`.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn unregsiter_collection(&self, id: GlobalId) -> bool {
         let prev = self
             .collections

@@ -12,6 +12,7 @@ use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytesize::ByteSize;
 use differential_dataflow::trace::{Cursor, TraceReader};
@@ -31,21 +32,20 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
 use mz_repr::{ColumnType, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_timely_util::probe;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
-use tracing::{error, info, span, Level};
+use tracing::{error, info, span, warn, Level};
 use uuid::Uuid;
 
 use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
-use crate::render::LinearJoinImpl;
-use crate::server::ResponseSender;
+use crate::render::{LinearJoinImpl, LinearJoinSpec};
+use crate::server::{ComputeInstanceContext, ResponseSender};
 use crate::typedefs::TraceRowHandle;
 
 /// Worker-local state that is maintained across dataflows.
@@ -83,15 +83,17 @@ pub struct ComputeState {
     /// Max size in bytes of any result.
     max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-    pub dataflow_max_inflight_bytes: usize,
-    /// Implementation to use for rendering linear joins.
-    pub linear_join_impl: LinearJoinImpl,
+    pub dataflow_max_inflight_bytes: Option<usize>,
+    /// Specification for rendering linear joins.
+    pub linear_join_spec: LinearJoinSpec,
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
     /// Enable arrangement type specialization.
     pub enable_specialized_arrangements: bool,
+    /// Other configuration for compute
+    pub context: ComputeInstanceContext,
 }
 
 impl ComputeState {
@@ -101,6 +103,7 @@ impl ComputeState {
         persist_clients: Arc<PersistClientCache>,
         metrics: ComputeMetrics,
         tracing_handle: Arc<TracingHandle>,
+        context: ComputeInstanceContext,
     ) -> Self {
         let traces = TraceManager::new(metrics.for_traces(worker_id));
         let command_history = ComputeCommandHistory::new(metrics.for_history(worker_id));
@@ -115,11 +118,12 @@ impl ComputeState {
             persist_clients,
             command_history,
             max_result_size: u32::MAX,
-            dataflow_max_inflight_bytes: usize::MAX,
-            linear_join_impl: Default::default(),
+            dataflow_max_inflight_bytes: None,
+            linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
             enable_specialized_arrangements: Default::default(),
+            context,
         }
     }
 
@@ -198,9 +202,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
+            linear_join_yielding,
             enable_mz_join_core,
             enable_jemalloc_profiling,
             enable_specialized_arrangements,
+            enable_columnation_lgalloc,
             persist,
             tracing,
             grpc_client: _grpc_client,
@@ -212,11 +218,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
         }
+        if let Some(v) = linear_join_yielding {
+            self.compute_state.linear_join_spec.yielding = v;
+        }
         if let Some(v) = enable_specialized_arrangements {
             self.compute_state.enable_specialized_arrangements = v;
         }
         if let Some(v) = enable_mz_join_core {
-            self.compute_state.linear_join_impl = match v {
+            self.compute_state.linear_join_spec.implementation = match v {
                 false => LinearJoinImpl::DifferentialDataflow,
                 true => LinearJoinImpl::Materialize,
             };
@@ -236,6 +245,29 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             }
             None => (),
         }
+        match enable_columnation_lgalloc {
+            Some(true) => {
+                if let Some(path) = self.compute_state.context.scratch_directory.as_ref() {
+                    info!(path = ?path, "Enabling lgalloc");
+                    lgalloc::lgalloc_set_config(
+                        lgalloc::LgAlloc::new()
+                            .enable()
+                            .with_path(path.clone())
+                            .with_background_config(lgalloc::BackgroundWorkerConfig {
+                                interval: Duration::from_secs(1),
+                                batch: 32,
+                            }),
+                    );
+                } else {
+                    warn!("Not enabling lgalloc, scratch directory not specified");
+                }
+            }
+            Some(false) => {
+                info!("Disabling lgalloc");
+                lgalloc::lgalloc_set_config(&lgalloc::LgAlloc::new())
+            }
+            None => {}
+        }
 
         persist.apply(self.compute_state.persist_clients.cfg());
         tracing.apply(self.compute_state.tracing_handle.as_ref());
@@ -245,13 +277,35 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Collect the exported object identifiers, paired with their associated "collection" identifier.
         // The latter is used to extract dependency information, which is in terms of collections ids.
         let dataflow_index = self.timely_worker.next_dataflow_index();
+        let as_of = dataflow.as_of.clone().unwrap();
+
+        if dataflow.is_transient() {
+            tracing::debug!(
+                name = %dataflow.debug_name,
+                import_ids = %dataflow.display_import_ids(),
+                export_ids = %dataflow.display_export_ids(),
+                as_of = ?as_of.elements(),
+                until = ?dataflow.until.elements(),
+                "creating dataflow",
+            );
+        } else {
+            tracing::info!(
+                name = %dataflow.debug_name,
+                import_ids = %dataflow.display_import_ids(),
+                export_ids = %dataflow.display_export_ids(),
+                as_of = ?as_of.elements(),
+                until = ?dataflow.until.elements(),
+                "creating dataflow",
+            );
+        };
 
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let mut collection = CollectionState::new();
 
-            let as_of = dataflow.as_of.clone().unwrap();
-            collection.reported_frontier = ReportedFrontier::NotReported { lower: as_of };
+            collection.reported_frontier = ReportedFrontier::NotReported {
+                lower: as_of.clone(),
+            };
 
             let existing = self.compute_state.collections.insert(object_id, collection);
             if existing.is_some() {
@@ -372,7 +426,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             panic!("dataflow server has already initialized logging");
         }
 
-        let (logger, traces) = logging::initialize(self.timely_worker, config);
+        let worker_id = self.timely_worker.index();
+        let metrics = self.compute_state.metrics.for_logging(worker_id);
+
+        let (logger, traces) = logging::initialize(self.timely_worker, config, metrics);
 
         // Install traces as maintained indexes
         for (log, trace) in traces {
@@ -688,14 +745,8 @@ impl PendingPeek {
         let peek = &mut self.peek;
         let oks = self.trace_bundle.oks_mut();
         match oks {
-            SpecializedTraceHandle::Bytes9Row(key_types, oks_handle) => {
-                Self::collect_ok_finished_data(
-                    peek,
-                    oks_handle,
-                    Some(key_types),
-                    None,
-                    max_result_size,
-                )
+            SpecializedTraceHandle::RowUnit(oks_handle) => {
+                Self::collect_ok_finished_data(peek, oks_handle, None, Some(&[]), max_result_size)
             }
             SpecializedTraceHandle::RowRow(oks_handle) => {
                 Self::collect_ok_finished_data(peek, oks_handle, None, None, max_result_size)
@@ -738,6 +789,7 @@ impl PendingPeek {
         let mut datum_vec = DatumVec::new();
         let mut l_datum_vec = DatumVec::new();
         let mut r_datum_vec = DatumVec::new();
+        let mut key_buf = K::default();
 
         // We have to sort the literal constraints because cursor.seek_key can seek only forward.
         peek.literal_constraints
@@ -758,7 +810,8 @@ impl PendingPeek {
                         Some(current_literal) => {
                             // NOTE(vmarcos): We expect the extra allocations below to be manageable
                             // since we only perform as many of them as there are literals.
-                            let current_literal = K::from_row(current_literal.clone(), key_types);
+                            let current_literal =
+                                key_buf.from_row(current_literal.clone(), key_types);
                             cursor.seek_key(&storage, &current_literal);
                             if !cursor.key_valid(&storage) {
                                 return Ok(results);
@@ -775,8 +828,6 @@ impl PendingPeek {
                 }
             }
 
-            let mut key_buf = Row::default();
-            let mut val_buf = Row::default();
             while cursor.val_valid(&storage) {
                 // TODO: This arena could be maintained and reused for longer,
                 // but it wasn't clear at what interval we should flush
@@ -784,16 +835,13 @@ impl PendingPeek {
                 // This choice is conservative, and not the end of the world
                 // from a performance perspective.
                 let arena = RowArena::new();
-                // TODO(vmarcos): We could think of not transiting through `Row` below,
-                // but rather create another type-sensitive dispatch to obtain the borrow
-                // on the key and value datums. The complexity does not seem worth the payoff
-                // if all we are doing here is returning a naturally limited number of results.
-                let key = cursor.key(&storage).into_row(&mut key_buf, key_types);
-                let row = cursor.val(&storage).into_row(&mut val_buf, val_types);
-                // TODO: We could unpack into a re-used allocation, except
-                // for the arena above (the allocation would not be allowed
-                // to outlive the arena above, from which it might borrow).
-                let mut borrow = datum_vec.borrow_with_many(&[key, row]);
+
+                let key = cursor.key(&storage).into_datum_iter(key_types);
+                let row = cursor.val(&storage).into_datum_iter(val_types);
+
+                let mut borrow = datum_vec.borrow();
+                borrow.extend(key);
+                borrow.extend(row);
 
                 if has_literal_constraints {
                     // The peek was created from an IndexedFilter join. We have to add those columns
@@ -942,14 +990,6 @@ pub struct CollectionState {
     ///
     /// Only `Some` if the collection is a sink and *not* a subscribe.
     pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
-    /// Probe handles for regulating the output of dataflow sources that (transitively) feed this
-    /// collection.
-    ///
-    /// Only populated if the collection is an index.
-    ///
-    /// New dataflows that depend on this index are expected to report their output frontiers
-    /// through these probe handles.
-    pub index_flow_control_probes: Vec<probe::Handle<Timestamp>>,
 }
 
 impl CollectionState {
@@ -958,7 +998,6 @@ impl CollectionState {
             reported_frontier: ReportedFrontier::new(),
             sink_token: None,
             sink_write_frontier: None,
-            index_flow_control_probes: Default::default(),
         }
     }
 

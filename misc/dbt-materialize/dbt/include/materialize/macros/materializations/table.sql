@@ -22,7 +22,7 @@
   {%- set target_relation = api.Relation.create(identifier=identifier,
                                                 schema=schema,
                                                 database=database,
-                                                type='materializedview') -%}
+                                                type='materialized_view') -%}
 
   {% if old_relation %}
     {{ adapter.drop_relation(old_relation) }}

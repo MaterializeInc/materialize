@@ -297,8 +297,8 @@ pub struct Fixpoint {
 
 impl Transform for Fixpoint {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = self.name)
     )]
@@ -322,7 +322,7 @@ impl Transform for Fixpoint {
 
                 let span = tracing::span!(
                     target: "optimizer",
-                    tracing::Level::TRACE,
+                    tracing::Level::DEBUG,
                     "iteration",
                     path.segment = format!("{:04}", i)
                 );
@@ -387,11 +387,6 @@ impl Default for FuseAndCollapse {
                 // Removes redundant inputs from joins.
                 // Note that this eliminates one redundant input per join,
                 // so it is necessary to run this section in a loop.
-                // TODO: (#6748) Predicate pushdown unlocks the ability to
-                // remove some redundant joins but also prevents other
-                // redundant joins from being removed. When predicate pushdown
-                // no longer works against redundant join, check if it is still
-                // necessary to run RedundantJoin here.
                 Box::new(crate::redundant_join::RedundantJoin::default()),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a
@@ -405,8 +400,8 @@ impl Default for FuseAndCollapse {
 
 impl Transform for FuseAndCollapse {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "fuse_and_collapse")
     )]
@@ -668,7 +663,7 @@ impl Optimizer {
     /// which makes them suitable for pre-optimization before dataflow deployment.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = self.name)
     )]

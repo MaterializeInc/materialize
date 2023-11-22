@@ -22,7 +22,7 @@ pub use crate::relation_and_scalar::{
 };
 use crate::{Datum, ScalarType};
 
-/// The type of a [`Datum`](crate::Datum).
+/// The type of a [`Datum`].
 ///
 /// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
 /// Int32 or String) with its nullability.
@@ -243,6 +243,11 @@ impl RelationType {
         }
         true
     }
+
+    /// Returns all the [`ColumnType`]s, in order, for this relation.
+    pub fn columns(&self) -> &[ColumnType] {
+        &self.column_types
+    }
 }
 
 impl RustType<ProtoRelationType> for RelationType {
@@ -289,6 +294,11 @@ impl ColumnName {
     pub fn as_mut_str(&mut self) -> &mut String {
         &mut self.0
     }
+
+    /// Returns if this [`ColumnName`] is similar to the provided one.
+    pub fn is_similar(&self, other: &ColumnName) -> bool {
+        self.0.to_lowercase() == other.as_str().to_lowercase()
+    }
 }
 
 impl fmt::Display for ColumnName {
@@ -326,6 +336,13 @@ impl RustType<ProtoColumnName> for ColumnName {
         Ok(ColumnName(proto.value.ok_or_else(|| {
             TryFromProtoError::missing_field("ProtoColumnName::value")
         })?))
+    }
+}
+
+impl From<ColumnName> for mz_sql_parser::ast::Ident {
+    fn from(value: ColumnName) -> Self {
+        // Note: ColumnNames are known to be less than the max length of an Ident (I think?).
+        mz_sql_parser::ast::Ident::new_unchecked(value.0)
     }
 }
 
@@ -494,6 +511,15 @@ impl RelationDesc {
     /// Returns an iterator over the names of the columns in this relation.
     pub fn iter_names(&self) -> impl Iterator<Item = &ColumnName> {
         self.names.iter()
+    }
+
+    /// Returns an iterator over the names of the columns in this relation that are "similar" to
+    /// the provided `name`.
+    pub fn iter_similar_names<'a>(
+        &'a self,
+        name: &'a ColumnName,
+    ) -> impl Iterator<Item = &'a ColumnName> {
+        self.iter_names().filter(|n| n.is_similar(name))
     }
 
     /// Finds a column by name.

@@ -12,10 +12,28 @@
 import argparse
 import subprocess
 import sys
+from pathlib import Path
+from typing import Any
 
 import yaml
 
-from materialize import MZ_ROOT, spawn
+from materialize import MZ_ROOT, buildkite, spawn
+
+
+def permit_rerunning_successful_steps(pipeline: Any) -> None:
+    def visit(step: Any) -> None:
+        step.setdefault("retry", {}).setdefault("manual", {}).setdefault(
+            "permit_on_passed", True
+        )
+
+    for config in pipeline["steps"]:
+        if "trigger" in config or "wait" in config or "block" in config:
+            continue
+        if "group" in config:
+            for inner_config in config.get("steps", []):
+                visit(inner_config)
+            continue
+        visit(config)
 
 
 def main() -> int:
@@ -54,10 +72,18 @@ def main() -> int:
                 step["steps"] = new_inner_steps
                 del step["key"]
                 new_steps.append(step)
+
+    permit_rerunning_successful_steps(pipeline)
+
     spawn.runv(
         ["buildkite-agent", "pipeline", "upload", "--replace"],
         stdin=yaml.dump(new_steps).encode(),
     )
+
+    # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
+    # if we trim away all the JUnit report-generating steps.
+    Path("junit_dummy.xml").write_text("")
+    buildkite.upload_artifact("junit_dummy.xml")
 
     return 0
 

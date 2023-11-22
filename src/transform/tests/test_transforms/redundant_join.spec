@@ -123,7 +123,7 @@ With
 apply pipeline=redundant_join
 Join on=(#0 = #2)
   Get x
-  Distinct group_by=[#0]
+  Distinct project=[#0]
     Get x
 ----
 Project (#0..=#2)
@@ -139,7 +139,7 @@ Return
     Get l0
 With
   cte l0 =
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Get x
 ----
 Return
@@ -149,7 +149,7 @@ Return
         Get x
 With
   cte l0 =
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Get x
 
 
@@ -184,12 +184,12 @@ Return
   Get l0
 With Mutually Recursive
   cte l0 = // { types: "(bigint, bigint, bigint)" }
-    Distinct group_by=[#0, #1, #2]
+    Distinct project=[#0, #1, #2]
       Union
         Get l0
         Join on=(#2 = (#0 % 2))
           Get x
-          Distinct group_by=[(#0 % 2)]
+          Distinct project=[(#0 % 2)]
             Project (#0)
               Get x
 ----
@@ -197,7 +197,7 @@ Return
   Get l0
 With Mutually Recursive
   cte l0 =
-    Distinct group_by=[#0..=#2]
+    Distinct project=[#0..=#2]
       Union
         Get l0
         Project (#0..=#2)

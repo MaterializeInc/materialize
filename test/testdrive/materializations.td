@@ -22,7 +22,7 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -446,19 +446,19 @@ c    d
 AccumulableErrorCheck
 AccumulableErrorCheck
 AccumulableErrorCheck
-ArrangeAccumulable
-ArrangeAccumulable
-ArrangeAccumulable
-"ArrangeBy[[Column(0), Column(1)]]"
-"ArrangeBy[[Column(0), Column(1)]]"
+"ArrangeAccumulable [val: empty]"
+"ArrangeAccumulable [val: empty]"
+"ArrangeAccumulable [val: empty]"
+"ArrangeBy[[Column(0), Column(1)]] [val: empty]"
+"ArrangeBy[[Column(0), Column(1)]] [val: empty]"
 "ArrangeBy[[Column(0), Column(1)]]-errors"
 "ArrangeBy[[Column(0), Column(1)]]-errors"
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(1)]]
 ArrangeBy[[Column(1)]]-errors
-ArrangeMonotonic
-ArrangeMonotonic
+"ArrangeMonotonic [val: empty]"
+"ArrangeMonotonic [val: empty]"
 ReduceAccumulable
 ReduceAccumulable
 ReduceAccumulable

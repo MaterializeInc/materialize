@@ -93,7 +93,7 @@ contains:cannot create source in cluster with more than one replica
 
 # Test that `DROP CLUSTER` only succeeds with `CASCADE`.
 ! DROP CLUSTER storage
-contains:cannot drop cluster with active objects
+contains:cannot drop cluster "storage" because other objects depend on it
 > DROP CLUSTER storage CASCADE
 
 > SET cluster = default
@@ -116,7 +116,7 @@ aa
 bb
 
 > CREATE CONNECTION kafka
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE SOURCE data1
   IN CLUSTER storage

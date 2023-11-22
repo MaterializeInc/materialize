@@ -117,8 +117,7 @@ CTEs have the following limitations, which we are working to improve:
 
 ### Query hints
 
-Users can specify any query hints to help Materialize optimize
-query planning more efficiently.
+Users can specify query hints to help Materialize optimize queries.
 
 The following query hints are valid within the `OPTION` clause.
 
@@ -233,12 +232,11 @@ above: Materialize tears down the created dataflow after returning the results.
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `USAGE` privileges on the schemas that all relations in the query are contained in.
 - `SELECT` privileges on all relations in the query.
  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
-   execute the view definition. Even if the view owner is an admin, they still must explicitly be
+   execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
    granted the necessary privileges.
-- `USAGE` privileges on all types used in the query.
 - `USAGE` privileges on the active cluster.
 
 ## Related pages

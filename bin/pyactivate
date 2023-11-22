@@ -18,18 +18,18 @@ import subprocess
 import sys
 import venv
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 logger = logging.getLogger("bootstrap")
 
 
-def main(args: List[str]) -> int:
+def main(args: list[str]) -> int:
     logging.basicConfig(level=os.environ.get("MZ_DEV_LOG", "WARNING").upper())
     logger.debug("args=%s", args)
 
     # Validate Python version.
-    if sys.hexversion < 0x03090000:
-        print("fatal: python v3.9.0+ required", file=sys.stderr)
+    if sys.hexversion < 0x030a0000:
+        print("fatal: python v3.10.0+ required", file=sys.stderr)
         print(
             " hint: you have v{}.{}.{}".format(
                 sys.version_info.major, sys.version_info.minor, sys.version_info.micro
@@ -95,6 +95,15 @@ def activate_venv(py_dir: Path) -> Path:
         # `symlinks=False` is broken with the system Python.
         # See: https://bugs.python.org/issue38705
         symlinks = os.name != "nt"
+        # Work around Debian's packaging of Python, which doesn't include the
+        # `ensurepip` module that `venv` uses under the hood.
+        try:
+            import ensurepip
+        except ImportError:
+            raise AssertionError(
+                "It appears you're on a Debian-derived system. Please install `python3-venv`, otherwise this will fail annoyingly."
+            )
+
         venv.create(venv_dir, with_pip=True, clear=True, symlinks=symlinks)
         # Work around a Debian bug which incorrectly makes pip think that we've
         # installed wheel in the virtual environment when we haven't. This is
@@ -165,10 +174,10 @@ def acquire_deps(venv_dir: Path, variant: Optional[str] = None, use_pep517: bool
     if stamp_mtime <= requirements_mtime:
         print(f"==> Updating {variant + ' ' if variant else ''}dependencies with pip", file=sys.stderr)
         subprocess.check_call([
-            venv_dir / "bin" / "pip", "install", "-r", requirements_path,
-            "--disable-pip-version-check",
-            *(["--use-pep517"] if use_pep517 else [])
-        ],
+                venv_dir / "bin" / "pip", "install", "-r", requirements_path,
+                "--disable-pip-version-check",
+                *(["--use-pep517"] if use_pep517 else []),
+            ],
             stdout=sys.stderr
         )
         stamp_path.touch()

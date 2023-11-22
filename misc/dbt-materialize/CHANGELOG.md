@@ -1,14 +1,81 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.7.0 - 2023-11-20
+
+* Support specifying the materialization type used to store test failures via
+  the new [`store_failures_as` configuration](https://docs.getdbt.com/reference/resource-configs/store_failures_as).
+  Accepted values: `materialized_view` (default), `view`, `ephemeral`.
+
+  * **Project level**
+  ```yaml
+  tests:
+    my_project:
+      +store_failures_as: view
+  ```
+
+  * **Model level**
+  ```yaml
+  models:
+    - name: my_model
+      columns:
+        - name: id
+          tests:
+            - not_null:
+                config:
+                  store_failures_as: view
+            - unique:
+                config:
+                  store_failures_as: ephemeral
+  ```
+
+  If both [`store_failures`](https://docs.getdbt.com/reference/resource-configs/store_failures)
+  and `store_failures_as` are specified, `store_failures_as` takes precedence.
+
+* Mark `dbt source freshness` as not supported. Materialize supports the
+  functionality required to enable column- and metadata-based source freshness
+  checks, but the value of this feature in a real-time data warehouse is
+  limited.
+
+## 1.6.1 - 2023-11-03
+
+* Support the [`ASSERT NOT NULL` option](https://materialize.com/docs/sql/create-materialized-view/#non-null-assertions)
+  for `materialized_view` materializations via the `not_null` column-level
+  constraint.
+
+  ```yaml
+    - name: model_with_constraints
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: col_with_constraints
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: col_without_constraints
+        data_type: int
+  ```
+
+  It's important to note that other constraint types are not
+  supported, and that `not_null` constraints can only be defined at the
+  column-level (not model-level).
+
+* Work around a bug in [`--persist-docs`](https://docs.getdbt.com/reference/resource-configs/persist_docs)
+  that prevented comments from being persisted for `materialized_view`
+  materializations. See [#21878]
+  (https://github.com/MaterializeInc/materialize/pull/21878) for details.
+
+  The `--persist-docs` flag requires [Materialize >=0.68.0](https://materialize.com/docs/releases/v0.68/).
+  Previous versions **do not** have support for the `COMMENT ON` syntax, which
+  is required to persist resource descriptions as column and relation comments
+  in Materialize.
 
 * Load seeds into tables rather than materialized views.
 
-  For historical reasons, dbt-materialize has loaded seed data by injecting the
-  values from the CSV file in a `CREATE MATERIALIZED VIEW AS ...` statement.
-  Starting with this release, dbt-materialize now creates a table and loads
-  the values from the CSV into that file, matching the behavior of other
-  dbt adapters.
+  For historical reasons, `dbt-materialize` has loaded seed data by injecting
+  the values from the CSV file in a `CREATE MATERIALIZED VIEW AS ...`
+  statement. `dbt-materialize` now creates a table and loads the values from
+  the CSV into that file, matching the behavior of other dbt adapters.
 
 ## 1.6.0 - 2023-10-12
 

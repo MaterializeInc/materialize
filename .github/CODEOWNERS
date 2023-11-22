@@ -21,8 +21,13 @@
 /doc/developer/reference/storage    @MaterializeInc/storage
 /misc/dbt-materialize               @MaterializeInc/devex
 /src/adapter                        @MaterializeInc/adapter
+/src/adapter-types                  @MaterializeInc/adapter
 /src/adapter/src/optimizer          @MaterializeInc/compute
-/src/adapter/src/flags.rs
+/src/adapter/src/coord/dataflows.rs @MaterializeInc/compute
+# to track changes to feature flags
+/src/adapter/src/coord/ddl.rs       @MaterializeInc/testing
+# to track changes to feature flags
+/src/adapter/src/flags.rs           @MaterializeInc/testing
 /src/alloc                          @benesch
 /src/audit-log                      @MaterializeInc/adapter
 /src/avro                           @umanwizard
@@ -30,6 +35,7 @@
 /src/build-id                       @umanwizard
 /src/build-info                     @benesch
 /src/catalog                        @MaterializeInc/adapter
+/src/catalog-debug                  @MaterializeInc/adapter
 /src/ccsr                           @benesch
 /src/cloud-resources                @MaterializeInc/cloud
 /src/cluster                        @MaterializeInc/compute @MaterializeInc/storage

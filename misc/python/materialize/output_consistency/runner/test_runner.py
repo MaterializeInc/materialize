@@ -24,7 +24,7 @@ from materialize.output_consistency.generators.expression_generator import (
 )
 from materialize.output_consistency.generators.query_generator import QueryGenerator
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
-    InconsistencyIgnoreFilter,
+    GenericInconsistencyIgnoreFilter,
 )
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
@@ -34,6 +34,8 @@ from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.runner.time_guard import TimeGuard
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.validation.result_comparator import ResultComparator
+
+ENABLE_ADDING_WHERE_CONDITIONS = True
 
 
 class ConsistencyTestRunner:
@@ -49,7 +51,7 @@ class ConsistencyTestRunner:
         outcome_comparator: ResultComparator,
         sql_executors: SqlExecutors,
         randomized_picker: RandomizedPicker,
-        ignore_filter: InconsistencyIgnoreFilter,
+        ignore_filter: GenericInconsistencyIgnoreFilter,
         output_printer: OutputPrinter,
     ):
         self.config = config
@@ -141,7 +143,8 @@ class ConsistencyTestRunner:
         queries = self.query_generator.consume_queries(test_summary)
 
         for query in queries:
-            self._add_random_where_condition(query)
+            if ENABLE_ADDING_WHERE_CONDITIONS:
+                self._add_random_where_condition(query)
             success = self.execution_manager.execute_query(query, test_summary)
 
             if not success and self.config.fail_fast:

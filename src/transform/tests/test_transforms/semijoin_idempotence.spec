@@ -38,7 +38,7 @@ Return
           Negate
             Join on=(#0 = #3)
               Get t0
-              Distinct group_by=[#0]
+              Distinct project=[#0]
                 Get l0
         Get t0
     Project (#0, #1, #2, #0, #4)

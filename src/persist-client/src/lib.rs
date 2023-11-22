@@ -126,6 +126,7 @@ pub mod cfg;
 pub mod cli {
     //! Persist command-line utilities
     pub mod admin;
+    pub mod args;
     pub mod inspect;
 }
 pub mod critical;
@@ -157,6 +158,7 @@ mod internal {
     pub mod maintenance;
     pub mod metrics;
     pub mod paths;
+    pub mod restore;
     pub mod service;
     pub mod state;
     pub mod state_diff;
@@ -386,7 +388,7 @@ impl PersistClient {
         ))
     }
 
-    /// [Self::open], but returning only a [/eadHandle].
+    /// [Self::open], but returning only a [ReadHandle].
     ///
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [WriteHandle].
@@ -459,10 +461,6 @@ impl PersistClient {
     }
 
     /// Creates and returns a [BatchFetcher] for the given shard id.
-    ///
-    /// The `_schema` parameter is currently unused, but should be an object
-    /// that represents the schema of the data in the shard. This will be required
-    /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
     pub async fn create_batch_fetcher<K, V, T, D>(
         &self,
@@ -648,31 +646,16 @@ impl PersistClient {
             key: key_schema,
             val: val_schema,
         };
-        let compact = self.cfg.compaction_enabled.then(|| {
-            Compactor::new(
-                self.cfg.clone(),
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.isolated_runtime),
-                writer_id.clone(),
-                schemas.clone(),
-                gc.clone(),
-            )
-        });
-        let upper = machine.applier.clone_upper();
         let writer = WriteHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
             machine,
             gc,
-            compact,
             Arc::clone(&self.blob),
-            Arc::clone(&self.isolated_runtime),
             writer_id,
             &diagnostics.handle_purpose,
             schemas,
-            upper,
-        )
-        .await;
+        );
         Ok(writer)
     }
 
@@ -781,6 +764,7 @@ impl Schema<ShardId> for ShardIdSchema {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
+    use std::mem;
     use std::pin::Pin;
     use std::str::FromStr;
     use std::task::Context;
@@ -1186,12 +1170,16 @@ mod tests {
             let shard_id1 = "s11111111-1111-1111-1111-111111111111"
                 .parse::<ShardId>()
                 .expect("invalid shard id");
-            let (_, read1) = client
-                .expect_open::<String, String, u64, i64>(shard_id1)
+            let fetcher1 = client
+                .create_batch_fetcher::<String, String, u64, i64>(
+                    shard_id1,
+                    Default::default(),
+                    Default::default(),
+                    Diagnostics::for_tests(),
+                )
                 .await;
-            let fetcher1 = read1.clone("").await.batch_fetcher().await;
             for batch in snap {
-                let (batch, res) = fetcher1.fetch_leased_part(batch).await;
+                let res = fetcher1.fetch_leased_part(&batch).await;
                 read0.process_returned_leased_part(batch);
                 assert_eq!(
                     res.unwrap_err(),
@@ -1983,12 +1971,12 @@ mod tests {
             .expect("client construction failed")
             .expect_open::<(), (), u64, i64>(ShardId::new())
             .await;
-        let read_heartbeat_tasks = read
-            .heartbeat_tasks
+        let mut read_unexpired_state = read
+            .unexpired_state
             .take()
-            .expect("handle should have heartbeat task");
+            .expect("handle should have unexpired state");
         read.expire().await;
-        for read_heartbeat_task in read_heartbeat_tasks {
+        for read_heartbeat_task in mem::take(&mut read_unexpired_state.heartbeat_tasks) {
             let () = read_heartbeat_task
                 .await
                 .expect("task should shutdown cleanly");

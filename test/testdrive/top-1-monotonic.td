@@ -38,7 +38,7 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=1
   );
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE t1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-top1-${testdrive.seed}')
@@ -274,22 +274,22 @@ ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-ArrangeBy[[Column(0)]]
-"Arranged DistinctBy"
-"Arranged DistinctBy"
-"Arranged DistinctBy"
-"Arranged DistinctBy"
+"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]] [val: empty]"
+"Arranged DistinctBy [val: empty]"
+"Arranged DistinctBy [val: empty]"
+"Arranged DistinctBy [val: empty]"
+"Arranged DistinctBy [val: empty]"
 "Arranged MonotonicTop1 partial"
 "Arranged MonotonicTop1 partial"
 "Arranged MonotonicTop1 partial"
 "Arranged MonotonicTop1 partial"
 "Arranged MonotonicTop1 partial"
 "Arranged MonotonicTop1 partial"
-DistinctBy
-DistinctBy
-DistinctBy
-DistinctBy
+"DistinctBy [val: empty]"
+"DistinctBy [val: empty]"
+"DistinctBy [val: empty]"
+"DistinctBy [val: empty]"
 DistinctByErrorCheck
 DistinctByErrorCheck
 DistinctByErrorCheck

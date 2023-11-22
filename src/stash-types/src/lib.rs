@@ -84,37 +84,6 @@ use mz_proto::TryFromProtoError;
 use tokio_postgres::error::SqlState;
 
 pub mod metrics;
-pub mod objects;
-
-/// Not a public API, only exposed for mz-stash.
-pub mod upgrade {
-    use paste::paste;
-    macro_rules! objects {
-        ( $( $x:ident ),* ) => {
-            paste! {
-                $(
-                    pub mod [<objects_ $x>] {
-                        include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
-                    }
-                )*
-            }
-        }
-    }
-
-    objects!(v35, v36, v37, v38, v39, v40);
-}
-
-/// The current version of the `Stash`.
-///
-/// We will initialize new `Stash`es with this version, and migrate existing `Stash`es to this
-/// version. Whenever the `Stash` changes, e.g. the protobufs we serialize in the `Stash`
-/// change, we need to bump this version.
-pub const STASH_VERSION: u64 = 40;
-
-/// The minimum `Stash` version number that we support migrating from.
-///
-/// After bumping this we can delete the old migrations.
-pub const MIN_STASH_VERSION: u64 = 35;
 
 /// An error that can occur while interacting with a `Stash`.
 ///
@@ -161,7 +130,11 @@ pub enum InternalStashError {
     Postgres(::tokio_postgres::Error),
     Fence(String),
     PeekSinceUpper(String),
-    IncompatibleVersion(u64),
+    IncompatibleVersion {
+        found_version: u64,
+        min_stash_version: u64,
+        stash_version: u64,
+    },
     Proto(TryFromProtoError),
     Decoding(prost::DecodeError),
     Uninitialized,
@@ -178,8 +151,12 @@ impl fmt::Display for StashError {
             InternalStashError::Decoding(e) => write!(f, "prost decoding: {e}"),
             InternalStashError::Fence(e) => f.write_str(e),
             InternalStashError::PeekSinceUpper(e) => f.write_str(e),
-            InternalStashError::IncompatibleVersion(v) => {
-                write!(f, "incompatible Stash version {v}, minimum: {MIN_STASH_VERSION}, current: {STASH_VERSION}")
+            InternalStashError::IncompatibleVersion {
+                found_version,
+                min_stash_version,
+                stash_version,
+            } => {
+                write!(f, "incompatible Stash version {found_version}, minimum: {min_stash_version}, current: {stash_version}")
             }
             InternalStashError::Uninitialized => write!(f, "uninitialized"),
             InternalStashError::StashNotWritable(e) => f.write_str(e),

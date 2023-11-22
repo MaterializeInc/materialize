@@ -52,12 +52,12 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*)]
         Project ()
-          Filter (mz_now() < numeric_to_mz_timestamp(delete_ms)) AND (mz_now() >= numeric_to_mz_timestamp(insert_ms))
+          Filter (mz_now() < numeric_to_mz_timestamp(#2{delete_ms})) AND (mz_now() >= numeric_to_mz_timestamp(#1{insert_ms}))
             ReadStorage materialize.public.events
 
 Source materialize.public.events
-  filter=((mz_now() >= numeric_to_mz_timestamp(insert_ms)) AND (mz_now() < numeric_to_mz_timestamp(delete_ms)))
-  pushdown=((mz_now() >= numeric_to_mz_timestamp(insert_ms)) AND (mz_now() < numeric_to_mz_timestamp(delete_ms)))
+  filter=((mz_now() >= numeric_to_mz_timestamp(#1{insert_ms})) AND (mz_now() < numeric_to_mz_timestamp(#2{delete_ms})))
+  pushdown=((mz_now() >= numeric_to_mz_timestamp(#1{insert_ms})) AND (mz_now() < numeric_to_mz_timestamp(#2{delete_ms})))
 
 EOF
 
@@ -74,12 +74,12 @@ WHERE mz_now() >= 10000 * (insert_ms / 10000)
 Explained Query:
   Project (#0, #1)
     Filter (mz_now() >= numeric_to_mz_timestamp((10000 * #3))) AND (mz_now() < numeric_to_mz_timestamp((10000 * (1 + #3))))
-      Map ((insert_ms / 10000))
+      Map ((#1{insert_ms} / 10000))
         ReadStorage materialize.public.events
 
 Source materialize.public.events
   filter=((mz_now() < numeric_to_mz_timestamp((10000 * (1 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
-  map=((insert_ms / 10000))
+  map=((#1{insert_ms} / 10000))
   pushdown=((mz_now() < numeric_to_mz_timestamp((10000 * (1 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
 
 EOF
@@ -97,12 +97,12 @@ WHERE mz_now() >= 10000 * (insert_ms / 10000)
 Explained Query:
   Project (#0, #1)
     Filter (mz_now() >= numeric_to_mz_timestamp((10000 * #3))) AND (mz_now() < numeric_to_mz_timestamp((6 * (10000 + #3))))
-      Map ((insert_ms / 10000))
+      Map ((#1{insert_ms} / 10000))
         ReadStorage materialize.public.events
 
 Source materialize.public.events
   filter=((mz_now() < numeric_to_mz_timestamp((6 * (10000 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
-  map=((insert_ms / 10000))
+  map=((#1{insert_ms} / 10000))
   pushdown=((mz_now() < numeric_to_mz_timestamp((6 * (10000 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
 
 EOF
@@ -120,12 +120,12 @@ WHERE mz_now() >= insert_ms
 ----
 Explained Query:
   Project (#0, #1)
-    Filter (mz_now() >= numeric_to_mz_timestamp(insert_ms)) AND (mz_now() < numeric_to_mz_timestamp((insert_ms + 30000)))
+    Filter (mz_now() >= numeric_to_mz_timestamp(#1{insert_ms})) AND (mz_now() < numeric_to_mz_timestamp((#1{insert_ms} + 30000)))
       ReadStorage materialize.public.events
 
 Source materialize.public.events
-  filter=((mz_now() < numeric_to_mz_timestamp((insert_ms + 30000))) AND (mz_now() >= numeric_to_mz_timestamp(insert_ms)))
-  pushdown=((mz_now() < numeric_to_mz_timestamp((insert_ms + 30000))) AND (mz_now() >= numeric_to_mz_timestamp(insert_ms)))
+  filter=((mz_now() < numeric_to_mz_timestamp((#1{insert_ms} + 30000))) AND (mz_now() >= numeric_to_mz_timestamp(#1{insert_ms})))
+  pushdown=((mz_now() < numeric_to_mz_timestamp((#1{insert_ms} + 30000))) AND (mz_now() >= numeric_to_mz_timestamp(#1{insert_ms})))
 
 EOF
 
@@ -137,12 +137,12 @@ WHERE mz_now() >= insert_ms + 60000
   AND mz_now() < delete_ms + 60000;
 ----
 Explained Query:
-  Filter (mz_now() < numeric_to_mz_timestamp((delete_ms + 60000))) AND (mz_now() >= numeric_to_mz_timestamp((insert_ms + 60000)))
+  Filter (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 60000))) AND (mz_now() >= numeric_to_mz_timestamp((#1{insert_ms} + 60000)))
     ReadStorage materialize.public.events
 
 Source materialize.public.events
-  filter=((mz_now() >= numeric_to_mz_timestamp((insert_ms + 60000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 60000))))
-  pushdown=((mz_now() >= numeric_to_mz_timestamp((insert_ms + 60000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 60000))))
+  filter=((mz_now() >= numeric_to_mz_timestamp((#1{insert_ms} + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 60000))))
+  pushdown=((mz_now() >= numeric_to_mz_timestamp((#1{insert_ms} + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 60000))))
 
 EOF
 
@@ -158,12 +158,12 @@ FROM events
 WHERE COALESCE(delete_ms, insert_ms) < mz_now();
 ----
 Explained Query:
-  Filter (numeric_to_mz_timestamp(coalesce(delete_ms, insert_ms)) < mz_now())
+  Filter (numeric_to_mz_timestamp(coalesce(#2{delete_ms}, #1{insert_ms})) < mz_now())
     ReadStorage materialize.public.events
 
 Source materialize.public.events
-  filter=((numeric_to_mz_timestamp(coalesce(delete_ms, insert_ms)) < mz_now()))
-  pushdown=((numeric_to_mz_timestamp(coalesce(delete_ms, insert_ms)) < mz_now()))
+  filter=((numeric_to_mz_timestamp(coalesce(#2{delete_ms}, #1{insert_ms})) < mz_now()))
+  pushdown=((numeric_to_mz_timestamp(coalesce(#2{delete_ms}, #1{insert_ms})) < mz_now()))
 
 EOF
 
@@ -182,12 +182,12 @@ WHERE mz_now() < delete_ms + 10000
   AND mz_now() < delete_ms + 90000;
 ----
 Explained Query:
-  Filter (mz_now() < numeric_to_mz_timestamp((delete_ms + 10000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 20000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 30000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 40000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 50000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 60000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 70000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 80000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 90000)))
+  Filter (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 10000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 20000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 30000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 40000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 50000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 70000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 80000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 90000)))
     ReadStorage materialize.public.events
 
 Source materialize.public.events
-  filter=((mz_now() < numeric_to_mz_timestamp((delete_ms + 10000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 20000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 30000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 40000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 50000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 60000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 70000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 80000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 90000))))
-  pushdown=((mz_now() < numeric_to_mz_timestamp((delete_ms + 10000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 20000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 30000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 40000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 50000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 60000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 70000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 80000))) AND (mz_now() < numeric_to_mz_timestamp((delete_ms + 90000))))
+  filter=((mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 10000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 20000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 30000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 40000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 50000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 70000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 80000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 90000))))
+  pushdown=((mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 10000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 20000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 30000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 40000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 50000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 70000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 80000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 90000))))
 
 EOF
 
@@ -206,12 +206,12 @@ WHERE EXTRACT(YEAR FROM inserted_at) = 2021;
 ----
 Explained Query:
   Project (#0, #1)
-    Filter (2021 = extract_year_ts(inserted_at))
+    Filter (2021 = extract_year_ts(#1{inserted_at}))
       ReadStorage materialize.public.events_timestamped
 
 Source materialize.public.events_timestamped
-  filter=((2021 = extract_year_ts(inserted_at)))
-  pushdown=((2021 = extract_year_ts(inserted_at)))
+  filter=((2021 = extract_year_ts(#1{inserted_at})))
+  pushdown=((2021 = extract_year_ts(#1{inserted_at})))
 
 EOF
 
@@ -231,12 +231,12 @@ WHERE mz_now() < try_parse_monotonic_iso8601_timestamp(content);
 ----
 Explained Query:
   Project (#0, #1)
-    Filter (mz_now() < timestamp_to_mz_timestamp(try_parse_monotonic_iso8601_timestamp(content)))
+    Filter (mz_now() < timestamp_to_mz_timestamp(try_parse_monotonic_iso8601_timestamp(#0{content})))
       ReadStorage materialize.public.events_timestamped
 
 Source materialize.public.events_timestamped
-  filter=((mz_now() < timestamp_to_mz_timestamp(try_parse_monotonic_iso8601_timestamp(content))))
-  pushdown=((mz_now() < timestamp_to_mz_timestamp(try_parse_monotonic_iso8601_timestamp(content))))
+  filter=((mz_now() < timestamp_to_mz_timestamp(try_parse_monotonic_iso8601_timestamp(#0{content}))))
+  pushdown=((mz_now() < timestamp_to_mz_timestamp(try_parse_monotonic_iso8601_timestamp(#0{content}))))
 
 EOF
 
@@ -309,5 +309,65 @@ Explained Query:
 Source materialize.public.t
   filter=((timestamp_to_mz_timestamp(case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end) < mz_now()))
   pushdown=((timestamp_to_mz_timestamp(case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end) < mz_now()))
+
+EOF
+
+# Regression test: should not report pushdown when one case can't be pushed down / might throw an exception.
+# (We don't infer a range for the result of EXTRACT, so the overall expression may overflow.)
+
+statement ok
+CREATE TABLE items(id int, ship_time timestamp);
+
+query T multiline
+EXPLAIN WITH(filter_pushdown)
+SELECT * from items
+WHERE mz_now() <= date_trunc(
+    'month',
+    ship_time
+    - (
+        CASE WHEN EXTRACT(MONTH FROM ship_time) < 6 THEN EXTRACT(MONTH FROM ship_time) + 6 ELSE 0 END
+        + CASE WHEN EXTRACT(MONTH FROM ship_time) >= 6 THEN EXTRACT(MONTH FROM ship_time) - 6 ELSE 0 END
+    )
+    * INTERVAL '1 months'
+)
+----
+Explained Query:
+  Project (#0, #1)
+    Filter (mz_now() <= timestamp_to_mz_timestamp(date_trunc_month_ts((#1 - (1 month * numeric_to_double((case when (#2 < 6) then (extract_month_ts(#1) + 6) else 0 end + case when (#2 >= 6) then (extract_month_ts(#1) - 6) else 0 end)))))))
+      Map (extract_month_ts(#1))
+        ReadStorage materialize.public.items
+
+Source materialize.public.items
+  filter=((mz_now() <= timestamp_to_mz_timestamp(date_trunc_month_ts((#1 - (1 month * numeric_to_double((case when (#2 < 6) then (extract_month_ts(#1) + 6) else 0 end + case when (#2 >= 6) then (extract_month_ts(#1) - 6) else 0 end))))))))
+  map=(extract_month_ts(#1))
+
+EOF
+
+query T multiline
+explain with(filter_pushdown)
+SELECT * from items
+WHERE CASE WHEN id = 10 THEN EXTRACT(MONTH FROM ship_time) ELSE 0 END < mz_now();
+----
+Explained Query:
+  Filter (numeric_to_mz_timestamp(case when (#0 = 10) then extract_month_ts(#1) else 0 end) < mz_now())
+    ReadStorage materialize.public.items
+
+Source materialize.public.items
+  filter=((numeric_to_mz_timestamp(case when (#0 = 10) then extract_month_ts(#1) else 0 end) < mz_now()))
+
+EOF
+
+query T multiline
+explain with(filter_pushdown)
+SELECT * from items
+WHERE CASE WHEN EXTRACT(MONTH FROM ship_time) >= 6 THEN 12 ELSE 0 END < mz_now();
+----
+Explained Query:
+  Filter (integer_to_mz_timestamp(case when (extract_month_ts(#1) >= 6) then 12 else 0 end) < mz_now())
+    ReadStorage materialize.public.items
+
+Source materialize.public.items
+  filter=((integer_to_mz_timestamp(case when (extract_month_ts(#1) >= 6) then 12 else 0 end) < mz_now()))
+  pushdown=((integer_to_mz_timestamp(case when (extract_month_ts(#1) >= 6) then 12 else 0 end) < mz_now()))
 
 EOF

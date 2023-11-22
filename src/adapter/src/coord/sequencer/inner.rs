@@ -16,13 +16,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use maplit::btreeset;
+use maplit::{btreemap, btreeset};
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
@@ -31,16 +28,15 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
-use mz_ore::{soft_assert, soft_panic_or_log, task};
+use mz_ore::{soft_assert, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::explain::json::json_string;
 use mz_repr::explain::{
     ExplainFormat, ExprHumanizer, ExprHumanizerExt, TransientItem, UsedIndexes,
 };
 use mz_repr::role_id::RoleId;
-use mz_repr::{
-    ColumnName, Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp,
-};
+use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
@@ -52,10 +48,12 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId,
 };
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
+use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
+use mz_adapter_types::connection::ConnectionId;
 use mz_sql::plan::{
-    AlterOptionParameter, Explainee, Index, IndexOption, MaterializedView, MutationKind, Params,
-    Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
-    SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege, VariableValue,
+    AlterOptionParameter, ExplainSinkSchemaPlan, Explainee, Index, IndexOption, MaterializedView,
+    MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
+    SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -74,29 +72,26 @@ use mz_storage_client::controller::{
 };
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::sinks::StorageSinkConnectionBuilder;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::optimizer_notices::OptimizerNotice;
-use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
+use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::instrument::WithSubscriber;
-use tracing::{event, warn, Level};
+use tracing::{event, warn, Level, Span};
 use tracing_core::callsite::rebuild_interest_cache;
 
 use crate::catalog::{
-    self, Catalog, CatalogItem, CatalogState, Cluster, ConnCatalog, Connection, DataSourceDesc,
-    StorageSinkConnectionState, UpdatePrivilegeVariant,
+    self, Catalog, CatalogItem, Cluster, ConnCatalog, Connection, DataSourceDesc,
+    UpdatePrivilegeVariant,
 };
-use crate::client::ConnectionId;
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{
-    prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
-    ExprPrepStyle,
+    dataflow_import_id_bundle, prep_scalar_expr, EvalTime, ExprPrepStyle,
 };
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::{FastPathPlan, PlannedPeek};
+use crate::coord::peek::{FastPathPlan, PeekDataflowPlan, PeekPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
@@ -106,13 +101,13 @@ use crate::coord::{
     peek, Coordinator, CreateConnectionValidationReady, ExecuteContext, Message, PeekStage,
     PeekStageFinish, PeekStageOptimize, PeekStageTimestamp, PeekStageValidate, PendingRead,
     PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext,
-    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
-use crate::optimize::{Optimize, OptimizeMaterializedView, OptimizerConfig};
+use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
@@ -173,7 +168,7 @@ impl Coordinator {
 
         for plan::CreateSourcePlans {
             source_id,
-            plan,
+            mut plan,
             resolved_ids,
         } in plans
         {
@@ -195,6 +190,24 @@ impl Coordinator {
                 }
                 _ => None,
             };
+
+            // Attempt to reduce the `CHECK` expression, we timeout if this takes too long.
+            if let mz_sql::plan::DataSourceDesc::Webhook {
+                validate_using: Some(validate),
+                ..
+            } = &mut plan.source.data_source
+            {
+                if let Err(reason) = validate.reduce_expression().await {
+                    self.metrics
+                        .webhook_validation_reduce_failures
+                        .with_label_values(&[reason])
+                        .inc();
+                    return Err(AdapterError::Internal(format!(
+                        "failed to reduce check expression, {reason}"
+                    )));
+                }
+            }
+
             let source =
                 catalog::Source::new(source_id, plan, cluster_id, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
@@ -540,7 +553,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_table(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::CreateTablePlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -551,7 +564,7 @@ impl Coordinator {
         } = plan;
 
         let conn_id = if table.temporary {
-            Some(session.conn_id())
+            Some(ctx.session().conn_id())
         } else {
             None
         };
@@ -571,12 +584,15 @@ impl Coordinator {
             oid: table_oid,
             name: name.clone(),
             item: CatalogItem::Table(table.clone()),
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
         }];
-        match self.catalog_transact(Some(session), ops).await {
+        match self.catalog_transact(Some(ctx.session()), ops).await {
             Ok(()) => {
                 // Determine the initial validity for the table.
                 let register_ts = self.get_local_write_ts().await.timestamp;
+                if let Some(id) = ctx.extra().contents() {
+                    self.set_statement_execution_timestamp(id, register_ts);
+                }
 
                 let collection_desc = CollectionDescription::from_desc(
                     table.desc.clone(),
@@ -587,6 +603,7 @@ impl Coordinator {
                     .create_collections(Some(register_ts), vec![(table_id, collection_desc)])
                     .await
                     .unwrap_or_terminate("cannot fail to create collections");
+                self.apply_local_write(register_ts).await;
 
                 self.initialize_storage_read_policies(
                     vec![table_id],
@@ -594,20 +611,32 @@ impl Coordinator {
                 )
                 .await;
 
-                // Advance the new table to a timestamp higher than the current read timestamp so
-                // that the table is immediately readable. Since we're applying the register ts, do
-                // this through group commit so all the other tables are immediately readable again,
-                // too.
-                let upper = register_ts.step_forward();
+                // Advance the new table to a timestamp higher than the current
+                // read timestamp so that the table is immediately readable.
+                // Since we're applying the register ts, do this through group
+                // commit so all the other tables are immediately readable
+                // again, too.
+                //
+                // TODO: It's a little odd to use a second timestamp here, but
+                // create tables should be rare and at most one of them will
+                // actually need to communicate with CRDB since we still
+                // allocate ranges of timestamps. This whole advancement and
+                // group_commit can be removed once we've finished the migration
+                // to the persist-txn tables.
+                let initial_read_ts = self.get_local_write_ts().await;
                 let appends = vec![(table_id, Vec::new())];
                 self.controller
                     .storage
-                    .append_table(register_ts, upper, appends)
+                    .append_table(
+                        initial_read_ts.timestamp,
+                        initial_read_ts.advance_to,
+                        appends,
+                    )
                     .expect("invalid table upper initialization")
                     .await
                     .expect("One-shot dropped while waiting synchronously")
                     .unwrap_or_terminate("cannot fail to append");
-                self.apply_local_write(register_ts).await;
+                self.apply_local_write(initial_read_ts.timestamp).await;
 
                 // Kick off a group commit so the new rest of the tables catch up to the new oracle read
                 // ts.
@@ -618,10 +647,11 @@ impl Coordinator {
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: name.item,
-                    ty: "table",
-                });
+                ctx.session_mut()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: name.item,
+                        ty: "table",
+                    });
                 Ok(ExecuteResponse::CreatedTable)
             }
             Err(err) => Err(err),
@@ -713,23 +743,10 @@ impl Coordinator {
             ctx
         );
 
-        // Knowing that we're only handling kafka sinks here helps us simplify.
-        let StorageSinkConnectionBuilder::Kafka(connection_builder) =
-            sink.connection_builder.clone();
-
-        // Then try to create a placeholder catalog item with an unknown
-        // connection. If that fails, we're done, though if the client specified
-        // `if_not_exists` we'll tell the client we succeeded.
-        //
-        // This placeholder catalog item reserves the name while we create
-        // the sink connection, which could take an arbitrarily long time.
-
         let catalog_sink = catalog::Sink {
             create_sql: sink.create_sql,
             from: sink.from,
-            connection: StorageSinkConnectionState::Pending(StorageSinkConnectionBuilder::Kafka(
-                connection_builder,
-            )),
+            connection: sink.connection,
             envelope: sink.envelope,
             with_snapshot,
             resolved_ids,
@@ -784,46 +801,11 @@ impl Coordinator {
 
         self.maybe_create_linked_cluster(id).await;
 
-        let create_export_token = return_if_err!(
-            self.controller
-                .storage
-                .prepare_export(id, catalog_sink.from),
-            ctx
-        );
+        self.create_storage_export(id, &catalog_sink)
+            .await
+            .unwrap_or_terminate("cannot fail to create exports");
 
-        let referenced_builder = sink.connection_builder.clone();
-
-        // Now we're ready to create the sink connection. Arrange to notify the
-        // main coordinator thread when the future completes.
-        let connection_builder = sink
-            .connection_builder
-            .into_inline_connection(self.catalog().state());
-
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let connection_context = self.connection_context.clone();
-        task::spawn(
-            || format!("sink_connection_ready:{}", sink.from),
-            async move {
-                // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
-                let result =
-                    internal_cmd_tx.send(Message::SinkConnectionReady(SinkConnectionReady {
-                        ctx: Some(ctx),
-                        id,
-                        oid,
-                        create_export_token,
-                        result: mz_storage_client::sink::build_sink_connection(
-                            connection_builder,
-                            referenced_builder,
-                            connection_context,
-                        )
-                        .await
-                        .map_err(Into::into),
-                    }));
-                if let Err(e) = result {
-                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                }
-            },
-        );
+        ctx.retire(Ok(ExecuteResponse::CreatedSink))
     }
 
     /// Validates that a view definition does not contain any expressions that may lead to
@@ -915,16 +897,25 @@ impl Coordinator {
                 .iter()
                 .map(|id| catalog::Op::DropObject(ObjectId::Item(*id))),
         );
+
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
         let raw_expr = view.expr.clone();
-        let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
-        let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
-        let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
+
+        // Collect optimizer parameters.
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+        // Build an optimizer for this VIEW.
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+
+        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+        let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+
         let view = catalog::View {
             create_sql: view.create_sql.clone(),
+            raw_expr,
+            desc: RelationDesc::new(optimized_expr.typ(), view.column_names.clone()),
             optimized_expr,
-            desc,
             conn_id: if view.temporary {
                 Some(session.conn_id().clone())
             } else {
@@ -943,8 +934,6 @@ impl Coordinator {
         Ok(ops)
     }
 
-    /// This should mirror the operational semantics of
-    /// `Coordinator::sequence_create_materialized_view_deprecated`.
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_materialized_view(
         &mut self,
@@ -993,17 +982,17 @@ impl Coordinator {
             });
         }
 
-        // Collect optimizer parameters
+        // Collect optimizer parameters.
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
         let id = self.catalog_mut().allocate_user_id().await?;
         let internal_view_id = self.allocate_transient_id()?;
         let debug_name = self.catalog().resolve_full_name(&name, None).to_string();
-        let optimizier_config = OptimizerConfig::from(self.catalog().system_config());
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-        // Build a MATERIALIZED VIEW optimizer for this view.
-        let mut optimizer = OptimizeMaterializedView::new(
+        // Build an optimizer for this MATERIALIZED VIEW.
+        let mut optimizer = optimize::materialized_view::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
             id,
@@ -1011,17 +1000,14 @@ impl Coordinator {
             column_names.clone(),
             non_null_assertions.clone(),
             debug_name,
-            optimizier_config,
+            optimizer_config,
         );
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
-        let local_mir_plan = optimizer.optimize(raw_expr)?;
+        let local_mir_plan = optimizer.optimize(raw_expr.clone())?;
         let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
-        // Timestamp selection
-        let since = self.least_valid_read(&global_mir_plan.id_bundle());
-        let timestamped_plan = global_mir_plan.clone().resolve(since.clone());
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-        let global_lir_plan = optimizer.optimize(timestamped_plan)?;
+        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
 
         let mut ops = Vec::new();
         ops.extend(
@@ -1035,8 +1021,9 @@ impl Coordinator {
             name: name.clone(),
             item: CatalogItem::MaterializedView(catalog::MaterializedView {
                 create_sql,
+                raw_expr,
                 optimized_expr: local_mir_plan.expr(),
-                desc: global_lir_plan.desc(),
+                desc: global_lir_plan.desc().clone(),
                 resolved_ids,
                 cluster_id,
                 non_null_assertions,
@@ -1060,6 +1047,14 @@ impl Coordinator {
                 // Emit notices.
                 self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
+                let output_desc = global_lir_plan.desc().clone();
+                let mut df_desc = global_lir_plan.unapply().0;
+
+                // Timestamp selection
+                let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
+                let since = self.least_valid_read(&id_bundle);
+                df_desc.set_as_of(since.clone());
+
                 // Announce the creation of the materialized view source.
                 self.controller
                     .storage
@@ -1068,7 +1063,7 @@ impl Coordinator {
                         vec![(
                             id,
                             CollectionDescription {
-                                desc: global_lir_plan.desc(),
+                                desc: output_desc,
                                 data_source: DataSource::Other(DataSourceOther::Compute),
                                 since: Some(since),
                                 status_collection_id: None,
@@ -1084,9 +1079,7 @@ impl Coordinator {
                 )
                 .await;
 
-                let df = global_lir_plan.unapply().0;
-
-                self.ship_dataflow_new(df, cluster_id).await;
+                self.ship_dataflow(df_desc, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -1112,29 +1105,51 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::CreateIndexPlan {
             name,
-            index,
+            index:
+                plan::Index {
+                    create_sql,
+                    on,
+                    keys,
+                    cluster_id,
+                },
             options,
             if_not_exists,
         } = plan;
 
-        // An index must be created on a specific cluster.
-        let cluster_id = index.cluster_id;
-
         self.ensure_cluster_can_host_compute_item(&name, cluster_id)?;
 
-        let empty_key = index.keys.is_empty();
-
+        // Collect optimizer parameters.
+        let compute_instance = self
+            .instance_snapshot(cluster_id)
+            .expect("compute instance does not exist");
         let id = self.catalog_mut().allocate_user_id().await?;
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+        // Build an optimizer for this INDEX.
+        let mut optimizer = optimize::index::Optimizer::new(
+            self.owned_catalog(),
+            compute_instance,
+            id,
+            optimizer_config,
+        );
+
+        // MIR ⇒ MIR optimization (global)
+        let index_plan = optimize::index::Index::new(&name, &on, &keys);
+        let global_mir_plan = optimizer.optimize(index_plan)?;
+        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+
         let index = catalog::Index {
-            create_sql: index.create_sql,
-            keys: index.keys,
-            on: index.on,
+            create_sql,
+            keys,
+            on,
             conn_id: None,
             resolved_ids,
             cluster_id,
             is_retained_metrics_object: false,
             custom_logical_compaction_window: None,
         };
+
         let oid = self.catalog_mut().allocate_oid()?;
         let on = self.catalog().get_entry(&index.on);
         // Indexes have the same owner as their parent relation.
@@ -1147,25 +1162,29 @@ impl Coordinator {
             owner_id,
         };
         match self
-            .catalog_transact_with(Some(session.conn_id()), vec![op], |txn| {
-                let mut builder = txn.dataflow_builder(cluster_id);
-                let (df, df_metainfo) = builder.build_index_dataflow(id)?;
-                Ok((df, df_metainfo))
-            })
+            .catalog_transact_conn(Some(session.conn_id()), vec![op])
             .await
         {
-            Ok((df, mut df_metainfo)) => {
-                if empty_key {
-                    df_metainfo.push_optimizer_notice_dedup(OptimizerNotice::IndexKeyEmpty);
-                }
+            Ok(_) => {
+                // Save plan structures.
+                self.catalog_mut()
+                    .set_optimized_plan(id, global_mir_plan.df_desc().clone());
+                self.catalog_mut()
+                    .set_physical_plan(id, global_lir_plan.df_desc().clone());
+                self.catalog_mut()
+                    .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
 
-                self.emit_optimizer_notices(session, &df_metainfo.optimizer_notices);
+                // Emit notices.
+                self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
-                self.catalog_mut().set_optimized_plan(id, df.clone());
-                self.catalog_mut().set_dataflow_metainfo(id, df_metainfo);
+                let mut df_desc = global_lir_plan.unapply().0;
 
-                let df = self.must_ship_dataflow(df, cluster_id).await;
-                self.catalog_mut().set_physical_plan(id, df);
+                // Timestamp selection
+                let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
+                let since = self.least_valid_read(&id_bundle);
+                df_desc.set_as_of(since);
+
+                self.ship_dataflow(df_desc, cluster_id).await;
 
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
@@ -1192,10 +1211,11 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
+            desc: plan.typ.inner.desc(&self.catalog().for_session(session))?,
             details: CatalogTypeDetails {
                 array_id: None,
                 typ: plan.typ.inner,
-                typreceive_oid: None,
+                pg_metadata: None,
             },
             resolved_ids,
         };
@@ -1690,6 +1710,20 @@ impl Coordinator {
         })
     }
 
+    pub(super) fn sequence_explain_schema(
+        &mut self,
+        ExplainSinkSchemaPlan { json_schema, .. }: ExplainSinkSchemaPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let json_value: serde_json::Value = serde_json::from_str(&json_schema).map_err(|e| {
+            AdapterError::Explain(mz_repr::explain::ExplainError::SerdeJsonError(e))
+        })?;
+
+        let json_string = json_string(&json_value);
+        Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[
+            Datum::String(&json_string),
+        ])]))
+    }
+
     pub(super) fn sequence_show_all_variables(
         &mut self,
         session: &Session,
@@ -1924,7 +1958,7 @@ impl Coordinator {
         }
     }
 
-    pub(super) fn sequence_end_transaction(
+    pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
         mut action: EndTransactionAction,
@@ -1944,7 +1978,9 @@ impl Coordinator {
             }),
         };
 
-        let result = self.sequence_end_transaction_inner(ctx.session_mut(), action);
+        let result = self
+            .sequence_end_transaction_inner(ctx.session_mut(), action)
+            .await;
 
         let (response, action) = match result {
             Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
@@ -1952,6 +1988,7 @@ impl Coordinator {
             }
             Ok((Some(TransactionOps::Writes(writes)), write_lock_guard)) => {
                 self.submit_write(PendingWriteTxn::User {
+                    span: Span::current(),
                     writes,
                     write_lock_guard,
                     pending_txn: PendingTxn {
@@ -2001,7 +2038,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
-    fn sequence_end_transaction_inner(
+    async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
@@ -2016,20 +2053,36 @@ impl Coordinator {
 
         if let EndTransactionAction::Commit = action {
             if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
-                if let TransactionOps::Writes(writes) = &mut ops {
-                    for WriteOp { id, .. } in &mut writes.iter() {
-                        // Re-verify this id exists.
-                        let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
-                            AdapterError::Catalog(catalog::Error {
-                                kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
-                                    id.to_string(),
-                                )),
-                            })
-                        })?;
-                    }
+                match &mut ops {
+                    TransactionOps::Writes(writes) => {
+                        for WriteOp { id, .. } in &mut writes.iter() {
+                            // Re-verify this id exists.
+                            let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
+                                AdapterError::Catalog(catalog::Error {
+                                    kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
+                                        id.to_string(),
+                                    )),
+                                })
+                            })?;
+                        }
 
-                    // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
-                    writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
+                        // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
+                        writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
+                    }
+                    TransactionOps::DDL {
+                        ops,
+                        state: _,
+                        revision,
+                    } => {
+                        // Make sure our catalog hasn't changed.
+                        if *revision != self.catalog().transient_revision() {
+                            return Err(AdapterError::DDLTransactionRace);
+                        }
+                        // Commit all of our queued ops.
+                        self.catalog_transact(Some(session), std::mem::take(ops))
+                            .await?;
+                    }
+                    _ => (),
                 }
                 return Ok((Some(ops), write_lock_guard));
             }
@@ -2084,6 +2137,7 @@ impl Coordinator {
     }
 
     /// Processes as many peek stages as possible.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_peek_stage(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2125,7 +2179,7 @@ impl Coordinator {
         }
     }
 
-    // Do some simple validation. We must defer most of it until after any off-thread work.
+    /// Do some simple validation. We must defer most of it until after any off-thread work.
     fn peek_stage_validate(
         &mut self,
         session: &Session,
@@ -2141,13 +2195,25 @@ impl Coordinator {
             copy_to,
         } = plan;
 
-        // Two transient allocations. We could reclaim these if we don't use them, potentially.
-        // TODO: reclaim transient identifiers in fast path cases.
+        // Collect optimizer parameters.
+        let catalog = self.owned_catalog();
+        let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
+        let compute_instance = self
+            .instance_snapshot(cluster.id())
+            .expect("compute instance does not exist");
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
-        let catalog = self.catalog();
+        let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
 
-        let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
+        // Build an optimizer for this SELECT.
+        let optimizer = optimize::peek::Optimizer::new(
+            Arc::clone(&catalog),
+            compute_instance,
+            finishing.clone(),
+            view_id,
+            index_id,
+            optimizer_config,
+        );
 
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
@@ -2181,7 +2247,7 @@ impl Coordinator {
             && when == QueryWhen::Immediately;
 
         let notices = check_log_reads(
-            catalog,
+            &catalog,
             cluster,
             &source_ids,
             &mut target_replica,
@@ -2200,31 +2266,25 @@ impl Coordinator {
         Ok(PeekStageOptimize {
             validity,
             source,
-            finishing,
             copy_to,
-            view_id,
-            index_id,
             source_ids,
-            cluster_id: cluster.id(),
             when,
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
+            optimizer,
         })
     }
 
     async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
-        let catalog = self.owned_catalog();
-        let compute = ComputeInstanceSnapshot::new(&self.controller, stage.cluster_id)
-            .expect("compute instance does not exist");
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
         // TODO: Is there a way to avoid making two dataflow_builders (the second is in
         // optimize_peek)?
         let id_bundle = self
-            .dataflow_builder(stage.cluster_id)
+            .dataflow_builder(stage.optimizer.cluster_id())
             .sufficient_collections(&stage.source_ids);
         // Although we have added `sources.depends_on()` to the validity already, also add the
         // sufficient collections for safety.
@@ -2236,7 +2296,7 @@ impl Coordinator {
                     ctx.session(),
                     &id_bundle,
                     &stage.when,
-                    stage.cluster_id,
+                    stage.optimizer.cluster_id(),
                     &stage.timeline_context,
                     None,
                 )
@@ -2257,14 +2317,7 @@ impl Coordinator {
 
         mz_ore::task::spawn_blocking(
             || "optimize peek",
-            move || match Self::optimize_peek(
-                catalog.state(),
-                compute,
-                ctx.session(),
-                stats,
-                id_bundle,
-                stage,
-            ) {
+            move || match Self::optimize_peek(ctx.session(), stats, id_bundle, stage) {
                 Ok(stage) => {
                     let stage = PeekStage::Timestamp(stage);
                     // Ignore errors if the coordinator has shut down.
@@ -2276,83 +2329,36 @@ impl Coordinator {
     }
 
     fn optimize_peek(
-        catalog: &CatalogState,
-        compute: ComputeInstanceSnapshot,
         session: &Session,
         stats: Box<dyn StatisticsOracle>,
         id_bundle: CollectionIdBundle,
         PeekStageOptimize {
             validity,
             source,
-            finishing,
             copy_to,
-            view_id,
-            index_id,
             source_ids,
-            cluster_id,
             when,
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
+            mut optimizer,
         }: PeekStageOptimize,
     ) -> Result<PeekStageTimestamp, AdapterError> {
-        let optimizer = Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-        let source = optimizer.optimize(source)?;
-        let mut builder = DataflowBuilder::new(catalog, compute);
-
-        // We create a dataflow and optimize it, to determine if we can avoid building it.
-        // This can happen if the result optimizes to a constant, or to a `Get` expression
-        // around a maintained arrangement.
-        let typ = source.typ();
-        let key: Vec<MirScalarExpr> = typ
-            .default_key()
-            .iter()
-            .map(|k| MirScalarExpr::Column(*k))
-            .collect();
-        // The assembled dataflow contains a view and an index of that view.
-        let mut dataflow = DataflowDesc::new(format!("oneshot-select-{}", view_id));
-        builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
-
-        // Resolve all unmaterializable function calls except mz_now(), because we don't yet have a
-        // timestamp.
-        let style = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::Deferred,
-            session,
-        };
-        dataflow.visit_children(
-            |r| prep_relation_expr(catalog, r, style),
-            |s| prep_scalar_expr(catalog, s, style),
-        )?;
-
-        dataflow.export_index(
-            index_id,
-            IndexDesc {
-                on_id: view_id,
-                key: key.clone(),
-            },
-            typ.clone(),
-        );
-
-        // Optimize the dataflow across views, and any other ways that appeal.
-        let dataflow_metainfo = mz_transform::optimize_dataflow(&mut dataflow, &builder, &*stats)?;
+        let local_mir_plan = optimizer.optimize(source)?;
+        let local_mir_plan = local_mir_plan.resolve(session, stats);
+        let global_mir_plan = optimizer.optimize(local_mir_plan)?;
 
         Ok(PeekStageTimestamp {
             validity,
-            dataflow,
-            finishing,
             copy_to,
-            view_id,
-            index_id,
             source_ids,
-            cluster_id,
             id_bundle,
             when,
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
-            key,
-            typ,
-            dataflow_metainfo,
+            optimizer,
+            global_mir_plan,
         })
     }
 
@@ -2362,21 +2368,15 @@ impl Coordinator {
         ctx: ExecuteContext,
         PeekStageTimestamp {
             validity,
-            dataflow,
-            finishing,
             copy_to,
-            view_id,
-            index_id,
             source_ids,
-            cluster_id,
             id_bundle,
             when,
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
-            key,
-            typ,
-            dataflow_metainfo,
+            optimizer,
+            global_mir_plan,
         }: PeekStageTimestamp,
     ) -> Option<(ExecuteContext, PeekStageFinish)> {
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
@@ -2387,20 +2387,14 @@ impl Coordinator {
                     conn_id.clone(),
                     RealTimeRecencyContext::Peek {
                         ctx,
-                        finishing,
                         copy_to,
-                        dataflow,
-                        cluster_id,
                         when,
                         target_replica,
-                        view_id,
-                        index_id,
                         timeline_context,
                         source_ids,
                         in_immediate_multi_stmt_txn,
-                        key,
-                        typ,
-                        dataflow_metainfo,
+                        optimizer,
+                        global_mir_plan,
                     },
                 );
                 task::spawn(|| "real_time_recency_peek", async move {
@@ -2421,21 +2415,15 @@ impl Coordinator {
                 ctx,
                 PeekStageFinish {
                     validity,
-                    finishing,
                     copy_to,
-                    dataflow,
-                    cluster_id,
                     id_bundle: Some(id_bundle),
                     when,
                     target_replica,
-                    view_id,
-                    index_id,
                     timeline_context,
                     source_ids,
                     real_time_recency_ts: None,
-                    key,
-                    typ,
-                    dataflow_metainfo,
+                    optimizer,
+                    global_mir_plan,
                 },
             )),
         }
@@ -2447,44 +2435,41 @@ impl Coordinator {
         ctx: &mut ExecuteContext,
         PeekStageFinish {
             validity: _,
-            finishing,
             copy_to,
-            dataflow,
-            cluster_id,
             id_bundle,
             when,
             target_replica,
-            view_id,
-            index_id,
             timeline_context,
             source_ids,
             real_time_recency_ts,
-            key,
-            typ,
-            dataflow_metainfo,
+            mut optimizer,
+            global_mir_plan,
         }: PeekStageFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
         let id_bundle = id_bundle.unwrap_or_else(|| {
-            self.index_oracle(cluster_id)
+            self.index_oracle(optimizer.cluster_id())
                 .sufficient_collections(&source_ids)
         });
         let peek_plan = self
             .plan_peek(
-                dataflow,
                 ctx.session_mut(),
                 &when,
-                cluster_id,
-                view_id,
-                index_id,
                 timeline_context,
                 source_ids,
                 &id_bundle,
                 real_time_recency_ts,
-                key,
-                typ,
-                &finishing,
+                &mut optimizer,
+                global_mir_plan,
             )
             .await?;
+        if let Some(transient_index_id) = match &peek_plan.plan {
+            peek::PeekPlan::FastPath(_) => None,
+            peek::PeekPlan::SlowPath(PeekDataflowPlan { id, .. }) => Some(id),
+        } {
+            if let Some(statement_logging_id) = ctx.extra.contents() {
+                self.set_transient_index_id(statement_logging_id, *transient_index_id);
+            }
+        }
 
         let determination = peek_plan.determination.clone();
 
@@ -2497,20 +2482,23 @@ impl Coordinator {
             .implement_peek_plan(
                 ctx.extra_mut(),
                 peek_plan,
-                finishing,
-                cluster_id,
+                optimizer.finishing().clone(),
+                optimizer.cluster_id(),
                 target_replica,
                 max_query_result_size,
             )
             .await?;
 
         if ctx.session().vars().emit_timestamp_notice() {
-            let explanation =
-                self.explain_timestamp(ctx.session(), cluster_id, &id_bundle, determination);
+            let explanation = self.explain_timestamp(
+                ctx.session(),
+                optimizer.cluster_id(),
+                &id_bundle,
+                determination,
+            );
             ctx.session()
                 .add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
-        self.emit_optimizer_notices(ctx.session(), &dataflow_metainfo.optimizer_notices);
 
         match copy_to {
             None => Ok(resp),
@@ -2645,72 +2633,75 @@ impl Coordinator {
 
     async fn plan_peek(
         &mut self,
-        mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
         session: &mut Session,
         when: &QueryWhen,
-        cluster_id: ClusterId,
-        view_id: GlobalId,
-        index_id: GlobalId,
         timeline_context: TimelineContext,
         source_ids: BTreeSet<GlobalId>,
         id_bundle: &CollectionIdBundle,
         real_time_recency_ts: Option<Timestamp>,
-        key: Vec<MirScalarExpr>,
-        typ: RelationType,
-        finishing: &RowSetFinishing,
+        optimizer: &mut optimize::peek::Optimizer,
+        global_mir_plan: optimize::peek::GlobalMirPlan,
     ) -> Result<PlannedPeek, AdapterError> {
         let conn_id = session.conn_id().clone();
         let determination = self
             .sequence_peek_timestamp(
                 session,
                 when,
-                cluster_id,
+                optimizer.cluster_id(),
                 timeline_context,
                 id_bundle,
                 &source_ids,
                 real_time_recency_ts,
             )
             .await?;
+        let timestamp_context = determination.clone().timestamp_context;
 
-        // Now that we have a timestamp, set the as of and resolve calls to mz_now().
-        dataflow.set_as_of(determination.timestamp_context.antichain());
-        let style = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::Time(determination.timestamp_context.timestamp_or_default()),
-            session,
+        let global_mir_plan = global_mir_plan.resolve(timestamp_context, session);
+        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+        let key = global_lir_plan.key();
+        let arity = global_lir_plan.typ().arity();
+
+        let (peek_plan, df_meta) = match global_lir_plan {
+            optimize::peek::GlobalLirPlan::FastPath {
+                plan,
+                df_meta,
+                typ: _,
+            } => {
+                let peek_plan = PeekPlan::FastPath(plan);
+                (peek_plan, df_meta)
+            }
+            optimize::peek::GlobalLirPlan::SlowPath {
+                df_desc,
+                df_meta,
+                typ: _,
+            } => {
+                let (permutation, thinning) = permutation_for_arrangement(&key, arity);
+                let peek_plan = PeekPlan::SlowPath(PeekDataflowPlan::new(
+                    df_desc,
+                    optimizer.index_id(),
+                    key,
+                    permutation,
+                    thinning.len(),
+                ));
+                (peek_plan, df_meta)
+            }
         };
-        let state = self.catalog().state();
-        dataflow.visit_children(
-            |r| prep_relation_expr(state, r, style),
-            |s| prep_scalar_expr(state, s, style),
-        )?;
 
-        let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
-
-        // At this point, `dataflow_plan` contains our best optimized dataflow.
-        // We will check the plan to see if there is a fast path to escape full dataflow construction.
-        let peek_plan = self.create_peek_plan(
-            dataflow,
-            view_id,
-            cluster_id,
-            index_id,
-            key,
-            permutation,
-            thinning.len(),
-            finishing,
-        )?;
+        self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
 
         Ok(PlannedPeek {
             plan: peek_plan,
             determination,
             conn_id,
-            source_arity: typ.arity(),
+            source_arity: arity,
             source_ids,
         })
     }
 
     /// Checks to see if the session needs a real time recency timestamp and if so returns
     /// a future that will return the timestamp.
-    fn recent_timestamp(
+    pub(super) fn recent_timestamp(
         &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
@@ -2771,9 +2762,9 @@ impl Coordinator {
                 .add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
-        // Determine the frontier of updates to subscribe *from*.
-        // Updates greater or equal to this frontier will be produced.
         let depends_on = from.depends_on();
+
+        // Run `check_log_reads` and emit notices.
         let notices = check_log_reads(
             self.catalog(),
             cluster,
@@ -2783,19 +2774,43 @@ impl Coordinator {
         )?;
         ctx.session_mut().add_notices(notices);
 
-        let id_bundle = self
-            .index_oracle(cluster_id)
-            .sufficient_collections(&depends_on);
+        // Determine timeline.
         let mut timeline = self.validate_timeline_context(depends_on.clone())?;
         if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
             // If the from IDs are timestamp independent but the query contains temporal functions
             // then the timeline context needs to be upgraded to timestamp dependent.
             timeline = TimelineContext::TimestampDependent;
         }
+
+        // Collect optimizer parameters.
+        let compute_instance = self
+            .instance_snapshot(cluster_id)
+            .expect("compute instance does not exist");
+        let id = self.allocate_transient_id()?;
+        let conn_id = ctx.session().conn_id().clone();
+        let up_to = up_to
+            .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr, ctx.session_mut()))
+            .transpose()?;
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+        // Build an optimizer for this SUBSCRIBE.
+        let mut optimizer = optimize::subscribe::Optimizer::new(
+            self.owned_catalog(),
+            compute_instance,
+            id,
+            conn_id,
+            with_snapshot,
+            up_to,
+            optimizer_config,
+        );
+
+        // MIR ⇒ MIR optimization (global)
+        let global_mir_plan = optimizer.optimize(from)?;
+        // Timestamp selection
         let as_of = self
             .determine_timestamp(
                 ctx.session(),
-                &id_bundle,
+                &global_mir_plan.id_bundle(optimizer.cluster_id()),
                 &when,
                 cluster_id,
                 &timeline,
@@ -2804,10 +2819,9 @@ impl Coordinator {
             .await?
             .timestamp_context
             .timestamp_or_default();
-
-        let up_to = up_to
-            .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr, ctx.session_mut()))
-            .transpose()?;
+        if let Some(id) = ctx.extra().contents() {
+            self.set_statement_execution_timestamp(id, as_of);
+        }
         if let Some(up_to) = up_to {
             if as_of == up_to {
                 ctx.session_mut()
@@ -2816,64 +2830,23 @@ impl Coordinator {
                 return Err(AdapterError::AbsurdSubscribeBounds { as_of, up_to });
             }
         }
-        let up_to = up_to.map(Antichain::from_elem).unwrap_or_default();
+        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
+        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
 
-        let (mut dataflow, dataflow_metainfo) = match from {
-            SubscribeFrom::Id(from_id) => {
-                let from = self.catalog().get_entry(&from_id);
-                let from_desc = from
-                    .desc(
-                        &self
-                            .catalog()
-                            .resolve_full_name(from.name(), Some(ctx.session().conn_id())),
-                    )
-                    .expect("subscribes can only be run on items with descs")
-                    .into_owned();
-                let sink_id = self.allocate_transient_id()?;
-                let sink_desc = ComputeSinkDesc {
-                    from: from_id,
-                    from_desc,
-                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
-                    with_snapshot,
-                    up_to,
-                    // No `FORCE NOT NULL` for subscribes
-                    non_null_assertions: vec![],
-                };
-                let sink_name = format!("subscribe-{}", sink_id);
-                self.dataflow_builder(cluster_id)
-                    .build_sink_dataflow(sink_name, sink_id, sink_desc)?
-            }
-            SubscribeFrom::Query { expr, desc } => {
-                let id = self.allocate_transient_id()?;
-                let expr = self.view_optimizer.optimize(expr)?;
-                let desc = RelationDesc::new(expr.typ(), desc.iter_names());
-                let sink_desc = ComputeSinkDesc {
-                    from: id,
-                    from_desc: desc,
-                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
-                    with_snapshot,
-                    up_to,
-                    // No `FORCE NOT NULL` for subscribes
-                    non_null_assertions: vec![],
-                };
-                let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
-                let mut dataflow_builder = self.dataflow_builder(cluster_id);
-                dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
-                let dataflow_metainfo =
-                    dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
-                (dataflow, dataflow_metainfo)
-            }
-        };
+        // Save plan structures.
+        self.catalog_mut()
+            .set_optimized_plan(id, global_mir_plan.df_desc().clone());
+        self.catalog_mut()
+            .set_physical_plan(id, global_lir_plan.df_desc().clone());
+        self.catalog_mut()
+            .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
 
-        self.emit_optimizer_notices(ctx.session(), &dataflow_metainfo.optimizer_notices);
+        // Emit notices.
+        self.emit_optimizer_notices(ctx.session(), &global_lir_plan.df_meta().optimizer_notices);
 
-        dataflow.set_as_of(Antichain::from_elem(as_of));
+        let sink_id = global_lir_plan.sink_id();
 
-        let (&sink_id, sink_desc) = dataflow
-            .sink_exports
-            .iter()
-            .next()
-            .expect("subscribes have a single sink export");
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
             user: ctx.session().user().clone(),
@@ -2881,7 +2854,7 @@ impl Coordinator {
             channel: tx,
             emit_progress,
             as_of,
-            arity: sink_desc.from_desc.arity(),
+            arity: global_lir_plan.sink_desc().from_desc.arity(),
             cluster_id,
             depends_on: depends_on.into_iter().collect(),
             start_time: self.now(),
@@ -2891,16 +2864,10 @@ impl Coordinator {
         active_subscribe.initialize();
         self.add_active_subscribe(sink_id, active_subscribe).await;
 
-        // Allow while the introduction of the new optimizer API in
-        // #20569 is in progress.
-        #[allow(deprecated)]
-        match self.ship_dataflow(dataflow, cluster_id).await {
-            Ok(_) => {}
-            Err(e) => {
-                self.remove_active_subscribe(sink_id).await;
-                return Err(e);
-            }
-        };
+        let (df_desc, _df_meta) = global_lir_plan.unapply();
+
+        self.ship_dataflow(df_desc, cluster_id).await;
+
         if let Some(target) = target_replica {
             self.controller
                 .compute
@@ -3121,15 +3088,11 @@ impl Coordinator {
         // we aren't storing this clone in a `Subscriber`, so we should be fine.
         let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
         let pipeline_result = match stmt {
             plan::ExplaineeStatement::Query {
                 raw_plan,
                 row_set_finishing,
+                desc,
                 broken,
             } => {
                 // Please see the doc comment on `explain_query_optimizer_pipeline` for more
@@ -3139,7 +3102,9 @@ impl Coordinator {
                     broken,
                     target_cluster,
                     ctx.session_mut(),
-                    &row_set_finishing,
+                    row_set_finishing,
+                    desc,
+                    &config,
                     root_dispatch,
                 )
                 .with_subscriber(&optimizer_trace)
@@ -3153,45 +3118,35 @@ impl Coordinator {
                 broken,
                 non_null_assertions,
             } => {
-                if enable_unified_optimizer_api {
-                    // Please see the docs on `explain_query_optimizer_pipeline` above.
-                    self.explain_create_materialized_view_optimizer_pipeline(
-                        name,
-                        raw_plan,
-                        column_names,
-                        cluster_id,
-                        broken,
-                        non_null_assertions,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                } else {
-                    // Allow while the introduction of the new optimizer API in
-                    // #20569 is in progress.
-                    #[allow(deprecated)]
-                    // Please see the docs on `explain_query_optimizer_pipeline` above.
-                    self.explain_create_materialized_view_optimizer_pipeline_deprecated(
-                        name,
-                        raw_plan,
-                        column_names,
-                        cluster_id,
-                        broken,
-                        &non_null_assertions,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                }
+                // Please see the docs on `explain_query_optimizer_pipeline` above.
+                self.explain_create_materialized_view_optimizer_pipeline(
+                    name,
+                    raw_plan,
+                    column_names,
+                    cluster_id,
+                    broken,
+                    non_null_assertions,
+                    &config,
+                    root_dispatch,
+                )
+                .with_subscriber(&optimizer_trace)
+                .await
             }
             plan::ExplaineeStatement::CreateIndex {
                 name,
                 index,
                 broken,
             } => {
-                self.explain_create_index_optimizer_pipeline(name, index, broken, root_dispatch)
-                    .with_subscriber(&optimizer_trace)
-                    .await
+                // Please see the docs on `explain_query_optimizer_pipeline` above.
+                self.explain_create_index_optimizer_pipeline(
+                    name,
+                    index,
+                    broken,
+                    &config,
+                    root_dispatch,
+                )
+                .with_subscriber(&optimizer_trace)
+                .await
             }
         };
 
@@ -3297,14 +3252,16 @@ impl Coordinator {
     // would be very hard to read. Additionally, once the issues with `broken` are resolved
     // (as discussed in <https://github.com/MaterializeInc/materialize/pull/21809>), this
     // can be simplified, as only a _singular_ `Registry` will be in use.
-    #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
+    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
     async fn explain_query_optimizer_pipeline(
         &mut self,
         raw_plan: mz_sql::plan::HirRelationExpr,
         broken: bool,
         target_cluster: TargetCluster,
         session: &mut Session,
-        finishing: &Option<RowSetFinishing>,
+        finishing: RowSetFinishing,
+        desc: RelationDesc,
+        explain_config: &mz_repr::explain::ExplainConfig,
         root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
@@ -3321,162 +3278,162 @@ impl Coordinator {
             tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
         }
 
-        let catalog = self.catalog();
+        // Initialize optimizer context
+        // ----------------------------
+
+        // Collect optimizer parameters.
+        let catalog = self.owned_catalog();
         let target_cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
+        let compute_instance = self
+            .instance_snapshot(target_cluster_id)
+            .expect("compute instance does not exist");
+        let select_id = self.allocate_transient_id()?;
+        let index_id = self.allocate_transient_id()?;
+        let system_config = catalog.system_config();
+        let optimizer_config = OptimizerConfig::from((system_config, explain_config));
+
+        // Build an optimizer for this SELECT.
+        let mut optimizer = optimize::peek::Optimizer::new(
+            Arc::clone(&catalog),
+            compute_instance,
+            finishing,
+            select_id,
+            index_id,
+            optimizer_config.clone(),
+        );
+
+        // Create a transient catalog item
+        // -------------------------------
+
+        let mut transient_items = BTreeMap::new();
+        transient_items.insert(select_id, {
+            TransientItem::new(
+                Some(GlobalId::Explain.to_string()),
+                Some(GlobalId::Explain.to_string()),
+                Some(desc.iter_names().map(|c| c.to_string()).collect()),
+            )
+        });
 
         // Execute the various stages of the optimization pipeline
         // -------------------------------------------------------
 
         // Trace the pipeline input under `optimize/raw`.
-        tracing::span!(target: "optimizer", Level::TRACE, "raw").in_scope(|| {
+        tracing::span!(target: "optimizer", Level::DEBUG, "raw").in_scope(|| {
             trace_plan(&raw_plan);
         });
 
-        // Execute the `optimize/hir_to_mir` stage.
-        let decorrelated_plan = catch_unwind(broken, "hir_to_mir", || {
-            raw_plan.optimize_and_lower(&plan::OptimizerConfig {})
-        })?;
+        // MIR ⇒ MIR optimization (local)
+        let local_mir_plan = catch_unwind(broken, "optimize", || optimizer.optimize(raw_plan))?;
 
-        let mut timeline_context =
-            self.validate_timeline_context(decorrelated_plan.depends_on())?;
-        if matches!(timeline_context, TimelineContext::TimestampIndependent)
-            && decorrelated_plan.contains_temporal()
-        {
-            // If the source IDs are timestamp independent but the query contains temporal functions,
-            // then the timeline context needs to be upgraded to timestamp dependent. This is
-            // required because `source_ids` doesn't contain functions.
-            timeline_context = TimelineContext::TimestampDependent;
-        }
+        // Resolve timestamp statistics catalog
+        // ------------------------------------
 
-        let source_ids = decorrelated_plan.depends_on();
-        let id_bundle = self
-            .index_oracle(target_cluster_id)
-            .sufficient_collections(&source_ids);
+        let (timestamp_ctx, stats) = {
+            let source_ids = local_mir_plan.expr().depends_on();
+            let mut timeline_context =
+                self.validate_timeline_context(source_ids.iter().cloned())?;
+            if matches!(timeline_context, TimelineContext::TimestampIndependent)
+                && local_mir_plan.expr().contains_temporal()
+            {
+                // If the source IDs are timestamp independent but the query contains temporal functions,
+                // then the timeline context needs to be upgraded to timestamp dependent. This is
+                // required because `source_ids` doesn't contain functions.
+                timeline_context = TimelineContext::TimestampDependent;
+            }
 
-        // Execute the `optimize/local` stage.
-        let optimized_plan = catch_unwind(broken, "local", || {
-            let _span = tracing::span!(target: "optimizer", Level::TRACE, "local").entered();
-            let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-            trace_plan(optimized_plan.as_inner());
-            Ok::<_, AdapterError>(optimized_plan)
-        })?;
+            let id_bundle = self
+                .index_oracle(target_cluster_id)
+                .sufficient_collections(&source_ids);
 
-        // Acquire a timestamp (necessary for loading statistics).
-        let timestamp_ctx = self
-            .sequence_peek_timestamp(
-                session,
-                &QueryWhen::Immediately,
-                target_cluster_id,
-                timeline_context,
-                &id_bundle,
-                &source_ids,
-                None, // no real-time recency
-            )
-            .await?
-            .timestamp_context;
+            // Acquire a timestamp (necessary for loading statistics).
+            let timestamp_ctx = self
+                .sequence_peek_timestamp(
+                    session,
+                    &QueryWhen::Immediately,
+                    target_cluster_id,
+                    timeline_context,
+                    &id_bundle,
+                    &source_ids,
+                    None, // no real-time recency
+                )
+                .with_subscriber(root_dispatch.clone())
+                .await?
+                .timestamp_context;
 
-        // Load cardinality statistics.
-        let stats = self
-            .statistics_oracle(session, &source_ids, timestamp_ctx.antichain(), true)
-            .with_subscriber(root_dispatch)
-            .await?;
+            // Load cardinality statistics.
+            //
+            // TODO: proper stats needs exact timestamp at the moment. However, we
+            // don't want to resolve the timestamp twice, so we need to figure out a
+            // way to get somewhat stale stats.
+            let stats = self
+                .statistics_oracle(session, &source_ids, timestamp_ctx.antichain(), true)
+                .with_subscriber(root_dispatch)
+                .await?;
 
-        let state = self.catalog().state();
-
-        // Execute the `optimize/global` stage.
-        let (mut df, df_metainfo) = catch_unwind(broken, "global", || {
-            let mut df_builder = self.dataflow_builder(target_cluster_id);
-
-            let mut df = DataflowDesc::new("explanation".to_string());
-            df_builder.import_view_into_dataflow(&GlobalId::Explain, &optimized_plan, &mut df)?;
-
-            // Resolve all unmaterializable function calls except mz_now(),
-            // because in line with the `sequence_~` method we pretend that we
-            // don't have a timestamp yet.
-            let style = ExprPrepStyle::OneShot {
-                logical_time: EvalTime::Deferred,
-                session,
-            };
-            df.visit_children(
-                |r| prep_relation_expr(state, r, style),
-                |s| prep_scalar_expr(state, s, style),
-            )?;
-
-            // Optimize the dataflow across views, and any other ways that appeal.
-            let df_metainfo = mz_transform::optimize_dataflow(
-                &mut df,
-                &self.index_oracle(target_cluster_id),
-                stats.as_ref(),
-            )?;
-
-            Ok::<_, AdapterError>((df, df_metainfo))
-        })?;
-
-        // Collect the list of indexes used by the dataflow at this point
-        let mut used_indexes = UsedIndexes::new(
-            df
-                .index_imports
-                .iter()
-                .map(|(id, _index_import)| {
-                    (*id, df_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                })
-                .collect(),
-        );
-
-        // Determine if fast path plan will be used for this explainee.
-        let fast_path_plan = {
-            df.set_as_of(timestamp_ctx.antichain());
-
-            // Resolve all unmaterializable function including mz_now().
-            let style = ExprPrepStyle::OneShot {
-                logical_time: EvalTime::Time(timestamp_ctx.timestamp_or_default()),
-                session,
-            };
-            df.visit_children(
-                |r| prep_relation_expr(state, r, style),
-                |s| prep_scalar_expr(state, s, style),
-            )?;
-            peek::create_fast_path_plan(
-                &mut df,
-                GlobalId::Explain,
-                finishing.as_ref(),
-                self.catalog.system_config().persist_fast_path_limit(),
-            )?
+            (timestamp_ctx, stats)
         };
 
-        if let Some(fast_path_plan) = &fast_path_plan {
-            used_indexes = fast_path_plan.used_indexes(finishing);
-        }
+        let (used_indexes, fast_path_plan, df_meta) = catch_unwind(broken, "optimize", || {
+            // MIR ⇒ MIR optimization (global)
+            let local_mir_plan = local_mir_plan.resolve(session, stats);
+            let global_mir_plan = optimizer.optimize(local_mir_plan)?;
 
-        // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
-        // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
-        if let Some(as_of) = df.as_of.as_ref() {
-            if !as_of.is_empty() {
-                if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1)) {
-                    df.until = timely::progress::Antichain::from_elem(next);
+            // Collect the list of indexes used by the dataflow at this point
+            let mut used_indexes = {
+                let df_desc = global_mir_plan.df_desc();
+                let df_meta = global_mir_plan.df_meta();
+                UsedIndexes::new(
+                    df_desc
+                        .index_imports
+                        .iter()
+                        .map(|(id, _index_import)| {
+                            (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                        })
+                        .collect(),
+                )
+            };
+
+            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+            let global_mir_plan = global_mir_plan.resolve(timestamp_ctx, session);
+            let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+            let (fast_path_plan, df_meta) = match global_lir_plan {
+                optimize::peek::GlobalLirPlan::FastPath { plan, typ, df_meta } => {
+                    let finishing = if !optimizer.finishing().is_trivial(typ.arity()) {
+                        Some(optimizer.finishing().clone())
+                    } else {
+                        None
+                    };
+                    used_indexes = plan.used_indexes(&finishing);
+
+                    // TODO(aalexandrov): rework `OptimizerTrace` with support
+                    // for diverging plan types towards the end and add a
+                    // `PlanTrace` for the `FastPathPlan` type.
+                    trace_plan(&"fast_path_plan (missing)".to_string());
+
+                    (Some(plan), df_meta)
                 }
-            }
-        }
+                optimize::peek::GlobalLirPlan::SlowPath {
+                    df_desc,
+                    df_meta,
+                    typ: _,
+                } => {
+                    trace_plan(&df_desc);
+                    (None, df_meta)
+                }
+            };
 
-        // Execute the `optimize/finalize_dataflow` stage.
-        let df = catch_unwind(broken, "finalize_dataflow", || {
-            self.finalize_dataflow(df, target_cluster_id)
+            Ok::<_, AdapterError>((used_indexes, fast_path_plan, df_meta))
         })?;
-
-        // Trace the resulting plan for the top-level `optimize` path.
-        trace_plan(&df);
 
         // Return objects that need to be passed to the `ExplainContext`
         // when rendering explanations for the various trace entries.
-        Ok((used_indexes, fast_path_plan, df_metainfo, BTreeMap::new()))
+        Ok((used_indexes, fast_path_plan, df_meta, transient_items))
     }
 
     /// Run the MV optimization explanation pipeline. This function must be called with
     /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
     /// The `root_dispatch` should be the global `tracing::Dispatch`.
-    ///
-    /// This should mirror the operational semantics of
-    /// `Coordinator::explain_create_materialized_view_optimizer_pipeline_deprecated`.
     ///
     /// WARNING, ENTERING SPOOKY ZONE 3.0
     ///
@@ -3485,7 +3442,7 @@ impl Coordinator {
     /// Currently this method does not need to use the global `Dispatch` like
     /// `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
     /// require it.
-    #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
+    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
     async fn explain_create_materialized_view_optimizer_pipeline(
         &mut self,
         name: QualifiedItemName,
@@ -3494,6 +3451,7 @@ impl Coordinator {
         target_cluster_id: ClusterId,
         broken: bool,
         non_null_assertions: Vec<usize>,
+        explain_config: &mz_repr::explain::ExplainConfig,
         _root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
@@ -3515,17 +3473,18 @@ impl Coordinator {
         // Initialize optimizer context
         // ----------------------------
 
-        // Collect optimizer parameters
+        // Collect optimizer parameters.
         let compute_instance = self
             .instance_snapshot(target_cluster_id)
             .expect("compute instance does not exist");
         let exported_sink_id = self.allocate_transient_id()?;
         let internal_view_id = self.allocate_transient_id()?;
         let debug_name = full_name.to_string();
-        let optimizier_config = OptimizerConfig::from(self.catalog().system_config());
+        let system_config = self.catalog().system_config();
+        let optimizer_config = optimize::OptimizerConfig::from((system_config, explain_config));
 
-        // Build a MATERIALIZED VIEW optimizer for this view.
-        let mut optimizer = OptimizeMaterializedView::new(
+        // Build an optimizer for this MATERIALIZED VIEW.
+        let mut optimizer = optimize::materialized_view::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
             exported_sink_id,
@@ -3533,7 +3492,7 @@ impl Coordinator {
             column_names.clone(),
             non_null_assertions,
             debug_name,
-            optimizier_config,
+            optimizer_config,
         );
 
         // Create a transient catalog item
@@ -3552,14 +3511,14 @@ impl Coordinator {
         // -------------------------------------------------------
 
         // Trace the pipeline input under `optimize/raw`.
-        tracing::span!(target: "optimizer", Level::TRACE, "raw").in_scope(|| {
+        tracing::span!(target: "optimizer", Level::DEBUG, "raw").in_scope(|| {
             trace_plan(&raw_plan);
         });
 
         let (df_desc, df_meta, used_indexes) = catch_unwind(broken, "optimize", || {
             // MIR ⇒ MIR optimization (local and global)
             let local_mir_plan = optimizer.optimize(raw_plan)?;
-            let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
+            let global_mir_plan = optimizer.optimize(local_mir_plan)?;
 
             // Collect the list of indexes used by the dataflow at this point
             let used_indexes = {
@@ -3576,12 +3535,8 @@ impl Coordinator {
                 )
             };
 
-            // Timestamp selection
-            let since = self.least_valid_read(&global_mir_plan.id_bundle());
-            let timestamped_plan = global_mir_plan.clone().resolve(since.clone());
-
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-            let global_lir_plan = optimizer.optimize(timestamped_plan)?;
+            let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
             let (df_desc, df_meta) = global_lir_plan.unapply();
 
@@ -3607,12 +3562,13 @@ impl Coordinator {
     // Currently this method does not need to use the global `Dispatch` like
     // `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
     // require it.
-    #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
+    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
     async fn explain_create_index_optimizer_pipeline(
         &mut self,
         name: QualifiedItemName,
         index: Index,
         broken: bool,
+        explain_config: &mz_repr::explain::ExplainConfig,
         _root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
@@ -3629,23 +3585,31 @@ impl Coordinator {
             tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
         }
 
-        // Initialize helper context
-        // -------------------------
-
-        let target_cluster_id = index.cluster_id;
+        // Initialize optimizer context
+        // ----------------------------
         let compute_instance = self
-            .instance_snapshot(target_cluster_id)
+            .instance_snapshot(index.cluster_id)
             .expect("compute instance does not exist");
         let exported_index_id = self.allocate_transient_id()?;
-        let state = self.catalog().state();
+        let system_config = self.catalog().system_config();
+        let optimizer_config = optimize::OptimizerConfig::from((system_config, explain_config));
+
+        // Build an optimizer for this INDEX.
+        let mut optimizer = optimize::index::Optimizer::new(
+            self.owned_catalog(),
+            compute_instance,
+            exported_index_id,
+            optimizer_config,
+        );
+
+        // Create a transient catalog item
+        // -------------------------------
+
         let on_entry = self.catalog.get_entry(&index.on);
         let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
         let on_desc = on_entry
             .desc(&full_name)
             .expect("can only create indexes on items with a valid description");
-
-        // Create a transient catalog item
-        // -------------------------------
 
         let mut transient_items = BTreeMap::new();
         transient_items.insert(exported_index_id, {
@@ -3656,90 +3620,43 @@ impl Coordinator {
             )
         });
 
-        // Global optimization
-        // -------------------
-        let (mut df, df_metainfo) = catch_unwind(broken, "global", || {
-            // This code should mirror the sequence of steps performed in
-            // `build_index_dataflow`. We cannot call `build_index_dataflow`
-            // here directly because it assumes that the index is present in the
-            // catalog as an `IndexEntry`. However, in the condtext of `EXPLAIN
-            // CREATE` we don't want to do actually modify the catalog state.
+        // Execute the various stages of the optimization pipeline
+        // -------------------------------------------------------
 
-            let mut df_builder = DataflowBuilder::new(self.catalog().state(), compute_instance);
-            let mut df = DataflowDesc::new(full_name.to_string());
+        let (df_desc, df_meta, used_indexes) = catch_unwind(broken, "optimize", || {
+            // MIR ⇒ MIR optimization (global)
+            let index_plan = optimize::index::Index::new(&name, &index.on, &index.keys);
+            let global_mir_plan = optimizer.optimize(index_plan)?;
 
-            df_builder.import_into_dataflow(&index.on, &mut df)?;
-
-            for desc in df.objects_to_build.iter_mut() {
-                prep_relation_expr(state, &mut desc.plan, ExprPrepStyle::Index)?;
-            }
-
-            let mut index_description = IndexDesc {
-                on_id: index.on,
-                key: index.keys.clone(),
+            // Collect the list of indexes used by the dataflow at this point
+            let used_indexes = {
+                let df_desc = global_mir_plan.df_desc();
+                let df_meta = global_mir_plan.df_meta();
+                UsedIndexes::new(
+                    df_desc
+                        .index_imports
+                        .iter()
+                        .map(|(id, _index_import)| {
+                            (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                        })
+                        .collect(),
+                )
             };
 
-            for key in index_description.key.iter_mut() {
-                prep_scalar_expr(state, key, ExprPrepStyle::Index)?;
-            }
+            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+            let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
-            df.export_index(exported_index_id, index_description, on_desc.typ().clone());
+            let (df_desc, df_meta) = global_lir_plan.unapply();
 
-            // Optimize the dataflow across views, and any other ways that appeal.
-            let df_metainfo = mz_transform::optimize_dataflow(
-                &mut df,
-                &df_builder,
-                &mz_transform::EmptyStatisticsOracle,
-            )?;
-
-            Ok::<_, AdapterError>((df, df_metainfo))
-        })?;
-
-        // Collect the list of indexes used by the dataflow at this point
-        let used_indexes = UsedIndexes::new(
-            df
-                .index_imports
-                .iter()
-                .map(|(id, _index_import)| {
-                    (*id, df_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                })
-                .collect(),
-        );
-
-        // Finalization
-        // ------------
-
-        // In the actual sequencing of `CREATE INDEX` statements, the following
-        // DataflowDescription manipulations happen in the `ship_dataflow` call.
-        // However, since we don't want to ship, we have temporary duplicated
-        // the code below. This will be resolved once we implement the proposal
-        // from #20569.
-
-        // If the only outputs of the dataflow are sinks, we might be able to
-        // turn off the computation early, if they all have non-trivial
-        // `up_to`s.
-        //
-        // TODO: This should never be the case here so we can probably remove
-        // the entire thing.
-        if df.index_exports.is_empty() {
-            soft_panic_or_log!("unexpectedly setting df.until for an index");
-            df.until = Antichain::from_elem(Timestamp::MIN);
-            for (_, sink) in &df.sink_exports {
-                df.until.join_assign(&sink.up_to);
-            }
-        }
-
-        // Execute the `optimize/finalize_dataflow` stage.
-        let df = catch_unwind(broken, "finalize_dataflow", || {
-            self.finalize_dataflow(df, target_cluster_id)
+            Ok::<_, AdapterError>((df_desc, df_meta, used_indexes))
         })?;
 
         // Trace the resulting plan for the top-level `optimize` path.
-        trace_plan(&df);
+        trace_plan(&df_desc);
 
         // Return objects that need to be passed to the `ExplainContext`
         // when rendering explanations for the various trace entries.
-        Ok((used_indexes, None, df_metainfo, transient_items))
+        Ok((used_indexes, None, df_meta, transient_items))
     }
 
     pub async fn sequence_explain_timestamp(
@@ -3819,8 +3736,15 @@ impl Coordinator {
     > {
         let plan::ExplainTimestampPlan { format, raw_plan } = plan;
 
-        let decorrelated_plan = raw_plan.optimize_and_lower(&plan::OptimizerConfig {})?;
-        let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
+        // Collect optimizer parameters.
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+        // Build an optimizer for this VIEW.
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+
+        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+        let optimized_plan = optimizer.optimize(raw_plan)?;
+
         let source_ids = optimized_plan.depends_on();
         let cluster = self
             .catalog()
@@ -3947,9 +3871,17 @@ impl Coordinator {
         let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
-            OptimizedMirRelationExpr(plan.values)
+            let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
+            OptimizedMirRelationExpr(expr)
         } else {
-            return_if_err!(self.view_optimizer.optimize(plan.values), ctx)
+            // Collect optimizer parameters.
+            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+            // Build an optimizer for this VIEW.
+            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+
+            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+            return_if_err!(optimizer.optimize(plan.values), ctx)
         };
 
         match optimized_mir.into_inner() {
@@ -4203,7 +4135,7 @@ impl Coordinator {
                     future: batch,
                     span: _,
                 } => {
-                    // TODO: This timeout should be removed once #11782 lands;
+                    // TODO(jkosh44): This timeout should be removed;
                     // we should instead periodically ensure clusters are
                     // healthy and actively cancel any work waiting on unhealthy
                     // clusters.
@@ -4348,7 +4280,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_item_rename(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: plan::AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::RenameItem {
@@ -4356,8 +4288,73 @@ impl Coordinator {
             current_full_name: plan.current_full_name,
             to_name: plan.to_name,
         };
-        match self.catalog_transact(Some(session), vec![op]).await {
+        match self
+            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(super) async fn sequence_alter_schema_rename(
+        &mut self,
+        session: &mut Session,
+        plan: plan::AlterSchemaRenamePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let (database_spec, schema_spec) = plan.cur_schema_spec;
+        let op = catalog::Op::RenameSchema {
+            database_spec,
+            schema_spec,
+            new_name: plan.new_schema_name,
+            check_reserved_names: true,
+        };
+        match self
+            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .await
+        {
+            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(super) async fn sequence_alter_schema_swap(
+        &mut self,
+        session: &mut Session,
+        plan: plan::AlterSchemaSwapPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::AlterSchemaSwapPlan {
+            schema_a_spec: (schema_a_db, schema_a),
+            schema_a_name,
+            schema_b_spec: (schema_b_db, schema_b),
+            schema_b_name,
+            name_temp,
+        } = plan;
+
+        let op_a = catalog::Op::RenameSchema {
+            database_spec: schema_a_db,
+            schema_spec: schema_a,
+            new_name: name_temp,
+            check_reserved_names: false,
+        };
+        let op_b = catalog::Op::RenameSchema {
+            database_spec: schema_b_db,
+            schema_spec: schema_b,
+            new_name: schema_a_name,
+            check_reserved_names: false,
+        };
+        let op_c = catalog::Op::RenameSchema {
+            database_spec: schema_a_db,
+            schema_spec: schema_a,
+            new_name: schema_b_name,
+            check_reserved_names: false,
+        };
+
+        match self
+            .catalog_transact_with_ddl_transaction(session, vec![op_a, op_b, op_c])
+            .await
+        {
+            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
             Err(err) => Err(err),
         }
     }
@@ -4390,7 +4387,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    fn set_index_options(
+    pub(super) fn set_index_options(
         &mut self,
         id: GlobalId,
         options: Vec<IndexOption>,
@@ -4739,9 +4736,11 @@ impl Coordinator {
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
+                let collection = btreemap! {id => ingestion};
+
                 self.controller
                     .storage
-                    .check_alter_collection(id, ingestion.clone())
+                    .check_alter_collection(&collection)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
                 // Do not drop this source, even though it's a dependency.
@@ -4785,7 +4784,7 @@ impl Coordinator {
                 // Commit the new ingestion to storage.
                 self.controller
                     .storage
-                    .alter_collection(id, ingestion)
+                    .alter_collection(collection)
                     .await
                     .expect("altering collection after txn must succeed");
             }
@@ -4950,9 +4949,11 @@ impl Coordinator {
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
+                let collection = btreemap! {id => ingestion};
+
                 self.controller
                     .storage
-                    .check_alter_collection(id, ingestion.clone())
+                    .check_alter_collection(&collection)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
                 let CreateSourceInner {
@@ -5023,7 +5024,7 @@ impl Coordinator {
                 // Commit the new ingestion to storage.
                 self.controller
                     .storage
-                    .alter_collection(id, ingestion)
+                    .alter_collection(collection)
                     .await
                     .expect("altering collection after txn must succeed");
 
@@ -5045,11 +5046,11 @@ impl Coordinator {
     ) -> Result<Vec<u8>, AdapterError> {
         let temp_storage = RowArena::new();
         prep_scalar_expr(
-            self.catalog().state(),
             secret_as,
             ExprPrepStyle::OneShot {
                 logical_time: EvalTime::NotAvailable,
                 session,
+                catalog_state: self.catalog().state(),
             },
         )?;
         let evaled = secret_as.eval(&[], &temp_storage)?;
@@ -5612,7 +5613,7 @@ impl mz_transform::StatisticsOracle for CachedStatisticsOracle {
 }
 
 impl Coordinator {
-    async fn statistics_oracle(
+    pub(super) async fn statistics_oracle(
         &self,
         session: &Session,
         source_ids: &BTreeSet<GlobalId>,
@@ -5662,7 +5663,7 @@ impl Coordinator {
 /// return a list of associated notices (today: we always emit exactly
 /// one notice if there are any per-replica log dependencies and if
 /// `emit_introspection_query_notice` is set, and none otherwise.)
-fn check_log_reads(
+pub(super) fn check_log_reads(
     catalog: &Catalog,
     cluster: &Cluster,
     source_ids: &BTreeSet<GlobalId>,

@@ -24,7 +24,7 @@ use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InputCapability};
@@ -115,34 +115,36 @@ pub(super) fn construct<A: Allocate>(
 
         // Encode the contents of each logging stream into its expected `Row` format.
         let mut packer = PermutedRowPacker::new(DifferentialLog::ArrangementBatches);
-        let arrangement_batches = batches.as_collection().map(move |op| {
-            packer.pack_slice(&[
-                Datum::UInt64(u64::cast_from(op)),
-                Datum::UInt64(u64::cast_from(worker_id)),
-            ])
-        });
+        let arrangement_batches = batches
+            .as_collection()
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential batches")
+            .as_collection(move |op, ()| {
+                packer.pack_slice(&[
+                    Datum::UInt64(u64::cast_from(*op)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                ])
+            });
         let mut packer = PermutedRowPacker::new(DifferentialLog::ArrangementRecords);
-        let arrangement_records = records.as_collection().map(move |op| {
-            packer.pack_slice(&[
-                Datum::UInt64(u64::cast_from(op)),
-                Datum::UInt64(u64::cast_from(worker_id)),
-            ])
-        });
+        let arrangement_records = records
+            .as_collection()
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential records")
+            .as_collection(move |op, ()| {
+                packer.pack_slice(&[
+                    Datum::UInt64(u64::cast_from(*op)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                ])
+            });
 
         let mut packer = PermutedRowPacker::new(DifferentialLog::Sharing);
         let sharing = sharing
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Differential sharing",
-            );
-
-        let sharing = sharing.as_collection(move |op, ()| {
-            packer.pack_slice(&[
-                Datum::UInt64(u64::cast_from(*op)),
-                Datum::UInt64(u64::cast_from(worker_id)),
-            ])
-        });
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential sharing")
+            .as_collection(move |op, ()| {
+                packer.pack_slice(&[
+                    Datum::UInt64(u64::cast_from(*op)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                ])
+            });
 
         use DifferentialLog::*;
         let logs = [
@@ -172,8 +174,8 @@ type OutputBuffer<'a, 'b, D> = ConsolidateBuffer<'a, 'b, Timestamp, D, Diff, Pus
 
 /// Bundled output buffers used by the demux operator.
 struct DemuxOutput<'a, 'b> {
-    batches: OutputBuffer<'a, 'b, usize>,
-    records: OutputBuffer<'a, 'b, usize>,
+    batches: OutputBuffer<'a, 'b, (usize, ())>,
+    records: OutputBuffer<'a, 'b, (usize, ())>,
     sharing: OutputBuffer<'a, 'b, (usize, ())>,
 }
 
@@ -226,10 +228,10 @@ impl DemuxHandler<'_, '_, '_> {
     fn handle_batch(&mut self, event: BatchEvent) {
         let ts = self.ts();
         let op = event.operator;
-        self.output.batches.give(self.cap, (op, ts, 1));
+        self.output.batches.give(self.cap, ((op, ()), ts, 1));
 
         let diff = Diff::try_from(event.length).expect("must fit");
-        self.output.records.give(self.cap, (op, ts, diff));
+        self.output.records.give(self.cap, ((op, ()), ts, diff));
         self.notify_arrangement_size(op);
     }
 
@@ -238,12 +240,12 @@ impl DemuxHandler<'_, '_, '_> {
 
         let ts = self.ts();
         let op = event.operator;
-        self.output.batches.give(self.cap, (op, ts, -1));
+        self.output.batches.give(self.cap, ((op, ()), ts, -1));
 
         let diff = Diff::try_from(done).expect("must fit")
             - Diff::try_from(event.length1 + event.length2).expect("must fit");
         if diff != 0 {
-            self.output.records.give(self.cap, (op, ts, diff));
+            self.output.records.give(self.cap, ((op, ()), ts, diff));
         }
         self.notify_arrangement_size(op);
     }
@@ -251,11 +253,11 @@ impl DemuxHandler<'_, '_, '_> {
     fn handle_drop(&mut self, event: DropEvent) {
         let ts = self.ts();
         let op = event.operator;
-        self.output.batches.give(self.cap, (op, ts, -1));
+        self.output.batches.give(self.cap, ((op, ()), ts, -1));
 
         let diff = -Diff::try_from(event.length).expect("must fit");
         if diff != 0 {
-            self.output.records.give(self.cap, (op, ts, diff));
+            self.output.records.give(self.cap, ((op, ()), ts, diff));
         }
         self.notify_arrangement_size(op);
     }

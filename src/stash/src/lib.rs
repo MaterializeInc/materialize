@@ -101,17 +101,6 @@ mod tests;
 pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
 pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 
-// TODO(jkosh44) There's some circular logic going on with this key across crates.
-// mz_catalog::stash initializes uses this value to initialize
-// `CONFIG_COLLECTION: mz_stash::TypedCollection`. Then `mz_stash::postgres::Stash` uses this value
-// to check if the stash has been initialized.
-/// The key within the Config Collection that stores the version of the Stash.
-pub const USER_VERSION_KEY: &str = "user_version";
-pub const COLLECTION_CONFIG: TypedCollection<
-    mz_stash_types::objects::proto::ConfigKey,
-    mz_stash_types::objects::proto::ConfigValue,
-> = TypedCollection::new("config");
-
 pub type Diff = i64;
 pub type Timestamp = i64;
 
@@ -297,6 +286,7 @@ where
     }
 
     /// Returns all ((key, value), timestamp, diff) tuples in this [`TypedCollection`].
+    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
     pub async fn iter(
         &self,
         stash: &mut Stash,
@@ -313,6 +303,7 @@ where
     }
 
     /// Returns all key, value pairs in this [`TypedCollection`].
+    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
     pub async fn peek_one(&self, stash: &mut Stash) -> Result<BTreeMap<K, V>, StashError> {
         let name = self.name;
         stash
@@ -326,7 +317,7 @@ where
     }
 
     /// Returns the value of `key` in this [`TypedCollection`].
-    #[tracing::instrument(level = "trace", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
     pub async fn peek_key_one(&self, stash: &mut Stash, key: K) -> Result<Option<V>, StashError>
     where
         // TODO: Is it possible to remove the 'static?
@@ -347,7 +338,7 @@ where
     /// Sets the given k,v pair, if not already set.
     ///
     /// Returns the new value stored in stash after this operations.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
     pub async fn insert_key_without_overwrite(
         &self,
         stash: &mut Stash,
@@ -398,7 +389,7 @@ where
     /// Sets the given key value pairs, if not already set. If a new key appears
     /// multiple times in `entries`, its value will be from the first occurrence
     /// in `entries`.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
     pub async fn insert_without_overwrite<I>(
         &self,
         stash: &mut Stash,
@@ -451,7 +442,7 @@ where
     ///
     /// Returns the previous value if one existed and the value returned from
     /// `f`.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
     pub async fn upsert_key<F, R>(
         &self,
         stash: &mut Stash,
@@ -503,7 +494,7 @@ where
     }
 
     /// Sets the given key value pairs, removing existing entries match any key.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
     pub async fn upsert<I>(&self, stash: &mut Stash, entries: I) -> Result<(), StashError>
     where
         I: IntoIterator<Item = (K, V)>,
@@ -554,7 +545,7 @@ where
     ///   is likely not performant for more than 10-or-so keys.
     /// - This operation runs in a single transaction and cannot be combined
     ///   with other transactions.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
     pub async fn delete_keys(&self, stash: &mut Stash, keys: BTreeSet<K>) -> Result<(), StashError>
     where
         K: Clone + 'static,
@@ -606,6 +597,7 @@ where
 ///
 /// To finalize, add the results of [`TableTransaction::pending()`] to an
 /// [`AppendBatch`].
+#[derive(Debug, PartialEq, Eq)]
 pub struct TableTransaction<K, V> {
     initial: BTreeMap<K, V>,
     // The desired state of keys after commit. `None` means the value will be
@@ -790,17 +782,23 @@ where
     /// otherwise None.
     ///
     /// Returns an error if the uniqueness check failed.
+    ///
+    /// DO NOT call this function in a loop, use [`Self::set_many`] instead.
     pub fn set(&mut self, k: K, v: Option<V>) -> Result<Option<V>, StashError> {
         // Save the pending value for the key so we can restore it in case of
         // uniqueness violation.
         let restore = self.pending.get(&k).cloned();
 
         let prev = match self.pending.entry(k.clone()) {
-            // key hasn't been set in this txn yet. Set it and return the
-            // initial txn's value of k.
+            // key hasn't been set in this txn yet.
             Entry::Vacant(e) => {
-                e.insert(v);
-                self.initial.get(&k).cloned()
+                let initial = self.initial.get(&k);
+                if initial != v.as_ref() {
+                    // Provided value and initial value are different. Set key.
+                    e.insert(v);
+                }
+                // Return the initial txn's value of k.
+                initial.cloned()
             }
             // key has been set in this txn. Set it and return the previous
             // pending value.
@@ -822,6 +820,61 @@ where
             Err(err)
         } else {
             Ok(prev)
+        }
+    }
+
+    /// Set the values for many keys. Returns the previous entry for each key if the key existed,
+    /// otherwise None.
+    ///
+    /// Returns an error if any uniqueness check failed.
+    pub fn set_many(
+        &mut self,
+        kvs: BTreeMap<K, Option<V>>,
+    ) -> Result<BTreeMap<K, Option<V>>, StashError> {
+        let mut prevs = BTreeMap::new();
+        let mut restores = BTreeMap::new();
+
+        for (k, v) in kvs {
+            // Save the pending value for the key so we can restore it in case of
+            // uniqueness violation.
+            let restore = self.pending.get(&k).cloned();
+            restores.insert(k.clone(), restore);
+
+            let prev = match self.pending.entry(k.clone()) {
+                // key hasn't been set in this txn yet.
+                Entry::Vacant(e) => {
+                    let initial = self.initial.get(&k);
+                    if initial != v.as_ref() {
+                        // Provided value and initial value are different. Set key.
+                        e.insert(v);
+                    }
+                    // Return the initial txn's value of k.
+                    initial.cloned()
+                }
+                // key has been set in this txn. Set it and return the previous
+                // pending value.
+                Entry::Occupied(mut e) => e.insert(v),
+            };
+            prevs.insert(k, prev);
+        }
+
+        // Check for uniqueness violation.
+        if let Err(err) = self.verify() {
+            for (k, restore) in restores {
+                // Revert self.pending to the state it was in before calling this
+                // function.
+                match restore {
+                    Some(v) => {
+                        self.pending.insert(k, v);
+                    }
+                    None => {
+                        self.pending.remove(&k);
+                    }
+                }
+            }
+            Err(err)
+        } else {
+            Ok(prevs)
         }
     }
 

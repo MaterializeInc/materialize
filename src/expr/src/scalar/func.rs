@@ -20,7 +20,8 @@ use std::{fmt, iter, str};
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
+use chrono_tz::{OffsetComponents, OffsetName, Tz};
 use dec::OrderedDecimal;
 use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
@@ -34,10 +35,11 @@ use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
 use mz_ore::soft_assert;
 use mz_pgrepr::Type;
+use mz_pgtz::timezone::{Timezone, TimezoneSpec};
+use mz_proto::chrono::any_naive_datetime;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
-use mz_repr::adt::datetime::Timezone;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
@@ -45,9 +47,9 @@ use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::range::{self, Range, RangeBound, RangeOps};
 use mz_repr::adt::regex::{any_regex, Regex};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
-use mz_repr::chrono::any_naive_datetime;
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
+use mz_sql_pretty::pretty_str;
 use num::traits::CheckedNeg;
 use proptest::prelude::*;
 use proptest::strategy::*;
@@ -55,6 +57,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
+use subtle::ConstantTimeEq;
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::{
@@ -1360,6 +1363,18 @@ fn get_byte<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::from(i32::from(*i)))
 }
 
+pub fn constant_time_eq_bytes<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a_bytes = a.unwrap_bytes();
+    let b_bytes = b.unwrap_bytes();
+    Ok(Datum::from(bool::from(a_bytes.ct_eq(b_bytes))))
+}
+
+pub fn constant_time_eq_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_str();
+    let b = b.unwrap_str();
+    Ok(Datum::from(bool::from(a.as_bytes().ct_eq(b.as_bytes()))))
+}
+
 fn contains_range_elem<'a, R: RangeOps<'a>>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>
 where
     <R as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
@@ -1879,9 +1894,11 @@ fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, Eval
 }
 
 /// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
-pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
-    tz.parse()
-        .map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
+///
+/// The interpretation of fixed offsets depend on whether the POSIX or ISO 8601 standard is being
+/// used.
+pub(crate) fn parse_timezone(tz: &str, spec: TimezoneSpec) -> Result<Timezone, EvalError> {
+    Timezone::parse(tz, spec).map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
 }
 
 /// Converts the time datum `b`, which is assumed to be in UTC, to the timezone that the interval datum `a` is assumed
@@ -1933,6 +1950,26 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
         Some(dt) => Ok(dt.try_into()?),
         None => Err(EvalError::TimestampOutOfRange),
     }
+}
+
+fn timezone_offset<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let tz_str = a.unwrap_str();
+    let tz = match Tz::from_str_insensitive(tz_str) {
+        Ok(tz) => tz,
+        Err(_) => return Err(EvalError::InvalidIanaTimezoneId(tz_str.into())),
+    };
+    let offset = tz.offset_from_utc_datetime(&b.unwrap_timestamptz().naive_utc());
+    Ok(temp_storage.make_datum(|packer| {
+        packer.push_list_with(|packer| {
+            packer.push(Datum::from(offset.abbreviation()));
+            packer.push(Datum::from(offset.base_utc_offset()));
+            packer.push(Datum::from(offset.dst_offset()));
+        });
+    }))
 }
 
 /// Determines if an mz_aclitem contains one of the specified privileges. This will return true if
@@ -2100,6 +2137,20 @@ fn regexp_replace<'a>(
     Ok(Datum::String(replaced))
 }
 
+fn pretty_sql<'a>(
+    sql: Datum<'a>,
+    width: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let sql = sql.unwrap_str();
+    let width = width.unwrap_int32();
+    let width =
+        usize::try_from(width).map_err(|_| EvalError::PrettyError("invalid width".to_string()))?;
+    let pretty = pretty_str(sql, width).map_err(|e| EvalError::PrettyError(e.to_string()))?;
+    let pretty = temp_storage.push_string(pretty);
+    Ok(Datum::String(pretty))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
     AddInt16,
@@ -2227,6 +2278,7 @@ pub enum BinaryFunc {
     TimezoneIntervalTimestamp,
     TimezoneIntervalTimestampTz,
     TimezoneIntervalTime,
+    TimezoneOffset,
     TextConcat,
     JsonbGetInt64 { stringify: bool },
     JsonbGetString { stringify: bool },
@@ -2270,6 +2322,8 @@ pub enum BinaryFunc {
     Power,
     PowerNumeric,
     GetByte,
+    ConstantTimeEqBytes,
+    ConstantTimeEqString,
     RangeContainsElem { elem_type: ScalarType, rev: bool },
     RangeContainsRange { rev: bool },
     RangeOverlaps,
@@ -2284,6 +2338,7 @@ pub enum BinaryFunc {
     UuidGenerateV5,
     MzAclItemContainsPrivilege,
     ParseIdent,
+    PrettySql,
 }
 
 impl BinaryFunc {
@@ -2460,14 +2515,16 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestamp => date_trunc(a, b.unwrap_timestamp().deref()),
             BinaryFunc::DateTruncInterval => date_trunc_interval(a, b),
             BinaryFunc::DateTruncTimestampTz => date_trunc(a, b.unwrap_timestamptz().deref()),
-            BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str())
+            BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str(), TimezoneSpec::Posix)
                 .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp().into()).map(Into::into)),
-            BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str()).and_then(|tz| {
-                Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into())?.try_into()?)
-            }),
+            BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str(), TimezoneSpec::Posix)
+                .and_then(|tz| {
+                    Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into())?.try_into()?)
+                }),
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
+            BinaryFunc::TimezoneOffset => timezone_offset(a, b, temp_storage),
             BinaryFunc::TextConcat => Ok(text_concat_binary(a, b, temp_storage)),
             BinaryFunc::JsonbGetInt64 { stringify } => {
                 Ok(jsonb_get_int64(a, b, temp_storage, *stringify))
@@ -2518,6 +2575,8 @@ impl BinaryFunc {
             BinaryFunc::PowerNumeric => power_numeric(a, b),
             BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
             BinaryFunc::GetByte => get_byte(a, b),
+            BinaryFunc::ConstantTimeEqBytes => constant_time_eq_bytes(a, b),
+            BinaryFunc::ConstantTimeEqString => constant_time_eq_string(a, b),
             BinaryFunc::RangeContainsElem { elem_type, rev: _ } => Ok(match elem_type {
                 ScalarType::Int32 => contains_range_elem::<i32>(a, b),
                 ScalarType::Int64 => contains_range_elem::<i64>(a, b),
@@ -2544,6 +2603,7 @@ impl BinaryFunc {
             BinaryFunc::UuidGenerateV5 => Ok(uuid_generate_v5(a, b)),
             BinaryFunc::MzAclItemContainsPrivilege => mz_acl_item_contains_privilege(a, b),
             BinaryFunc::ParseIdent => parse_ident(a, b, temp_storage),
+            BinaryFunc::PrettySql => pretty_sql(a, b, temp_storage),
         }
     }
 
@@ -2648,6 +2708,15 @@ impl BinaryFunc {
 
             TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
 
+            TimezoneOffset => ScalarType::Record {
+                fields: vec![
+                    ("abbrev".into(), ScalarType::String.nullable(false)),
+                    ("base_utc_offset".into(), ScalarType::Interval.nullable(false)),
+                    ("dst_offset".into(), ScalarType::Interval.nullable(false)),
+                ],
+                custom_id: None,
+            }.nullable(true),
+
             SubTime => ScalarType::Interval.nullable(in_nullable),
 
             MzRenderTypmod | TextConcat => ScalarType::String.nullable(in_nullable),
@@ -2696,6 +2765,10 @@ impl BinaryFunc {
 
             GetByte => ScalarType::Int32.nullable(in_nullable),
 
+            ConstantTimeEqBytes | ConstantTimeEqString => {
+                ScalarType::Bool.nullable(in_nullable)
+            },
+
             UuidGenerateV5 => ScalarType::Uuid.nullable(in_nullable),
 
             RangeContainsElem { .. }
@@ -2718,6 +2791,7 @@ impl BinaryFunc {
             MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable),
 
             ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable),
+            PrettySql => ScalarType::String.nullable(in_nullable),
         }
     }
 
@@ -2850,6 +2924,8 @@ impl BinaryFunc {
             | IsRegexpMatch { .. }
             | ToCharTimestamp
             | ToCharTimestampTz
+            | ConstantTimeEqBytes
+            | ConstantTimeEqString
             | DateBinTimestamp
             | DateBinTimestampTz
             | ExtractInterval
@@ -2869,6 +2945,7 @@ impl BinaryFunc {
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
+            | TimezoneOffset
             | TextConcat
             | JsonbContainsString
             | JsonbContainsJsonb
@@ -2914,7 +2991,8 @@ impl BinaryFunc {
             | RangeDifference
             | UuidGenerateV5
             | MzAclItemContainsPrivilege
-            | ParseIdent => false,
+            | ParseIdent
+            | PrettySql => false,
 
             JsonbGetInt64 { .. }
             | JsonbGetString { .. }
@@ -3089,6 +3167,7 @@ impl BinaryFunc {
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
+            | TimezoneOffset
             | RoundNumeric
             | ConvertFrom
             | Left
@@ -3114,7 +3193,10 @@ impl BinaryFunc {
             | UuidGenerateV5
             | GetByte
             | MzAclItemContainsPrivilege
-            | ParseIdent => false,
+            | ConstantTimeEqBytes
+            | ConstantTimeEqString
+            | ParseIdent
+            | PrettySql => false,
         }
     }
 
@@ -3278,7 +3360,8 @@ impl BinaryFunc {
             | BinaryFunc::TimezoneTimestampTz
             | BinaryFunc::TimezoneIntervalTimestamp
             | BinaryFunc::TimezoneIntervalTimestampTz
-            | BinaryFunc::TimezoneIntervalTime => (false, false),
+            | BinaryFunc::TimezoneIntervalTime
+            | BinaryFunc::TimezoneOffset => (false, false),
             BinaryFunc::TextConcat
             | BinaryFunc::JsonbGetInt64 { .. }
             | BinaryFunc::JsonbGetString { .. }
@@ -3335,6 +3418,8 @@ impl BinaryFunc {
             BinaryFunc::UuidGenerateV5 => (false, false),
             BinaryFunc::MzAclItemContainsPrivilege => (false, false),
             BinaryFunc::ParseIdent => (false, false),
+            BinaryFunc::ConstantTimeEqBytes | BinaryFunc::ConstantTimeEqString => (false, false),
+            BinaryFunc::PrettySql => (false, false),
         }
     }
 }
@@ -3476,6 +3561,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => f.write_str("timezoneits"),
             BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
+            BinaryFunc::TimezoneOffset => f.write_str("timezone_offset"),
             BinaryFunc::TextConcat => f.write_str("||"),
             BinaryFunc::JsonbGetInt64 { stringify: false } => f.write_str("->"),
             BinaryFunc::JsonbGetInt64 { stringify: true } => f.write_str("->>"),
@@ -3520,6 +3606,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
             BinaryFunc::GetByte => f.write_str("get_byte"),
+            BinaryFunc::ConstantTimeEqBytes => f.write_str("constant_time_compare_bytes"),
+            BinaryFunc::ConstantTimeEqString => f.write_str("constant_time_compare_strings"),
             BinaryFunc::RangeContainsElem { rev, .. } => {
                 f.write_str(if *rev { "<@" } else { "@>" })
             }
@@ -3538,6 +3626,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::UuidGenerateV5 => f.write_str("uuid_generate_v5"),
             BinaryFunc::MzAclItemContainsPrivilege => f.write_str("mz_aclitem_contains_privilege"),
             BinaryFunc::ParseIdent => f.write_str("parse_ident"),
+            BinaryFunc::PrettySql => f.write_str("pretty_sql"),
         }
     }
 }
@@ -3684,6 +3773,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::TimezoneIntervalTimestamp).boxed(),
             Just(BinaryFunc::TimezoneIntervalTimestampTz).boxed(),
             Just(BinaryFunc::TimezoneIntervalTime).boxed(),
+            Just(BinaryFunc::TimezoneOffset).boxed(),
             Just(BinaryFunc::TextConcat).boxed(),
             bool::arbitrary()
                 .prop_map(|stringify| BinaryFunc::JsonbGetInt64 { stringify })
@@ -3883,6 +3973,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => TimezoneIntervalTimestamp(()),
             BinaryFunc::TimezoneIntervalTimestampTz => TimezoneIntervalTimestampTz(()),
             BinaryFunc::TimezoneIntervalTime => TimezoneIntervalTime(()),
+            BinaryFunc::TimezoneOffset => TimezoneOffset(()),
             BinaryFunc::TextConcat => TextConcat(()),
             BinaryFunc::JsonbGetInt64 { stringify } => JsonbGetInt64(*stringify),
             BinaryFunc::JsonbGetString { stringify } => JsonbGetString(*stringify),
@@ -3945,6 +4036,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::UuidGenerateV5 => UuidGenerateV5(()),
             BinaryFunc::MzAclItemContainsPrivilege => MzAclItemContainsPrivilege(()),
             BinaryFunc::ParseIdent => ParseIdent(()),
+            BinaryFunc::ConstantTimeEqBytes => ConstantTimeEqBytes(()),
+            BinaryFunc::ConstantTimeEqString => ConstantTimeEqString(()),
+            BinaryFunc::PrettySql => PrettySql(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -4080,6 +4174,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 TimezoneIntervalTimestamp(()) => Ok(BinaryFunc::TimezoneIntervalTimestamp),
                 TimezoneIntervalTimestampTz(()) => Ok(BinaryFunc::TimezoneIntervalTimestampTz),
                 TimezoneIntervalTime(()) => Ok(BinaryFunc::TimezoneIntervalTime),
+                TimezoneOffset(()) => Ok(BinaryFunc::TimezoneOffset),
                 TextConcat(()) => Ok(BinaryFunc::TextConcat),
                 JsonbGetInt64(stringify) => Ok(BinaryFunc::JsonbGetInt64 { stringify }),
                 JsonbGetString(stringify) => Ok(BinaryFunc::JsonbGetString { stringify }),
@@ -4144,6 +4239,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 UuidGenerateV5(()) => Ok(BinaryFunc::UuidGenerateV5),
                 MzAclItemContainsPrivilege(()) => Ok(BinaryFunc::MzAclItemContainsPrivilege),
                 ParseIdent(()) => Ok(BinaryFunc::ParseIdent),
+                ConstantTimeEqBytes(()) => Ok(BinaryFunc::ConstantTimeEqBytes),
+                ConstantTimeEqString(()) => Ok(BinaryFunc::ConstantTimeEqString),
+                PrettySql(()) => Ok(BinaryFunc::PrettySql),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
@@ -7448,14 +7546,15 @@ impl VariadicFunc {
             VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition => array_position(&ds),
             VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage),
-            VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str()).map(|tz| {
-                timezone_time(
-                    tz,
-                    ds[1].unwrap_time(),
-                    &ds[2].unwrap_timestamptz().naive_utc(),
-                )
-                .into()
-            }),
+            VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str(), TimezoneSpec::Posix)
+                .map(|tz| {
+                    timezone_time(
+                        tz,
+                        ds[1].unwrap_time(),
+                        &ds[2].unwrap_timestamptz().naive_utc(),
+                    )
+                    .into()
+                }),
             VariadicFunc::RegexpSplitToArray => {
                 let flags = if ds.len() == 2 {
                     Datum::String("")
@@ -7583,7 +7682,11 @@ impl VariadicFunc {
                 .nullable(true),
             ListSliceLinear { .. } => input_types[0].scalar_type.clone().nullable(in_nullable),
             RecordCreate { field_names } => ScalarType::Record {
-                fields: field_names.clone().into_iter().zip(input_types).collect(),
+                fields: field_names
+                    .clone()
+                    .into_iter()
+                    .zip_eq(input_types)
+                    .collect(),
                 custom_id: None,
             }
             .nullable(false),

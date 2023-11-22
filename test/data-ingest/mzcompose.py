@@ -12,7 +12,7 @@ import time
 
 from materialize.data_ingest.executor import KafkaExecutor, KafkaRoundtripExecutor
 from materialize.data_ingest.workload import *  # noqa: F401 F403
-from materialize.data_ingest.workload import Workload, execute_workload
+from materialize.data_ingest.workload import WORKLOADS, execute_workload
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
@@ -26,7 +26,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(
         auto_create_topics=False,
-        port="30123:30123",
+        ports=["30123:30123"],
         allow_host_ports=True,
         environment_extra=[
             "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
@@ -64,7 +64,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     workloads = (
         [globals()[workload] for workload in args.workload]
         if args.workload
-        else Workload.__subclasses__()
+        else WORKLOADS
     )
 
     print(f"--- Random seed is {args.seed}")
@@ -77,7 +77,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """CREATE CONNECTION IF NOT EXISTS kafka_conn
-               FOR KAFKA BROKER 'kafka:9092'"""
+               FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"""
         )
         cur.execute(
             """CREATE CONNECTION IF NOT EXISTS csr_conn

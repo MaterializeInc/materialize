@@ -39,6 +39,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::str::StrExt;
+use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::Float as NumFloat;
 use once_cell::sync::Lazy;
@@ -367,7 +368,7 @@ where
 /// <time zone interval> ::=
 ///     <sign> <hours value> <colon> <minutes value>
 /// ```
-fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, datetime::Timezone), String> {
+fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), String> {
     if s.is_empty() {
         return Err("timestamp string is empty".into());
     }
@@ -393,7 +394,7 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, datetime::Ti
     let offset = if tz_string.is_empty() {
         Default::default()
     } else {
-        tz_string.parse()?
+        Timezone::parse(tz_string, TimezoneSpec::Iso)?
     };
 
     Ok((d, t, offset))
@@ -472,7 +473,7 @@ where
 pub fn parse_timestamptz(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
     parse_timestamp_string(s)
         .and_then(|(date, time, timezone)| {
-            use datetime::Timezone::*;
+            use Timezone::*;
             let mut dt = date.and_time(time);
             let offset = match timezone {
                 FixedOffset(offset) => offset,
@@ -1301,7 +1302,7 @@ fn lex_unquoted_element<'a>(
 pub fn parse_map<'a, V, E>(
     s: &'a str,
     is_value_type_map: bool,
-    gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+    gen_elem: impl FnMut(Option<Cow<'a, str>>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, ParseError>
 where
     E: ToString,
@@ -1313,7 +1314,7 @@ where
 fn parse_map_inner<'a, V, E>(
     s: &'a str,
     is_value_type_map: bool,
-    mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+    mut gen_elem: impl FnMut(Option<Cow<'a, str>>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, String>
 where
     E: ToString,
@@ -1388,7 +1389,7 @@ where
             Some(_) => lex_unquoted_element(buf, is_special_char, is_end_of_literal)?,
             None => bail!("unexpected end of input"),
         };
-        let value = gen_value(value.unwrap())?;
+        let value = gen_value(value)?;
 
         // Insert elements.
         map.insert(key, value);

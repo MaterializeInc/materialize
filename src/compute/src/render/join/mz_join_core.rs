@@ -38,6 +38,7 @@
 
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::time::Instant;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Multiply;
@@ -56,15 +57,19 @@ use timely::progress::timestamp::Timestamp;
 use timely::scheduling::Activator;
 use timely::PartialOrder;
 
+use crate::render::context::ShutdownToken;
+
 /// Joins two arranged collections with the same key type.
 ///
 /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
 /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
 /// every value returned by the iterator.
-pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, K, V1, V2>(
+pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, K, V1, V2, YFn>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
+    shutdown_token: ShutdownToken,
     mut result: L,
+    yield_fn: YFn,
 ) -> Collection<G, I::Item, Diff>
 where
     G: Scope,
@@ -77,6 +82,7 @@ where
     K: Data,
     V1: Data,
     V2: Data,
+    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
@@ -172,6 +178,23 @@ where
                 let mut input2_buffer = Vec::new();
 
                 move |input1, input2, output| {
+                    // If the dataflow is shutting down, discard all existing and future work.
+                    if shutdown_token.in_shutdown() {
+                        // Discard data at the inputs.
+                        input1.for_each(|_cap, _data| ());
+                        input2.for_each(|_cap, _data| ());
+
+                        // Discard queued work.
+                        todo1 = Default::default();
+                        todo2 = Default::default();
+
+                        // Stop holding on to input traces.
+                        trace1_option = None;
+                        trace2_option = None;
+
+                        return;
+                    }
+
                     // 1. Consuming input.
                     //
                     // The join computation repeatedly accepts batches of updates from each of its inputs.
@@ -278,24 +301,30 @@ where
                     // input must scan all batches from the other input).
 
                     // Perform some amount of outstanding work.
-                    let mut fuel = 1_000_000;
-                    while !todo1.is_empty() && fuel > 0 {
-                        todo1
-                            .front_mut()
-                            .unwrap()
-                            .work(output, &mut result, &mut fuel);
+                    let start_time = Instant::now();
+                    let mut work = 0;
+                    while !todo1.is_empty() && !yield_fn(start_time, work) {
+                        todo1.front_mut().unwrap().work(
+                            output,
+                            &mut result,
+                            |w| yield_fn(start_time, w),
+                            &mut work,
+                        );
                         if !todo1.front().unwrap().work_remains() {
                             todo1.pop_front();
                         }
                     }
 
                     // Perform some amount of outstanding work.
-                    let mut fuel = 1_000_000;
-                    while !todo2.is_empty() && fuel > 0 {
-                        todo2
-                            .front_mut()
-                            .unwrap()
-                            .work(output, &mut result, &mut fuel);
+                    let start_time = Instant::now();
+                    let mut work = 0;
+                    while !todo2.is_empty() && !yield_fn(start_time, work) {
+                        todo2.front_mut().unwrap().work(
+                            output,
+                            &mut result,
+                            |w| yield_fn(start_time, w),
+                            &mut work,
+                        );
                         if !todo2.front().unwrap().work_remains() {
                             todo2.pop_front();
                         }
@@ -405,14 +434,16 @@ where
     }
 
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
-    fn work<L, I>(
+    fn work<L, I, YFn>(
         &mut self,
         output: &mut OutputHandle<T, (D, T, Diff), Tee<T, (D, T, Diff)>>,
         mut result: L,
-        fuel: &mut usize,
+        yield_fn: YFn,
+        work: &mut usize,
     ) where
         I: IntoIterator<Item = D>,
         L: FnMut(&C1::Key, &C1::Val, &C2::Val) -> I,
+        YFn: Fn(usize) -> bool,
     {
         let meet = self.capability.time();
 
@@ -443,7 +474,7 @@ where
                 Ordering::Less => cursor1.seek_key(storage1, cursor2.key(storage2)),
                 Ordering::Greater => cursor2.seek_key(storage2, cursor1.key(storage1)),
                 Ordering::Equal => {
-                    // Populate `temp` with the results, as long as fuel remains.
+                    // Populate `temp` with the results, until we should yield.
                     let key = cursor2.key(storage2);
                     while let Some(val1) = cursor1.get_val(storage1) {
                         while let Some(val2) = cursor2.get_val(storage2) {
@@ -463,14 +494,14 @@ where
                         cursor1.step_val(storage1);
                         cursor2.rewind_vals(storage2);
 
-                        *fuel = fuel.saturating_sub(temp.len());
+                        *work = work.saturating_add(temp.len());
 
-                        if *fuel == 0 {
-                            // The fuel is exhausted, so we should yield. Returning here is only
-                            // allowed because we leave the cursors in a state that will let us
-                            // pick up the work correctly on the next invocation.
-                            *fuel += flush(temp, &mut session);
-                            if *fuel == 0 {
+                        if yield_fn(*work) {
+                            // Returning here is only allowed because we leave the cursors in a
+                            // state that will let us pick up the work correctly on the next
+                            // invocation.
+                            *work -= flush(temp, &mut session);
+                            if yield_fn(*work) {
                                 return;
                             }
                         }
@@ -483,7 +514,7 @@ where
         }
 
         if !temp.is_empty() {
-            *fuel += flush(temp, &mut session);
+            *work -= flush(temp, &mut session);
         }
 
         // We only get here after having iterated through all keys.

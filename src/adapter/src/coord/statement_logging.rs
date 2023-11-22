@@ -16,8 +16,9 @@ use mz_ore::now::to_datetime;
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::{Datum, Diff, Row, RowPacker};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::plan::Params;
+use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
@@ -117,22 +118,31 @@ impl Coordinator {
         });
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn drain_statement_log(&mut self) {
-        let pending_session_events =
-            std::mem::take(&mut self.statement_logging.pending_session_events);
-        let pending_prepared_statement_events =
-            std::mem::take(&mut self.statement_logging.pending_prepared_statement_events);
-        let pending_statement_execution_events =
+        let session_updates = std::mem::take(&mut self.statement_logging.pending_session_events)
+            .into_iter()
+            .map(|update| (update, 1))
+            .collect();
+        let prepared_statement_updates =
+            std::mem::take(&mut self.statement_logging.pending_prepared_statement_events)
+                .into_iter()
+                .map(|update| (update, 1))
+                .collect();
+        let statement_execution_updates =
             std::mem::take(&mut self.statement_logging.pending_statement_execution_events);
 
-        self.controller
-            .storage
-            .send_statement_log_updates(
-                pending_statement_execution_events,
-                pending_prepared_statement_events,
-                pending_session_events,
-            )
-            .await;
+        use IntrospectionType::*;
+        for (type_, updates) in [
+            (SessionHistory, session_updates),
+            (PreparedStatementHistory, prepared_statement_updates),
+            (StatementExecutionHistory, statement_execution_updates),
+        ] {
+            self.controller
+                .storage
+                .record_introspection_updates(type_, updates)
+                .await;
+        }
     }
 
     /// Returns any statement logging events needed for a particular
@@ -238,9 +248,14 @@ impl Coordinator {
             cluster_id,
             cluster_name,
             application_name,
+            transaction_isolation,
+            execution_timestamp,
+            transaction_id,
+            transient_index_id,
         } = record;
 
         let cluster = cluster_id.map(|id| id.to_string());
+        let transient_index_id = transient_index_id.map(|id| id.to_string());
         packer.extend([
             Datum::Uuid(*id),
             Datum::Uuid(*prepared_statement_id),
@@ -251,6 +266,13 @@ impl Coordinator {
             },
             Datum::String(&*application_name),
             cluster_name.as_ref().map(String::as_str).into(),
+            Datum::String(&*transaction_isolation),
+            (*execution_timestamp).into(),
+            Datum::UInt64(*transaction_id),
+            match &transient_index_id {
+                None => Datum::Null,
+                Some(transient_index_id) => Datum::String(transient_index_id),
+            },
         ]);
         packer
             .push_array(
@@ -372,31 +394,56 @@ impl Coordinator {
         vec![(retraction, -1), (new, 1)]
     }
 
-    /// Set the `cluster_id` for a statement, once it's known.
-    pub fn set_statement_execution_cluster(
+    /// Mutate a statement execution record via the given function `f`.
+    fn mutate_record<F: FnOnce(&mut StatementBeganExecutionRecord)>(
         &mut self,
         StatementLoggingId(id): StatementLoggingId,
-        cluster_id: ClusterId,
+        f: F,
     ) {
-        let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
         let record = self
             .statement_logging
             .executions_begun
             .get_mut(&id)
-            .expect("set_statement_execution_cluster must not be called after execution ends");
-        if record.cluster_id == Some(cluster_id) {
-            return;
-        }
+            .expect("mutate_record must not be called after execution ends");
         let retraction = Self::pack_statement_began_execution_update(record);
         self.statement_logging
             .pending_statement_execution_events
             .push((retraction, -1));
-        record.cluster_name = Some(cluster_name);
-        record.cluster_id = Some(cluster_id);
+        f(record);
         let update = Self::pack_statement_began_execution_update(record);
         self.statement_logging
             .pending_statement_execution_events
             .push((update, 1));
+    }
+
+    /// Set the `cluster_id` for a statement, once it's known.
+    pub fn set_statement_execution_cluster(
+        &mut self,
+        id: StatementLoggingId,
+        cluster_id: ClusterId,
+    ) {
+        let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
+        self.mutate_record(id, |record| {
+            record.cluster_name = Some(cluster_name);
+            record.cluster_id = Some(cluster_id);
+        });
+    }
+
+    /// Set the `execution_timestamp` for a statement, once it's known
+    pub fn set_statement_execution_timestamp(
+        &mut self,
+        id: StatementLoggingId,
+        timestamp: Timestamp,
+    ) {
+        self.mutate_record(id, |record| {
+            record.execution_timestamp = Some(u64::from(timestamp));
+        });
+    }
+
+    pub fn set_transient_index_id(&mut self, id: StatementLoggingId, transient_index_id: GlobalId) {
+        self.mutate_record(id, |record| {
+            record.transient_index_id = Some(transient_index_id)
+        });
     }
 
     /// Possibly record the beginning of statement execution, depending on a randomly-chosen value.
@@ -466,10 +513,18 @@ impl Coordinator {
             sample_rate,
             params,
             began_at: self.now(),
-            // Cluster is not known yet; we'll fill it in later
+            application_name: session.application_name().to_string(),
+            transaction_isolation: session.vars().transaction_isolation().to_string(),
+            transaction_id: session
+                .transaction()
+                .inner()
+                .expect("Every statement runs in an explicit or implicit transaction")
+                .id,
+            // These are not known yet; we'll fill them in later.
             cluster_id: None,
             cluster_name: None,
-            application_name: session.application_name().to_string(),
+            execution_timestamp: None,
+            transient_index_id: None,
         };
         let mseh_update = Self::pack_statement_began_execution_update(&record);
         self.statement_logging

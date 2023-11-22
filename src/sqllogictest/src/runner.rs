@@ -42,7 +42,9 @@ use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use md5::{Digest, Md5};
 use mz_controller::ControllerConfig;
+use mz_environmentd::CatalogConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
+use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -120,6 +122,7 @@ pub enum Outcome<'a> {
     WrongColumnNames {
         expected_column_names: &'a Vec<ColumnName>,
         actual_column_names: Vec<ColumnName>,
+        actual_output: Output,
         location: Location,
     },
     OutputFailure {
@@ -244,6 +247,7 @@ impl fmt::Display for Outcome<'_> {
             WrongColumnNames {
                 expected_column_names,
                 actual_column_names,
+                actual_output: _,
                 location,
             } => write!(
                 f,
@@ -830,20 +834,24 @@ impl<'a> Runner<'a> {
             )
             .await?
         {
-            match (row.get("name"), row.get("size")) {
-                ("r1", "1") => needs_default_replica = false,
-                (name, _) => {
-                    inner
-                        .system_client
-                        .batch_execute(&format!("DROP CLUSTER REPLICA default.{name}"))
-                        .await?
-                }
+            let name: &str = row.get("name");
+            let size: &str = row.get("size");
+            if name == "r1" && size == self.config.replicas.to_string() {
+                needs_default_replica = false;
+            } else {
+                inner
+                    .system_client
+                    .batch_execute(&format!("DROP CLUSTER REPLICA default.{}", name))
+                    .await?;
             }
         }
         if needs_default_replica {
             inner
                 .system_client
-                .batch_execute("CREATE CLUSTER REPLICA default.r1 SIZE '1'")
+                .batch_execute(&format!(
+                    "CREATE CLUSTER REPLICA default.r1 SIZE '{}'",
+                    self.config.replicas
+                ))
                 .await?;
         }
 
@@ -898,7 +906,7 @@ impl<'a> RunnerInner<'a> {
         let temp_dir = tempfile::tempdir()?;
         let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
-        let (consensus_uri, adapter_stash_url, storage_stash_url) = {
+        let (consensus_uri, adapter_stash_url, storage_stash_url, timestamp_oracle_url) = {
             let postgres_url = &config.postgres_url;
             info!(%postgres_url, "starting server");
             let (client, conn) = Retry::default()
@@ -922,15 +930,18 @@ impl<'a> RunnerInner<'a> {
                 .batch_execute(
                     "DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
+                     DROP SCHEMA IF EXISTS sqllogictest_tsoracle CASCADE;
                      CREATE SCHEMA IF NOT EXISTS sqllogictest_consensus;
                      CREATE SCHEMA sqllogictest_adapter;
-                     CREATE SCHEMA sqllogictest_storage;",
+                     CREATE SCHEMA sqllogictest_storage;
+                     CREATE SCHEMA sqllogictest_tsoracle;",
                 )
                 .await?;
             (
                 format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_adapter"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_tsoracle"),
             )
         };
 
@@ -959,12 +970,22 @@ impl<'a> RunnerInner<'a> {
             |_, _| PubSubClientConnection::noop(),
         );
         let persist_clients = Arc::new(persist_clients);
+
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let orchestrator = Arc::new(TracingOrchestrator::new(
+            orchestrator,
+            config.tracing.clone(),
+        ));
         let listeners = mz_environmentd::Listeners::bind_any_local().await?;
         let host_name = format!("localhost:{}", listeners.http_local_addr().port());
+        let catalog_config = CatalogConfig::Shadow {
+            url: adapter_stash_url,
+            persist_clients: Arc::clone(&persist_clients),
+        };
         let server_config = mz_environmentd::Config {
-            adapter_stash_url,
+            catalog_config,
+            timestamp_oracle_url: Some(timestamp_oracle_url),
             controller: ControllerConfig {
                 build_info: &mz_environmentd::BUILD_INFO,
                 orchestrator,
@@ -996,20 +1017,27 @@ impl<'a> RunnerInner<'a> {
             tls: None,
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
-            concurrent_webhook_req_count: None,
             unsafe_mode: true,
             all_features: false,
             metrics_registry,
             now,
             environment_id,
             cluster_replica_sizes: Default::default(),
-            bootstrap_default_cluster_replica_size: "1".into(),
-            bootstrap_builtin_cluster_replica_size: "1".into(),
-            system_parameter_defaults: config.system_parameter_defaults.clone(),
+            bootstrap_default_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_builtin_cluster_replica_size: config.replicas.to_string(),
+            system_parameter_defaults: {
+                let mut params = BTreeMap::new();
+                params.insert(
+                    "log_filter".to_string(),
+                    config.tracing.startup_log_filter.to_string(),
+                );
+                params.extend(config.system_parameter_defaults.clone());
+                params
+            },
             default_storage_cluster_size: None,
             availability_zones: Default::default(),
             connection_context,
-            tracing_handle: TracingHandle::disabled(),
+            tracing_handle: config.tracing_handle.clone(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
             segment_api_key: None,
@@ -1023,6 +1051,8 @@ impl<'a> RunnerInner<'a> {
             deploy_generation: None,
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
+            // TODO(txn): Get this flipped to true before turning anything on in prod.
+            enable_persist_txn_tables_cli: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1095,14 +1125,11 @@ impl<'a> RunnerInner<'a> {
     /// Set features that should be enabled regardless of whether reset-server was
     /// called. These features may be set conditionally depending on the run configuration.
     async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
-        // We turn on enable_monotonic_oneshot_selects,
-        // as that feature has reached enough maturity to do so.
+        // We turn on enable_specialized_arrangements, as we wish to get
+        // as much coverage of this feature as we can.
         // TODO(vmarcos): Remove this code when we retire these feature flags.
         self.system_client
-            .execute(
-                "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
-                &[],
-            )
+            .execute("ALTER SYSTEM SET enable_specialized_arrangements = on", &[])
             .await?;
 
         // Dangerous functions are useful for tests so we enable it for all tests.
@@ -1374,25 +1401,6 @@ impl<'a> RunnerInner<'a> {
             Ok(query_output) => query_output,
         };
 
-        // Various checks as long as there are returned rows.
-        if let Some(row) = rows.get(0) {
-            // check column names
-            if let Some(expected_column_names) = expected_column_names {
-                let actual_column_names = row
-                    .columns()
-                    .iter()
-                    .map(|t| ColumnName::from(t.name()))
-                    .collect::<Vec<_>>();
-                if expected_column_names != &actual_column_names {
-                    return Ok(Outcome::WrongColumnNames {
-                        expected_column_names,
-                        actual_column_names,
-                        location,
-                    });
-                }
-            }
-        }
-
         // format output
         let mut formatted_rows = vec![];
         for row in &rows {
@@ -1414,6 +1422,26 @@ impl<'a> RunnerInner<'a> {
         let mut values = formatted_rows.into_iter().flatten().collect::<Vec<_>>();
         if let Sort::Value = sort {
             values.sort();
+        }
+
+        // Various checks as long as there are returned rows.
+        if let Some(row) = rows.get(0) {
+            // check column names
+            if let Some(expected_column_names) = expected_column_names {
+                let actual_column_names = row
+                    .columns()
+                    .iter()
+                    .map(|t| ColumnName::from(t.name()))
+                    .collect::<Vec<_>>();
+                if expected_column_names != &actual_column_names {
+                    return Ok(Outcome::WrongColumnNames {
+                        expected_column_names,
+                        actual_column_names,
+                        actual_output: Output::Values(values),
+                        location,
+                    });
+                }
+            }
         }
 
         // check output
@@ -1721,12 +1749,15 @@ pub struct RunConfig<'a> {
     pub auto_transactions: bool,
     pub enable_table_keys: bool,
     pub orchestrator_process_wrapper: Option<String>,
+    pub tracing: TracingCliArgs,
+    pub tracing_handle: TracingHandle,
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Persist state is handled specially because:
     /// - Persist background workers do not necessarily shut down immediately once the server is
     ///   shut down, and may panic if their storage is delete out from under them.
     /// - It's safe for different databases to reference the same state: all data is scoped by UUID.
     pub persist_dir: TempDir,
+    pub replicas: usize,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
@@ -1882,6 +1913,41 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
     writeln!(runner.config.stdout, "==> {}", filename.display());
     let mut in_transaction = false;
 
+    fn append_values_output(
+        buf: &mut RewriteBuffer,
+        input: &String,
+        expected_output: &str,
+        mode: &Mode,
+        types: &Vec<Type>,
+        column_names: Option<&Vec<ColumnName>>,
+        actual_output: &Vec<String>,
+    ) {
+        buf.append_header(input, expected_output, column_names);
+
+        for (i, row) in actual_output.chunks(types.len()).enumerate() {
+            match mode {
+                // In Cockroach mode, output each row on its own line, with
+                // two spaces between each column.
+                Mode::Cockroach => {
+                    if i != 0 {
+                        buf.append("\n");
+                    }
+                    buf.append(&row.join("  "));
+                }
+                // In standard mode, output each value on its own line,
+                // and ignore row boundaries.
+                Mode::Standard => {
+                    for (j, col) in row.iter().enumerate() {
+                        if i != 0 || j != 0 {
+                            buf.append("\n");
+                        }
+                        buf.append(col);
+                    }
+                }
+            }
+        }
+    }
+
     for record in parser.parse_records()? {
         let outcome = runner.run_record(&record, &mut in_transaction).await?;
 
@@ -1896,6 +1962,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                             output: Output::Values(_),
                             output_str: expected_output,
                             types,
+                            column_names,
                             ..
                         }),
                     ..
@@ -1905,32 +1972,43 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     ..
                 },
             ) => {
-                {
-                    buf.append_header(&input, expected_output);
-
-                    for (i, row) in actual_output.chunks(types.len()).enumerate() {
-                        match mode {
-                            // In Cockroach mode, output each row on its own line, with
-                            // two spaces between each column.
-                            Mode::Cockroach => {
-                                if i != 0 {
-                                    buf.append("\n");
-                                }
-                                buf.append(&row.join("  "));
-                            }
-                            // In standard mode, output each value on its own line,
-                            // and ignore row boundaries.
-                            Mode::Standard => {
-                                for (j, col) in row.iter().enumerate() {
-                                    if i != 0 || j != 0 {
-                                        buf.append("\n");
-                                    }
-                                    buf.append(col);
-                                }
-                            }
-                        }
-                    }
-                }
+                append_values_output(
+                    &mut buf,
+                    &input,
+                    expected_output,
+                    mode,
+                    types,
+                    column_names.as_ref(),
+                    actual_output,
+                );
+            }
+            (
+                Record::Query {
+                    output:
+                        Ok(QueryOutput {
+                            mode,
+                            output: Output::Values(_),
+                            output_str: expected_output,
+                            types,
+                            ..
+                        }),
+                    ..
+                },
+                Outcome::WrongColumnNames {
+                    actual_column_names,
+                    actual_output: Output::Values(actual_output),
+                    ..
+                },
+            ) => {
+                append_values_output(
+                    &mut buf,
+                    &input,
+                    expected_output,
+                    mode,
+                    types,
+                    Some(actual_column_names),
+                    actual_output,
+                );
             }
             (
                 Record::Query {
@@ -1938,6 +2016,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                         Ok(QueryOutput {
                             output: Output::Hashed { .. },
                             output_str: expected_output,
+                            column_names,
                             ..
                         }),
                     ..
@@ -1947,7 +2026,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     ..
                 },
             ) => {
-                buf.append_header(&input, expected_output);
+                buf.append_header(&input, expected_output, column_names.as_ref());
 
                 buf.append(format!("{} values hashing to {}\n", num_values, md5).as_str())
             }
@@ -1961,7 +2040,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     ..
                 },
             ) => {
-                buf.append_header(&input, expected_output);
+                buf.append_header(&input, expected_output, None);
 
                 for (i, row) in actual_output.iter().enumerate() {
                     if i != 0 {
@@ -2040,7 +2119,12 @@ impl<'a> RewriteBuffer<'a> {
         self.output.push_str(s);
     }
 
-    fn append_header(&mut self, input: &String, expected_output: &str) {
+    fn append_header(
+        &mut self,
+        input: &String,
+        expected_output: &str,
+        column_names: Option<&Vec<ColumnName>>,
+    ) {
         // Output everything before this record.
         // TODO(benesch): is it possible to rewrite this to avoid `as`?
         #[allow(clippy::as_conversions)]
@@ -2055,6 +2139,18 @@ impl<'a> RewriteBuffer<'a> {
         } else if self.peek_last(6) != "\n----\n" {
             self.append("\n----\n");
         }
+
+        let Some(names) = column_names else {
+            return;
+        };
+        self.append(
+            &names
+                .iter()
+                .map(|name| name.as_str().replace('␠', " "))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        self.append("\n");
     }
 
     fn rewrite_expected_error(
@@ -2139,12 +2235,18 @@ fn generate_view_sql(
     // column name ambiguity in all cases, but we assume here that we
     // can adjust the (hopefully) small number of tests that eventually
     // challenge us in this particular way.
-    let name = UnresolvedItemName(vec![Ident::new(format!("v{}", view_uuid))]);
+    let name = UnresolvedItemName(vec![Ident::new_unchecked(format!("v{}", view_uuid))]);
     let projection = expected_column_names.map_or(
         num_attributes.map_or(vec![], |n| {
-            (1..=n).map(|i| Ident::new(format!("a{i}"))).collect()
+            (1..=n)
+                .map(|i| Ident::new_unchecked(format!("a{i}")))
+                .collect()
         }),
-        |cols| cols.iter().map(|c| Ident::new(c.as_str())).collect(),
+        |cols| {
+            cols.iter()
+                .map(|c| Ident::new_unchecked(c.as_str()))
+                .collect()
+        },
     );
     let columns: Vec<Ident> = projection
         .iter()
@@ -2366,8 +2468,10 @@ fn derive_order_by_from_projection(
                 } else {
                     // If the expression is not found in the
                     // projection, add extra column.
-                    let ident =
-                        Ident::new(format!("a{}", (projection.len() + extra_columns.len() + 1)));
+                    let ident = Ident::new_unchecked(format!(
+                        "a{}",
+                        (projection.len() + extra_columns.len() + 1)
+                    ));
                     extra_columns.push(SelectItem::Expr {
                         expr: query_expr.clone(),
                         alias: Some(ident.clone()),

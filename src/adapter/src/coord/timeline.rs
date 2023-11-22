@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
+use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -22,17 +23,20 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
+use mz_sql::session::vars::TimestampOracleImpl;
 use mz_storage_types::sources::Timeline;
 use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::error;
+use tracing::{debug, error, info};
 
 use crate::catalog::CatalogItem;
-use crate::client::ConnectionId;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timestamp_oracle::catalog_oracle::{
     CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
     TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
+};
+use crate::coord::timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
 use crate::coord::timestamp_oracle::{self, TimestampOracle};
 use crate::coord::timestamp_selection::TimestampProvider;
@@ -148,6 +152,7 @@ impl Coordinator {
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
         let now = self.now().into();
 
@@ -178,7 +183,10 @@ impl Coordinator {
             timeline,
             Timestamp::minimum(),
             self.catalog().config().now.clone(),
+            self.timestamp_oracle_impl,
             timestamp_persistence,
+            self.timestamp_oracle_url.clone(),
+            &self.timestamp_oracle_metrics,
             &mut self.global_timelines,
         )
         .await
@@ -190,34 +198,74 @@ impl Coordinator {
         timeline: &'a Timeline,
         initially: Timestamp,
         now: NowFn,
+        timestamp_oracle_impl: TimestampOracleImpl,
         timestamp_persistence: P,
+        timestamp_oracle_url: Option<String>,
+        metrics: &Arc<timestamp_oracle::metrics::Metrics>,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
     ) -> &'a mut TimelineState<Timestamp>
     where
         P: TimestampPersistence<mz_repr::Timestamp> + 'static,
     {
         if !global_timelines.contains_key(timeline) {
-            let oracle = if timeline == &Timeline::EpochMilliseconds {
-                CatalogTimestampOracle::new(
-                    initially,
-                    move || (now)().into(),
-                    *TIMESTAMP_PERSIST_INTERVAL,
-                    timestamp_persistence,
-                )
-                .await
+            info!(
+                "opening a new {:?} TimestampOracle for timeline {:?}",
+                timestamp_oracle_impl, timeline,
+            );
+
+            let now_fn = if timeline == &Timeline::EpochMilliseconds {
+                now
             } else {
-                CatalogTimestampOracle::new(
-                    initially,
-                    Timestamp::minimum,
-                    *TIMESTAMP_PERSIST_INTERVAL,
-                    timestamp_persistence,
-                )
-                .await
+                // Timelines that are not `EpochMilliseconds` don't have an
+                // "external" clock that wants to drive forward timestamps in
+                // addition to the rule that write timestamps must be strictly
+                // monotonically increasing.
+                //
+                // Passing in a clock that always yields the minimum takes the
+                // clock out of the equation and makes timestamps advance only
+                // by the rule about strict monotonicity mentioned above.
+                NowFn::from(|| Timestamp::minimum().into())
             };
+
+            let oracle = match timestamp_oracle_impl {
+                TimestampOracleImpl::Postgres => {
+                    let timestamp_oracle_url = timestamp_oracle_url.expect("missing --timestamp-oracle-url even though the crdb-backed timestamp oracle was configured");
+                    let oracle_config = PostgresTimestampOracleConfig::new(
+                        &timestamp_oracle_url,
+                        Arc::clone(metrics),
+                    );
+
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
+                        PostgresTimestampOracle::open(
+                            oracle_config,
+                            timeline.to_string(),
+                            initially,
+                            now_fn,
+                        )
+                        .await,
+                    );
+
+                    oracle
+                }
+                TimestampOracleImpl::Catalog => {
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
+                        CatalogTimestampOracle::new(
+                            initially,
+                            now_fn,
+                            *TIMESTAMP_PERSIST_INTERVAL,
+                            timestamp_persistence,
+                        )
+                        .await,
+                    );
+
+                    oracle
+                }
+            };
+
             global_timelines.insert(
                 timeline.clone(),
                 TimelineState {
-                    oracle: Box::new(oracle),
+                    oracle,
                     read_holds: ReadHolds::new(),
                 },
             );
@@ -279,11 +327,6 @@ impl Coordinator {
             }
         }
         let became_empty = read_holds.is_empty();
-
-        // Finally, remove the Timeline if it's empty.
-        if became_empty {
-            self.global_timelines.remove(&timeline);
-        }
 
         became_empty
     }
@@ -636,9 +679,22 @@ impl Coordinator {
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
                 let id_bundle = self.ids_in_timeline(&timeline);
-                let now =
-                    Self::largest_not_in_advance_of_upper(&self.least_valid_write(&id_bundle));
-                oracle.apply_write(now).await;
+
+                // Advance the timeline if-and-only-if there are objects in it.
+                // Otherwise we'd advance to the empty frontier, meaning we
+                // close it off for ever.
+                if !id_bundle.is_empty() {
+                    let least_valid_write = self.least_valid_write(&id_bundle);
+                    let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
+                    oracle.apply_write(now).await;
+                    debug!(
+                        least_valid_write = ?least_valid_write,
+                        oracle_read_ts = ?oracle.read_ts().await,
+                        "advanced {:?} to {}",
+                        timeline,
+                        now,
+                    );
+                }
             };
             let read_ts = oracle.read_ts().await;
             if read_holds.times().any(|time| time.less_than(&read_ts)) {

@@ -9,10 +9,11 @@
 
 //! Code for iterating through one or more parts, including streaming consolidation.
 
-use anyhow::bail;
+use anyhow::anyhow;
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::FuturesUnordered;
-use futures_util::TryStreamExt;
+use futures_util::StreamExt;
 use mz_persist::location::Blob;
 use mz_persist_types::Codec64;
 use semver::Version;
@@ -66,6 +67,7 @@ pub(crate) enum FetchData<T> {
         shard_metrics: Arc<ShardMetrics>,
         part_key: PartialBatchKey,
         part_desc: Description<T>,
+        key_lower: Vec<u8>,
     },
     Leased {
         blob: Arc<dyn Blob + Send + Sync>,
@@ -76,7 +78,6 @@ pub(crate) enum FetchData<T> {
     },
     AlreadyFetched,
 }
-
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     fn maybe_unconsolidated(&self) -> bool {
         let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
@@ -91,6 +92,14 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         mem::replace(self, FetchData::AlreadyFetched)
     }
 
+    fn key_lower(&self) -> &[u8] {
+        match self {
+            FetchData::Unleased { key_lower, .. } => key_lower.as_slice(),
+            FetchData::Leased { part, .. } => part.key_lower.as_slice(),
+            FetchData::AlreadyFetched => &[],
+        }
+    }
+
     async fn fetch(self) -> anyhow::Result<EncodedPart<T>> {
         match self {
             FetchData::Unleased {
@@ -101,18 +110,18 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                 shard_metrics,
                 part_key,
                 part_desc,
-            } => {
-                fetch_batch_part(
-                    &shard_id,
-                    &*blob,
-                    &metrics,
-                    &shard_metrics,
-                    read_metrics(&metrics.read),
-                    &part_key,
-                    &part_desc,
-                )
-                .await
-            }
+                ..
+            } => fetch_batch_part(
+                &shard_id,
+                &*blob,
+                &metrics,
+                &shard_metrics,
+                read_metrics(&metrics.read),
+                &part_key,
+                &part_desc,
+            )
+            .await
+            .map_err(|blob_key| anyhow!("missing unleased key {blob_key}")),
             FetchData::Leased {
                 blob,
                 read_metrics,
@@ -131,13 +140,12 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                     &part.key,
                     &part.desc,
                 )
-                .await;
+                .await
+                .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"));
                 lease_returner.return_leased_part(part);
                 fetched
             }
-            FetchData::AlreadyFetched => {
-                bail!("Fetched already-fetched part!")
-            }
+            FetchData::AlreadyFetched => Err(anyhow!("attempt to fetch an already-fetched part")),
         }
     }
 }
@@ -150,6 +158,7 @@ pub(crate) enum ConsolidationPart<T, D> {
     Prefetched {
         handle: JoinHandle<anyhow::Result<EncodedPart<T>>>,
         maybe_unconsolidated: bool,
+        key_lower: Vec<u8>,
     },
     Encoded {
         part: EncodedPart<T>,
@@ -182,6 +191,23 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidation
         let mut data: Vec<_> = data.into_iter().map(clone_tuple).collect();
         consolidate_updates(&mut data);
         Self::Sorted { data, index: 0 }
+    }
+
+    fn kvt_lower(&mut self) -> Option<(&[u8], &[u8], T)> {
+        match self {
+            ConsolidationPart::Queued { data } => Some((data.key_lower(), &[], T::minimum())),
+            ConsolidationPart::Prefetched { key_lower, .. } => {
+                Some((key_lower.as_slice(), &[], T::minimum()))
+            }
+            ConsolidationPart::Encoded { part, cursor } => {
+                let (k, v, t, _) = cursor.peek(part)?;
+                Some((k, v, t))
+            }
+            ConsolidationPart::Sorted { data, index } => {
+                let ((k, v), t, _) = data.get(*index)?;
+                Some((k.as_slice(), v.as_slice(), t.clone()))
+            }
+        }
     }
 
     /// This requires a mutable pointer because the cursor may need to scan ahead to find the next
@@ -275,6 +301,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         shard_metrics: Arc::clone(shard_metrics),
                         part_key: part.key.clone(),
                         part_desc: desc.clone(),
+                        key_lower: part.key_lower.clone(),
                     },
                 };
                 (c_part, part.encoded_size_bytes)
@@ -344,38 +371,58 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         for run in &mut self.runs {
             let last_in_run = run.len() < 2;
             if let Some((part, _)) = run.front_mut() {
-                let part_iter = match part {
+                match part {
                     ConsolidationPart::Encoded { part, cursor } => {
-                        ConsolidationPartIter::encoded(part, cursor, &self.filter)
+                        iter.push(
+                            ConsolidationPartIter::encoded(part, cursor, &self.filter),
+                            last_in_run,
+                        );
                     }
                     ConsolidationPart::Sorted { data, index } => {
-                        ConsolidationPartIter::Sorted { data, index }
+                        iter.push(ConsolidationPartIter::Sorted { data, index }, last_in_run);
                     }
-                    ConsolidationPart::Queued { .. } | ConsolidationPart::Prefetched { .. } => {
-                        // Unreachable from the public API: we always join on the first part of every
-                        // run in `next`, so we should never encounter an unfetched part here.
-                        // TODO: when we have lower bounds on keys in the stats, we could insert a
-                        // placeholder here instead.
-                        panic!("trying to create an interator from an unfetched part!")
+                    other @ ConsolidationPart::Queued { .. }
+                    | other @ ConsolidationPart::Prefetched { .. } => {
+                        // We don't want the iterator to return anything at or above this bound,
+                        // since it might require data that we haven't fetched yet.
+                        if let Some(bound) = other.kvt_lower() {
+                            iter.push_upper(bound);
+                        }
                     }
                 };
-                iter.push(part_iter, last_in_run);
             }
         }
 
         Some(iter)
     }
 
-    /// Wait until the next part in every run is available, then return an iterator over the next
-    /// consolidated chunk of output. If this method returns `None`, that all the data has been
-    /// exhausted and the full consolidated dataset has been returned.
-    pub(crate) async fn next(&mut self) -> anyhow::Result<Option<ConsolidatingIter<T, D>>> {
-        self.trim();
-        let futures: FuturesUnordered<_> = self
+    /// We don't need to have fetched every part to make progress, but we do at least need
+    /// to have fetched _some_ parts: in particular, parts at the beginning of their runs
+    /// which may include the smallest remaining KVT.
+    ///
+    /// Returns success when we've successfully fetched enough parts to be able to make progress.
+    async fn unblock_progress(&mut self) -> anyhow::Result<()> {
+        let global_lower = self
+            .runs
+            .iter_mut()
+            .filter_map(|run| run.front_mut().and_then(|(part, _)| part.kvt_lower()))
+            .min();
+
+        let Some((k, v, t)) = global_lower else {
+            return Ok(());
+        };
+        let (k, v) = (k.to_vec(), v.to_vec());
+        let global_lower = (k.as_slice(), v.as_slice(), t);
+
+        let mut ready_futures: FuturesUnordered<_> = self
             .runs
             .iter_mut()
             .map(|run| async {
                 let part = &mut run.front_mut().expect("trimmed run should be nonempty").0;
+                match part.kvt_lower() {
+                    Some(lower) if lower > global_lower => return Ok(false),
+                    _ => {}
+                }
                 match part {
                     ConsolidationPart::Queued { data } => {
                         self.metrics.compaction.parts_waited.inc();
@@ -390,6 +437,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                     ConsolidationPart::Prefetched {
                         handle,
                         maybe_unconsolidated,
+                        ..
                     } => {
                         if handle.is_finished() {
                             self.metrics.compaction.parts_prefetched.inc();
@@ -405,10 +453,31 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                     }
                     ConsolidationPart::Encoded { .. } | ConsolidationPart::Sorted { .. } => {}
                 }
-                Ok::<(), anyhow::Error>(())
+                Ok::<_, anyhow::Error>(true)
             })
             .collect();
-        let () = futures.try_collect().await?;
+
+        // Wait for all the needed parts to be fetched, and assert that there's at least one.
+        let mut total_ready = 0;
+        while let Some(awaited) = ready_futures.next().await {
+            if awaited? {
+                total_ready += 1;
+            }
+        }
+        assert!(
+            total_ready > 0,
+            "at least one part should be fetched and ready to go"
+        );
+
+        Ok(())
+    }
+
+    /// Wait until data is available, then return an iterator over the next
+    /// consolidated chunk of output. If this method returns `None`, that all the data has been
+    /// exhausted and the full consolidated dataset has been returned.
+    pub(crate) async fn next(&mut self) -> anyhow::Result<Option<ConsolidatingIter<T, D>>> {
+        self.trim();
+        self.unblock_progress().await?;
         Ok(self.iter())
     }
 
@@ -465,7 +534,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         }
                         _ => continue,
                     };
-
+                    let key_lower = data.key_lower().to_vec();
                     let maybe_unconsolidated = data.maybe_unconsolidated();
                     let span = debug_span!("compaction::prefetch");
                     let handle = mz_ore::task::spawn(
@@ -475,6 +544,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                     *c_part = ConsolidationPart::Prefetched {
                         handle,
                         maybe_unconsolidated,
+                        key_lower,
                     };
                 }
             }
@@ -507,7 +577,6 @@ impl<T, D> Drop for Consolidator<T, D> {
 /// too eagerly.
 /// In particular, we only advance the cursor past a tuple when that tuple has been returned from
 /// a call to `next`.
-#[derive(Debug)]
 pub(crate) enum ConsolidationPartIter<'a, T: Timestamp, D> {
     Encoded {
         part: &'a EncodedPart<T>,
@@ -521,6 +590,30 @@ pub(crate) enum ConsolidationPartIter<'a, T: Timestamp, D> {
         data: &'a [((Vec<u8>, Vec<u8>), T, D)],
         index: &'a mut usize,
     },
+}
+
+impl<'a, T: Timestamp, D: Debug> Debug for ConsolidationPartIter<'a, T, D> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConsolidationPartIter::Encoded {
+                part: _,
+                cursor,
+                filter: _,
+                next,
+            } => {
+                let mut f = f.debug_struct("Encoded");
+                f.field("cursor", cursor);
+                f.field("next", next);
+                f.finish()
+            }
+            ConsolidationPartIter::Sorted { index, data } => {
+                let mut f = f.debug_struct("Sorted");
+                f.field("index", index);
+                f.field("next", &data.get(**index));
+                f.finish()
+            }
+        }
+    }
 }
 
 impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPartIter<'a, T, D> {
@@ -618,6 +711,7 @@ impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T
 pub(crate) struct ConsolidatingIter<'a, T: Timestamp, D> {
     parts: Vec<ConsolidationPartIter<'a, T, D>>,
     heap: BinaryHeap<PartRef<'a, T, D>>,
+    upper_bound: Option<(&'a [u8], &'a [u8], T)>,
     state: Option<TupleRef<'a, T, D>>,
     drop_stash: &'a mut Option<Tuple<T, D>>,
 }
@@ -634,6 +728,7 @@ where
         Self {
             parts: vec![],
             heap: BinaryHeap::new(),
+            upper_bound: None,
             state: init_state,
             drop_stash,
         }
@@ -649,6 +744,18 @@ where
         part_ref.update_peek(&iter);
         self.parts.push(iter);
         self.heap.push(part_ref);
+    }
+
+    /// Set an upper bound based on the stats from an unfetched part. If there's already
+    /// an upper bound set, keep the most conservative / smallest one.
+    fn push_upper(&mut self, upper: (&'a [u8], &'a [u8], T)) {
+        let update_bound = self
+            .upper_bound
+            .as_ref()
+            .map_or(true, |existing| *existing > upper);
+        if update_bound {
+            self.upper_bound = Some(upper);
+        }
     }
 
     /// Attempt to consolidate as much into the current state as possible.
@@ -680,18 +787,27 @@ where
                         break;
                     }
                 } else {
+                    // Don't start consolidating a new KVT that's past our provided upper bound,
+                    // since that data may also live in some unfetched part.
+                    if let Some((k0, v0, t0)) = &self.upper_bound {
+                        if (k0, v0, t0) <= (k1, v1, t1) {
+                            return None;
+                        }
+                    }
+
                     self.state = part.pop(&mut self.parts);
                 }
             } else {
                 if part.last_in_run {
                     PeekMut::pop(part);
                 } else {
-                    // NB: this is the only case this method exits without returning the current state:
-                    // there may be more instances of the KVT in a later part of the same run.
+                    // There may be more instances of the KVT in a later part of the same run;
+                    // exit without returning the current state.
                     return None;
                 }
             }
         }
+
         self.state.take()
     }
 }

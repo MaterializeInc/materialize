@@ -21,6 +21,7 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
@@ -38,7 +39,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::cfg::ProtoUntrimmableColumns;
+use crate::cfg::{PersistFeatureFlag, ProtoUntrimmableColumns};
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
@@ -61,6 +62,8 @@ pub struct Batch<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
+    pub(crate) batch_delete_enabled: bool,
+    pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_id: ShardId,
 
     /// The version of Materialize which wrote this batch.
@@ -70,11 +73,11 @@ where
     pub(crate) batch: HollowBatch<T>,
 
     /// Handle to the [Blob] that the blobs of this batch were uploaded to.
-    pub(crate) _blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
-    pub(crate) _phantom: PhantomData<(K, V, T, D)>,
+    pub(crate) _phantom: PhantomData<fn() -> (K, V, T, D)>,
 }
 
 impl<K, V, T, D> Drop for Batch<K, V, T, D>
@@ -104,16 +107,20 @@ where
     D: Semigroup + Codec64,
 {
     pub(crate) fn new(
+        batch_delete_enabled: bool,
+        metrics: Arc<Metrics>,
         blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
         version: Version,
         batch: HollowBatch<T>,
     ) -> Self {
         Self {
+            batch_delete_enabled,
+            metrics,
             shard_id,
             version,
             batch,
-            _blob: blob,
+            blob,
             _phantom: PhantomData,
         }
     }
@@ -146,17 +153,21 @@ where
     /// marks them as deleted.
     #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     pub async fn delete(mut self) {
-        // TODO: This is temporarily disabled because nemesis seems to have
-        // caught that we sometimes delete batches that are later needed.
-        // Temporarily removing the deletions while we figure out the bug in
-        // case it has anything to do with CI timeouts.
-        //
-        // for key in self.blob_keys.iter() {
-        //     retry_external("batch::delete", || async {
-        //         self.blob.delete(key).await
-        //     })
-        //     .await;
-        // }
+        if !self.batch_delete_enabled {
+            return;
+        }
+        let deletes = FuturesUnordered::new();
+        for part in self.batch.parts.iter() {
+            let metrics = Arc::clone(&self.metrics);
+            let blob = Arc::clone(&self.blob);
+            deletes.push(async move {
+                retry_external(&metrics.retries.external.batch_delete, || async {
+                    blob.delete(&part.key).await
+                })
+                .await;
+            });
+        }
+        let () = deletes.collect().await;
         self.batch.parts.clear();
     }
 
@@ -205,6 +216,7 @@ pub enum Added {
 pub struct BatchBuilderConfig {
     writer_key: WriterKey,
     pub(crate) blob_target_size: usize,
+    pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
@@ -218,6 +230,9 @@ impl BatchBuilderConfig {
         BatchBuilderConfig {
             writer_key,
             blob_target_size: value.dynamic.blob_target_size(),
+            batch_delete_enabled: value
+                .dynamic
+                .enabled(PersistFeatureFlag::BATCH_DELETE_ENABLED),
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
@@ -411,7 +426,6 @@ where
             Arc::clone(&blob),
             isolated_runtime,
             &batch_write_metrics,
-            consolidate,
         );
         Self {
             lower,
@@ -476,13 +490,16 @@ where
             }
         }
 
-        let remainder = self.buffer.drain();
-        self.flush_part(stats_schemas, remainder).await;
+        let (key_lower, remainder) = self.buffer.drain();
+        self.flush_part(stats_schemas, key_lower, remainder).await;
 
+        let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let parts = self.parts.finish().await;
 
         let desc = Description::new(self.lower, registered_upper, self.since);
         let batch = Batch::new(
+            batch_delete_enabled,
+            Arc::clone(&self.metrics),
             self.blob,
             self.shard_id.clone(),
             self.version,
@@ -519,8 +536,9 @@ where
         self.inclusive_upper.insert(Reverse(ts.clone()));
 
         match self.buffer.push(key, val, ts.clone(), diff.clone()) {
-            Some(part_to_flush) => {
-                self.flush_part(stats_schemas, part_to_flush).await;
+            Some((key_lower, part_to_flush)) => {
+                self.flush_part(stats_schemas, key_lower, part_to_flush)
+                    .await;
                 Ok(Added::RecordAndParts)
             }
             None => Ok(Added::Record),
@@ -535,6 +553,7 @@ where
     async fn flush_part<StatsK: Codec, StatsV: Codec>(
         &mut self,
         stats_schemas: &Schemas<StatsK, StatsV>,
+        key_lower: Vec<u8>,
         columnar: ColumnarRecords,
     ) {
         let num_updates = columnar.len();
@@ -582,6 +601,7 @@ where
         self.parts
             .write(
                 stats_schemas,
+                key_lower,
                 columnar,
                 self.inline_upper.clone(),
                 self.since.clone(),
@@ -645,7 +665,7 @@ where
         val: &V,
         ts: T,
         diff: D,
-    ) -> Option<ColumnarRecords> {
+    ) -> Option<(Vec<u8>, ColumnarRecords)> {
         let initial_key_buf_len = self.key_buf.len();
         let initial_val_buf_len = self.val_buf.len();
         self.metrics
@@ -673,7 +693,7 @@ where
         }
     }
 
-    fn drain(&mut self) -> ColumnarRecords {
+    fn drain(&mut self) -> (Vec<u8>, ColumnarRecords) {
         let mut updates = Vec::with_capacity(self.current_part.len());
         for ((k_range, v_range), t, d) in self.current_part.drain(..) {
             updates.push(((&self.key_buf[k_range], &self.val_buf[v_range]), t, d));
@@ -690,9 +710,10 @@ where
         if updates.is_empty() {
             self.key_buf.clear();
             self.val_buf.clear();
-            return ColumnarRecordsBuilder::default().finish();
+            return (vec![], ColumnarRecordsBuilder::default().finish());
         }
 
+        let ((mut key_lower, _), _, _) = &updates[0];
         let start = Instant::now();
         let mut builder = ColumnarRecordsBuilder::default();
         builder.reserve_exact(
@@ -701,12 +722,23 @@ where
             self.current_part_value_bytes,
         );
         for ((k, v), t, d) in updates {
+            if self.consolidate {
+                debug_assert!(
+                    key_lower <= k,
+                    "consolidated data should be presented in order"
+                )
+            } else {
+                key_lower = k.min(key_lower);
+            }
             // if this fails, the individual record is too big to fit in a ColumnarRecords by itself.
             // The limits are big, so this is a pretty extreme case that we intentionally don't handle
             // right now.
             assert!(builder.push(((k, v), T::encode(&t), D::encode(&d))));
         }
+        let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
+            .expect("lower bound always exists");
         let columnar = builder.finish();
+
         self.batch_write_metrics
             .step_columnar_encoding
             .inc_by(start.elapsed().as_secs_f64());
@@ -718,7 +750,7 @@ where
         self.current_part_value_bytes = 0;
         assert_eq!(self.current_part.len(), 0);
 
-        columnar
+        (key_lower, columnar)
     }
 }
 
@@ -736,7 +768,6 @@ pub(crate) struct BatchParts<T> {
     writing_parts: VecDeque<JoinHandle<HollowBatchPart>>,
     finished_parts: Vec<HollowBatchPart>,
     batch_metrics: BatchWriteMetrics,
-    consolidated: bool,
 }
 
 impl<T: Timestamp + Codec64> BatchParts<T> {
@@ -749,7 +780,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         blob: Arc<dyn Blob + Send + Sync>,
         isolated_runtime: Arc<IsolatedRuntime>,
         batch_metrics: &BatchWriteMetrics,
-        consolidated: bool,
     ) -> Self {
         BatchParts {
             cfg,
@@ -762,13 +792,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             writing_parts: VecDeque::new(),
             finished_parts: Vec::new(),
             batch_metrics: batch_metrics.clone(),
-            consolidated,
         }
     }
 
     pub(crate) async fn write<K: Codec, V: Codec>(
         &mut self,
         schemas: &Schemas<K, V>,
+        key_lower: Vec<u8>,
         updates: ColumnarRecords,
         upper: Antichain<T>,
         since: Antichain<T>,
@@ -785,7 +815,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let stats_collection_enabled = self.cfg.stats_collection_enabled;
         let stats_budget = self.cfg.stats_budget;
         let schemas = schemas.clone();
-        let consolidated = self.consolidated;
         let untrimmable_columns = Arc::clone(&self.cfg.stats_untrimmable_columns);
 
         let write_span = debug_span!("batch::write_part", shard = %self.shard_id).or_current();
@@ -793,13 +822,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             || "batch::write_part",
             async move {
                 let goodbytes = updates.goodbytes();
-                let key_lower = if consolidated {
-                    updates.get(0).and_then(|((k, _), _, _)| {
-                        truncate_bytes(k, TRUNCATE_LEN, TruncateBound::Lower)
-                    })
-                } else {
-                    None
-                };
                 let batch = BlobTraceBatchPart {
                     desc,
                     updates: vec![updates],
@@ -877,8 +899,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 HollowBatchPart {
                     key: partial_key,
                     encoded_size_bytes: payload_len,
-                    // If we don't have an explicit bound, use the minimum key.
-                    key_lower: key_lower.unwrap_or_else(Vec::new),
+                    key_lower,
                     stats,
                 }
             }

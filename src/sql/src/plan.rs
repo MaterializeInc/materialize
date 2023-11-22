@@ -46,7 +46,7 @@ use mz_sql_parser::ast::{
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
 
@@ -60,7 +60,7 @@ use crate::catalog::{
 };
 use crate::names::{
     Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
-    ResolvedIds, SystemObjectId,
+    ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -68,7 +68,6 @@ pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod lowering;
 pub(crate) mod notice;
-pub(crate) mod optimize;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
@@ -86,8 +85,8 @@ pub use expr::{
     AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
     WindowExprType,
 };
+pub use lowering::Config as HirToMirConfig;
 pub use notice::PlanNotice;
-pub use optimize::OptimizerConfig;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
@@ -135,6 +134,7 @@ pub enum Plan {
     CopyFrom(CopyFromPlan),
     ExplainPlan(ExplainPlanPlan),
     ExplainTimestamp(ExplainTimestampPlan),
+    ExplainSinkSchema(ExplainSinkSchemaPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
     AlterClusterSwap(AlterClusterSwapPlan),
@@ -154,6 +154,8 @@ pub enum Plan {
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterItemSwap(AlterItemSwapPlan),
+    AlterSchemaRename(AlterSchemaRenamePlan),
+    AlterSchemaSwap(AlterSchemaSwapPlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
@@ -199,6 +201,7 @@ impl Plan {
                     PlanKind::AlterClusterRename,
                     PlanKind::AlterClusterReplicaRename,
                     PlanKind::AlterItemRename,
+                    PlanKind::AlterSchemaRename,
                     PlanKind::AlterNoop,
                 ]
             }
@@ -206,6 +209,7 @@ impl Plan {
                 vec![
                     PlanKind::AlterClusterSwap,
                     PlanKind::AlterItemSwap,
+                    PlanKind::AlterSchemaSwap,
                     PlanKind::AlterNoop,
                 ]
             }
@@ -255,6 +259,7 @@ impl Plan {
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::ExplainPlan => vec![PlanKind::ExplainPlan],
             StatementKind::ExplainTimestamp => vec![PlanKind::ExplainTimestamp],
+            StatementKind::ExplainSinkSchema => vec![PlanKind::ExplainSinkSchema],
             StatementKind::Fetch => vec![PlanKind::Fetch],
             StatementKind::GrantPrivileges => vec![PlanKind::GrantPrivileges],
             StatementKind::GrantRole => vec![PlanKind::GrantRole],
@@ -340,6 +345,7 @@ impl Plan {
             Plan::CopyFrom(_) => "copy from",
             Plan::ExplainPlan(_) => "explain plan",
             Plan::ExplainTimestamp(_) => "explain timestamp",
+            Plan::ExplainSinkSchema(_) => "explain schema",
             Plan::Insert(_) => "insert",
             Plan::AlterNoop(plan) => match plan.object_type {
                 ObjectType::Table => "alter table",
@@ -369,6 +375,8 @@ impl Plan {
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterItemSwap(_) => "swap item",
+            Plan::AlterSchemaRename(_) => "alter rename schema",
+            Plan::AlterSchemaSwap(_) => "alter swap schema",
             Plan::AlterSecret(_) => "alter secret",
             Plan::AlterSystemSet(_) => "alter system",
             Plan::AlterSystemReset(_) => "alter system",
@@ -839,7 +847,8 @@ pub enum ExplaineeStatement {
     /// The object to be explained is a SELECT statement.
     Query {
         raw_plan: HirRelationExpr,
-        row_set_finishing: Option<RowSetFinishing>,
+        row_set_finishing: RowSetFinishing,
+        desc: RelationDesc,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
     },
@@ -892,10 +901,16 @@ impl ExplaineeStatement {
     pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
         match self {
             Self::Query {
-                row_set_finishing, ..
+                row_set_finishing,
+                desc,
+                ..
             } => {
-                // Use the optional finishing extracted in the plan_query call.
-                row_set_finishing.clone()
+                if !row_set_finishing.is_trivial(desc.arity()) {
+                    // Use the optional finishing extracted in the plan_query call.
+                    Some(row_set_finishing.clone())
+                } else {
+                    None
+                }
             }
             Self::CreateMaterializedView { .. } => {
                 // Trivial finishing asserted in plan_create_materialized_view.
@@ -937,6 +952,12 @@ pub struct ExplainTimestampPlan {
 }
 
 #[derive(Debug)]
+pub struct ExplainSinkSchemaPlan {
+    pub sink_from: GlobalId,
+    pub json_schema: String,
+}
+
+#[derive(Debug)]
 pub struct SendDiffsPlan {
     pub id: GlobalId,
     pub updates: Vec<(Row, Diff)>,
@@ -948,7 +969,7 @@ pub struct SendDiffsPlan {
 #[derive(Debug)]
 pub struct InsertPlan {
     pub id: GlobalId,
-    pub values: mz_expr::MirRelationExpr,
+    pub values: HirRelationExpr,
     pub returning: Vec<mz_expr::MirScalarExpr>,
 }
 
@@ -1050,11 +1071,27 @@ pub struct AlterItemRenamePlan {
 }
 
 #[derive(Debug)]
+pub struct AlterSchemaRenamePlan {
+    pub cur_schema_spec: (ResolvedDatabaseSpecifier, SchemaSpecifier),
+    pub new_schema_name: String,
+}
+
+#[derive(Debug)]
+pub struct AlterSchemaSwapPlan {
+    pub schema_a_spec: (ResolvedDatabaseSpecifier, SchemaSpecifier),
+    pub schema_a_name: String,
+    pub schema_b_spec: (ResolvedDatabaseSpecifier, SchemaSpecifier),
+    pub schema_b_name: String,
+    pub name_temp: String,
+}
+
+#[derive(Debug)]
 pub struct AlterClusterSwapPlan {
     pub id_a: ClusterId,
     pub id_b: ClusterId,
     pub name_a: String,
     pub name_b: String,
+    pub name_temp: String,
 }
 
 #[derive(Debug)]
@@ -1268,14 +1305,50 @@ pub struct Ingestion {
 pub struct WebhookValidation {
     /// The expression used to validate a request.
     pub expression: MirScalarExpr,
+    /// Description of the source that will be created.
+    pub relation_desc: RelationDesc,
     /// The column index to provide the request body and whether to provide it as bytes.
     pub bodies: Vec<(usize, bool)>,
     /// The column index to provide the request headers and whether to provide the values as bytes.
-    ///
-    /// TODO(parkmycar): Support filtering down to specific headers.
     pub headers: Vec<(usize, bool)>,
     /// Any secrets that are used in that validation.
     pub secrets: Vec<WebhookValidationSecret>,
+}
+
+impl WebhookValidation {
+    const MAX_REDUCE_TIME: Duration = Duration::from_secs(60);
+
+    /// Attempt to reduce the internal [`MirScalarExpr`] into a simpler expression.
+    ///
+    /// The reduction happens on a separate thread, we also only wait for
+    /// `WebhookValidation::MAX_REDUCE_TIME` before timing out and returning an error.
+    pub async fn reduce_expression(&mut self) -> Result<(), &'static str> {
+        let WebhookValidation {
+            expression,
+            relation_desc,
+            ..
+        } = self;
+
+        // On a different thread, attempt to reduce the expression.
+        let mut expression_ = expression.clone();
+        let desc_ = relation_desc.clone();
+        let reduce_task = mz_ore::task::spawn_blocking(
+            || "webhook-validation-reduce",
+            move || {
+                expression_.reduce(&desc_.typ().column_types);
+                expression_
+            },
+        );
+
+        match tokio::time::timeout(Self::MAX_REDUCE_TIME, reduce_task).await {
+            Ok(Ok(reduced_expr)) => {
+                *expression = reduced_expr;
+                Ok(())
+            }
+            Ok(Err(_)) => Err("joining task"),
+            Err(_) => Err("timeout"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1328,7 +1401,7 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
+    pub connection: StorageSinkConnection<ReferencedConnection>,
     pub envelope: SinkEnvelope,
 }
 

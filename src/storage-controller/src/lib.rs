@@ -84,11 +84,12 @@ use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::BufMut;
 use differential_dataflow::lattice::Lattice;
-use futures::Stream;
+use futures::stream::BoxStream;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
@@ -103,40 +104,45 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
+use mz_persist_txn::txn_cache::TxnsCache;
+use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
-use mz_stash_types::objects::proto;
 use mz_storage_client::client::{
     CreateSinkCommand, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
     SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
     TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
-    CollectionDescription, CollectionState, CreateExportToken, DataSource, DataSourceOther,
-    ExportDescription, ExportState, IntrospectionType, MonotonicAppender, ReadPolicy,
-    SnapshotCursor, StorageController,
+    CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
+    ExportState, IntrospectionType, MonotonicAppender, ReadPolicy, SnapshotCursor,
+    StorageController,
 };
 use mz_storage_client::healthcheck::{
     self, MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC,
     MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
-use mz_storage_types::controller::{CollectionMetadata, DurableCollectionMetadata, StorageError};
+use mz_storage_types::collections as proto;
+use mz_storage_types::controller::{
+    CollectionMetadata, DurableCollectionMetadata, StorageError, TxnsCodecRow,
+};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData, SourceExport};
+use mz_storage_types::AlterCompatible;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio_stream::StreamMap;
-use tracing::{debug, info};
+use tracing::{debug, error, info, warn};
 
 use crate::command_wals::ProtoShardId;
 use crate::rehydration::RehydratingStorageClient;
@@ -153,9 +159,13 @@ pub static METADATA_COLLECTION: TypedCollection<proto::GlobalId, proto::DurableC
 pub static METADATA_EXPORT: TypedCollection<proto::GlobalId, proto::DurableExportMetadata> =
     TypedCollection::new("storage-export-metadata-u64");
 
+pub static PERSIST_TXNS_SHARD: TypedCollection<(), String> =
+    TypedCollection::new("persist-txns-shard");
+
 pub static ALL_COLLECTIONS: &[&str] = &[
     METADATA_COLLECTION.name(),
     METADATA_EXPORT.name(),
+    PERSIST_TXNS_SHARD.name(),
     command_wals::SHARD_FINALIZATION.name(),
 ];
 
@@ -214,17 +224,17 @@ impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Tim
     }
 }
 
-impl RustType<mz_stash_types::objects::proto::DurableExportMetadata>
+impl RustType<mz_storage_types::collections::DurableExportMetadata>
     for DurableExportMetadata<mz_repr::Timestamp>
 {
-    fn into_proto(&self) -> mz_stash_types::objects::proto::DurableExportMetadata {
-        mz_stash_types::objects::proto::DurableExportMetadata {
+    fn into_proto(&self) -> mz_storage_types::collections::DurableExportMetadata {
+        mz_storage_types::collections::DurableExportMetadata {
             initial_as_of: Some(self.initial_as_of.into_proto()),
         }
     }
 
     fn from_proto(
-        proto: mz_stash_types::objects::proto::DurableExportMetadata,
+        proto: mz_storage_types::collections::DurableExportMetadata,
     ) -> Result<Self, TryFromProtoError> {
         Ok(DurableExportMetadata {
             initial_as_of: proto
@@ -286,6 +296,11 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
+    /// The shard id of the persist-txn txns shard or None if persist-txn is not
+    /// enabled.
+    txns_id: Option<ShardId>,
+    /// A PersistClient usable for opening txns_id.
+    txns_client: PersistClient,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
@@ -333,9 +348,13 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Note: This is used for finalizing shards of webhook sources, once webhook sources are
     /// installed on a `clusterd` this can likely be refactored away.
     internal_response_sender: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
-    /// Frontiers that have been recorded in the `Frontiers` collection, kept to be able to retract
-    /// old rows.
-    recorded_frontiers: BTreeMap<(GlobalId, Option<ReplicaId>), Antichain<T>>,
+
+    /// `(read, write)` frontiers that have been recorded in the `Frontiers` collection, kept to be
+    /// able to retract old rows.
+    recorded_frontiers: BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)>,
+    /// Write frontiers that have been recorded in the `ReplicaFrontiers` collection, kept to be
+    /// able to retract old rows.
+    recorded_replica_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<T>>,
 }
 
 #[async_trait(?Send)]
@@ -392,13 +411,12 @@ where
         Box::new(self.collections.iter())
     }
 
-    fn create_instance(&mut self, id: StorageInstanceId, variable_length_row_encoding: bool) {
+    fn create_instance(&mut self, id: StorageInstanceId) {
         let mut client = RehydratingStorageClient::new(
             self.build_info,
             self.metrics.for_instance(id),
             self.envd_epoch,
             self.config.grpc_client.clone(),
-            variable_length_row_encoding,
         );
         if self.initialized {
             client.send(StorageCommand::InitializationComplete);
@@ -515,21 +533,20 @@ where
             )
             .await?;
 
-        let mut durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> =
-            METADATA_COLLECTION
-                .peek_one(&mut self.stash)
-                .await?
-                .into_iter()
-                .map(RustType::from_proto)
-                .collect::<Result<_, _>>()
-                .map_err(|e| StorageError::IOError(e.into()))?;
+        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(RustType::from_proto)
+            .collect::<Result<_, _>>()
+            .map_err(|e| StorageError::IOError(e.into()))?;
 
         // We first enrich each collection description with some additional metadata...
         use futures::stream::{StreamExt, TryStreamExt};
         let enriched_with_metadata = collections
             .into_iter()
             .map(|(id, description)| {
-                let collection_shards = durable_metadata.remove(&id).expect("inserted above");
+                let collection_shards = durable_metadata.get(&id).expect("inserted above");
 
                 let status_shard =
                     if let Some(status_collection_id) = description.status_collection_id {
@@ -561,12 +578,29 @@ where
                     _ => None,
                 };
 
+                // If the shard is being managed by persist-txn (initially, tables), then we need to
+                // pass along the shard id for the txns shard to dataflow rendering.
+                let txns_shard = match description.data_source {
+                    DataSource::Other(DataSourceOther::TableWrites) => {
+                        // `self.txns_id` is None if persist-txn is not enabled, which makes this
+                        // do the right thing.
+                        self.txns_id.clone()
+                    }
+                    DataSource::Ingestion(_)
+                    | DataSource::Introspection(_)
+                    | DataSource::Progress
+                    | DataSource::Webhook
+                    | DataSource::Other(DataSourceOther::Compute)
+                    | DataSource::Other(DataSourceOther::Source) => None,
+                };
+
                 let metadata = CollectionMetadata {
                     persist_location: self.persist_location.clone(),
                     remap_shard,
                     data_shard: collection_shards.data_shard,
                     status_shard,
                     relation_desc: description.desc.clone(),
+                    txns_shard,
                 };
 
                 Ok((id, description, metadata))
@@ -623,7 +657,7 @@ where
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
                         if since_handle.since().elements() == &[T::minimum()] {
-                            info!("advancing {} to initial since of {:?}", id, register_ts);
+                            debug!("advancing {} to initial since of {:?}", id, register_ts);
                             let token = since_handle.opaque().clone();
                             let _ = since_handle.compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(register_ts.clone()))).await;
                         }
@@ -650,6 +684,7 @@ where
             .await?;
 
         let mut to_create = Vec::with_capacity(to_register.len());
+        let mut table_registers = Vec::with_capacity(to_register.len());
         // This work mutates the controller state, so must be done serially. Because there
         // is no io-bound work, its very fast.
         {
@@ -671,21 +706,21 @@ where
                     DataSource::Introspection(_) | DataSource::Webhook => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
                         self.persist_monotonic_worker.register(id, write);
+                        self.collections.insert(id, collection_state);
                     }
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist table worker", id);
-                        self.persist_table_worker.register(id, write);
+                        table_registers.push((id, write, collection_state));
                     }
                     DataSource::Ingestion(_)
                     | DataSource::Progress
                     | DataSource::Other(DataSourceOther::Compute)
                     | DataSource::Other(DataSourceOther::Source) => {
                         debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
+                        self.collections.insert(id, collection_state);
                     }
                 }
                 self.persist_read_handles.register(id, since_handle);
-
-                self.collections.insert(id, collection_state);
 
                 if let DataSource::Ingestion(i) = &description.data_source {
                     source_statistics.insert(id, statistics::StatsInitState(BTreeMap::new()));
@@ -696,6 +731,25 @@ where
                 }
 
                 to_create.push((id, description));
+            }
+        }
+
+        // Register the tables all in one batch.
+        if !table_registers.is_empty() {
+            let register_ts = register_ts
+                .expect("caller should have provided a register_ts when creating a table");
+            let mut collection_states = Vec::with_capacity(table_registers.len());
+            let table_registers = table_registers
+                .into_iter()
+                .map(|(id, write, collection_state)| {
+                    collection_states.push((id, collection_state));
+                    (id, write)
+                })
+                .collect();
+            self.persist_table_worker
+                .register(register_ts, table_registers);
+            for (id, collection_state) in collection_states {
+                self.collections.insert(id, collection_state);
             }
         }
 
@@ -782,7 +836,7 @@ where
                         IntrospectionType::ShardMapping => {
                             self.initialize_shard_mapping().await;
                         }
-                        IntrospectionType::Frontiers => {
+                        IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
                             // Set the collection to empty.
                             self.reconcile_managed_collection(id, vec![]).await;
                         }
@@ -837,6 +891,12 @@ where
                                 self.partially_truncate_statement_log().await;
                             }
                         }
+
+                        // Truncate compute-maintained collections.
+                        IntrospectionType::ComputeDependencies
+                        | IntrospectionType::ComputeReplicaHeartbeats => {
+                            self.reconcile_managed_collection(id, vec![]).await;
+                        }
                     }
                 }
                 DataSource::Webhook => {
@@ -852,63 +912,69 @@ where
 
     fn check_alter_collection(
         &mut self,
-        id: GlobalId,
-        ingestion: IngestionDescription,
+        collections: &BTreeMap<GlobalId, IngestionDescription>,
     ) -> Result<(), StorageError> {
-        self.check_alter_collection_inner(id, ingestion)
+        for (id, ingestion) in collections {
+            self.check_alter_collection_inner(*id, ingestion.clone())?;
+        }
+        Ok(())
     }
 
     async fn alter_collection(
         &mut self,
-        id: GlobalId,
-        ingestion: IngestionDescription,
+        collections: BTreeMap<GlobalId, IngestionDescription>,
     ) -> Result<(), StorageError> {
-        self.check_alter_collection_inner(id, ingestion.clone())
+        self.check_alter_collection(&collections)
             .expect("error avoided by calling check_alter_collection first");
 
-        // Describe the ingestion in terms of collection metadata.
-        let description = self
-            .enrich_ingestion(id, ingestion.clone())
-            .expect("verified valid in check_alter_collection_inner");
+        for (id, ingestion) in collections {
+            // Describe the ingestion in terms of collection metadata.
+            let description = self
+                .enrich_ingestion(id, ingestion.clone())
+                .expect("verified valid in check_alter_collection_inner");
 
-        let collection = self.collection_mut(id).expect("validated exists");
-        let new_source_exports = match &mut collection.description.data_source {
-            DataSource::Ingestion(active_ingestion) => {
-                // Determine which IDs we're adding.
-                let new_source_exports: Vec<_> = description
-                    .source_exports
-                    .keys()
-                    .filter(|id| !active_ingestion.source_exports.contains_key(id))
-                    .cloned()
-                    .collect();
-                *active_ingestion = ingestion;
+            let collection = self.collection_mut(id).expect("validated exists");
+            let new_source_exports = match &mut collection.description.data_source {
+                DataSource::Ingestion(active_ingestion) => {
+                    // Determine which IDs we're adding.
+                    let new_source_exports: Vec<_> = description
+                        .source_exports
+                        .keys()
+                        .filter(|id| !active_ingestion.source_exports.contains_key(id))
+                        .cloned()
+                        .collect();
+                    *active_ingestion = ingestion;
 
-                new_source_exports
-            }
-            _ => unreachable!("verified collection refers to ingestion"),
-        };
+                    new_source_exports
+                }
+                _ => unreachable!("verified collection refers to ingestion"),
+            };
 
-        // Assess dependency since, which we have to fast-forward this
-        // collection's since to.
-        let storage_dependencies = collection.description.get_storage_dependencies();
+            // Assess dependency since, which we have to fast-forward this
+            // collection's since to.
+            let storage_dependencies = collection.description.get_storage_dependencies();
 
-        // Ensure this new collection's since is aligned with the dependencies.
-        // This will likely place its since beyond its upper which is OK because
-        // its snapshot will catch it up with the rest of the source, i.e. we
-        // will never see its upper at a state beyond 0 and less than its since.
-        self.install_dependency_read_holds(new_source_exports.into_iter(), &storage_dependencies)?;
+            // Ensure this new collection's since is aligned with the dependencies.
+            // This will likely place its since beyond its upper which is OK because
+            // its snapshot will catch it up with the rest of the source, i.e. we
+            // will never see its upper at a state beyond 0 and less than its since.
+            self.install_dependency_read_holds(
+                new_source_exports.into_iter(),
+                &storage_dependencies,
+            )?;
 
-        // Fetch the client for this ingestion's instance.
-        let client = self
-            .clients
-            .get_mut(&description.instance_id)
-            .expect("verified exists");
+            // Fetch the client for this ingestion's instance.
+            let client = self
+                .clients
+                .get_mut(&description.instance_id)
+                .expect("verified exists");
 
-        client.send(StorageCommand::RunIngestions(vec![RunIngestionCommand {
-            id,
-            description,
-            update: true,
-        }]));
+            client.send(StorageCommand::RunIngestions(vec![RunIngestionCommand {
+                id,
+                description,
+                update: true,
+            }]));
+        }
 
         Ok(())
     }
@@ -928,66 +994,14 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    fn prepare_export(
-        &mut self,
-        id: GlobalId,
-        from_id: GlobalId,
-    ) -> Result<CreateExportToken<T>, StorageError> {
-        if let Ok(_export) = self.export(id) {
-            return Err(StorageError::SourceIdReused(id));
-        }
-
-        let dependency_since = self.determine_collection_since_joins(&[from_id])?;
-        self.install_read_capabilities(id, &[from_id], dependency_since.clone())?;
-
-        info!(
-            sink_id = id.to_string(),
-            from_id = from_id.to_string(),
-            acquired_since = ?dependency_since,
-            "prepare_export: sink acquired read holds"
-        );
-
-        Ok(CreateExportToken {
-            id,
-            from_id,
-            acquired_since: dependency_since,
-        })
-    }
-
-    fn cancel_prepare_export(
-        &mut self,
-        CreateExportToken {
-            id,
-            from_id,
-            acquired_since,
-        }: CreateExportToken<T>,
-    ) {
-        info!(
-            sink_id = id.to_string(),
-            from_id = from_id.to_string(),
-            acquired_since = ?acquired_since,
-            "cancel_prepare_export: sink releasing read holds",
-        );
-        self.remove_read_capabilities(acquired_since, &[from_id]);
-    }
-
     async fn create_exports(
         &mut self,
-        exports: Vec<(
-            CreateExportToken<Self::Timestamp>,
-            ExportDescription<Self::Timestamp>,
-        )>,
+        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
-        let mut dedup_hashmap = BTreeMap::<&_, &_>::new();
-        for (export, desc) in exports.iter() {
-            let CreateExportToken {
-                id,
-                from_id,
-                acquired_since: _,
-            } = export;
-
-            if dedup_hashmap.insert(id, desc).is_some() {
+        let mut dedup = BTreeMap::new();
+        for (id, desc) in exports.iter() {
+            if dedup.insert(id, desc).is_some() {
                 return Err(StorageError::SinkIdReused(*id));
             }
             if let Ok(export) = self.export(*id) {
@@ -995,21 +1009,20 @@ where
                     return Err(StorageError::SinkIdReused(*id));
                 }
             }
-            if desc.sink.from != *from_id {
-                return Err(StorageError::InvalidUsage(format!(
-                    "sink {id} was prepared using from_id {from_id}, \
-                    but is now presented with from_id {}",
-                    desc.sink.from
-                )));
-            }
         }
 
-        for (export, description) in exports {
-            let CreateExportToken {
-                id,
-                from_id,
-                acquired_since,
-            } = export;
+        for (id, description) in exports {
+            let from_id = description.sink.from;
+
+            let dependency_since = self.determine_collection_since_joins(&[from_id])?;
+            self.install_read_capabilities(id, &[from_id], dependency_since.clone())?;
+
+            info!(
+                sink_id = id.to_string(),
+                from_id = from_id.to_string(),
+                acquired_since = ?dependency_since,
+                "prepare_export: sink acquired read holds"
+            );
 
             // It's worth adding a quick note on write frontiers here.
             //
@@ -1058,12 +1071,13 @@ where
             let mut durable_export_data = DurableExportMetadata::from_proto(value)
                 .map_err(|e| StorageError::IOError(e.into()))?;
 
-            durable_export_data.initial_as_of.downgrade(&acquired_since);
+            durable_export_data
+                .initial_as_of
+                .downgrade(&dependency_since);
 
             info!(
                 sink_id = id.to_string(),
                 from_id = from_id.to_string(),
-                acquired_since = ?acquired_since,
                 initial_as_of = ?durable_export_data.initial_as_of,
                 "create_exports: creating sink"
             );
@@ -1072,7 +1086,7 @@ where
                 id,
                 ExportState::new(
                     description.clone(),
-                    acquired_since,
+                    dependency_since,
                     read_policy,
                     storage_dependencies,
                 ),
@@ -1127,7 +1141,7 @@ where
     }
 
     fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
-        // We don't explicitly call `remove_read_capabilities`! Downgrading the
+        // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
         let policies = identifiers
@@ -1152,8 +1166,9 @@ where
                 continue;
             }
 
-            // We don't explicitly call `remove_read_capabilities`! Downgrading the frontier of the
-            // sink to `[]` (the empty Antichain), will propagate to the storage dependencies.
+            // We don't explicitly remove read capabilities! Downgrading the
+            // frontier of the sink to `[]` (the empty Antichain), will
+            // propagate to the storage dependencies.
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())]);
@@ -1191,13 +1206,53 @@ where
     // actually existed. We should include the original time in the updates advanced by the as_of
     // frontier in the result and let the caller decide what to do with the information.
     async fn snapshot(
-        &self,
+        &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError> {
-        let as_of = Antichain::from_elem(as_of);
-        let mut read_handle = self.read_handle_for_snapshot(id).await?;
-        match read_handle.snapshot_and_fetch(as_of).await {
+        let metadata = &self.collection(id)?.collection_metadata;
+        let contents = match metadata.txns_shard.as_ref() {
+            None => {
+                // We're not using persist-txn for tables, so we can take a snapshot directly.
+                let mut read_handle = self.read_handle_for_snapshot(id).await?;
+                read_handle
+                    .snapshot_and_fetch(Antichain::from_elem(as_of))
+                    .await
+            }
+            Some(txns_id) => {
+                // We _are_ using persist-txn for tables. It advances the physical upper of the
+                // shard lazily, so we need to ask it for the snapshot to ensure the read is
+                // unblocked.
+                //
+                // Consider the following scenario:
+                // - Table A is written to via txns at time 5
+                // - Tables other than A are written to via txns consuming timestamps up to 10
+                // - We'd like to read A at 7
+                // - The application process of A's txn has advanced the upper to 5+1, but we need
+                //   it to be past 7, but the txns shard knows that (5,10) is empty of writes to A
+                // - This branch allows it to handle that advancing the physical upper of Table A to
+                //   10 (NB but only once we see it get past the write at 5!)
+                // - Then we can read it normally.
+                //
+                // TODO(txn): We do a series of snapshots at boot and then never again. It's
+                // wasteful to create this TxnsCache and then throw it away for each of them, but
+                // it's better than the alternative of keeping it alive for snapshot calls that will
+                // never come (worse, it's tricky to keep it making progress, which results in a
+                // stuck since). Replace this with the shared TxnsCache thing we'll have to do
+                // anyway for the dataflow operators.
+                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
+                    &self.txns_client,
+                    *txns_id,
+                    Some(metadata.data_shard),
+                )
+                .await;
+                txns_cache.update_gt(&as_of).await;
+                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let mut read_handle = self.read_handle_for_snapshot(id).await?;
+                data_snapshot.snapshot_and_fetch(&mut read_handle).await
+            }
+        };
+        match contents {
             Ok(contents) => {
                 let mut snapshot = Vec::with_capacity(contents.len());
                 for ((data, _), _, diff) in contents {
@@ -1213,23 +1268,51 @@ where
     }
 
     async fn snapshot_cursor(
-        &self,
+        &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
     where
         Self::Timestamp: Timestamp + Lattice + Codec64,
     {
-        let mut handle = self.read_handle_for_snapshot(id).await?;
-        let cursor = handle
-            .snapshot_cursor(Antichain::from_elem(as_of))
-            .await
-            .map_err(|_| StorageError::ReadBeforeSince(id))?;
+        let metadata = &self.collection(id)?.collection_metadata;
+        // See the comments in Self::snapshot for what's going on here.
+        let cursor = match metadata.txns_shard.as_ref() {
+            None => {
+                let mut handle = self.read_handle_for_snapshot(id).await?;
+                let cursor = handle
+                    .snapshot_cursor(Antichain::from_elem(as_of))
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                SnapshotCursor {
+                    _read_handle: handle,
+                    cursor,
+                }
+            }
+            Some(txns_id) => {
+                // TODO(txn): Replace this with the shared TxnsCache thing
+                // we'll have to do anyway for the dataflow operators.
+                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
+                    &self.txns_client,
+                    *txns_id,
+                    Some(metadata.data_shard),
+                )
+                .await;
+                txns_cache.update_gt(&as_of).await;
+                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let mut handle = self.read_handle_for_snapshot(id).await?;
+                let cursor = data_snapshot
+                    .snapshot_cursor(&mut handle)
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                SnapshotCursor {
+                    _read_handle: handle,
+                    cursor,
+                }
+            }
+        };
 
-        Ok(SnapshotCursor {
-            _read_handle: handle,
-            cursor,
-        })
+        Ok(cursor)
     }
 
     async fn snapshot_stats(
@@ -1237,6 +1320,7 @@ where
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
     ) -> Result<SnapshotStats<Self::Timestamp>, StorageError> {
+        // TODO(txn): Fix stats for persist-txn shards.
         self.persist_read_handles.snapshot_stats(id, as_of).await
     }
 
@@ -1467,6 +1551,7 @@ where
         self.stashed_response = Some(msg);
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn process(&mut self) -> Result<(), anyhow::Error> {
         match self.stashed_response.take() {
             None => (),
@@ -1631,7 +1716,14 @@ where
             self.introspection_ids[&IntrospectionType::SourceStatusHistory];
         let mut updates = vec![];
         for id in pending_source_drops.drain(..) {
-            let status_row = healthcheck::pack_status_row(id, "dropped", None, (self.now)(), None);
+            let status_row = healthcheck::pack_status_row(
+                id,
+                "dropped",
+                None,
+                &Default::default(),
+                &Default::default(),
+                (self.now)(),
+            );
             updates.push((status_row, 1));
         }
 
@@ -1651,8 +1743,14 @@ where
         {
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in pending_sink_drops.drain(..) {
-                let status_row =
-                    healthcheck::pack_status_row(id, "dropped", None, (self.now)(), None);
+                let status_row = healthcheck::pack_status_row(
+                    id,
+                    "dropped",
+                    None,
+                    &Default::default(),
+                    &Default::default(),
+                    (self.now)(),
+                );
                 updates.push((status_row, 1));
 
                 sink_statistics.remove(&id);
@@ -1686,68 +1784,58 @@ where
 
     async fn record_frontiers(
         &mut self,
-        external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
+        external_frontiers: BTreeMap<
+            GlobalId,
+            (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
+        >,
     ) {
-        // Make `replica_id` optional, to account for storage objects that are not installed on
-        // replicas.
-        let mut frontiers = BTreeMap::new();
-        let mut external_ids = HashSet::with_capacity(frontiers.len());
-        for ((object_id, replica_id), frontier) in external_frontiers {
-            frontiers.insert((object_id, Some(replica_id)), frontier);
-            external_ids.insert(object_id);
-        }
+        let mut frontiers = external_frontiers;
 
         // Enrich `frontiers` with storage frontiers.
-        // Make sure to not add frontiers for objects already present in `frontiers`
         for (object_id, collection) in self.active_collections() {
-            if !external_ids.contains(&object_id) {
-                let replica_id = collection
-                    .cluster_id()
-                    .and_then(|c| self.replicas.get(&c))
-                    .copied();
-                let frontier = collection.write_frontier.clone();
-                frontiers.insert((object_id, replica_id), frontier);
-            }
+            let since = collection.read_capabilities.frontier().to_owned();
+            let upper = collection.write_frontier.clone();
+            frontiers.insert(object_id, (since, upper));
         }
-        for (object_id, export) in &self.exports {
-            if !external_ids.contains(object_id) {
-                let cluster_id = export.cluster_id();
-                let replica_id = self.replicas.get(&cluster_id).copied();
-                let frontier = export.write_frontier.clone();
-                frontiers.insert((*object_id, replica_id), frontier);
-            }
+        for (object_id, export) in self.active_exports() {
+            // Exports cannot be read from, so their `since` is always the empty frontier.
+            let since = Antichain::new();
+            let upper = export.write_frontier.clone();
+            frontiers.insert(object_id, (since, upper));
         }
 
         let mut updates = Vec::new();
-        let mut push_update = |(object_id, replica_id): (GlobalId, Option<ReplicaId>),
-                               frontier: Antichain<Self::Timestamp>,
-                               diff: Diff| {
-            let time_datum = match frontier.into_option() {
-                Some(ts) => Datum::MzTimestamp(ts.into()),
-                None => return, // don't record empty frontiers
+        let mut push_update =
+            |object_id: GlobalId,
+             (since, upper): (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
+             diff: Diff| {
+                let read_frontier = since
+                    .into_option()
+                    .map_or(Datum::Null, |ts| Datum::MzTimestamp(ts.into()));
+                let write_frontier = upper
+                    .into_option()
+                    .map_or(Datum::Null, |ts| Datum::MzTimestamp(ts.into()));
+                let row = Row::pack_slice(&[
+                    Datum::String(&object_id.to_string()),
+                    read_frontier,
+                    write_frontier,
+                ]);
+                updates.push((row, diff));
             };
-            let object_id = object_id.to_string();
-            let object_datum = Datum::String(&object_id);
-            let replica_id = replica_id.map(|id| id.to_string());
-            let replica_datum = replica_id.as_deref().map_or(Datum::Null, Datum::String);
-
-            let row = Row::pack_slice(&[object_datum, replica_datum, time_datum]);
-            updates.push((row, diff));
-        };
 
         let mut old_frontiers = std::mem::replace(&mut self.recorded_frontiers, frontiers);
-        for (&key, new_frontier) in &self.recorded_frontiers {
-            match old_frontiers.remove(&key) {
-                Some(old_frontier) if &old_frontier != new_frontier => {
-                    push_update(key, new_frontier.clone(), 1);
-                    push_update(key, old_frontier, -1);
+        for (&id, new) in &self.recorded_frontiers {
+            match old_frontiers.remove(&id) {
+                Some(old) if &old != new => {
+                    push_update(id, new.clone(), 1);
+                    push_update(id, old, -1);
                 }
                 Some(_) => (),
-                None => push_update(key, new_frontier.clone(), 1),
+                None => push_update(id, new.clone(), 1),
             }
         }
-        for (key, old_frontier) in old_frontiers {
-            push_update(key, old_frontier, -1);
+        for (id, old) in old_frontiers {
+            push_update(id, old, -1);
         }
 
         self.append_to_managed_collection(
@@ -1756,34 +1844,77 @@ where
         )
         .await;
     }
-    async fn send_statement_log_updates(
-        &mut self,
-        statement_execution_history_updates: Vec<(Row, Diff)>,
-        prepared_statement_history_updates: Vec<Row>,
-        session_history_updates: Vec<Row>,
-    ) {
-        let mseh_id = self.introspection_ids[&IntrospectionType::StatementExecutionHistory];
-        let mpsh_id = self.introspection_ids[&IntrospectionType::PreparedStatementHistory];
-        let msh_id = self.introspection_ids[&IntrospectionType::SessionHistory];
 
-        self.append_to_managed_collection(mseh_id, statement_execution_history_updates)
-            .await;
+    async fn record_replica_frontiers(
+        &mut self,
+        external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
+    ) {
+        let mut frontiers = external_frontiers;
+
+        // Enrich `frontiers` with storage frontiers.
+        for (object_id, collection) in self.active_collections() {
+            let replica_id = collection
+                .cluster_id()
+                .and_then(|c| self.replicas.get(&c))
+                .copied();
+            if let Some(replica_id) = replica_id {
+                let upper = collection.write_frontier.clone();
+                frontiers.insert((object_id, replica_id), upper);
+            }
+        }
+        for (object_id, export) in self.active_exports() {
+            let cluster_id = export.cluster_id();
+            let replica_id = self.replicas.get(&cluster_id).copied();
+            if let Some(replica_id) = replica_id {
+                let upper = export.write_frontier.clone();
+                frontiers.insert((object_id, replica_id), upper);
+            }
+        }
+
+        let mut updates = Vec::new();
+        let mut push_update = |(object_id, replica_id): (GlobalId, ReplicaId),
+                               upper: Antichain<Self::Timestamp>,
+                               diff: Diff| {
+            let write_frontier = upper
+                .into_option()
+                .map_or(Datum::Null, |ts| Datum::MzTimestamp(ts.into()));
+            let row = Row::pack_slice(&[
+                Datum::String(&object_id.to_string()),
+                Datum::String(&replica_id.to_string()),
+                write_frontier,
+            ]);
+            updates.push((row, diff));
+        };
+
+        let mut old_frontiers = std::mem::replace(&mut self.recorded_replica_frontiers, frontiers);
+        for (&key, new) in &self.recorded_replica_frontiers {
+            match old_frontiers.remove(&key) {
+                Some(old) if &old != new => {
+                    push_update(key, new.clone(), 1);
+                    push_update(key, old, -1);
+                }
+                Some(_) => (),
+                None => push_update(key, new.clone(), 1),
+            }
+        }
+        for (key, old) in old_frontiers {
+            push_update(key, old, -1);
+        }
+
         self.append_to_managed_collection(
-            mpsh_id,
-            prepared_statement_history_updates
-                .into_iter()
-                .map(|update| (update, 1))
-                .collect(),
+            self.introspection_ids[&IntrospectionType::ReplicaFrontiers],
+            updates,
         )
         .await;
-        self.append_to_managed_collection(
-            msh_id,
-            session_history_updates
-                .into_iter()
-                .map(|update| (update, 1))
-                .collect(),
-        )
-        .await;
+    }
+
+    async fn record_introspection_updates(
+        &mut self,
+        type_: IntrospectionType,
+        updates: Vec<(Row, Diff)>,
+    ) {
+        let id = self.introspection_ids[&type_];
+        self.append_to_managed_collection(id, updates).await;
     }
 }
 
@@ -1842,6 +1973,7 @@ where
         stash_metrics: Arc<StashMetrics>,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
+        enable_persist_txn_tables: bool,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -1907,7 +2039,31 @@ where
             .await
             .expect("stash operation must succeed");
 
-        let persist_table_worker = persist_handles::PersistTableWriteWorker::new(tx.clone());
+        let txns_client = persist_clients
+            .open(persist_location.clone())
+            .await
+            .expect("location should be valid");
+        let (persist_table_worker, txns_id) = if enable_persist_txn_tables {
+            let txns_id = PERSIST_TXNS_SHARD
+                .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
+                .await
+                .expect("could not get txns shard id")
+                .parse::<ShardId>()
+                .expect("should be valid shard id");
+            let txns = TxnsHandle::open(
+                T::minimum(),
+                txns_client.clone(),
+                txns_id,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+            )
+            .await;
+            let worker = persist_handles::PersistTableWriteWorker::new_txns(tx.clone(), txns);
+            (worker, Some(txns_id))
+        } else {
+            let worker = persist_handles::PersistTableWriteWorker::new_legacy(tx.clone());
+            (worker, None)
+        };
         let persist_monotonic_worker =
             persist_handles::PersistMonotonicWriteWorker::new(tx.clone());
         let collection_manager_write_handle = persist_monotonic_worker.clone();
@@ -1923,6 +2079,8 @@ where
             persist_table_worker,
             persist_monotonic_worker,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
+            txns_id,
+            txns_client,
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
@@ -1942,6 +2100,7 @@ where
             persist: persist_clients,
             metrics: StorageControllerMetrics::new(metrics_registry),
             recorded_frontiers: BTreeMap::new(),
+            recorded_replica_frontiers: BTreeMap::new(),
         }
     }
 
@@ -1970,6 +2129,14 @@ where
             .iter()
             .filter(|(_id, c)| !c.is_dropped())
             .map(|(id, c)| (*id, c))
+    }
+
+    /// Iterate over exports that have not been dropped.
+    fn active_exports(&self) -> impl Iterator<Item = (GlobalId, &ExportState<T>)> {
+        self.exports
+            .iter()
+            .filter(|(_id, e)| !e.is_dropped())
+            .map(|(id, e)| (*id, e))
     }
 
     /// Return the since frontier at which we can read from all the given
@@ -2015,32 +2182,6 @@ where
         Ok(())
     }
 
-    /// Removes read holds that were previously acquired via
-    /// `install_read_capabilities`.
-    ///
-    /// ## Panics
-    ///
-    /// This panics if there are no read capabilities at `capability` for all
-    /// depended-upon collections.
-    fn remove_read_capabilities(
-        &mut self,
-        capability: Antichain<T>,
-        storage_dependencies: &[GlobalId],
-    ) {
-        let mut changes = ChangeBatch::new();
-        for time in capability.iter() {
-            changes.update(time.clone(), -1);
-        }
-
-        // Remove holds for all dependencies, which we previously acquired.
-        let mut storage_read_updates = storage_dependencies
-            .iter()
-            .map(|id| (*id, changes.clone()))
-            .collect();
-
-        self.update_read_capabilities(&mut storage_read_updates);
-    }
-
     /// Opens a write and critical since handles for the given `shard`.
     ///
     /// `since` is an optional `since` that the read handle will be forwarded to if it is less than
@@ -2063,22 +2204,17 @@ where
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
         };
-        let write = persist_client
-            .open_writer(
-                shard,
-                Arc::new(relation_desc),
-                Arc::new(UnitSchema),
-                diagnostics.clone(),
-            )
-            .await
-            .expect("invalid persist usage");
 
         // Construct the handle in a separate block to ensure all error paths are diverging
         let since_handle = {
             // This block's aim is to ensure the handle is in terms of our epoch
             // by the time we return it.
             let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                .open_critical_since(shard, PersistClient::CONTROLLER_CRITICAL_SINCE, diagnostics)
+                .open_critical_since(
+                    shard,
+                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+                    diagnostics.clone(),
+                )
                 .await
                 .expect("invalid persist usage");
 
@@ -2114,6 +2250,26 @@ where
             }
         };
 
+        let mut write = persist_client
+            .open_writer(
+                shard,
+                Arc::new(relation_desc),
+                Arc::new(UnitSchema),
+                diagnostics.clone(),
+            )
+            .await
+            .expect("invalid persist usage");
+
+        // N.B.
+        // Fetch the most recent upper for the write handle. Otherwise, this may be behind
+        // the since of the since handle. Its vital this happens AFTER we create
+        // the since handle as it needs to be linearized with that operation. It may be true
+        // that creating the write handle after the since handle already ensures this, but we
+        // do this out of an abundance of caution.
+        //
+        // Note that this returns the upper, but also sets it on the handle to be fetched later.
+        write.fetch_recent_upper().await;
+
         (write, since_handle)
     }
 
@@ -2123,7 +2279,7 @@ where
     /// # Panics
     /// - If `id` does not belong to a collection or is not registered as a
     ///   managed collection.
-    async fn reconcile_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    async fn reconcile_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         let mut reconciled_updates = BTreeMap::<Row, Diff>::new();
 
         for (row, diff) in updates.into_iter() {
@@ -2160,6 +2316,7 @@ where
     ///
     /// # Panics
     /// - If `id` is not registered as a managed collection.
+    #[tracing::instrument(level = "debug", skip(self, updates))]
     async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         self.collection_manager
             .append_to_collection(id, updates)
@@ -2285,11 +2442,10 @@ where
             .get_by_name(&ColumnName::from("finished_status"))
             .expect("schema has not changed");
 
-        let mut mseh_rows = Box::pin(
-            self.snapshot_and_stream(mseh_id, mseh_ts)
-                .await
-                .expect("snapshot_succeeds"),
-        );
+        let mut mseh_rows = self
+            .snapshot_and_stream(mseh_id, mseh_ts)
+            .await
+            .expect("snapshot_succeeds");
 
         let mut mseh_updates = vec![];
         let mut ps_to_keep = HashSet::new();
@@ -2340,11 +2496,10 @@ where
         let mut mpsh_updates = vec![];
         let mut sessions_to_keep = HashSet::new();
 
-        let mut mpsh_rows = Box::pin(
-            self.snapshot_and_stream(mpsh_id, mpsh_ts)
-                .await
-                .expect("snapshot_succeeds"),
-        );
+        let mut mpsh_rows = self
+            .snapshot_and_stream(mpsh_id, mpsh_ts)
+            .await
+            .expect("snapshot_succeeds");
 
         let (mpsh_id_col, _) = MZ_PREPARED_STATEMENT_HISTORY_DESC
             .get_by_name(&ColumnName::from("id"))
@@ -2366,11 +2521,10 @@ where
         let ps_kept = ps_to_keep.len();
         std::mem::drop(ps_to_keep);
 
-        let mut msh_rows = Box::pin(
-            self.snapshot_and_stream(msh_id, msh_ts)
-                .await
-                .expect("snapshot_succeeds"),
-        );
+        let mut msh_rows = self
+            .snapshot_and_stream(msh_id, msh_ts)
+            .await
+            .expect("snapshot_succeeds");
 
         let (msh_id_col, _) = MZ_SESSION_HISTORY_DESC
             .get_by_name(&ColumnName::from("id"))
@@ -2518,6 +2672,7 @@ where
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn append_shard_mappings<I>(&self, global_ids: I, diff: i64)
     where
         I: Iterator<Item = GlobalId>,
@@ -2681,6 +2836,7 @@ where
 
     /// Attempts to close all shards marked for finalization.
     #[allow(dead_code)]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn finalize_shards(&mut self) {
         let shards = self
             .stash
@@ -2736,21 +2892,46 @@ where
                         .await
                         .expect("invalid persist usage");
 
-                    if !write_handle.upper().is_empty() {
-                        write_handle
-                            .append(
-                                Vec::<((mz_storage_types::sources::SourceData, ()), T, Diff)>::new(
-                                ),
-                                write_handle.upper().clone(),
-                                Antichain::new(),
-                            )
-                            .await
-                            // Rather than error, just leave this shard as one to finalize later.
-                            .ok()?
-                            .ok()?;
-                    }
+                    if write_handle.upper().is_empty() {
+                        Some(shard_id)
+                    } else {
+                        // Finalizing a shard can take a long time cleaning up existing data.
+                        // Spawning a task means that we can't proactively remove this shard
+                        // from the finalization register, unfortunately... but the next run
+                        // of `finalize_shards` should notice the upper has advanced and tidy
+                        // up.
+                        mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
+                            let result =
+                                tokio::time::timeout(
+                                    Duration::from_secs(15 * 60),
 
-                    Some(shard_id)
+                                    write_handle.append(
+                                        Vec::<(
+                                            (mz_storage_types::sources::SourceData, ()),
+                                            T,
+                                            Diff,
+                                        )>::new(),
+                                        write_handle.upper().clone(),
+                                        Antichain::new(),
+                                    )
+                                ).await;
+
+                            // Rather than error, just leave this shard as one to finalize later.
+                            match result {
+                                Err(_) => {
+                                    warn!("timed out while trying to finalize shard {shard_id}");
+                                }
+                                Ok(Err(usage)) => {
+                                    error!("invalid usage while finalizing shard {shard_id}: {usage:?}")
+                                }
+                                Ok(Ok(Err(mismatch))) => {
+                                    warn!("unable to advance the upper of shard {shard_id} to the empty antichain: {mismatch:?}")
+                                }
+                                Ok(Ok(Ok(()))) => {}
+                            };
+                        });
+                        None
+                    }
                 } else {
                     None
                 }
@@ -2817,7 +2998,7 @@ where
                     "{id:?} inalterable because its data source is {:?} and not an ingestion",
                     o
                 );
-                return Err(StorageError::InvalidAlterSource { id });
+                return Err(StorageError::InvalidAlter { id });
             }
         };
 
@@ -2829,7 +3010,7 @@ where
                     prev_storage_dependencies,
                     new_storage_dependencies
                 );
-            return Err(StorageError::InvalidAlterSource { id });
+            return Err(StorageError::InvalidAlter { id });
         }
 
         Ok(())
@@ -3031,17 +3212,51 @@ where
         &self,
         id: GlobalId,
         as_of: T,
-    ) -> Result<impl Stream<Item = (SourceData, T, Diff)>, StorageError> {
-        let as_of = Antichain::from_elem(as_of);
-        let mut read_handle = self.read_handle_for_snapshot(id).await?;
+    ) -> Result<BoxStream<(SourceData, T, Diff)>, StorageError> {
         use futures::stream::StreamExt;
-        match read_handle.snapshot_and_stream(as_of).await {
-            Ok(contents) => Ok(contents.map(|((result_k, result_v), t, diff)| {
-                let () = result_v.expect("invalid empty value");
-                let data = result_k.expect("invalid key data");
-                (data, t, diff)
-            })),
-            Err(_) => Err(StorageError::ReadBeforeSince(id)),
+
+        let metadata = &self.collection(id)?.collection_metadata;
+        // See the comments in Self::snapshot for what's going on here.
+        match metadata.txns_shard.as_ref() {
+            None => {
+                let as_of = Antichain::from_elem(as_of);
+                let mut read_handle = self.read_handle_for_snapshot(id).await?;
+                let contents = read_handle.snapshot_and_stream(as_of).await;
+                match contents {
+                    Ok(contents) => {
+                        Ok(Box::pin(contents.map(|((result_k, result_v), t, diff)| {
+                            let () = result_v.expect("invalid empty value");
+                            let data = result_k.expect("invalid key data");
+                            (data, t, diff)
+                        })))
+                    }
+                    Err(_) => Err(StorageError::ReadBeforeSince(id)),
+                }
+            }
+            Some(txns_id) => {
+                // TODO(txn): Replace this with the shared TxnsCache thing
+                // we'll have to do anyway for the dataflow operators.
+                let mut txns_cache = TxnsCache::<T, TxnsCodecRow>::open(
+                    &self.txns_client,
+                    *txns_id,
+                    Some(metadata.data_shard),
+                )
+                .await;
+                txns_cache.update_gt(&as_of).await;
+                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let mut handle = self.read_handle_for_snapshot(id).await?;
+                let contents = data_snapshot.snapshot_and_stream(&mut handle).await;
+                match contents {
+                    Ok(contents) => {
+                        Ok(Box::pin(contents.map(|((result_k, result_v), t, diff)| {
+                            let () = result_v.expect("invalid empty value");
+                            let data = result_k.expect("invalid key data");
+                            (data, t, diff)
+                        })))
+                    }
+                    Err(_) => Err(StorageError::ReadBeforeSince(id)),
+                }
+            }
         }
     }
 }

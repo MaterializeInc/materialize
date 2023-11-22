@@ -25,7 +25,7 @@ $ kafka-ingest format=avro topic=resolution-int2double schema=${int-col} timesta
   );
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE resolution_int2double
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-int2double-${testdrive.seed}')

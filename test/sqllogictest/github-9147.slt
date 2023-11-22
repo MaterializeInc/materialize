@@ -24,7 +24,7 @@ Explained Query:
       ArrangeBy keys=[[#0]] // { arity: 2 }
         ReadStorage materialize.public.t1 // { arity: 2 }
       ArrangeBy keys=[[#0]] // { arity: 1 }
-        Distinct group_by=[#0] // { arity: 1 }
+        Distinct project=[#0] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Filter (#0 > 1) // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }

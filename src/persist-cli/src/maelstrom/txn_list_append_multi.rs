@@ -116,6 +116,11 @@ impl Transactor {
                 txn.tidy(std::mem::take(&mut self.tidy));
                 match txn.commit_at(&mut self.txns, write_ts).await {
                     Ok(maintenance) => {
+                        // Aggressively allow the txns shard to compact. To
+                        // exercise more edge cases, do it before we apply the
+                        // newly committed txn.
+                        self.txns.compact_to(write_ts).await;
+
                         debug!("req committed at read_ts={} write_ts={}", read_ts, write_ts);
                         let tidy = maintenance.apply(&mut self.txns).await;
                         self.tidy.merge(tidy);
@@ -265,18 +270,8 @@ impl Transactor {
             // To recover them, instead of grabbing a snapshot at the read_ts,
             // we have to start a subscription at time 0 and walk it forward
             // until we pass read_ts.
-            let as_of = self
-                .txns
-                .read_cache()
-                .data_since(data_id)
-                .expect("data shard has been registered");
-            let mut subscribe = DataSubscribe::new(
-                "maelstrom",
-                self.client.clone(),
-                self.txns_id,
-                *data_id,
-                as_of,
-            );
+            let mut subscribe =
+                DataSubscribe::new("maelstrom", self.client.clone(), self.txns_id, *data_id, 0);
             while subscribe.progress() <= read_ts {
                 subscribe.step();
             }

@@ -63,7 +63,7 @@ Explained Query:
             Map (null) // { arity: 1 }
               Union // { arity: 0 }
                 Negate // { arity: 0 }
-                  Distinct // { arity: 0 }
+                  Distinct project=[] // { arity: 0 }
                     Project () // { arity: 0 }
                       Get l0 // { arity: 1 }
                 Constant // { arity: 0 }
@@ -102,7 +102,7 @@ Explained Query:
             Map (null) // { arity: 2 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Project (#0) // { arity: 1 }
                       Get l2 // { arity: 2 }
                 Get l0 // { arity: 1 }
@@ -128,7 +128,7 @@ Explained Query:
               Filter (#0) IS NOT NULL // { arity: 1 }
                 ReadStorage materialize.public.t1 // { arity: 1 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
@@ -165,7 +165,7 @@ Explained Query:
             Map (null) // { arity: 2 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Project (#0) // { arity: 1 }
                       Get l4 // { arity: 2 }
                 Get l0 // { arity: 1 }
@@ -201,7 +201,7 @@ Explained Query:
       Filter (#0) IS NOT NULL // { arity: 1 }
         Get l0 // { arity: 1 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
@@ -219,7 +219,7 @@ EXPLAIN WITH(arity, join_impls) SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1
 Explained Query:
   Return // { arity: 2 }
     Project (#2, #4) // { arity: 2 }
-      Join on=(eq(#0, #1, #3)) type=delta // { arity: 5 }
+      Join on=(#0 = #1 = #3) type=delta // { arity: 5 }
         implementation
           %0:t2 » %1[#0]KA » %2[#0]KA
           %1 » %0:t2[#0]KA » %2[#0]KA
@@ -232,7 +232,7 @@ Explained Query:
             Map (null) // { arity: 2 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Project (#0) // { arity: 1 }
                       Get l4 // { arity: 2 }
                 Get l0 // { arity: 1 }
@@ -242,7 +242,7 @@ Explained Query:
             Map (null) // { arity: 2 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Project (#0) // { arity: 1 }
                       Get l6 // { arity: 2 }
                 Get l0 // { arity: 1 }
@@ -287,7 +287,7 @@ Explained Query:
       Filter (#0) IS NOT NULL // { arity: 1 }
         Get l0 // { arity: 1 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
@@ -312,7 +312,7 @@ EXPLAIN WITH(arity, join_impls) SELECT (SELECT f1 + 1 FROM t1 WHERE t1.f1 = t2.f
 Explained Query:
   Return // { arity: 2 }
     Project (#2, #4) // { arity: 2 }
-      Join on=(eq(#0, #1, #3)) type=delta // { arity: 5 }
+      Join on=(#0 = #1 = #3) type=delta // { arity: 5 }
         implementation
           %0:t2 » %1[#0]KA » %2[#0]KA
           %1 » %0:t2[#0]KA » %2[#0]KA
@@ -325,7 +325,7 @@ Explained Query:
             Map (null) // { arity: 2 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Project (#0) // { arity: 1 }
                       Get l3 // { arity: 2 }
                 Get l0 // { arity: 1 }
@@ -335,7 +335,7 @@ Explained Query:
             Map (null) // { arity: 2 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Project (#0) // { arity: 1 }
                       Get l4 // { arity: 2 }
                 Get l0 // { arity: 1 }
@@ -368,7 +368,7 @@ Explained Query:
               Filter (#0) IS NOT NULL // { arity: 1 }
                 ReadStorage materialize.public.t1 // { arity: 1 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
@@ -389,7 +389,7 @@ EXPLAIN WITH(arity, join_impls) SELECT (SELECT MIN(f1) FROM t1 WHERE t1.f1 = t2.
 Explained Query:
   Return // { arity: 2 }
     Project (#2, #4) // { arity: 2 }
-      Join on=(eq(#0, #1, #3)) type=delta // { arity: 5 }
+      Join on=(#0 = #1 = #3) type=delta // { arity: 5 }
         implementation
           %0:t2 » %1[#0]UKA » %2[#0]UKA
           %1 » %2[#0]UKA » %0:t2[#0]KA
@@ -451,7 +451,7 @@ Explained Query:
               Filter (#0) IS NOT NULL // { arity: 1 }
                 ReadStorage materialize.public.t1 // { arity: 1 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
@@ -487,7 +487,7 @@ Explained Query:
             Map (null) // { arity: 2 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Project (#0) // { arity: 1 }
                       Get l6 // { arity: 2 }
                 Get l0 // { arity: 1 }
@@ -514,7 +514,7 @@ Explained Query:
               Map (null) // { arity: 2 }
                 Union // { arity: 1 }
                   Negate // { arity: 1 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       Project (#0) // { arity: 1 }
                         Get l4 // { arity: 2 }
                   Get l2 // { arity: 1 }
@@ -538,7 +538,7 @@ Explained Query:
             Filter (#0) IS NOT NULL // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 1 }
     cte l2 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         Get l1 // { arity: 1 }
     cte l1 =
       Project (#0) // { arity: 1 }
@@ -552,7 +552,7 @@ Explained Query:
               Filter (#0) IS NOT NULL // { arity: 1 }
                 ReadStorage materialize.public.t2 // { arity: 1 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t3 // { arity: 1 }
 
 Source materialize.public.t1
@@ -602,7 +602,7 @@ Explained Query:
                 Map (null) // { arity: 2 }
                   Union // { arity: 1 }
                     Negate // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Project (#0) // { arity: 1 }
                           Get l7 // { arity: 2 }
                     Get l5 // { arity: 1 }
@@ -625,7 +625,7 @@ Explained Query:
               Get l5 // { arity: 1 }
             Get l1 // { arity: 1 }
     cte l5 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         Project (#0) // { arity: 1 }
           Get l4 // { arity: 2 }
     cte l4 =
@@ -641,7 +641,7 @@ Explained Query:
               Map (null) // { arity: 2 }
                 Union // { arity: 1 }
                   Negate // { arity: 1 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       Project (#0) // { arity: 1 }
                         Get l3 // { arity: 2 }
                   Get l0 // { arity: 1 }
@@ -668,7 +668,7 @@ Explained Query:
         Filter (#0) IS NOT NULL // { arity: 1 }
           ReadStorage materialize.public.t1 // { arity: 1 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
@@ -706,7 +706,7 @@ Explained Query:
             Map (null) // { arity: 2 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Project (#0) // { arity: 1 }
                       Get l2 // { arity: 2 }
                 Get l0 // { arity: 1 }
@@ -723,7 +723,7 @@ Explained Query:
     cte l1 =
       Project (#0) // { arity: 1 }
         Filter (#0) IS NOT NULL // { arity: 3 }
-          Join on=(eq(#0, #1, #2)) type=delta // { arity: 3 }
+          Join on=(#0 = #1 = #2) type=delta // { arity: 3 }
             implementation
               %0:l0 » %1:t1[#0]KA » %2:t2[#0]KA
               %1:t1 » %0:l0[#0]UKA » %2:t2[#0]KA
@@ -737,7 +737,7 @@ Explained Query:
               Filter (#0) IS NOT NULL // { arity: 1 }
                 ReadStorage materialize.public.t2 // { arity: 1 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.t3 // { arity: 1 }
 
 Source materialize.public.t1
@@ -782,7 +782,7 @@ Explained Query:
             Map (null) // { arity: 3 }
               Union // { arity: 2 }
                 Negate // { arity: 2 }
-                  Distinct group_by=[#0, #1] // { arity: 2 }
+                  Distinct project=[#0, #1] // { arity: 2 }
                     Project (#0, #1) // { arity: 2 }
                       Get l3 // { arity: 3 }
                 Get l1 // { arity: 2 }
@@ -808,7 +808,7 @@ Explained Query:
             Filter (#0) IS NOT NULL // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 1 }
     cte l1 =
-      Distinct group_by=[#0, #1] // { arity: 2 }
+      Distinct project=[#0, #1] // { arity: 2 }
         Get l0 // { arity: 2 }
     cte l0 =
       CrossJoin type=differential // { arity: 2 }
@@ -872,9 +872,9 @@ Return // { arity: 2, types: "(integer, text)" }
                 CrossJoin // { arity: 0, types: "()" }
                   Union // { arity: 0, types: "()" }
                     Negate // { arity: 0, types: "()" }
-                      Distinct // { arity: 0, types: "()" }
+                      Distinct project=[] // { arity: 0, types: "()" }
                         Get l1 // { arity: 1, types: "(integer)" }
-                    Distinct // { arity: 0, types: "()" }
+                    Distinct project=[] // { arity: 0, types: "()" }
                       Constant // { arity: 0, types: "()" }
                         - ()
                   Constant // { arity: 0, types: "()" }

@@ -31,7 +31,8 @@ from typing import Any
 
 import yaml
 
-from materialize import mzbuild, spawn
+from materialize import buildkite, mzbuild, spawn
+from materialize.ci_util.trim_pipeline import permit_rerunning_successful_steps
 from materialize.mzcompose.composition import Composition
 
 from .deploy.deploy_util import rust_version
@@ -85,15 +86,15 @@ so it is executed.""",
             print(
                 "Repository glue code has changed, so the trimmed pipeline below does not apply"
             )
-            trim_pipeline(copy.deepcopy(pipeline), args.coverage)
+            trim_tests_pipeline(copy.deepcopy(pipeline), args.coverage)
         else:
             print("--- Trimming unchanged steps from pipeline")
-            trim_pipeline(pipeline, args.coverage)
+            trim_tests_pipeline(pipeline, args.coverage)
 
         # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
         # if we trim away all the JUnit report-generating steps.
-        Path("junit-dummy.xml").write_text("")
-        spawn.runv(["buildkite-agent", "artifact", "upload", "junit-dummy.xml"])
+        Path("junit_dummy.xml").write_text("")
+        buildkite.upload_artifact("junit_dummy.xml")
 
     if args.coverage:
         pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
@@ -179,26 +180,19 @@ def prioritize_pipeline(pipeline: Any) -> None:
     if tag.startswith("v"):
         priority = 10
 
+    def visit(config: Any) -> None:
+        config["priority"] = config.get("priority", 0) + priority
+
     if priority is not None:
         for config in pipeline["steps"]:
             if "trigger" in config or "wait" in config:
                 # Trigger and Wait steps do not allow priorities.
                 continue
-            config["priority"] = config.get("priority", 0) + priority
-
-
-def permit_rerunning_successful_steps(pipeline: Any) -> None:
-    for config in pipeline["steps"]:
-        if (
-            "trigger" in config
-            or "wait" in config
-            or "block" in config
-            or "group" in config
-        ):
-            continue
-        config.setdefault("retry", {}).setdefault("manual", {}).setdefault(
-            "permit_on_passed", True
-        )
+            if "group" in config:
+                for inner_config in config.get("steps", []):
+                    visit(inner_config)
+                continue
+            visit(config)
 
 
 def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
@@ -225,7 +219,11 @@ def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
         return
 
     def visit(step: dict[str, Any]) -> None:
-        if "id" in step and step["id"] not in ("analyze", "build-x86_64"):
+        if (
+            "id" in step
+            and step["id"] not in ("analyze", "build-x86_64")
+            and "skip" not in step
+        ):
             selection_step["fields"][0]["options"].append({"value": step["id"]})
 
     for step in pipeline["steps"]:
@@ -237,7 +235,7 @@ def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
     pipeline["steps"].insert(0, selection_step)
 
 
-def trim_pipeline(pipeline: Any, coverage: bool) -> None:
+def trim_tests_pipeline(pipeline: Any, coverage: bool) -> None:
     """Trim pipeline steps whose inputs have not changed in this branch.
 
     Steps are assigned inputs in two ways:

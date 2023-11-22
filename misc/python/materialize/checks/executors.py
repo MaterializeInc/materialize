@@ -13,8 +13,8 @@ from inspect import Traceback
 from typing import Any
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
-from materialize.util import MzVersion
 
 
 class Executor:

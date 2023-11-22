@@ -16,7 +16,7 @@ from collections.abc import Callable
 
 import junit_xml
 
-from materialize import MZ_ROOT, ci_util
+from materialize import MZ_ROOT, buildkite, ci_util
 
 # - None value indicates that this line is interesting, but we don't know yet
 #   if it can actually be covered.
@@ -49,52 +49,6 @@ IGNORE_FILE_PATH_RE = re.compile(
     """,
     re.VERBOSE,
 )
-
-
-def find_modified_lines() -> Coverage:
-    """
-    Find each line that has been added or modified in the current pull request.
-    """
-    base_branch = os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", "main") or os.getenv(
-        "BUILDKITE_PIPELINE_DEFAULT_BRANCH", "main"
-    )
-    # Make sure we have the latest state to correctly identify the merge base
-    subprocess.run(["git", "fetch", "origin", base_branch], check=True)
-    result = subprocess.run(
-        ["git", "merge-base", "HEAD", f"origin/{base_branch}"],
-        check=True,
-        capture_output=True,
-    )
-    merge_base = result.stdout.strip()
-    print(f"Merge base: {merge_base.decode('utf-8')}")
-    result = subprocess.run(
-        ["git", "diff", "-U0", merge_base], check=True, capture_output=True
-    )
-
-    coverage: Coverage = {}
-    file_path = None
-    for line_raw in result.stdout.splitlines():
-        line = line_raw.decode("utf-8")
-        # +++ b/src/adapter/src/coord/command_handler.rs
-        if line.startswith("+++"):
-            file_path = line.removeprefix("+++ b/")
-            if ignore_file_in_coverage_report(file_path):
-                continue
-            coverage[file_path] = OrderedDict()
-        # @@ -641,7 +640,6 @@ impl Coordinator {
-        elif line.startswith("@@ ") and file_path in coverage:
-            # We only care about the second value ("+640,6" in the example),
-            # which contains the line number and length of the modified block
-            # in new code state.
-            parts = line.split(" ")[2]
-            if "," in parts:
-                start, length = map(int, parts.split(","))
-            else:
-                start = int(parts)
-                length = 1
-            for line_nr in range(start, start + length):
-                coverage[file_path][line_nr] = None
-    return coverage
 
 
 def ignore_file_in_coverage_report(file_path: str) -> bool:
@@ -220,7 +174,11 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
 
     test_cases = []
 
-    coverage = find_modified_lines()
+    coverage: Coverage = {}
+    for file, line in buildkite.find_modified_lines():
+        if not ignore_file_in_coverage_report(file):
+            coverage.setdefault(file, OrderedDict())[line] = None
+
     for lcov_file in args.tests:
         mark_covered_lines(lcov_file, coverage)
     if args.unittests:

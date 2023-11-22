@@ -110,19 +110,22 @@ create_materialized_view ::=
   'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
     view_name ( '(' col_ident ( ',' col_ident )* ')' )?
     ('IN CLUSTER' cluster_name)?
+    ('WITH' '(' ( 'ASSERT NOT NULL' col_ident ( ',' 'ASSERT NOT NULL' col_ident )* )? ')')?
     'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'MATERIALIZED VIEW'
     view_name ( '(' col_ident ( ',' col_ident )* ')' )?
     ('IN CLUSTER' cluster_name)?
+    ('WITH' '(' ( 'ASSERT NOT NULL' col_ident ( ',' 'ASSERT NOT NULL' col_ident )* )? ')')?
     'AS' select_stmt
 create_role ::=
-    'CREATE' 'ROLE' role_name 'WITH'? 'INHERIT'
+    'CREATE' 'ROLE' role_name ('WITH'? 'INHERIT')?
 create_secret ::=
     'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
 create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
 create_sink_kafka ::=
-    'CREATE SINK' 'IF NOT EXISTS'? sink_name
+    'CREATE SINK' 'IF NOT EXISTS'? sink_name sink_definition
+sink_definition ::=
     ('IN CLUSTER' cluster_name)?
     'FROM' item_name
     'INTO' kafka_sink_connection
@@ -264,6 +267,12 @@ explain_timestamp ::=
   ( 'AS' ( 'TEXT' | 'JSON' ) )?
   'FOR'
   select_stmt
+explain_schema ::=
+  'EXPLAIN' ( 'KEY' | 'VALUE' ) 'SCHEMA'
+  ( 'AS JSON' )?
+  'FOR'
+  'CREATE SINK' (sink_name)?
+  sink_definition
 fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
@@ -439,6 +448,10 @@ show_objects ::=
   'SHOW' 'OBJECTS' ('FROM' schema_name)?
 show_privileges ::=
   'SHOW' 'PRIVILEGES' ('ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS' | 'SYSTEM'))? ('FOR' role_name)?
+show_default_privileges ::=
+  'SHOW' 'DEFAULT' 'PRIVILEGES' ('ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS'))? ('FOR' role_name)?
+show_role_membership ::=
+  'SHOW' 'ROLE' 'MEMBERSHIP' ('FOR' role_name)?
 string_agg ::=
   'string_agg' '(' value ',' delimiter    ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 subscribe_stmt ::=

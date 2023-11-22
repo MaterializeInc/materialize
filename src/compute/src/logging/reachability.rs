@@ -19,11 +19,10 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
-use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
+use mz_repr::{Datum, Diff, RowArena, SharedRow, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Filter;
 
 use crate::extensions::arrange::MzArrange;
@@ -50,6 +49,7 @@ pub(super) fn construct<A: Allocate>(
     event_queue: EventQueue<ReachabilityEvent>,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
+    let worker_index = worker.index();
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
@@ -90,12 +90,12 @@ pub(super) fn construct<A: Allocate>(
                 input.for_each(|cap, data| {
                     data.swap(&mut buffer);
 
-                    for (time, worker, (addr, massaged)) in buffer.drain(..) {
+                    for (time, _worker, (addr, massaged)) in buffer.drain(..) {
                         let time_ms = (((time.as_millis() / interval_ms) + 1) * interval_ms)
                             .try_into()
                             .expect("must fit");
                         for (source, port, update_type, ts, diff) in massaged {
-                            let datum = (update_type, addr.clone(), source, port, worker, ts);
+                            let datum = (update_type, addr.clone(), source, port, ts);
                             updates_session.give(&cap, ((datum, ()), time_ms, diff));
                         }
                     }
@@ -105,10 +105,7 @@ pub(super) fn construct<A: Allocate>(
 
         let updates = updates
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| u64::cast_from(*w)),
-                "PreArrange Timely reachability",
-            );
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely reachability");
 
         let mut result = BTreeMap::new();
         for variant in logs_active {
@@ -122,30 +119,32 @@ pub(super) fn construct<A: Allocate>(
                     variant.desc().arity(),
                 );
 
-                let mut row_buf = Row::default();
-                let updates = updates.as_collection(
-                    move |(update_type, addr, source, port, worker, ts), _| {
+                let updates =
+                    updates.as_collection(move |(update_type, addr, source, port, ts), _| {
                         let row_arena = RowArena::default();
                         let update_type = if *update_type { "source" } else { "target" };
-                        row_buf.packer().push_list(
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
+                        row_builder.packer().push_list(
                             addr.iter()
                                 .chain_one(source)
                                 .map(|id| Datum::UInt64(u64::cast_from(*id))),
                         );
                         let datums = &[
-                            row_arena.push_unary_row(row_buf.clone()),
+                            row_arena.push_unary_row(row_builder.clone()),
                             Datum::UInt64(u64::cast_from(*port)),
-                            Datum::UInt64(u64::cast_from(*worker)),
+                            Datum::UInt64(u64::cast_from(worker_index)),
                             Datum::String(update_type),
                             Datum::from(ts.clone()),
                         ];
-                        row_buf.packer().extend(key.iter().map(|k| datums[*k]));
-                        let key_row = row_buf.clone();
-                        row_buf.packer().extend(value.iter().map(|k| datums[*k]));
-                        let value_row = row_buf.clone();
+                        row_builder.packer().extend(key.iter().map(|k| datums[*k]));
+                        let key_row = row_builder.clone();
+                        row_builder
+                            .packer()
+                            .extend(value.iter().map(|k| datums[*k]));
+                        let value_row = row_builder.clone();
                         (key_row, value_row)
-                    },
-                );
+                    });
 
                 let trace = updates
                     .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))

@@ -25,7 +25,7 @@ JOIN mz_internal.mz_cluster_replica_utilization u ON u.replica_id = r.id
 WHERE r.cluster_id = 'u1'
 ORDER BY r.id;
 ----
-u1 r1 u1 1 0
+u1  r1  u1  2  0
 
 # useSinkErrors(...)
 query ITI
@@ -110,9 +110,9 @@ FROM mz_clusters c
 LEFT OUTER JOIN mz_cluster_replicas r ON c.id = r.cluster_id
 ORDER BY r.id
 ----
-s1 mz_system s1 r1 1
-s2 mz_introspection s2 r1 1
-u1 default u1 r1 1
+s1  mz_system  s1  r1  2
+s2  mz_introspection  s2  r1  2
+u1  default  u1  r1  2
 
 
 # ---- useClusterUtilization.ts

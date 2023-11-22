@@ -112,9 +112,14 @@ fn bench_transact(c: &mut Criterion) {
                 .await
                 .unwrap();
 
-            Catalog::open_debug_stash_catalog_url(postgres_url, schema.into(), SYSTEM_TIME.clone())
-                .await
-                .unwrap()
+            Catalog::open_debug_stash_catalog_url(
+                postgres_url,
+                schema.into(),
+                SYSTEM_TIME.clone(),
+                None,
+            )
+            .await
+            .unwrap()
         });
         let mut id = 0;
         b.iter(|| {
@@ -131,7 +136,10 @@ fn bench_transact(c: &mut Criterion) {
                     .await
                     .unwrap();
             })
-        })
+        });
+        runtime.block_on(async {
+            catalog.expire().await;
+        });
     });
 }
 

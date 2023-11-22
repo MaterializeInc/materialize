@@ -18,9 +18,10 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
+use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
-use mz_ore::id_gen::{IdAllocator, IdHandle};
+use mz_ore::id_gen::IdAllocator;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
@@ -42,8 +43,8 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{
-    AppendWebhookResponse, Canceled, CatalogDump, CatalogSnapshot, Command, ExecuteResponse,
-    GetVariablesResponse, Response,
+    Canceled, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse,
+    Response,
 };
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
@@ -51,15 +52,8 @@ use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
+use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, PeekResponseUnary, StartupResponse};
-
-/// Inner type of a [`ConnectionId`], `u32` for postgres compatibility.
-///
-/// Note: Generally you should not use this type directly, and instead use [`ConnectionId`].
-pub type ConnectionIdType = u32;
-
-/// An abstraction allowing us to name different connections.
-pub type ConnectionId = IdHandle<ConnectionIdType>;
 
 /// A handle to a running coordinator.
 ///
@@ -638,7 +632,7 @@ impl SessionClient {
         let result: Result<_, AdapterError> =
             mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, columns, rows)
                 .err_into()
-                .and_then(|values| values.lower().err_into())
+                .and_then(|values| values.lower(conn_catalog.system_vars()).err_into())
                 .and_then(|values| {
                     Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context())
                         .optimize(values)

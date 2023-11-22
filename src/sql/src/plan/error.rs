@@ -27,7 +27,7 @@ use mz_repr::adt::timestamp::InvalidTimestampPrecisionError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedItemName;
+use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
 
 use crate::catalog::{
@@ -37,7 +37,8 @@ use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 use crate::pure::error::{
-    KafkaSourcePurificationError, LoadGeneratorSourcePurificationError, PgSourcePurificationError,
+    CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
+    LoadGeneratorSourcePurificationError, PgSourcePurificationError,
     TestScriptSourcePurificationError,
 };
 use crate::session::vars::VarError;
@@ -58,6 +59,7 @@ pub enum PlanError {
     UnknownColumn {
         table: Option<PartialItemName>,
         column: ColumnName,
+        similar: Box<[ColumnName]>,
     },
     UngroupedColumn {
         table: Option<PartialItemName>,
@@ -102,6 +104,7 @@ pub enum PlanError {
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
     InvalidId(GlobalId),
+    InvalidIdent(IdentError),
     InvalidObject(Box<ResolvedItemName>),
     InvalidObjectType {
         expected_type: SystemObjectType,
@@ -134,6 +137,12 @@ pub enum PlanError {
     },
     DropLastSubsource {
         source: String,
+    },
+    DependentObjectsStillExist {
+        object_type: String,
+        object_name: String,
+        // (dependent type, name)
+        dependents: Vec<(String, String)>,
     },
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
@@ -214,8 +223,11 @@ pub enum PlanError {
     InvalidGroupSizeHints,
     PgSourcePurification(PgSourcePurificationError),
     KafkaSourcePurification(KafkaSourcePurificationError),
+    KafkaSinkPurification(KafkaSinkPurificationError),
     TestScriptSourcePurification(TestScriptSourcePurificationError),
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
+    CsrPurification(CsrPurificationError),
+    MissingName(CatalogItemType),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -266,6 +278,8 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.detail(),
             Self::TestScriptSourcePurification(e) => e.detail(),
             Self::LoadGeneratorSourcePurification(e) => e.detail(),
+            Self::CsrPurification(e) => e.detail(),
+            Self::KafkaSinkPurification(e) => e.detail(),
             _ => None,
         }
     }
@@ -281,6 +295,7 @@ impl PlanError {
             Self::DropLastSubsource { source } | Self::DropProgressCollection { source, .. } => Some(format!(
                 "Use DROP SOURCE {source} to drop the primary source along with all subsources"
             )),
+            Self::DependentObjectsStillExist {..} => Some("Use DROP ... CASCADE to drop the dependent objects too.".into()),
             Self::AlterViewOnMaterializedView(_) => {
                 Some("Use ALTER MATERIALIZED VIEW to rename a materialized view.".into())
             }
@@ -340,6 +355,19 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.hint(),
             Self::TestScriptSourcePurification(e) => e.hint(),
             Self::LoadGeneratorSourcePurification(e) => e.hint(),
+            Self::CsrPurification(e) => e.hint(),
+            Self::KafkaSinkPurification(e) => e.hint(),
+            Self::UnknownColumn { table, similar, .. } => {
+                let suffix = "Make sure to surround case sensitive names in double quotes.";
+                match &similar[..] {
+                    [] => None,
+                    [column] => Some(format!("The similarly named column {} does exist. {suffix}", ColumnDisplay { table, column })),
+                    names => {
+                        let similar = names.into_iter().map(|column| ColumnDisplay { table, column }).join(", ");
+                        Some(format!("There are similarly named columns that do exist: {similar}. {suffix}"))
+                    }
+                }
+            }
             _ => None,
         }
     }
@@ -362,7 +390,7 @@ impl fmt::Display for PlanError {
                 }
                 Ok(())
             }
-            Self::UnknownColumn { table, column } => write!(
+            Self::UnknownColumn { table, column, similar: _ } => write!(
                 f,
                 "column {} does not exist",
                 ColumnDisplay { table, column }
@@ -448,6 +476,7 @@ impl fmt::Display for PlanError {
             Self::ParserStatement(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
             Self::InvalidId(id) => write!(f, "invalid id {}", id),
+            Self::InvalidIdent(err) => write!(f, "invalid identifier, {err}"),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidObjectType{expected_type, actual_type, object_name} => write!(f, "{actual_type} {object_name} is not a {expected_type}"),
             Self::InvalidPrivilegeTypes{ invalid_privileges, object_description, } => {
@@ -474,6 +503,17 @@ impl fmt::Display for PlanError {
             Self::DropLastSubsource { source } => write!(f, "SOURCE {} must retain at least one non-progress subsource", source.quoted()),
             Self::DropProgressCollection { progress_collection, source: _} => write!(f, "SOURCE {} is a progress collection and cannot be dropped independently of its primary source", progress_collection.quoted()),
             Self::DropNonSubsource { non_subsource, source} => write!(f, "SOURCE {} is a not a subsource of {}", non_subsource.quoted(), source.quoted()),
+            Self::DependentObjectsStillExist {object_type, object_name, dependents} => {
+                let reason = match &dependents[..] {
+                    [] => " because other objects depend on it".to_string(),
+                    dependents => {
+                        let dependents = dependents.iter().map(|(dependent_type, dependent_name)| format!("{} {}", dependent_type, dependent_name.quoted())).join(", ");
+                        format!(": still depended upon by {dependents}")
+                    },
+                };
+                let object_name = object_name.quoted();
+                write!(f, "cannot drop {object_type} {object_name}{reason}")
+            }
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
             Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {
@@ -548,8 +588,13 @@ impl fmt::Display for PlanError {
             Self::KafkaSourcePurification(e) => write!(f, "KAFKA source validation: {}", e),
             Self::TestScriptSourcePurification(e) => write!(f, "TEST SCRIPT source validation: {}", e),
             Self::LoadGeneratorSourcePurification(e) => write!(f, "LOAD GENERATOR source validation: {}", e),
+            Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
+            Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
             Self::MangedReplicaName(name) => {
                 write!(f, "{name} is reserved for replicas of managed clusters")
+            }
+            Self::MissingName(item_type) => {
+                write!(f, "unspecified name for {item_type}")
             }
         }
     }
@@ -660,6 +705,18 @@ impl From<KafkaSourcePurificationError> for PlanError {
     }
 }
 
+impl From<KafkaSinkPurificationError> for PlanError {
+    fn from(e: KafkaSinkPurificationError) -> Self {
+        PlanError::KafkaSinkPurification(e)
+    }
+}
+
+impl From<CsrPurificationError> for PlanError {
+    fn from(e: CsrPurificationError) -> Self {
+        PlanError::CsrPurification(e)
+    }
+}
+
 impl From<TestScriptSourcePurificationError> for PlanError {
     fn from(e: TestScriptSourcePurificationError) -> Self {
         PlanError::TestScriptSourcePurification(e)
@@ -669,6 +726,12 @@ impl From<TestScriptSourcePurificationError> for PlanError {
 impl From<LoadGeneratorSourcePurificationError> for PlanError {
     fn from(e: LoadGeneratorSourcePurificationError) -> Self {
         PlanError::LoadGeneratorSourcePurification(e)
+    }
+}
+
+impl From<IdentError> for PlanError {
+    fn from(e: IdentError) -> Self {
+        PlanError::InvalidIdent(e)
     }
 }
 

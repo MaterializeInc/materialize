@@ -22,11 +22,6 @@ ALTER SYSTEM SET enable_rbac_checks = true
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks = true
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_index_options = true
 ----
 COMPLETE 0
@@ -533,7 +528,7 @@ ALTER MATERIALIZED VIEW jmv OWNER TO group_materialize
 ## Connections
 
 statement ok
-CREATE CONNECTION mc TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION mc TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 
 query T
 SELECT mz_roles.name
@@ -570,7 +565,7 @@ statement ok
 ALTER CONNECTION mssh ROTATE KEYS
 
 simple conn=joe,user=joe
-CREATE CONNECTION jc TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION jc TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -1251,6 +1246,7 @@ DROP ROLE owner
 ----
 db error: ERROR: role "owner" cannot be dropped because some objects depend on it
 DETAIL: owner: owner of SOURCE "materialize.public.s_progress"
+owner: privileges granted on SOURCE "materialize.public.s_progress" to mz_support
 owner: privileges on SOURCE "materialize.public.s_progress" granted by owner
 owner: privileges granted on SOURCE "materialize.public.s_progress" to owner
 owner: owner of SOURCE "materialize.public.s"
@@ -1487,7 +1483,7 @@ GRANT CREATE ON CLUSTER default TO owner;
 COMPLETE 0
 
 simple conn=owner6,user=owner
-CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -2706,14 +2702,26 @@ DROP OWNED BY materialize;
 db error: ERROR: schema "materialize.s" cannot be dropped without CASCADE while it contains non-owned objects
 
 simple conn=mz_system,user=mz_system
-CREATE VIEW v AS SELECT * FROM t;
+CREATE VIEW v1 AS SELECT * FROM t;
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 DROP OWNED BY materialize;
 ----
-db error: ERROR: cannot drop "materialize.public.t" without CASCADE: still depended upon by non-owned catalog items "materialize.public.v"
+db error: ERROR: cannot drop table "materialize.public.t": still depended upon by view "materialize.public.v1"
+HINT: Use DROP ... CASCADE to drop the dependent objects too.
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW v2 AS SELECT * FROM t;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+db error: ERROR: cannot drop table "materialize.public.t": still depended upon by view "materialize.public.v1", view "materialize.public.v2"
+HINT: Use DROP ... CASCADE to drop the dependent objects too.
 
 simple conn=mz_system,user=mz_system
 CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
@@ -2723,7 +2731,8 @@ COMPLETE 0
 simple conn=mz_system,user=mz_system
 DROP OWNED BY materialize;
 ----
-db error: ERROR: cannot drop cluster "c" without CASCADE: still depended upon by non-owned catalog items "materialize.public.mv"
+db error: ERROR: cannot drop cluster "c": still depended upon by materialized view "materialize.public.mv"
+HINT: Use DROP ... CASCADE to drop the dependent objects too.
 
 simple conn=mz_system,user=mz_system
 DROP OWNED BY materialize CASCADE;
@@ -2838,7 +2847,7 @@ SELECT name FROM mz_materialized_views WHERE name = 'mv'
 ----
 mv
 
-statement error cannot drop cluster "c" without CASCADE: still depended upon by non-owned catalog items "materialize.public.mv"
+statement error cannot drop cluster "c": still depended upon by materialized view "materialize.public.mv"
 DROP OWNED BY materialize
 
 query T
@@ -3042,10 +3051,5 @@ DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for syst
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
 ----
 COMPLETE 0

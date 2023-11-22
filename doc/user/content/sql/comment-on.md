@@ -6,7 +6,7 @@ menu:
     parent: 'commands'
 ---
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 `COMMENT ON ...` adds or updates the comment of an object.
 

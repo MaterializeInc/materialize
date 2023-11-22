@@ -9,6 +9,7 @@
 
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
 from materialize.zippy.framework import Action, Capability
 from materialize.zippy.minio_capabilities import MinioIsRunning
@@ -22,6 +23,10 @@ class MzStart(Action):
     @classmethod
     def requires(cls) -> set[type[Capability]]:
         return {CockroachIsRunning, MinioIsRunning}
+
+    @classmethod
+    def incompatible_with(cls) -> set[type[Capability]]:
+        return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
         c.up("materialized")
@@ -41,7 +46,19 @@ class MzStart(Action):
             )
 
         c.sql(
-            "ALTER CLUSTER default SET (MANAGED = false)", user="mz_system", port=6877
+            """
+            ALTER CLUSTER default SET (MANAGED = false);
+            ALTER SYSTEM SET enable_unified_clusters = true;
+            """,
+            user="mz_system",
+            port=6877,
+        )
+
+        # Make sure all eligible LIMIT queries use the PeekPersist optimization
+        c.sql(
+            "ALTER SYSTEM SET persist_fast_path_limit = 1000000000",
+            user="mz_system",
+            port=6877,
         )
 
     def provides(self) -> list[Capability]:
@@ -53,7 +70,11 @@ class MzStop(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning}
+        # Technically speaking, we do not need balancerd to be up in order to kill Mz
+        # However, without this protection we frequently end up in a situation where
+        # both are down and Zippy enters a prolonged period of restarting one or the
+        # other and no other useful work can be performed in the meantime.
+        return {MzIsRunning, BalancerdIsRunning}
 
     def run(self, c: Composition) -> None:
         c.kill("materialized")

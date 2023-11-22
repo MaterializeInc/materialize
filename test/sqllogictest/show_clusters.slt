@@ -31,10 +31,10 @@ SELECT name, replicas FROM (SHOW CLUSTERS)
 bar
 r1 (1), r2 (1)
 default
-r1 (1)
+r1 (2)
 foo
 NULL
 mz_introspection
-r1 (1)
+r1 (2)
 mz_system
-r1 (1)
+r1 (2)

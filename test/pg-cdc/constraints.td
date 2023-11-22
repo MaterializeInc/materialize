@@ -81,4 +81,4 @@ ALTER TABLE unique_nullable REPLICA IDENTITY FULL;
 #
 # Unique NOT converted to keys because values are nullable
 > EXPLAIN SELECT DISTINCT f1, f2 FROM unique_nullable
-"Explained Query:\n  Distinct group_by=[#0, #1]\n    Project (#0, #1)\n      ReadIndex on=unique_nullable unique_nullable_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.public.unique_nullable_primary_idx (*** full scan ***)\n"
+"Explained Query:\n  Distinct project=[#0, #1]\n    Project (#0, #1)\n      ReadIndex on=unique_nullable unique_nullable_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.public.unique_nullable_primary_idx (*** full scan ***)\n"

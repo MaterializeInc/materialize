@@ -90,7 +90,7 @@ Explained Query:
                 ArrangeBy keys=[[#0]] // { types: "(integer?)" }
                   ReadStorage materialize.public.u // { types: "(integer?)" }
                 ArrangeBy keys=[[#0]] // { types: "(integer)" }
-                  Distinct group_by=[#0] // { types: "(integer)" }
+                  Distinct project=[#0] // { types: "(integer)" }
                     Project (#0) // { types: "(integer)" }
                       Get l0 // { types: "(integer, text?, date?)" }
           Project () // { types: "()" }

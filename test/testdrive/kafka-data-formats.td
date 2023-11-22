@@ -12,7 +12,7 @@ $ kafka-create-topic topic=input_csv_partitioned partitions=2
 $ kafka-create-topic topic=input_proto
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE input_csv (first, second)
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_csv-${testdrive.seed}')

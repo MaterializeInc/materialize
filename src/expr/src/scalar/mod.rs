@@ -20,6 +20,7 @@ use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_ore::vec::swap_remove_multiple;
 use mz_pgrepr::TypeFromOidError;
+use mz_pgtz::timezone::TimezoneSpec;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::date::DateError;
@@ -645,16 +646,41 @@ impl MirScalarExpr {
         matches!(self, MirScalarExpr::Literal(Err(_), _typ))
     }
 
+    pub fn is_column(&self) -> bool {
+        matches!(self, MirScalarExpr::Column(_))
+    }
+
+    pub fn is_error_if_null(&self) -> bool {
+        matches!(
+            self,
+            Self::CallVariadic {
+                func: VariadicFunc::ErrorIfNull,
+                ..
+            }
+        )
+    }
+
+    #[deprecated = "Use `might_error` instead"]
     pub fn contains_error_if_null(&self) -> bool {
         let mut worklist = vec![self];
         while let Some(expr) = worklist.pop() {
-            if matches!(
-                expr,
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ErrorIfNull,
-                    ..
-                }
-            ) {
+            if expr.is_error_if_null() {
+                return true;
+            }
+            worklist.extend(expr.children());
+        }
+        false
+    }
+
+    /// A very crude approximation for scalar expressions that might produce an
+    /// error.
+    ///
+    /// Currently, this is restricted only to expressions that either contain a
+    /// literal error or a [`VariadicFunc::ErrorIfNull`] call.
+    pub fn might_error(&self) -> bool {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            if expr.is_literal_err() || expr.is_error_if_null() {
                 return true;
             }
             worklist.extend(expr.children());
@@ -960,7 +986,7 @@ impl MirScalarExpr {
                             // time we really don't want to parse it again and again, so we parse it once and embed it into the
                             // UnaryFunc enum. The memory footprint of Timezone is small (8 bytes).
                             let tz = expr1.as_literal_str().unwrap();
-                            *e = match parse_timezone(tz) {
+                            *e = match parse_timezone(tz, TimezoneSpec::Posix) {
                                 Ok(tz) => MirScalarExpr::CallUnary {
                                     func: UnaryFunc::TimezoneTimestamp(func::TimezoneTimestamp(tz)),
                                     expr: Box::new(expr2.take()),
@@ -972,7 +998,7 @@ impl MirScalarExpr {
                             }
                         } else if *func == BinaryFunc::TimezoneTimestampTz && expr1.is_literal() {
                             let tz = expr1.as_literal_str().unwrap();
-                            *e = match parse_timezone(tz) {
+                            *e = match parse_timezone(tz, TimezoneSpec::Posix) {
                                 Ok(tz) => MirScalarExpr::CallUnary {
                                     func: UnaryFunc::TimezoneTimestampTz(
                                         func::TimezoneTimestampTz(tz),
@@ -1179,7 +1205,7 @@ impl MirScalarExpr {
                         } else if let VariadicFunc::TimezoneTime = func {
                             if exprs[0].is_literal() && exprs[2].is_literal_ok() {
                                 let tz = exprs[0].as_literal_str().unwrap();
-                                *e = match parse_timezone(tz) {
+                                *e = match parse_timezone(tz, TimezoneSpec::Posix) {
                                     Ok(tz) => MirScalarExpr::CallUnary {
                                         func: UnaryFunc::TimezoneTime(func::TimezoneTime {
                                             tz,
@@ -1842,6 +1868,18 @@ impl MirScalarExpr {
         contains
     }
 
+    /// True iff the expression contains an `UnmaterializableFunc` that is not in the `exceptions`
+    /// list.
+    pub fn contains_unmaterializable_except(&self, exceptions: &[UnmaterializableFunc]) -> bool {
+        let mut contains = false;
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| match e {
+            MirScalarExpr::CallUnmaterializable(f) if !exceptions.contains(f) => contains = true,
+            _ => (),
+        });
+        contains
+    }
+
     /// True iff the expression contains a `Column`.
     pub fn contains_column(&self) -> bool {
         let mut contains = false;
@@ -2342,6 +2380,7 @@ pub enum EvalError {
     InvalidTimezone(String),
     InvalidTimezoneInterval,
     InvalidTimezoneConversion,
+    InvalidIanaTimezoneId(String),
     InvalidLayer {
         max_layer: usize,
         val: i64,
@@ -2411,6 +2450,7 @@ pub enum EvalError {
     LengthTooLarge,
     AclArrayNullElement,
     MzAclArrayNullElement,
+    PrettyError(String),
 }
 
 impl fmt::Display for EvalError {
@@ -2477,6 +2517,9 @@ impl fmt::Display for EvalError {
                 f.write_str("timezone interval must not contain months or years")
             }
             EvalError::InvalidTimezoneConversion => f.write_str("invalid timezone conversion"),
+            EvalError::InvalidIanaTimezoneId(tz) => {
+                write!(f, "invalid IANA Time Zone Database identifier: '{}'", tz)
+            }
             EvalError::InvalidLayer { max_layer, val } => write!(
                 f,
                 "invalid layer: {}; must use value within [1, {}]",
@@ -2507,6 +2550,7 @@ impl fmt::Display for EvalError {
                 f.write_str("unterminated escape sequence in LIKE")
             }
             EvalError::Parse(e) => e.fmt(f),
+            EvalError::PrettyError(e) => e.fmt(f),
             EvalError::ParseHex(e) => e.fmt(f),
             EvalError::Internal(s) => write!(f, "internal error: {}", s),
             EvalError::InfinityOutOfDomain(s) => {
@@ -2799,6 +2843,7 @@ impl RustType<ProtoEvalError> for EvalError {
             }),
             EvalError::UnterminatedLikeEscapeSequence => UnterminatedLikeEscapeSequence(()),
             EvalError::Parse(error) => Parse(error.into_proto()),
+            EvalError::PrettyError(error) => PrettyError(error.into_proto()),
             EvalError::ParseHex(error) => ParseHex(error.into_proto()),
             EvalError::Internal(v) => Internal(v.clone()),
             EvalError::InfinityOutOfDomain(v) => InfinityOutOfDomain(v.clone()),
@@ -2855,6 +2900,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::LengthTooLarge => LengthTooLarge(()),
             EvalError::AclArrayNullElement => AclArrayNullElement(()),
             EvalError::MzAclArrayNullElement => MzAclArrayNullElement(()),
+            EvalError::InvalidIanaTimezoneId(s) => InvalidIanaTimezoneId(s.clone()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2974,6 +3020,8 @@ impl RustType<ProtoEvalError> for EvalError {
                 LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
                 AclArrayNullElement(()) => Ok(EvalError::AclArrayNullElement),
                 MzAclArrayNullElement(()) => Ok(EvalError::MzAclArrayNullElement),
+                InvalidIanaTimezoneId(s) => Ok(EvalError::InvalidIanaTimezoneId(s)),
+                PrettyError(s) => Ok(EvalError::PrettyError(s)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

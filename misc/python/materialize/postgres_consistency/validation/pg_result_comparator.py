@@ -13,18 +13,23 @@ from decimal import Decimal
 from typing import Any
 
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
-    InconsistencyIgnoreFilter,
+    GenericInconsistencyIgnoreFilter,
 )
 from materialize.output_consistency.query.query_result import QueryExecution
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
-TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+")
+# Examples:
+# * 2038-01-19 03:14:18
+# * 2038-01-19 03:14:18.123
+# * 2038-01-19 03:14:18.123+00
+# * 2038-01-19 03:14:18+00
+TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?")
 
 
 class PostgresResultComparator(ResultComparator):
     """Compares the outcome (result or failure) of multiple query executions"""
 
-    def __init__(self, ignore_filter: InconsistencyIgnoreFilter):
+    def __init__(self, ignore_filter: GenericInconsistencyIgnoreFilter):
         super().__init__(ignore_filter)
         self.floating_precision = 1e-03
 
@@ -74,12 +79,20 @@ class PostgresResultComparator(ResultComparator):
         return TIMESTAMP_PATTERN.match(value1) is not None
 
     def is_timestamp_equal(self, value1: str, value2: str) -> bool:
-        # a timezone might be at the end, do not discard that
-        milliseconds_pattern = re.compile(r"\.\d+")
+        last_second_and_milliseconds_regex = r"(\d\.\d+)"
+        last_second_before_timezone_regex = r"(?<=:\d)(\d)(?=\+)"
+        last_second_at_the_end_regex = r"(?<=:\d)(\d$)"
+        last_second_and_milliseconds_pattern = re.compile(
+            f"{last_second_and_milliseconds_regex}|{last_second_before_timezone_regex}|{last_second_at_the_end_regex}"
+        )
 
-        if milliseconds_pattern.search(value1) and milliseconds_pattern.search(value2):
-            # drop milliseconds
-            value1 = milliseconds_pattern.sub(value1, "")
-            value2 = milliseconds_pattern.sub(value2, "")
+        if last_second_and_milliseconds_pattern.search(
+            value1
+        ) and last_second_and_milliseconds_pattern.search(value2):
+            # drop milliseconds and, if present, trunc last digit of second
+            value1 = last_second_and_milliseconds_pattern.sub("0", value1)
+            value2 = last_second_and_milliseconds_pattern.sub("0", value2)
 
+        assert self.is_timestamp(value1)
+        assert self.is_timestamp(value2)
         return value1 == value2

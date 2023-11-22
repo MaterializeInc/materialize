@@ -33,7 +33,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
-use crate::error::{Determinacy, InvalidUsage};
+use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyPartStats};
 use crate::internal::gc::GcReq;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
@@ -769,7 +769,7 @@ where
 
         let existed = self.leased_readers.remove(reader_id).is_some();
         if existed {
-            // TODO: Re-enable this once we have #15511.
+            // TODO(#22789): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -802,7 +802,7 @@ where
 
         let existed = self.critical_readers.remove(reader_id).is_some();
         if existed {
-            // TODO: Re-enable this once we have #15511.
+            // TODO(#22789): Re-enable this
             //
             // Temporarily disabling this because we think it might be the cause
             // of the remap since bug. Specifically, a clusterd process has a
@@ -1428,19 +1428,9 @@ pub struct ExpiryMetrics {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Since<T>(pub Antichain<T>);
 
-// When used as an error, Since is determinate.
-impl<T> Determinacy for Since<T> {
-    const DETERMINANT: bool = true;
-}
-
 /// Wrapper for Antichain that represents an Upper
 #[derive(Debug, PartialEq)]
 pub struct Upper<T>(pub Antichain<T>);
-
-// When used as an error, Upper is determinate.
-impl<T> Determinacy for Upper<T> {
-    const DETERMINANT: bool = true;
-}
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -1770,7 +1760,7 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader2),
             Continue(true)
         );
-        // TODO: expiry temporarily doesn't advance since until we have #15511.
+        // TODO(#22789): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
@@ -1781,7 +1771,7 @@ pub(crate) mod tests {
             state.collections.expire_leased_reader(&reader3),
             Continue(true)
         );
-        // TODO: expiry temporarily doesn't advance since until we have #15511.
+        // TODO(#22789): expiry temporarily doesn't advance since
         // Switch this assertion back when we re-enable this.
         //
         // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));

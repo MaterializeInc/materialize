@@ -23,13 +23,18 @@ use itertools::Itertools;
 use mz_adapter::catalog::{Catalog, ConnCatalog};
 use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
-use mz_catalog::StashConfig;
+use mz_catalog::durable::StashConfig;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::PubSubClientConnection;
+use mz_persist_client::{PersistClient, PersistLocation};
+use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_tls_util::make_tls;
 use once_cell::sync::Lazy;
@@ -116,10 +121,12 @@ pub struct Config {
     pub materialize_internal_http_port: u16,
     /// Session parameters to set after connecting to materialize.
     pub materialize_params: Vec<(String, String)>,
-    /// An optional Postgres connection string to the catalog stash.
-    pub materialize_catalog_postgres_stash: Option<String>,
+    /// An optional catalog configuration.
+    pub materialize_catalog_config: Option<CatalogConfig>,
     /// Build information
     pub build_info: &'static BuildInfo,
+    /// The environment ID to use for this run
+    pub environment_id: EnvironmentId,
 
     // === Persist options. ===
     /// Handle to the persist consensus system.
@@ -176,18 +183,21 @@ pub struct State {
     postgres_factory: StashFactory,
 
     // === Materialize state. ===
-    materialize_catalog_postgres_stash: Option<String>,
+    materialize_catalog_config: Option<CatalogConfig>,
+
     materialize_sql_addr: String,
     materialize_http_addr: String,
     materialize_internal_sql_addr: String,
     materialize_internal_http_addr: String,
     materialize_user: String,
     pgclient: tokio_postgres::Client,
+    environment_id: EnvironmentId,
 
     // === Persist state. ===
     persist_consensus_url: Option<String>,
     persist_blob_url: Option<String>,
     build_info: &'static BuildInfo,
+    persist_clients: PersistClientCache,
 
     // === Confluent state. ===
     schema_registry_url: Url,
@@ -295,19 +305,79 @@ impl State {
     where
         F: FnOnce(ConnCatalog) -> T,
     {
-        if let Some(url) = &self.materialize_catalog_postgres_stash {
+        fn stash_config(stash_url: String, stash_factory: StashFactory) -> StashConfig {
             let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new()).unwrap();
-            let catalog = Catalog::open_debug_read_only_stash_catalog_config(
-                StashConfig {
-                    stash_factory: self.postgres_factory.clone(),
-                    stash_url: url.clone(),
-                    schema: None,
-                    tls,
-                },
-                SYSTEM_TIME.clone(),
-            )
-            .await?;
+            StashConfig {
+                stash_factory,
+                stash_url,
+                schema: None,
+                tls,
+            }
+        }
+
+        async fn persist_client(
+            persist_consensus_url: String,
+            persist_blob_url: String,
+            persist_clients: &PersistClientCache,
+        ) -> Result<PersistClient, anyhow::Error> {
+            let persist_location = PersistLocation {
+                blob_uri: persist_blob_url,
+                consensus_uri: persist_consensus_url,
+            };
+            Ok(persist_clients.open(persist_location).await?)
+        }
+
+        if let Some(catalog_config) = &self.materialize_catalog_config {
+            let catalog = match catalog_config {
+                CatalogConfig::Stash { url } => {
+                    let stash_config = stash_config(url.clone(), self.postgres_factory.clone());
+                    Catalog::open_debug_read_only_stash_catalog_config(
+                        stash_config,
+                        SYSTEM_TIME.clone(),
+                        Some(self.environment_id.clone()),
+                    )
+                    .await?
+                }
+                CatalogConfig::Persist {
+                    persist_consensus_url,
+                    persist_blob_url,
+                } => {
+                    let persist_client = persist_client(
+                        persist_consensus_url.clone(),
+                        persist_blob_url.clone(),
+                        &self.persist_clients,
+                    )
+                    .await?;
+                    Catalog::open_debug_read_only_persist_catalog_config(
+                        persist_client,
+                        SYSTEM_TIME.clone(),
+                        self.environment_id.clone(),
+                    )
+                    .await?
+                }
+                CatalogConfig::Shadow {
+                    url,
+                    persist_consensus_url,
+                    persist_blob_url,
+                } => {
+                    let stash_config = stash_config(url.clone(), self.postgres_factory.clone());
+                    let persist_client = persist_client(
+                        persist_consensus_url.clone(),
+                        persist_blob_url.clone(),
+                        &self.persist_clients,
+                    )
+                    .await?;
+                    Catalog::open_debug_read_only_shadow_catalog_config(
+                        stash_config,
+                        persist_client,
+                        SYSTEM_TIME.clone(),
+                        self.environment_id.clone(),
+                    )
+                    .await?
+                }
+            };
             let res = f(catalog.for_session(&Session::dummy()));
+            catalog.expire().await;
             Ok(Some(res))
         } else {
             Ok(None)
@@ -348,6 +418,9 @@ impl State {
             .context("resetting materialize state: SHOW DATABASES")?
         {
             let db_name: String = row.get(0);
+            if db_name.starts_with("testdrive_no_reset_") {
+                continue;
+            }
             let query = format!("DROP DATABASE {}", db_name);
             sql::print_query(&query, None);
             inner_client.batch_execute(&query).await.context(format!(
@@ -507,6 +580,33 @@ impl State {
     }
 }
 
+/// Configuration for the Catalog.
+#[derive(Debug, Clone)]
+pub enum CatalogConfig {
+    /// The catalog contents are stored the stash.
+    Stash {
+        /// The PostgreSQL URL for the adapter stash.
+        url: String,
+    },
+    /// The catalog contents are stored in persist.
+    Persist {
+        /// Handle to the persist consensus system.
+        persist_consensus_url: String,
+        /// Handle to the persist blob storage.
+        persist_blob_url: String,
+    },
+    /// The catalog contents are stored in both persist and the stash and their contents are
+    /// compared. This is mostly used for testing purposes.
+    Shadow {
+        /// The PostgreSQL URL for the adapter stash.
+        url: String,
+        /// Handle to the persist consensus system.
+        persist_consensus_url: String,
+        /// Handle to the persist blob storage.
+        persist_blob_url: String,
+    },
+}
+
 pub enum ControlFlow {
     Continue,
     Break,
@@ -568,6 +668,7 @@ impl Run for PosCommand {
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
                     "kafka-verify-data" => kafka::run_verify_data(builtin, state).await,
                     "kafka-verify-commit" => kafka::run_verify_commit(builtin, state).await,
+                    "kafka-verify-topic" => kafka::run_verify_topic(builtin, state).await,
                     "mysql-connect" => mysql::run_connect(builtin, state).await,
                     "mysql-execute" => mysql::run_execute(builtin, state).await,
                     "nop" => nop::run_nop(),
@@ -597,6 +698,7 @@ impl Run for PosCommand {
                     }
                     "set" => set::set_vars(builtin, state),
                     "set-from-sql" => set::run_set_from_sql(builtin, state).await,
+                    "set-from-file" => set::run_set_from_file(builtin, state).await,
                     "webhook-append" => webhook::run_append(builtin, state).await,
                     // "verify-timestamp-compaction" => Box::new(
                     //     verify_timestamp_compaction::run_verify_timestamp_compaction_action(
@@ -708,7 +810,7 @@ pub async fn create_state(
         }
     };
 
-    let materialize_catalog_postgres_stash = config.materialize_catalog_postgres_stash.clone();
+    let materialize_catalog_config = config.materialize_catalog_config.clone();
 
     let (
         materialize_sql_addr,
@@ -863,18 +965,24 @@ pub async fn create_state(
         postgres_factory: StashFactory::new(&MetricsRegistry::new()),
 
         // === Materialize state. ===
-        materialize_catalog_postgres_stash,
+        materialize_catalog_config,
         materialize_sql_addr,
         materialize_http_addr,
         materialize_internal_sql_addr,
         materialize_internal_http_addr,
         materialize_user,
         pgclient,
+        environment_id: config.environment_id.clone(),
 
         // === Persist state. ===
         persist_consensus_url: config.persist_consensus_url.clone(),
         persist_blob_url: config.persist_blob_url.clone(),
         build_info: config.build_info,
+        persist_clients: PersistClientCache::new(
+            PersistConfig::new(config.build_info, SYSTEM_TIME.clone()),
+            &MetricsRegistry::new(),
+            |_, _| PubSubClientConnection::noop(),
+        ),
 
         // === Confluent state. ===
         schema_registry_url,

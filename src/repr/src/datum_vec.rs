@@ -45,40 +45,6 @@ impl DatumVec {
         borrow.extend(row.iter());
         borrow
     }
-
-    /// Borrow an instance with a specific lifetime, and pre-populate with `Row`s, for example
-    /// first adding a key followed by its values.
-    pub fn borrow_with_many<'a, 'b, D: ::std::borrow::Borrow<Row> + 'a>(
-        &'a mut self,
-        rows: &'b [&'a D],
-    ) -> DatumVecBorrow<'a> {
-        let mut borrow = self.borrow();
-        for row in rows {
-            borrow.extend(row.borrow().iter());
-        }
-        borrow
-    }
-
-    /// Borrow an instance with a specific lifetime, and pre-populate with some `Datum`s and a `Row`,
-    /// for example first adding a key followed by its values.
-    pub fn borrow_with_iter<'a, I, D, R>(
-        &'a mut self,
-        datum_iter: I,
-        row: &'a R,
-    ) -> DatumVecBorrow<'a>
-    where
-        I: IntoIterator<Item = D>,
-        D: ::std::borrow::Borrow<Datum<'a>>,
-        R: ::std::borrow::Borrow<Row> + 'a,
-    {
-        let mut borrow = self.borrow();
-        for datum in datum_iter {
-            borrow.push(*datum.borrow());
-        }
-        let row_iter = row.borrow().iter();
-        borrow.extend(row_iter);
-        borrow
-    }
 }
 
 /// A borrowed allocation of `Datum` with a specific lifetime.
@@ -131,7 +97,9 @@ mod test {
         {
             // different lifetime, so that rust is happy with the reference lifetimes
             let r2 = Row::pack_slice(&[Datum::String("second")]);
-            let borrow = d.borrow_with_many(&[&r, &r2]);
+            let mut borrow = d.borrow();
+            borrow.extend(&*r);
+            borrow.extend(&*r2);
             assert_eq!(borrow.len(), 3);
             assert_eq!(borrow[2], Datum::String("second"));
         }

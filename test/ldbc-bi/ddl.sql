@@ -87,6 +87,7 @@ CREATE TABLE Forum (
 );
 
 CREATE INDEX Forum_id ON Forum (id);
+CREATE INDEX Forum_ModeratorPersonId on Forum (ModeratorPersonId);
 
 CREATE TABLE Post (
     creationDate timestamp with time zone NOT NULL,
@@ -197,4 +198,5 @@ CREATE TABLE Person_knows_Person (
 );
 
 CREATE INDEX Person_knows_Person_Person1id ON Person_knows_Person (Person1id);
+CREATE INDEX Person_knows_Person_Person2id ON person_knows_person (Person2id);
 CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id);

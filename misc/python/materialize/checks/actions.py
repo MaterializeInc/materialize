@@ -80,7 +80,6 @@ class Manipulate(Action):
         self.phase = phase - 1
 
         self.checks = scenario.check_objects
-        assert len(self.checks) >= self.phase
 
     def execute(self, e: Executor) -> None:
         assert self.phase is not None

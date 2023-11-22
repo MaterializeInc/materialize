@@ -19,7 +19,7 @@ WORKDIR /scratch
 # The environment variables are necessary to convince `tzdata`'s install scripts
 # not to hang.
 # See: https://serverfault.com/questions/949991/how-to-install-tzdata-on-a-ubuntu-docker-image
-RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     autoconf \
     automake \
     bison \
@@ -80,7 +80,7 @@ COPY --from=crosstool /opt/x-tools /opt/x-tools
 
 # Install dependencies needed by any CI job. Not all of these are available in
 # the Ubuntu repositories.
-RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     bsdmainutils \
     ca-certificates \
     cmake \
@@ -93,6 +93,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     gnupg2 \
     jq \
     lcov \
+    libc-dbg \
     libclang-dev \
     libpq-dev \
     lld \
@@ -110,12 +111,19 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     unzip \
     xz-utils \
     yamllint \
+    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js LTS, for our Python typechecker. This is up here because we don't
 # expect it to change often.
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y nodejs
+
+COPY nodesource.asc .
+
+RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
+    && rm nodesource.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_18.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs
 
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
     | tar xz -C / --strip-components 1 \
@@ -131,11 +139,12 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && rm kail.tar.gz \
     && chmod +x /usr/local/bin/kail \
     && mkdir -p /usr/local/lib/docker/cli-plugins \
+    # If you upgrade Docker (Compose) version here, also update it in misc/python/cli/mzcompose.py \
     && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
     && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
-    && curl -fsSL https://github.com/parca-dev/parca-debuginfo/releases/download/v0.7.0/parca-debuginfo_0.7.0_Linux_$(echo "$ARCH_GCC" | sed "s/aarch64/arm64/").tar.gz \
+    && curl -fsSL https://github.com/parca-dev/parca-debuginfo/releases/download/v0.9.0/parca-debuginfo_0.9.0_Linux_$(echo "$ARCH_GCC" | sed "s/aarch64/arm64/").tar.gz \
     | tar xz -C /usr/local/bin parca-debuginfo
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
@@ -176,6 +185,7 @@ RUN mkdir rust \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
     && rm -rf rust.asc rust.tar.gz rust \
+    && cargo install --root /usr/local --version "=0.8.0" --locked cargo-vet \
     && cargo install --root /usr/local --version "=0.5.2" --locked cargo-about \
     && cargo install --root /usr/local --version "=1.40.5" --locked cargo-deb \
     && cargo install --root /usr/local --version "=0.12.2" --locked cargo-deny \

@@ -1,0 +1,1757 @@
+---
+source: src/catalog/tests/debug.rs
+expression: trace
+---
+Trace {
+    audit_log: CollectionTrace {
+        values: [
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 1,
+                                    event_type: Grant,
+                                    object_type: Cluster,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        AlterDefaultPrivilegeV1(
+                                            AlterDefaultPrivilegeV1 {
+                                                role_id: "p",
+                                                database_id: None,
+                                                schema_id: None,
+                                                grantee_id: "s2",
+                                                privileges: "U",
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 2,
+                                    event_type: Grant,
+                                    object_type: Database,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        AlterDefaultPrivilegeV1(
+                                            AlterDefaultPrivilegeV1 {
+                                                role_id: "p",
+                                                database_id: None,
+                                                schema_id: None,
+                                                grantee_id: "s2",
+                                                privileges: "U",
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 3,
+                                    event_type: Grant,
+                                    object_type: Schema,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        AlterDefaultPrivilegeV1(
+                                            AlterDefaultPrivilegeV1 {
+                                                role_id: "p",
+                                                database_id: None,
+                                                schema_id: None,
+                                                grantee_id: "s2",
+                                                privileges: "U",
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 4,
+                                    event_type: Grant,
+                                    object_type: Type,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        AlterDefaultPrivilegeV1(
+                                            AlterDefaultPrivilegeV1 {
+                                                role_id: "p",
+                                                database_id: None,
+                                                schema_id: None,
+                                                grantee_id: "p",
+                                                privileges: "U",
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 5,
+                                    event_type: Create,
+                                    object_type: Database,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        IdNameV1(
+                                            IdNameV1 {
+                                                id: "u1",
+                                                name: "materialize",
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 6,
+                                    event_type: Grant,
+                                    object_type: Database,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        UpdatePrivilegeV1(
+                                            UpdatePrivilegeV1 {
+                                                object_id: "Du1",
+                                                grantee_id: "p",
+                                                grantor_id: "s1",
+                                                privileges: "U",
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 7,
+                                    event_type: Create,
+                                    object_type: Schema,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        SchemaV2(
+                                            SchemaV2 {
+                                                id: "3",
+                                                name: "public",
+                                                database_name: Some(
+                                                    StringWrapper {
+                                                        inner: "materialize",
+                                                    },
+                                                ),
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 8,
+                                    event_type: Create,
+                                    object_type: Cluster,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        IdNameV1(
+                                            IdNameV1 {
+                                                id: "u1",
+                                                name: "default",
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 9,
+                                    event_type: Grant,
+                                    object_type: Cluster,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        UpdatePrivilegeV1(
+                                            UpdatePrivilegeV1 {
+                                                object_id: "Cu1",
+                                                grantee_id: "p",
+                                                grantor_id: "s1",
+                                                privileges: "U",
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 10,
+                                    event_type: Create,
+                                    object_type: ClusterReplica,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        CreateClusterReplicaV1(
+                                            CreateClusterReplicaV1 {
+                                                cluster_id: "u1",
+                                                cluster_name: "default",
+                                                replica_id: Some(
+                                                    StringWrapper {
+                                                        inner: "u1",
+                                                    },
+                                                ),
+                                                replica_name: "r1",
+                                                logical_size: "1",
+                                                disk: false,
+                                                billed_as: None,
+                                                internal: false,
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 11,
+                                    event_type: Grant,
+                                    object_type: System,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        UpdatePrivilegeV1(
+                                            UpdatePrivilegeV1 {
+                                                object_id: "SYSTEM",
+                                                grantee_id: "s1",
+                                                grantor_id: "s1",
+                                                privileges: "RBN",
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "1",
+                1,
+            ),
+        ],
+    },
+    clusters: CollectionTrace {
+        values: [
+            (
+                (
+                    ClusterKey {
+                        id: Some(
+                            ClusterId {
+                                value: Some(
+                                    User(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    ClusterValue {
+                        name: "default",
+                        linked_object_id: None,
+                        owner_id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        privileges: [
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            Public(
+                                                Empty,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                2,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 768,
+                                    },
+                                ),
+                            },
+                        ],
+                        config: Some(
+                            ClusterConfig {
+                                variant: Some(
+                                    Managed(
+                                        ManagedCluster {
+                                            size: "1",
+                                            replication_factor: 1,
+                                            availability_zones: [],
+                                            logging: Some(
+                                                ReplicaLogging {
+                                                    log_logging: false,
+                                                    interval: Some(
+                                                        Duration {
+                                                            secs: 1,
+                                                            nanos: 0,
+                                                        },
+                                                    ),
+                                                },
+                                            ),
+                                            idle_arrangement_merge_effort: None,
+                                            disk: false,
+                                        },
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+        ],
+    },
+    introspection_sources: CollectionTrace {
+        values: [],
+    },
+    cluster_replicas: CollectionTrace {
+        values: [
+            (
+                (
+                    ClusterReplicaKey {
+                        id: Some(
+                            ReplicaId {
+                                value: Some(
+                                    User(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    ClusterReplicaValue {
+                        cluster_id: Some(
+                            ClusterId {
+                                value: Some(
+                                    User(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        name: "r1",
+                        config: Some(
+                            ReplicaConfig {
+                                logging: Some(
+                                    ReplicaLogging {
+                                        log_logging: false,
+                                        interval: Some(
+                                            Duration {
+                                                secs: 1,
+                                                nanos: 0,
+                                            },
+                                        ),
+                                    },
+                                ),
+                                idle_arrangement_merge_effort: None,
+                                location: Some(
+                                    Managed(
+                                        ManagedLocation {
+                                            size: "1",
+                                            availability_zone: None,
+                                            disk: false,
+                                            internal: false,
+                                            billed_as: None,
+                                        },
+                                    ),
+                                ),
+                            },
+                        ),
+                        owner_id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+        ],
+    },
+    comments: CollectionTrace {
+        values: [],
+    },
+    configs: CollectionTrace {
+        values: [
+            (
+                (
+                    ConfigKey {
+                        key: "deploy_generation",
+                    },
+                    ConfigValue {
+                        value: 0,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    ConfigKey {
+                        key: "user_version",
+                    },
+                    ConfigValue {
+                        value: 44,
+                    },
+                ),
+                "1",
+                1,
+            ),
+        ],
+    },
+    databases: CollectionTrace {
+        values: [
+            (
+                (
+                    DatabaseKey {
+                        id: Some(
+                            DatabaseId {
+                                value: Some(
+                                    User(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    DatabaseValue {
+                        name: "materialize",
+                        owner_id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        privileges: [
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            Public(
+                                                Empty,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                2,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 768,
+                                    },
+                                ),
+                            },
+                        ],
+                    },
+                ),
+                "1",
+                1,
+            ),
+        ],
+    },
+    default_privileges: CollectionTrace {
+        values: [
+            (
+                (
+                    DefaultPrivilegesKey {
+                        role_id: Some(
+                            RoleId {
+                                value: Some(
+                                    Public(
+                                        Empty,
+                                    ),
+                                ),
+                            },
+                        ),
+                        database_id: None,
+                        schema_id: None,
+                        object_type: Type,
+                        grantee: Some(
+                            RoleId {
+                                value: Some(
+                                    Public(
+                                        Empty,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    DefaultPrivilegesValue {
+                        privileges: Some(
+                            AclMode {
+                                bitflags: 256,
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    DefaultPrivilegesKey {
+                        role_id: Some(
+                            RoleId {
+                                value: Some(
+                                    Public(
+                                        Empty,
+                                    ),
+                                ),
+                            },
+                        ),
+                        database_id: None,
+                        schema_id: None,
+                        object_type: Cluster,
+                        grantee: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        2,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    DefaultPrivilegesValue {
+                        privileges: Some(
+                            AclMode {
+                                bitflags: 256,
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    DefaultPrivilegesKey {
+                        role_id: Some(
+                            RoleId {
+                                value: Some(
+                                    Public(
+                                        Empty,
+                                    ),
+                                ),
+                            },
+                        ),
+                        database_id: None,
+                        schema_id: None,
+                        object_type: Database,
+                        grantee: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        2,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    DefaultPrivilegesValue {
+                        privileges: Some(
+                            AclMode {
+                                bitflags: 256,
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    DefaultPrivilegesKey {
+                        role_id: Some(
+                            RoleId {
+                                value: Some(
+                                    Public(
+                                        Empty,
+                                    ),
+                                ),
+                            },
+                        ),
+                        database_id: None,
+                        schema_id: None,
+                        object_type: Schema,
+                        grantee: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        2,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    DefaultPrivilegesValue {
+                        privileges: Some(
+                            AclMode {
+                                bitflags: 256,
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+        ],
+    },
+    id_allocator: CollectionTrace {
+        values: [
+            (
+                (
+                    IdAllocKey {
+                        name: "auditlog",
+                    },
+                    IdAllocValue {
+                        next_id: 12,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "database",
+                    },
+                    IdAllocValue {
+                        next_id: 2,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "replica",
+                    },
+                    IdAllocValue {
+                        next_id: 2,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "schema",
+                    },
+                    IdAllocValue {
+                        next_id: 6,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "storage_usage",
+                    },
+                    IdAllocValue {
+                        next_id: 1,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "system",
+                    },
+                    IdAllocValue {
+                        next_id: 1,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "system_compute",
+                    },
+                    IdAllocValue {
+                        next_id: 1,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "system_replica",
+                    },
+                    IdAllocValue {
+                        next_id: 1,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "user",
+                    },
+                    IdAllocValue {
+                        next_id: 1,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "user_compute",
+                    },
+                    IdAllocValue {
+                        next_id: 2,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "user_role",
+                    },
+                    IdAllocValue {
+                        next_id: 1,
+                    },
+                ),
+                "1",
+                1,
+            ),
+        ],
+    },
+    items: CollectionTrace {
+        values: [],
+    },
+    roles: CollectionTrace {
+        values: [
+            (
+                (
+                    RoleKey {
+                        id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    RoleValue {
+                        name: "mz_system",
+                        attributes: Some(
+                            RoleAttributes {
+                                inherit: true,
+                            },
+                        ),
+                        membership: Some(
+                            RoleMembership {
+                                map: [],
+                            },
+                        ),
+                        vars: Some(
+                            RoleVars {
+                                entries: [],
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    RoleKey {
+                        id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        2,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    RoleValue {
+                        name: "mz_support",
+                        attributes: Some(
+                            RoleAttributes {
+                                inherit: true,
+                            },
+                        ),
+                        membership: Some(
+                            RoleMembership {
+                                map: [],
+                            },
+                        ),
+                        vars: Some(
+                            RoleVars {
+                                entries: [],
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    RoleKey {
+                        id: Some(
+                            RoleId {
+                                value: Some(
+                                    Public(
+                                        Empty,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    RoleValue {
+                        name: "public",
+                        attributes: Some(
+                            RoleAttributes {
+                                inherit: true,
+                            },
+                        ),
+                        membership: Some(
+                            RoleMembership {
+                                map: [],
+                            },
+                        ),
+                        vars: Some(
+                            RoleVars {
+                                entries: [],
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+        ],
+    },
+    schemas: CollectionTrace {
+        values: [
+            (
+                (
+                    SchemaKey {
+                        id: Some(
+                            SchemaId {
+                                value: Some(
+                                    User(
+                                        3,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    SchemaValue {
+                        database_id: Some(
+                            DatabaseId {
+                                value: Some(
+                                    User(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        name: "public",
+                        owner_id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        privileges: [
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            Public(
+                                                Empty,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                2,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 768,
+                                    },
+                                ),
+                            },
+                        ],
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    SchemaKey {
+                        id: Some(
+                            SchemaId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    SchemaValue {
+                        database_id: None,
+                        name: "mz_catalog",
+                        owner_id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        privileges: [
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            Public(
+                                                Empty,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                2,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 768,
+                                    },
+                                ),
+                            },
+                        ],
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    SchemaKey {
+                        id: Some(
+                            SchemaId {
+                                value: Some(
+                                    System(
+                                        2,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    SchemaValue {
+                        database_id: None,
+                        name: "pg_catalog",
+                        owner_id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        privileges: [
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            Public(
+                                                Empty,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                2,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 768,
+                                    },
+                                ),
+                            },
+                        ],
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    SchemaKey {
+                        id: Some(
+                            SchemaId {
+                                value: Some(
+                                    System(
+                                        4,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    SchemaValue {
+                        database_id: None,
+                        name: "mz_internal",
+                        owner_id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        privileges: [
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            Public(
+                                                Empty,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                2,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 768,
+                                    },
+                                ),
+                            },
+                        ],
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    SchemaKey {
+                        id: Some(
+                            SchemaId {
+                                value: Some(
+                                    System(
+                                        5,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    SchemaValue {
+                        database_id: None,
+                        name: "information_schema",
+                        owner_id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        privileges: [
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            Public(
+                                                Empty,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                2,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 768,
+                                    },
+                                ),
+                            },
+                        ],
+                    },
+                ),
+                "1",
+                1,
+            ),
+        ],
+    },
+    settings: CollectionTrace {
+        values: [],
+    },
+    storage_usage: CollectionTrace {
+        values: [],
+    },
+    system_object_mappings: CollectionTrace {
+        values: [],
+    },
+    system_configurations: CollectionTrace {
+        values: [],
+    },
+    system_privileges: CollectionTrace {
+        values: [
+            (
+                (
+                    SystemPrivilegesKey {
+                        grantee: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        grantor: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    SystemPrivilegesValue {
+                        acl_mode: Some(
+                            AclMode {
+                                bitflags: 3758096384,
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+        ],
+    },
+    timestamps: CollectionTrace {
+        values: [
+            (
+                (
+                    TimestampKey {
+                        id: "M",
+                    },
+                    TimestampValue {
+                        ts: Some(
+                            Timestamp {
+                                internal: 0,
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+        ],
+    },
+}

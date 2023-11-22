@@ -386,7 +386,7 @@ mod relation {
     fn parse_distinct(ctx: CtxRef, input: ParseStream) -> Result {
         let reduce = input.parse::<kw::Distinct>()?;
 
-        let group_key = if input.eat(kw::group_by) {
+        let group_key = if input.eat(kw::project) {
             input.parse::<syn::Token![=]>()?;
             let inner;
             syn::bracketed!(inner in input);
@@ -656,7 +656,7 @@ mod relation {
 
 /// Support for parsing [mz_expr::MirScalarExpr].
 mod scalar {
-    use mz_expr::{ColumnOrder, MirScalarExpr};
+    use mz_expr::{BinaryFunc, ColumnOrder, MirScalarExpr};
     use mz_repr::{AsColumnType, Datum, Row};
 
     use super::*;
@@ -1020,16 +1020,31 @@ mod scalar {
     pub fn parse_join_equivalences(input: ParseStream) -> syn::Result<Vec<Vec<MirScalarExpr>>> {
         let mut equivalences = vec![];
         while !input.is_empty() {
-            if input.eat(kw::eq) {
-                let inner;
-                syn::parenthesized!(inner in input);
-                equivalences.push(inner.parse_comma_sep(parse_expr)?);
-            } else {
-                let lhs = parse_operand(input)?;
-                input.parse::<syn::Token![=]>()?;
-                let rhs = parse_operand(input)?;
-                equivalences.push(vec![lhs, rhs]);
+            let mut equivalence = vec![];
+            loop {
+                let mut worklist = vec![parse_operand(input)?];
+                while let Some(operand) = worklist.pop() {
+                    // Be more lenient and support parenthesized equivalences,
+                    // e.g. `... AND (x = u + v = z + 1) AND ...`.
+                    if let MirScalarExpr::CallBinary {
+                        func: BinaryFunc::Eq,
+                        expr1,
+                        expr2,
+                    } = operand
+                    {
+                        // We reverse the order in the worklist in order to get
+                        // the correct order in the equivalence class.
+                        worklist.push(*expr2);
+                        worklist.push(*expr1);
+                    } else {
+                        equivalence.push(operand);
+                    }
+                }
+                if !input.eat(syn::Token![=]) {
+                    break;
+                }
             }
+            equivalences.push(equivalence);
             input.eat(kw::AND);
         }
         Ok(equivalences)
@@ -1491,6 +1506,7 @@ mod kw {
     syn::custom_keyword!(on);
     syn::custom_keyword!(OR);
     syn::custom_keyword!(order_by);
+    syn::custom_keyword!(project);
     syn::custom_keyword!(Project);
     syn::custom_keyword!(Recursive);
     syn::custom_keyword!(Reduce);

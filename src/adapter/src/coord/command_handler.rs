@@ -13,7 +13,11 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use futures::future::LocalBoxFuture;
+use futures::FutureExt;
+use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_compute_client::protocol::response::PeekResponse;
+use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
@@ -26,6 +30,7 @@ use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
 };
 use mz_sql::rbac;
+use mz_sql::rbac::CREATE_ITEM_USAGE;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, OwnedVarInput, Var, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -36,10 +41,8 @@ use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::{CatalogItem, DataSourceDesc, Source};
-use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
-    AppendWebhookResponse, AppendWebhookValidator, Canceled, CatalogSnapshot, Command,
-    ExecuteResponse, GetVariablesResponse, StartupResponse,
+    Canceled, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
@@ -48,30 +51,22 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
+use crate::webhook::{AppendWebhookResponse, AppendWebhookValidator};
 use crate::{catalog, metrics, ExecuteContext};
 
 use super::ExecuteContextExtra;
 
 impl Coordinator {
-    pub(crate) async fn handle_command(&mut self, mut cmd: Command) {
-        if let Some(session) = cmd.session_mut() {
-            session.apply_external_metadata_updates();
-        }
-        match cmd {
-            Command::Startup {
-                cancel_tx,
-                tx,
-                set_setting_keys,
-                user,
-                conn_id,
-                secret_key,
-                uuid,
-                application_name,
-                notice_tx,
-            } => {
-                // Note: We purposefully do not use a ClientTransmitter here because startup
-                // handles errors and cleanup of sessions itself.
-                self.handle_startup(
+    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
+    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
+    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    pub(crate) fn handle_command<'a>(&'a mut self, mut cmd: Command) -> LocalBoxFuture<'a, ()> {
+        async move {
+            if let Some(session) = cmd.session_mut() {
+                session.apply_external_metadata_updates();
+            }
+            match cmd {
+                Command::Startup {
                     cancel_tx,
                     tx,
                     set_setting_keys,
@@ -81,142 +76,161 @@ impl Coordinator {
                     uuid,
                     application_name,
                     notice_tx,
-                )
-                .await;
-            }
-
-            Command::Execute {
-                portal_name,
-                session,
-                tx,
-                span,
-                outer_ctx_extra,
-            } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                let span = span
-                    .in_scope(|| tracing::debug_span!("message_command (execute)").or_current());
-
-                self.handle_execute(portal_name, session, tx, outer_ctx_extra)
-                    .instrument(span)
+                } => {
+                    // Note: We purposefully do not use a ClientTransmitter here because startup
+                    // handles errors and cleanup of sessions itself.
+                    self.handle_startup(
+                        cancel_tx,
+                        tx,
+                        set_setting_keys,
+                        user,
+                        conn_id,
+                        secret_key,
+                        uuid,
+                        application_name,
+                        notice_tx,
+                    )
                     .await;
-            }
+                }
 
-            Command::RetireExecute { data, reason } => self.retire_execution(reason, data),
+                Command::Execute {
+                    portal_name,
+                    session,
+                    tx,
+                    span,
+                    outer_ctx_extra,
+                } => {
+                    let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                    let span = span.or_current();
+                    tracing::Span::current().add_link(span.context().span().span_context().clone());
 
-            Command::CancelRequest {
-                conn_id,
-                secret_key,
-            } => {
-                self.handle_cancel(conn_id, secret_key);
-            }
+                    self.handle_execute(portal_name, session, tx, outer_ctx_extra)
+                        .instrument(span)
+                        .await;
+                }
 
-            Command::PrivilegedCancelRequest { conn_id } => {
-                self.handle_privileged_cancel(conn_id);
-            }
+                Command::RetireExecute { data, reason } => self.retire_execution(reason, data),
 
-            Command::AppendWebhook {
-                database,
-                schema,
-                name,
-                conn_id,
-                tx,
-            } => {
-                self.handle_append_webhook(database, schema, name, conn_id, tx);
-            }
+                Command::CancelRequest {
+                    conn_id,
+                    secret_key,
+                } => {
+                    self.handle_cancel(conn_id, secret_key);
+                }
 
-            Command::GetSystemVars { conn_id, tx } => {
-                let conn = &self.active_conns[&conn_id];
-                let vars =
-                    GetVariablesResponse::new(self.catalog.system_config().iter().filter(|var| {
-                        var.visible(conn.user(), Some(self.catalog.system_config()))
-                            .is_ok()
-                    }));
-                let _ = tx.send(Ok(vars));
-            }
+                Command::PrivilegedCancelRequest { conn_id } => {
+                    self.handle_privileged_cancel(conn_id);
+                }
 
-            Command::SetSystemVars { vars, conn_id, tx } => {
-                let mut ops = Vec::with_capacity(vars.len());
-                let conn = &self.active_conns[&conn_id];
+                Command::AppendWebhook {
+                    database,
+                    schema,
+                    name,
+                    conn_id,
+                    tx,
+                } => {
+                    self.handle_append_webhook(database, schema, name, conn_id, tx);
+                }
 
-                for (name, value) in vars {
-                    if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
-                        var.visible(conn.user(), Some(self.catalog.system_config()))
-                    }) {
-                        let _ = tx.send(Err(e.into()));
-                        return;
+                Command::GetSystemVars { conn_id, tx } => {
+                    let conn = &self.active_conns[&conn_id];
+                    let vars = GetVariablesResponse::new(
+                        self.catalog.system_config().iter().filter(|var| {
+                            var.visible(conn.user(), Some(self.catalog.system_config()))
+                                .is_ok()
+                        }),
+                    );
+                    let _ = tx.send(Ok(vars));
+                }
+
+                Command::SetSystemVars { vars, conn_id, tx } => {
+                    let mut ops = Vec::with_capacity(vars.len());
+                    let conn = &self.active_conns[&conn_id];
+
+                    for (name, value) in vars {
+                        if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
+                            var.visible(conn.user(), Some(self.catalog.system_config()))
+                        }) {
+                            let _ = tx.send(Err(e.into()));
+                            return;
+                        }
+
+                        ops.push(catalog::Op::UpdateSystemConfiguration {
+                            name,
+                            value: OwnedVarInput::Flat(value),
+                        });
                     }
 
-                    ops.push(catalog::Op::UpdateSystemConfiguration {
-                        name,
-                        value: OwnedVarInput::Flat(value),
+                    let result = self.catalog_transact_conn(Some(&conn_id), ops).await;
+                    let _ = tx.send(result);
+                }
+
+                Command::Terminate { conn_id, tx } => {
+                    self.handle_terminate(conn_id).await;
+                    // Note: We purposefully do not use a ClientTransmitter here because we're already
+                    // terminating the provided session.
+                    if let Some(tx) = tx {
+                        let _ = tx.send(Ok(()));
+                    }
+                }
+
+                Command::Commit {
+                    action,
+                    session,
+                    tx,
+                    otel_ctx,
+                } => {
+                    let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                    // We reach here not through a statement execution, but from the
+                    // "commit" pgwire command. Thus, we just generate a default statement
+                    // execution context (once statement logging is implemented, this will cause nothing to be logged
+                    // when the execution finishes.)
+                    let ctx = ExecuteContext::from_parts(
+                        tx,
+                        self.internal_cmd_tx.clone(),
+                        session,
+                        Default::default(),
+                    );
+                    let plan = match action {
+                        EndTransactionAction::Commit => {
+                            Plan::CommitTransaction(CommitTransactionPlan {
+                                transaction_type: TransactionType::Implicit,
+                            })
+                        }
+                        EndTransactionAction::Rollback => {
+                            Plan::AbortTransaction(AbortTransactionPlan {
+                                transaction_type: TransactionType::Implicit,
+                            })
+                        }
+                    };
+                    // TODO: We need a Span that is not none for the otel_ctx to
+                    // attach the parent relationship to. If we do the TODO to swap
+                    // otel_ctx in `Command::Commit` for a Span, we can downgrade
+                    // this to a debug_span.
+                    let span = tracing::info_span!("message_command (commit)").or_current();
+                    span.in_scope(|| otel_ctx.attach_as_parent());
+                    tracing::Span::current().add_link(span.context().span().span_context().clone());
+
+                    self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                        .instrument(span)
+                        .await;
+                }
+
+                Command::CatalogSnapshot { tx } => {
+                    let _ = tx.send(CatalogSnapshot {
+                        catalog: self.owned_catalog(),
                     });
                 }
 
-                let result = self.catalog_transact_conn(Some(&conn_id), ops).await;
-                let _ = tx.send(result);
-            }
-
-            Command::Terminate { conn_id, tx } => {
-                self.handle_terminate(conn_id).await;
-                // Note: We purposefully do not use a ClientTransmitter here because we're already
-                // terminating the provided session.
-                if let Some(tx) = tx {
-                    let _ = tx.send(Ok(()));
+                Command::CheckConsistency { tx } => {
+                    let _ = tx.send(self.check_consistency());
                 }
             }
-
-            Command::Commit {
-                action,
-                session,
-                tx,
-                otel_ctx,
-            } => {
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                // We reach here not through a statement execution, but from the
-                // "commit" pgwire command. Thus, we just generate a default statement
-                // execution context (once statement logging is implemented, this will cause nothing to be logged
-                // when the execution finishes.)
-                let ctx = ExecuteContext::from_parts(
-                    tx,
-                    self.internal_cmd_tx.clone(),
-                    session,
-                    Default::default(),
-                );
-                let plan = match action {
-                    EndTransactionAction::Commit => {
-                        Plan::CommitTransaction(CommitTransactionPlan {
-                            transaction_type: TransactionType::Implicit,
-                        })
-                    }
-                    EndTransactionAction::Rollback => {
-                        Plan::AbortTransaction(AbortTransactionPlan {
-                            transaction_type: TransactionType::Implicit,
-                        })
-                    }
-                };
-                // TODO: We need a Span that is not none for the otel_ctx to
-                // attach the parent relationship to. If we do the TODO to swap
-                // otel_ctx in `Command::Commit` for a Span, we can downgrade
-                // this to a debug_span.
-                let span = tracing::info_span!("message_command (commit)");
-                span.in_scope(|| otel_ctx.attach_as_parent());
-                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
-                    .instrument(span)
-                    .await;
-            }
-
-            Command::CatalogSnapshot { tx } => {
-                let _ = tx.send(CatalogSnapshot {
-                    catalog: self.owned_catalog(),
-                });
-            }
-
-            Command::CheckConsistency { tx } => {
-                let _ = tx.send(self.check_consistency());
-            }
         }
+        .boxed_local()
     }
 
+    #[tracing::instrument(level = "debug", skip(self, cancel_tx, tx, secret_key, notice_tx))]
     async fn handle_startup(
         &mut self,
         cancel_tx: Arc<watch::Sender<Canceled>>,
@@ -434,7 +448,7 @@ impl Coordinator {
         self.handle_execute_inner(stmt, params, ctx).await
     }
 
-    #[tracing::instrument(level = "trace", skip(self, ctx))]
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
     pub(crate) async fn handle_execute_inner(
         &mut self,
         stmt: Statement<Raw>,
@@ -443,7 +457,7 @@ impl Coordinator {
     ) {
         // Verify that this statement type can be executed in the current
         // transaction state.
-        match ctx.session_mut().transaction_mut() {
+        match ctx.session().transaction() {
             // By this point we should be in a running transaction.
             TransactionStatus::Default => unreachable!(),
 
@@ -487,8 +501,7 @@ impl Coordinator {
             // transactions can do unless there's some additional checking to make sure
             // something disallowed in explicit transactions did not previously take place
             // in the implicit portion.
-            txn @ TransactionStatus::InTransactionImplicit(_)
-            | txn @ TransactionStatus::InTransaction(_) => {
+            TransactionStatus::InTransactionImplicit(_) | TransactionStatus::InTransaction(_) => {
                 match stmt {
                     // Statements that are safe in a transaction. We still need to verify that we
                     // don't interleave reads and writes since we can't perform those serializably.
@@ -501,6 +514,7 @@ impl Coordinator {
                     | Statement::Execute(_)
                     | Statement::ExplainPlan(_)
                     | Statement::ExplainTimestamp(_)
+                    | Statement::ExplainSinkSchema(_)
                     | Statement::Fetch(_)
                     | Statement::Prepare(_)
                     | Statement::Rollback(_)
@@ -528,14 +542,28 @@ impl Coordinator {
                         // is always safe.
                     }
 
+                    Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_) => {
+                        let state = self.catalog().for_session(ctx.session()).state().clone();
+                        let revision = self.catalog().transient_revision();
+
+                        // Initialize our transaction with a set of empty ops, or return an error
+                        // if we can't run a DDL transaction
+                        let txn_status = ctx.session_mut().transaction_mut();
+                        if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
+                            ops: vec![],
+                            state,
+                            revision,
+                        }) {
+                            return ctx.retire(Err(err));
+                        }
+                    }
+
                     // Statements below must by run singly (in Started).
                     Statement::AlterCluster(_)
                     | Statement::AlterConnection(_)
                     | Statement::AlterDefaultPrivileges(_)
                     | Statement::AlterIndex(_)
                     | Statement::AlterSetCluster(_)
-                    | Statement::AlterObjectRename(_)
-                    | Statement::AlterObjectSwap(_)
                     | Statement::AlterOwner(_)
                     | Statement::AlterRole(_)
                     | Statement::AlterSecret(_)
@@ -572,16 +600,18 @@ impl Coordinator {
                     | Statement::Update(_)
                     | Statement::ValidateConnection(_)
                     | Statement::Comment(_) => {
+                        let txn_status = ctx.session_mut().transaction_mut();
+
                         // If we're not in an implicit transaction and we could generate exactly one
                         // valid ExecuteResponse, we can delay execution until commit.
-                        if !txn.is_implicit() {
+                        if !txn_status.is_implicit() {
                             // Statements whose tag is trivial (known only from an unexecuted statement) can
                             // be run in a special single-statement explicit mode. In this mode (`BEGIN;
                             // <stmt>; COMMIT`), we generate the expected tag from a successful <stmt>, but
                             // delay execution until `COMMIT`.
                             if let Ok(resp) = ExecuteResponse::try_from(&stmt) {
-                                if let Err(err) =
-                                    txn.add_ops(TransactionOps::SingleStatement { stmt, params })
+                                if let Err(err) = txn_status
+                                    .add_ops(TransactionOps::SingleStatement { stmt, params })
                                 {
                                     ctx.retire(Err(err));
                                     return;
@@ -615,7 +645,9 @@ impl Coordinator {
         match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
-            stmt @ (Statement::CreateSource(_) | Statement::AlterSource(_)) => {
+            stmt @ (Statement::CreateSource(_)
+            | Statement::AlterSource(_)
+            | Statement::CreateSink(_)) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();
                 let catalog = self.owned_catalog();
@@ -628,11 +660,12 @@ impl Coordinator {
                     // Checks if the session is authorized to purify a statement. Usually
                     // authorization is checked after planning, however purification happens before
                     // planning, which may require the use of some connections and secrets.
-                    if let Err(e) = rbac::check_item_usage(
+                    if let Err(e) = rbac::check_usage(
                         &catalog,
                         ctx.session().role_metadata(),
                         ctx.session().vars(),
                         &resolved_ids,
+                        &CREATE_ITEM_USAGE,
                     ) {
                         return ctx.retire(Err(e.into()));
                     }
@@ -678,6 +711,7 @@ impl Coordinator {
     /// Note: Here we take a [`ConnectionIdType`] as opposed to an owned
     /// `ConnectionId` because this method gets called by external clients when
     /// they request to cancel a request.
+    #[tracing::instrument(level = "debug", skip(self, secret_key))]
     fn handle_cancel(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
         if let Some((id_handle, conn_meta)) = self.active_conns.get_key_value(&conn_id) {
             // If the secret key specified by the client doesn't match the
@@ -696,6 +730,7 @@ impl Coordinator {
 
     /// Unconditionally instructs the dataflow layer to cancel any ongoing,
     /// interactive work for the named `conn_id`.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // Cancel pending writes. There is at most one pending write per session.
@@ -765,6 +800,7 @@ impl Coordinator {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
         if self.active_conns.get(&conn_id).is_none() {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.
@@ -798,6 +834,7 @@ impl Coordinator {
         self.send_builtin_table_updates_defer(vec![update]);
     }
 
+    #[tracing::instrument(level = "debug", skip(self, tx))]
     fn handle_append_webhook(
         &mut self,
         database: String,
@@ -806,13 +843,6 @@ impl Coordinator {
         conn_id: ConnectionId,
         tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     ) {
-        // Make sure the feature is enabled before doing anything else.
-        if !self.catalog().system_config().enable_webhook_sources() {
-            // We don't care if the listener went away.
-            let _ = tx.send(Err(AdapterError::Unsupported("enable_webhook_sources")));
-            return;
-        }
-
         /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
         ///
         /// Returns a struct that can be used to append data to the underlying storate collection, and the
@@ -823,6 +853,7 @@ impl Coordinator {
             schema: String,
             name: String,
             conn_id: ConnectionId,
+            now_fn: NowFn,
         ) -> Result<AppendWebhookResponse, PartialItemName> {
             // Resolve our collection.
             let name = PartialItemName {
@@ -864,6 +895,7 @@ impl Coordinator {
                         AppendWebhookValidator::new(
                             validation,
                             coord.caching_secrets_reader.clone(),
+                            now_fn,
                         )
                     });
                     (body, headers.clone(), validator)
@@ -885,7 +917,9 @@ impl Coordinator {
             })
         }
 
-        let response = resolve(self, database, schema, name, conn_id).map_err(|name| {
+        // Get our current clock for any sources that might use time based validation.
+        let now_fn = self.catalog.config().now.clone();
+        let response = resolve(self, database, schema, name, conn_id, now_fn).map_err(|name| {
             AdapterError::UnknownWebhookSource {
                 database: name.database.expect("provided"),
                 schema: name.schema.expect("provided"),

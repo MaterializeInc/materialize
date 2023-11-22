@@ -7,12 +7,25 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_disk_cluster_replicas = false
+ALTER SYSTEM SET disk_cluster_replicas_default = false
+
+! CREATE CLUSTER no SIZE = '1', REPLICATION FACTOR 0, DISK;
+exact:`WITH (DISK)` for cluster replicas is not supported
+
+> CREATE CLUSTER no SIZE = '1', REPLICATION FACTOR 0;
+
+! ALTER CLUSTER no SET (REPLICATION FACTOR 1, DISK);
+exact:`WITH (DISK)` for cluster replicas is not supported
+
+> DROP CLUSTER no;
+
 # Test that with `enable_create_source_denylist_with_options` off, if
 # `enable_disk_cluster_replicas` is on, we can use `WITH(DISK)`.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_source_denylist_with_options = false
 ALTER SYSTEM SET enable_disk_cluster_replicas = true
-ALTER SYSTEM SET disk_cluster_replicas_default = false
 
 > DROP CLUSTER IF EXISTS c;
 

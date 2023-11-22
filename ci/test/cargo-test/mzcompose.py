@@ -9,7 +9,7 @@
 
 import os
 
-from materialize import MZ_ROOT, spawn, ui
+from materialize import MZ_ROOT, buildkite, spawn, ui
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
@@ -22,7 +22,7 @@ SERVICES = [
     Kafka(
         # We need a stable port to advertise, so pick one that is unlikely to
         # conflict with a Kafka cluster running on the local machine.
-        port="30123:30123",
+        ports=["30123:30123"],
         allow_host_ports=True,
         environment_extra=[
             "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
@@ -102,10 +102,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         try:
             spawn.runv(cmd + args.args, env=env)
         finally:
-            spawn.runv(["xz", "-0", "coverage/cargotest.lcov"])
-            spawn.runv(
-                ["buildkite-agent", "artifact", "upload", "coverage/cargotest.lcov.xz"]
-            )
+            spawn.runv(["zstd", "coverage/cargotest.lcov"])
+            buildkite.upload_artifact("coverage/cargotest.lcov.zst")
     else:
         if args.miri_full:
             spawn.runv(

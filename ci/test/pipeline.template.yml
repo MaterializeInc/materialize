@@ -141,6 +141,17 @@ steps:
           queue: linux-x86_64
         coverage: skip
 
+      - id: vet-check
+        label: Cargo vet Check
+        command: bin/ci-builder run stable cargo vet check --locked
+        inputs:
+          - Cargo.lock
+          - misc/cargo-vet/config.toml
+        timeout_in_minutes: 5
+        agents:
+          queue: linux-x86_64
+        coverage: skip
+
       - id: lint-docs
         label: Lint docs
         command: bin/ci-builder run stable ci/test/lint-docs.sh
@@ -162,41 +173,44 @@ steps:
           queue: linux-x86_64
         coverage: skip
 
-  - id: cargo-test
-    label: Cargo test
-    timeout_in_minutes: 30
-    artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
-    inputs:
-      - Cargo.lock
-      - "**/Cargo.toml"
-      - "**/*.rs"
-      - "**/*.proto"
-      - "**/testdata/**"
-    env:
-      AWS_DEFAULT_REGION: "us-east-1"
-      # cargo-test's coverage is handled separately by cargo-llvm-cov
-      BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: cargo-test
-    agents:
-      queue: builder-linux-x86_64
+  - group: "Cargo tests"
+    key: cargo-tests
+    steps:
+      - id: cargo-test
+        label: Cargo test
+        timeout_in_minutes: 45
+        artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
+        inputs:
+          - Cargo.lock
+          - "**/Cargo.toml"
+          - "**/*.rs"
+          - "**/*.proto"
+          - "**/testdata/**"
+        env:
+          AWS_DEFAULT_REGION: "us-east-1"
+          # cargo-test's coverage is handled separately by cargo-llvm-cov
+          BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: cargo-test
+        agents:
+          queue: builder-linux-x86_64
 
-  - id: miri-test
-    label: Miri test (fast) %n
-    inputs: [src]
-    parallelism: 2
-    timeout_in_minutes: 30
-    artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: cargo-test
-          args: [--miri-fast]
-    agents:
-      queue: builder-linux-x86_64
-    coverage: skip
+      - id: miri-test
+        label: Miri test (fast) %n
+        inputs: [src]
+        parallelism: 2
+        timeout_in_minutes: 30
+        artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: cargo-test
+              args: [--miri-fast]
+        agents:
+          queue: builder-linux-x86_64
+        coverage: skip
 
   - id: testdrive
     label: Testdrive %n
@@ -371,27 +385,15 @@ steps:
         agents:
           queue: linux-x86_64
 
-      - id: kafka-ssl
-        label: Kafka SSL smoke test
+      - id: kafka-auth
+        label: Kafka auth test
         depends_on: build-x86_64
         timeout_in_minutes: 30
-        inputs: [test/kafka-ssl/smoketest.td]
+        inputs: [test/kafka-auth/smoketest.td]
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
-              composition: kafka-ssl
-        agents:
-          queue: linux-x86_64
-
-      - id: kafka-sasl-plain
-        label: Kafka SASL PLAIN smoke test
-        depends_on: build-x86_64
-        timeout_in_minutes: 30
-        inputs: [test/kafka-sasl-plain/smoketest.td]
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: kafka-sasl-plain
+              composition: kafka-auth
         agents:
           queue: linux-x86_64
 
@@ -498,7 +500,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartSourcePostgres, --check=PgCdc]
+              args: [--scenario=RestartSourcePostgres, --check=PgCdc, --check=PgCdcNoWait, --check=PgCdcMzNow, --check=SshPg, --check=DebeziumPostgres]
 
   - id: cloudtest
     label: Cloudtest %n
@@ -525,6 +527,17 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
+
+  - id: backup-restore
+    label: "CRDB / Persist backup and restore"
+    artifact_paths: junit_*.xml
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: backup-restore
 
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
@@ -696,6 +709,18 @@ steps:
         agents:
           queue: linux-x86_64
 
+      - id: lang-ruby
+        label: ":ruby: tests"
+        depends_on: build-x86_64
+        timeout_in_minutes: 10
+        inputs: [test/lang/ruby]
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: ruby
+        agents:
+          queue: linux-x86_64
+
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs
@@ -791,9 +816,6 @@ steps:
     priority: 1
     agents:
       queue: builder-linux-x86_64
-    retry:
-      manual:
-        permit_on_passed: true
     coverage: only
 
   - wait: ~

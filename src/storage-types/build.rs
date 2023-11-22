@@ -80,6 +80,8 @@ use std::env;
 fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
 
+    const ATTR: &str = "#[derive(Eq, PartialOrd, Ord, ::serde::Serialize, ::serde::Deserialize, ::proptest_derive::Arbitrary)]";
+
     let mut config = prost_build::Config::new();
     config.btree_map(["."]);
 
@@ -90,6 +92,8 @@ fn main() {
         // is to re-run if any file in the crate changes; that's still a bit too
         // broad, but it's better.
         .emit_rerun_if_changed(false)
+        .message_attribute(".mz_storage_types.collections", ATTR)
+        .enum_attribute("GlobalId.value", ATTR)
         .extern_path(".mz_ccsr.config", "::mz_ccsr")
         .extern_path(".mz_expr.id", "::mz_expr")
         .extern_path(".mz_expr.linear", "::mz_expr")
@@ -98,7 +102,6 @@ fn main() {
         .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
         .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
-        .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
         .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_orchestrator", "::mz_orchestrator")
@@ -115,6 +118,7 @@ fn main() {
             config,
             &[
                 "storage-types/src/controller.proto",
+                "storage-types/src/collections.proto",
                 "storage-types/src/shim.proto",
                 "storage-types/src/errors.proto",
                 "storage-types/src/connections/aws.proto",

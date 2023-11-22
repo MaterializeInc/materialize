@@ -30,7 +30,7 @@ Region        | Day of week | Time
 --------------|-------------|-----------------------------
 aws/eu-west-1 | Wednesday   | 2100-2300 [Europe/Dublin]
 aws/us-east-1 | Thursday    | 0500-0700 [America/New_York]
-aws/us-west-2 | Thursday    | 0200-0400 [America/Los_Angeles]
+aws/us-west-2 | Thursday    | 0500-0700 [America/New_York]
 
 {{< note >}}
 Upgrade windows follow any daylight saving time or summer time rules
@@ -57,8 +57,8 @@ SELECT mz_version();
 ```
 
 Scheduled weekly releases increase the middle component of the version number
-and reset the final component to zero (e.g., v0.26.2 -> v0.27.0). Unscheduled
-releases increase the final component of the version number (e.g., v0.27.0 -> v0.27.1).
+and may change the final component to any number (e.g., v0.26.2 -> v0.27.0 or v0.26.2 -> v0.27.5).
+Unscheduled releases increase the final component of the version number (e.g., v0.27.0 -> v0.27.1).
 
 ## Backwards compatibility
 

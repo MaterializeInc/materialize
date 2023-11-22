@@ -173,7 +173,7 @@
 //!     the txns shard contains the set of txns that need to be applied (as well
 //!     as the set of registered data shards).
 //!
-//! [TxnsCache]: crate::txn_read::TxnsCache
+//! [TxnsCache]: crate::txn_cache::TxnsCache
 //!
 //! # Usage
 //!
@@ -273,6 +273,7 @@ use differential_dataflow::Hashable;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
+use mz_persist_client::stats::PartStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{ShardId, ShardIdSchema};
 use mz_persist_types::codec_impls::VecU8Schema;
@@ -280,18 +281,13 @@ use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, instrument};
+use tracing::{debug, error, instrument};
 
-pub mod error;
 pub mod operator;
+pub mod txn_cache;
 pub mod txn_read;
 pub mod txn_write;
 pub mod txns;
-
-// TODO(txn):
-// - Closing/deleting data shards.
-// - Hold a critical since capability for each registered shard?
-// - Figure out the compaction story for both txn and data shard.
 
 /// The in-mem representation of an update in the txns shard.
 #[derive(Debug)]
@@ -300,6 +296,15 @@ pub enum TxnsEntry {
     Register(ShardId),
     /// A batch written to a data shard in a txn.
     Append(ShardId, Vec<u8>),
+}
+
+impl TxnsEntry {
+    fn data_id(&self) -> &ShardId {
+        match self {
+            TxnsEntry::Register(data_id) => data_id,
+            TxnsEntry::Append(data_id, _) => data_id,
+        }
+    }
 }
 
 /// An abstraction over the encoding format of [TxnsEntry].
@@ -320,6 +325,14 @@ pub trait TxnsCodec: Debug {
     ///
     /// Implementations should panic if the values are invalid.
     fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry;
+
+    /// Returns if a part might include the given data shard based on pushdown
+    /// stats.
+    ///
+    /// False positives are okay (needless fetches) but false negatives are not
+    /// (incorrectness). Returns an Option to make `?` convenient, `None` is
+    /// treated the same as `Some(true)`.
+    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool>;
 }
 
 /// A reasonable default implementation of [TxnsCodec].
@@ -347,6 +360,15 @@ impl TxnsCodec for TxnsCodecDefault {
         } else {
             TxnsEntry::Append(key, val)
         }
+    }
+    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
+        let stats = stats
+            .key
+            .col::<String>("")
+            .map_err(|err| error!("unexpected stats type: {}", err))
+            .ok()??;
+        let data_id_str = data_id.to_string();
+        Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
     }
 }
 
@@ -541,7 +563,7 @@ async fn apply_caa<K, V, T, D>(
 }
 
 #[instrument(level = "debug", skip_all, fields(shard=%txns_since.shard_id(), ts=?new_since_ts))]
-pub(crate) async fn maybe_cads<T, O, C>(
+pub(crate) async fn cads<T, O, C>(
     txns_since: &mut SinceHandle<C::Key, C::Val, T, i64, O>,
     new_since_ts: T,
 ) where
@@ -556,15 +578,13 @@ pub(crate) async fn maybe_cads<T, O, C>(
     }
     let token = txns_since.opaque().clone();
     let res = txns_since
-        .maybe_compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(new_since_ts)))
+        .compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(new_since_ts)))
         .await;
     match res {
-        Some(Ok(_)) => {}
-        Some(Err(actual)) => {
+        Ok(_) => {}
+        Err(actual) => {
             mz_ore::halt!("fenced by another process @ {actual:?}. ours = {token:?}")
         }
-        // We got rate-limited. No-op.
-        None => {}
     }
 }
 
@@ -655,7 +675,7 @@ pub mod tests {
                     .collect()
             };
             consolidate_updates(&mut expected);
-            let mut actual = actual.into_iter().collect();
+            let mut actual = actual.into_iter().filter(|(_, t, _)| t < &until).collect();
             consolidate_updates(&mut actual);
             // NB: Extra spaces after actual are so it lines up with expected.
             tracing::debug!(
@@ -678,10 +698,16 @@ pub mod tests {
         #[allow(ungated_async_fn_track_caller)]
         #[track_caller]
         pub async fn assert_snapshot(&self, data_id: ShardId, as_of: u64) {
+            self.assert_subscribe(data_id, as_of, as_of + 1).await;
+        }
+
+        #[allow(ungated_async_fn_track_caller)]
+        #[track_caller]
+        pub async fn assert_subscribe(&self, data_id: ShardId, as_of: u64, until: u64) {
             let mut data_subscribe =
                 DataSubscribe::new("test", self.client.clone(), self.txns_id, data_id, as_of);
-            data_subscribe.step_past(as_of).await;
-            self.assert_eq(data_id, as_of, as_of + 1, data_subscribe.output().clone())
+            data_subscribe.step_past(until - 1).await;
+            self.assert_eq(data_id, as_of, until, data_subscribe.output().clone());
         }
     }
 
@@ -713,6 +739,37 @@ pub mod tests {
             )
             .await
             .expect("codecs should not change")
+    }
+
+    pub(crate) async fn write_directly(
+        ts: u64,
+        data_write: &mut WriteHandle<String, (), u64, i64>,
+        keys: &[&str],
+        log: &CommitLog,
+    ) {
+        let data_id = data_write.shard_id();
+        let keys = keys.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
+        let updates = keys.iter().map(|k| ((k, &()), &ts, 1)).collect::<Vec<_>>();
+        let mut current = data_write.shared_upper().into_option().unwrap();
+        loop {
+            let res = crate::small_caa(
+                || format!("data {:.9} directly", data_id),
+                data_write,
+                &updates,
+                current,
+                ts + 1,
+            )
+            .await;
+            match res {
+                Ok(()) => {
+                    for ((k, ()), t, d) in updates {
+                        log.record((data_id, k.to_owned(), *t, d));
+                    }
+                    return;
+                }
+                Err(new_current) => current = new_current,
+            }
+        }
     }
 
     #[mz_ore::test(tokio::test)]

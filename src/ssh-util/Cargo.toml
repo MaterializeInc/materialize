@@ -13,12 +13,15 @@ openssh = { version = "0.9.8", default-features = false, features = ["native-mux
 openssh-mux-client = "0.15.5"
 openssl = { version = "0.10.48", features = ["vendored"] }
 rand = "0.8.5"
+futures = "0.3.25"
 scopeguard = "1.1.0"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
 ssh-key = { version = "0.4.3" }
 tempfile = "3.3.0"
+thiserror = { version = "1.0.37" }
 tokio = "1.32.0"
+tokio-stream = "0.1.11"
 tracing = "0.1.37"
 zeroize = { version = "1.5.7", features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

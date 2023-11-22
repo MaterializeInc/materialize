@@ -22,8 +22,8 @@ use rand::{Rng, SeedableRng};
 use tracing::trace;
 
 use crate::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, SeqNo,
-    VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream,
+    SeqNo, VersionedData,
 };
 
 #[derive(Debug)]
@@ -166,6 +166,12 @@ impl Blob for UnreliableBlob {
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         self.handle.run_op("delete", || self.blob.delete(key)).await
     }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        self.handle
+            .run_op("restore", || self.blob.restore(key))
+            .await
+    }
 }
 
 /// An unreliable delegate to [Consensus].
@@ -184,6 +190,11 @@ impl UnreliableConsensus {
 
 #[async_trait]
 impl Consensus for UnreliableConsensus {
+    fn list_keys(&self) -> ResultStream<String> {
+        // TODO: run_op for streams
+        self.consensus.list_keys()
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         self.handle
             .run_op("head", || self.consensus.head(key))

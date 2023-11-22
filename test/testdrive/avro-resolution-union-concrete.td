@@ -25,7 +25,7 @@ $ kafka-ingest format=avro topic=resolution-union-concrete schema=${union-int} t
   );
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE resolution_union_concrete
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-union-concrete-${testdrive.seed}')

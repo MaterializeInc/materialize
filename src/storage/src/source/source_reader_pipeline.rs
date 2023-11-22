@@ -75,12 +75,11 @@ use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, trace};
 
-use crate::render::sources::OutputIndex;
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
-    HealthStatus, HealthStatusUpdate, MaybeLength, SourceMessage, SourceMetrics, SourceOutput,
-    SourceReaderError, SourceRender,
+    MaybeLength, SourceMessage, SourceMetrics, SourceOutput, SourceReaderError, SourceRender,
 };
 use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
 
@@ -179,7 +178,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Key, C::Value>, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
     )>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, HealthStatusMessage>,
     Option<Rc<dyn Any>>,
 )
 where
@@ -260,7 +259,7 @@ fn source_render_operator<G, C>(
         Diff,
     >,
     Stream<G, Infallible>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, HealthStatusMessage>,
     Rc<dyn Any>,
 )
 where
@@ -304,20 +303,23 @@ where
             };
             for ((output_index, message), _, _) in data.iter() {
                 let status = match message {
-                    Ok(_) => HealthStatusUpdate::status(HealthStatus::Running),
-                    Err(ref error) => HealthStatusUpdate::status(HealthStatus::StalledWithError {
-                        error: error.inner.to_string(),
-                        hint: None,
-                    }),
+                    Ok(_) => HealthStatusUpdate::running(),
+                    Err(ref error) => HealthStatusUpdate::stalled(error.inner.to_string(), None),
                 };
 
                 let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
 
-                let status = (*output_index, status);
+                let mut status = HealthStatusMessage {
+                    index: *output_index,
+                    namespace: C::STATUS_NAMESPACE.clone(),
+                    update: status,
+                };
                 if statuses.last() != Some(&status) {
                     statuses.push(status.clone());
                     // The global status contains the most recent update of the subsources
-                    statuses.push((0, status.1));
+
+                    status.index = 0;
+                    statuses.push(status);
                 }
 
                 match message {
@@ -689,6 +691,8 @@ where
                     }
                 },
                 _ = work_to_do.notified(), if timestamper.initialized() => {
+                    source_metrics.inmemory_remap_bindings.set(u64::cast_from(timestamper.size()));
+
                     // Drain all messages that can be reclocked from all the batches
                     let total_buffered: usize = untimestamped_batches.iter().map(|(_, b)| b.len()).sum();
                     let reclock_source_upper = timestamper.source_upper();

@@ -156,9 +156,11 @@ impl AvailableCollections {
     }
 
     /// Represent a collection that is arranged in the
-    /// specified ways.
+    /// specified ways, with optionally given types describing
+    /// the rows that would be in the raw form of the collection.
     pub fn new_arranged(
         arranged: Vec<(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
+        types: Option<Vec<ColumnType>>,
     ) -> Self {
         assert!(
             !arranged.is_empty(),
@@ -167,7 +169,7 @@ impl AvailableCollections {
         Self {
             raw: false,
             arranged,
-            types: None,
+            types,
         }
     }
 
@@ -1012,6 +1014,11 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             forms.arranged.extend(collections.arranged);
             forms.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
             forms.arranged.dedup_by(|k1, k2| k1.0 == k2.0);
+            if forms.types.is_none() {
+                forms.types = collections.types;
+            } else {
+                assert!(collections.types.is_none() || collections.types == forms.types);
+            }
             Self::ArrangeBy {
                 input,
                 forms,
@@ -1608,7 +1615,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Threshold { input } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir(
+                let (plan, keys) = Self::from_mir(
                     input,
                     arrangements,
                     debug_info,
@@ -1616,31 +1623,40 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 )?;
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
-                let input = if !keys.raw {
-                    input.arrange_by(AvailableCollections::new_raw(), &keys, arity)
+                let plan = if !keys.raw {
+                    plan.arrange_by(AvailableCollections::new_raw(), &keys, arity)
                 } else {
-                    input
+                    plan
                 };
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
-                let input = if !keys
+                let mut types = keys.types.clone();
+                let plan = if !keys
                     .arranged
                     .iter()
                     .any(|(key, _, _)| key == &required_arrangement.0)
                 {
-                    input.arrange_by(
-                        AvailableCollections::new_arranged(vec![required_arrangement]),
+                    types = if enable_specialized_arrangements {
+                        Some(input.typ().column_types)
+                    } else {
+                        None
+                    };
+                    plan.arrange_by(
+                        AvailableCollections::new_arranged(
+                            vec![required_arrangement],
+                            types.clone(),
+                        ),
                         &keys,
                         arity,
                     )
                 } else {
-                    input
+                    plan
                 };
 
-                let output_keys = threshold_plan.keys();
+                let output_keys = threshold_plan.keys(types);
                 // Return the plan, and any produced keys.
                 (
                     Plan::Threshold {
-                        input: Box::new(input),
+                        input: Box::new(plan),
                         threshold_plan,
                     },
                     output_keys,
@@ -1687,9 +1703,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
             MirRelationExpr::ArrangeBy { input, keys } => {
                 let arity = input.arity();
                 let types = if enable_specialized_arrangements {
-                    input.typ().column_types
+                    Some(input.typ().column_types)
                 } else {
-                    Default::default()
+                    None
                 };
                 let (input, mut input_keys) = Self::from_mir(
                     input,
@@ -1697,7 +1713,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     debug_info,
                     enable_specialized_arrangements,
                 )?;
-                input_keys.types = Some(types);
+                input_keys.types = types;
 
                 // Determine keys that are not present in `input_keys`.
                 let new_keys = keys
@@ -1826,14 +1842,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// Convert the dataflow description into one that uses render plans.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = "finalize_dataflow")
     )]
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         enable_consolidate_after_union_negate: bool,
-        enable_monotonic_oneshot_selects: bool,
         enable_specialized_arrangements: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // First, we lower the dataflow description from MIR to LIR.
@@ -1846,7 +1861,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             Self::refine_union_negate_consolidation(&mut dataflow);
         }
 
-        if enable_monotonic_oneshot_selects {
+        if dataflow.is_single_time() {
             Self::refine_single_time_operator_selection(&mut dataflow);
 
             // The relaxation of the `must_consolidate` flag performs an LIR-based
@@ -1877,7 +1892,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
             let config = TransformConfig { monotonic_ids };
             Self::refine_single_time_consolidation(&mut dataflow, &config)?;
         }
-
         mz_repr::explain::trace_plan(&dataflow);
 
         Ok(dataflow)
@@ -1888,7 +1902,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// creates plans for every object to be built for the dataflow.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment ="mir_to_lir")
     )]
@@ -1967,7 +1981,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// push down common MFP expressions.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = "refine_source_mfps")
     )]
@@ -2024,7 +2038,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// Changes the `consolidate_output` flag of such Unions that have at least one Negated input.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = "refine_union_negate_consolidation")
     )]
@@ -2057,15 +2071,14 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// one-shot SELECT query.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = "refine_single_time_operator_selection")
     )]
     fn refine_single_time_operator_selection(dataflow: &mut DataflowDescription<Self>) {
-        // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
-        if !dataflow.is_single_time() {
-            return;
-        }
+        // We should only reach here if we have a one-shot SELECT query, i.e.,
+        // a single-time dataflow.
+        assert!(dataflow.is_single_time());
 
         // Upgrade single-time plans to monotonic.
         for build_desc in dataflow.objects_to_build.iter_mut() {
@@ -2110,7 +2123,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// whenever the input is deemed to be physically monotonic.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = "refine_single_time_consolidation")
     )]
@@ -2118,10 +2131,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
         dataflow: &mut DataflowDescription<Self>,
         config: &TransformConfig,
     ) -> Result<(), String> {
-        // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
-        if !dataflow.is_single_time() {
-            return Ok(());
-        }
+        // We should only reach here if we have a one-shot SELECT query, i.e.,
+        // a single-time dataflow.
+        assert!(dataflow.is_single_time());
 
         let transform = transform::RelaxMustConsolidate::<T>::new();
         for build_desc in dataflow.objects_to_build.iter_mut() {

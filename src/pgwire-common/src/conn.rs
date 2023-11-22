@@ -12,7 +12,7 @@ use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use mz_ore::netio::AsyncReady;
-use mz_ore::server::TlsMode;
+use mz_server_core::TlsMode;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;

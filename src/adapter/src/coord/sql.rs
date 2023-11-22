@@ -10,6 +10,7 @@
 //! Various utility methods used by the [`Coordinator`]. Ideally these are all
 //! put in more meaningfully named modules.
 
+use mz_adapter_types::connection::ConnectionId;
 use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, ScalarType};
 use mz_sql::names::{Aug, ResolvedIds};
@@ -18,7 +19,6 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::catalog::Catalog;
-use crate::client::ConnectionId;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::subscribe::ActiveSubscribe;
@@ -230,6 +230,7 @@ impl Coordinator {
     }
 
     /// Handle removing metadata associated with a SUBSCRIBE query.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn remove_active_subscribe(&mut self, id: GlobalId) {
         if let Some(active_subscribe) = self.active_subscribes.remove(&id) {
             let update = self

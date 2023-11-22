@@ -32,6 +32,7 @@ use tracing::{debug, info, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
+use crate::cfg::RetryParameters;
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::apply::Applier;
@@ -834,6 +835,8 @@ where
         frontier: &Antichain<T>,
         watch: &mut StateWatch<K, V, T, D>,
         reader_id: Option<&LeasedReaderId>,
+        // If Some, an override for the default listen sleep retry parameters.
+        retry: Option<RetryParameters>,
     ) -> HollowBatch<T> {
         let mut seqno = match self.applier.next_listen_batch(frontier) {
             Ok(b) => return b,
@@ -842,14 +845,14 @@ where
 
         // The latest state still doesn't have a new frontier for us:
         // watch+sleep in a loop until it does.
-        let sleeps = self.applier.metrics.retries.next_listen_batch.stream(
-            self.applier
-                .cfg
-                .dynamic
-                .next_listen_batch_retry_params()
-                .into_retry(SystemTime::now())
-                .into_retry_stream(),
-        );
+        let retry =
+            retry.unwrap_or_else(|| self.applier.cfg.dynamic.next_listen_batch_retry_params());
+        let sleeps = self
+            .applier
+            .metrics
+            .retries
+            .next_listen_batch
+            .stream(retry.into_retry(SystemTime::now()).into_retry_stream());
 
         enum Wake<'a, K, V, T, D> {
             Watch(&'a mut StateWatch<K, V, T, D>),
@@ -1074,6 +1077,19 @@ where
             }
 
             if !existed {
+                // If the read handle was intentionally expired, this task
+                // *should* be aborted before it observes the expiration. So if
+                // we get here, this task somehow failed to keep the read lease
+                // alive. Warn loudly, because there's now a live read handle to
+                // an expired shard that will panic if used, but don't panic,
+                // just in case there is some edge case that results in this
+                // task observing the intentional expiration of a read handle.
+                warn!(
+                    "heartbeat task for reader ({}) of shard ({}) exiting due to expired lease \
+                     while read handle is live",
+                    reader_id,
+                    machine.shard_id(),
+                );
                 return;
             }
         }
@@ -1666,6 +1682,42 @@ pub mod datadriven {
         ))
     }
 
+    pub async fn clear_blob(
+        datadriven: &mut MachineState,
+        _args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let mut to_delete = vec![];
+        datadriven
+            .client
+            .blob
+            .list_keys_and_metadata("", &mut |meta| {
+                to_delete.push(meta.key.to_owned());
+            })
+            .await?;
+        for blob in &to_delete {
+            datadriven.client.blob.delete(blob).await?;
+        }
+        Ok(format!("deleted={}\n", to_delete.len()))
+    }
+
+    pub async fn restore_blob(
+        datadriven: &mut MachineState,
+        _args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let not_restored = crate::internal::restore::restore_blob(
+            &datadriven.state_versions,
+            datadriven.client.blob.as_ref(),
+            &datadriven.client.cfg.build_version,
+            datadriven.shard_id,
+        )
+        .await?;
+        let mut out = String::new();
+        for key in not_restored {
+            writeln!(&mut out, "{key}");
+        }
+        Ok(out)
+    }
+
     pub async fn gc(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -1897,6 +1949,8 @@ pub mod datadriven {
                     .expect("unknown batch")
                     .clone();
                 Batch::new(
+                    true,
+                    Arc::clone(&datadriven.client.metrics),
                     Arc::clone(&datadriven.client.blob),
                     datadriven.shard_id,
                     datadriven.client.cfg.build_version.clone(),

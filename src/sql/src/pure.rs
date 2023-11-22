@@ -18,27 +18,32 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
-use mz_kafka_util::client::MzClientContext;
+use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
 use mz_ore::error::ErrorExt;
+use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    CreateSubsourceOption, CreateSubsourceOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
-    CsrSeedProtobufSchema, DbzMode, DeferredItemName, Envelope, KafkaConfigOption,
-    KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
-    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement, UnresolvedItemName,
+    AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
+    CreateSinkConnection, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
+    CsrSeedProtobufSchema, DbzMode, DeferredItemName, DocOnIdentifier, DocOnSchema, Envelope,
+    Ident, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
+    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement,
+    UnresolvedItemName,
 };
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::{Connection, ConnectionContext};
+use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::{
     GenericSourceConnection, PostgresSourcePublicationDetails, SourceConnection,
 };
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
+use rdkafka::admin::AdminClient;
 use tracing::info;
 use uuid::Uuid;
 
@@ -47,16 +52,17 @@ use crate::ast::{
     CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro, CsrConnectionProtobuf,
     Format, ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
 };
-use crate::catalog::{ErsatzCatalog, SessionCatalog};
+use crate::catalog::{CatalogItemType, ErsatzCatalog, SessionCatalog};
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::Aug;
+use crate::names::{Aug, ResolvedColumnName, ResolvedItemName};
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
 use crate::{kafka_util, normalize};
 
 use self::error::{
-    KafkaSourcePurificationError, LoadGeneratorSourcePurificationError, PgSourcePurificationError,
+    CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
+    LoadGeneratorSourcePurificationError, PgSourcePurificationError,
     TestScriptSourcePurificationError,
 };
 
@@ -152,8 +158,230 @@ pub async fn purify_statement(
         Statement::AlterSource(stmt) => {
             purify_alter_source(catalog, stmt, connection_context).await
         }
+        Statement::CreateSink(stmt) => {
+            let r = purify_create_sink(catalog, stmt, connection_context).await?;
+            Ok((vec![], r))
+        }
         o => unreachable!("{:?} does not need to be purified", o),
     }
+}
+
+/// Updates the CREATE SINK statement with materialize comments
+/// if `enable_sink_doc_on_option` feature flag is enabled
+pub(crate) fn add_materialize_comments(
+    catalog: &dyn SessionCatalog,
+    stmt: &mut CreateSinkStatement<Aug>,
+) -> Result<(), PlanError> {
+    // updating avro format with comments so that they are frozen in the `create_sql`
+    // only if the feature is enabled
+    if catalog.system_vars().enable_sink_doc_on_option() {
+        let from_id = stmt.from.item_id();
+        let from = catalog.get_item(from_id);
+        let object_ids = from.uses().0.iter().map(|id| *id).chain_one(from.id());
+
+        // add comments to the avro doc comments
+        if let Some(Format::Avro(AvroSchema::Csr {
+            csr_connection:
+                CsrConnectionAvro {
+                    connection:
+                        CsrConnection {
+                            connection: _,
+                            options,
+                        },
+                    ..
+                },
+        })) = &mut stmt.format
+        {
+            let user_provided_comments = &options
+                .iter()
+                .filter_map(|CsrConfigOption { name, .. }| match name {
+                    CsrConfigOptionName::AvroDocOn(doc_on) => Some(doc_on.clone()),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+
+            // Adding existing comments if not already provided by user
+            for object_id in object_ids {
+                let item = catalog.get_item(&object_id);
+                let full_name = catalog.resolve_full_name(item.name());
+                let full_resolved_name = ResolvedItemName::Item {
+                    id: object_id,
+                    qualifiers: item.name().qualifiers.clone(),
+                    full_name: full_name.clone(),
+                    print_id: !matches!(
+                        item.item_type(),
+                        CatalogItemType::Func | CatalogItemType::Type
+                    ),
+                };
+
+                if let Some(comments_map) = catalog.get_item_comments(&object_id) {
+                    // Getting comment on the item
+                    let doc_on_item_key = AvroDocOn {
+                        identifier: DocOnIdentifier::Type(full_resolved_name.clone()),
+                        for_schema: DocOnSchema::All,
+                    };
+                    if !user_provided_comments.contains(&doc_on_item_key) {
+                        if let Some(root_comment) = comments_map.get(&None) {
+                            options.push(CsrConfigOption {
+                                name: CsrConfigOptionName::AvroDocOn(doc_on_item_key),
+                                value: Some(mz_sql_parser::ast::WithOptionValue::Value(
+                                    Value::String(root_comment.clone()),
+                                )),
+                            });
+                        }
+                    }
+
+                    // Getting comments on columns in the item
+                    if let Ok(desc) = item.desc(&full_name) {
+                        for (pos, column_name) in desc.iter_names().enumerate() {
+                            let comment = comments_map.get(&Some(pos + 1));
+                            if let Some(comment_str) = comment {
+                                let doc_on_column_key = AvroDocOn {
+                                    identifier: DocOnIdentifier::Column(
+                                        ResolvedColumnName::Column {
+                                            relation: full_resolved_name.clone(),
+                                            name: column_name.to_owned(),
+                                            index: pos,
+                                        },
+                                    ),
+                                    for_schema: DocOnSchema::All,
+                                };
+                                if !user_provided_comments.contains(&doc_on_column_key) {
+                                    options.push(CsrConfigOption {
+                                        name: CsrConfigOptionName::AvroDocOn(doc_on_column_key),
+                                        value: Some(mz_sql_parser::ast::WithOptionValue::Value(
+                                            Value::String(comment_str.clone()),
+                                        )),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Checks that the sink described in the statement can connect to its external
+/// resources.
+///
+/// We must not leave any state behind in the Kafka broker, so just ensure that
+/// we can connect. This means we don't ensure that we can create the topic and
+/// introduces TOCTOU errors, but creating an inoperable sink is infinitely
+/// preferable to leaking state in users' environments.
+async fn purify_create_sink(
+    catalog: impl SessionCatalog,
+    mut stmt: CreateSinkStatement<Aug>,
+    connection_context: ConnectionContext,
+) -> Result<Statement<Aug>, PlanError> {
+    add_materialize_comments(&catalog, &mut stmt)?;
+    // General purification
+    let CreateSinkStatement {
+        connection, format, ..
+    } = &stmt;
+
+    match &connection {
+        CreateSinkConnection::Kafka {
+            connection:
+                KafkaConnection {
+                    connection,
+                    options,
+                },
+            key: _,
+        } => {
+            let scx = StatementContext::new(None, &catalog);
+            let mut connection = {
+                let item = scx.get_item_by_resolved_name(connection)?;
+                // Get Kafka connection
+                match item.connection()? {
+                    Connection::Kafka(connection) => {
+                        connection.clone().into_inline_connection(scx.catalog)
+                    }
+                    _ => sql_bail!(
+                        "{} is not a kafka connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    ),
+                }
+            };
+
+            let extracted_options: KafkaConfigOptionExtracted = options.clone().try_into()?;
+
+            for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
+                connection.options.insert(k, v);
+            }
+
+            let client: AdminClient<_> = connection
+                .create_with_context(
+                    &connection_context,
+                    MzClientContext::default(),
+                    &BTreeMap::new(),
+                )
+                .await
+                .map_err(|e| {
+                    // anyhow doesn't support Clone, so not trivial to move into PlanError
+                    KafkaSinkPurificationError::AdminClientError(Arc::new(e))
+                })?;
+
+            let metadata = client
+                .inner()
+                .fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT)
+                .map_err(|e| {
+                    KafkaSinkPurificationError::AdminClientError(Arc::new(
+                        ContextCreationError::KafkaError(e),
+                    ))
+                })?;
+
+            if metadata.brokers().len() == 0 {
+                Err(KafkaSinkPurificationError::ZeroBrokers)?;
+            }
+        }
+    }
+
+    if let Some(format) = format {
+        match format {
+            Format::Avro(AvroSchema::Csr {
+                csr_connection: CsrConnectionAvro { connection, .. },
+            })
+            | Format::Protobuf(ProtobufSchema::Csr {
+                csr_connection: CsrConnectionProtobuf { connection, .. },
+            }) => {
+                let connection = {
+                    let scx = StatementContext::new(None, &catalog);
+                    let item = scx.get_item_by_resolved_name(&connection.connection)?;
+                    // Get Kafka connection
+                    match item.connection()? {
+                        Connection::Csr(connection) => {
+                            connection.clone().into_inline_connection(&catalog)
+                        }
+                        _ => Err(CsrPurificationError::NotCsrConnection(
+                            scx.catalog.resolve_full_name(item.name()),
+                        ))?,
+                    }
+                };
+
+                let client = connection
+                    .connect(&connection_context)
+                    .await
+                    .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
+
+                client
+                    .list_subjects()
+                    .await
+                    .map_err(|e| CsrPurificationError::ListSubjectsError(Arc::new(e)))?;
+            }
+            Format::Avro(AvroSchema::InlineSchema { .. })
+            | Format::Bytes
+            | Format::Csv { .. }
+            | Format::Json
+            | Format::Protobuf(ProtobufSchema::InlineSchema { .. })
+            | Format::Regex(..)
+            | Format::Text => {}
+        }
+    }
+
+    Ok(Statement::CreateSink(stmt))
 }
 
 async fn purify_create_source(
@@ -347,8 +575,13 @@ async fn purify_create_source(
                 .config(&*connection_context.secrets_reader)
                 .await?;
 
-            let publication_tables =
-                mz_postgres_util::publication_info(&config, &publication, None).await?;
+            let publication_tables = mz_postgres_util::publication_info(
+                &connection_context.ssh_tunnel_manager,
+                &config,
+                &publication,
+                None,
+            )
+            .await?;
 
             if publication_tables.is_empty() {
                 Err(PgSourcePurificationError::EmptyPublication(
@@ -369,20 +602,23 @@ async fn purify_create_source(
                 ReferencedSubsources::All => {
                     for table in &publication_tables {
                         let upstream_name = UnresolvedItemName::qualified(&[
-                            &connection.database,
-                            &table.namespace,
-                            &table.name,
+                            Ident::new(&connection.database)?,
+                            Ident::new(&table.namespace)?,
+                            Ident::new(&table.name)?,
                         ]);
                         let subsource_name = subsource_name_gen(source_name, &table.name)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
                 ReferencedSubsources::SubsetSchemas(schemas) => {
-                    let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(&config)
-                        .await?
-                        .into_iter()
-                        .map(|s| s.name)
-                        .collect();
+                    let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(
+                        &connection_context.ssh_tunnel_manager,
+                        &config,
+                    )
+                    .await?
+                    .into_iter()
+                    .map(|s| s.name)
+                    .collect();
 
                     let requested_schemas: BTreeSet<_> =
                         schemas.iter().map(|s| s.as_str().to_string()).collect();
@@ -405,11 +641,12 @@ async fn purify_create_source(
                         }
 
                         let upstream_name = UnresolvedItemName::qualified(&[
-                            &connection.database,
-                            &table.namespace,
-                            &table.name,
+                            Ident::new(&connection.database)?,
+                            Ident::new(&table.namespace)?,
+                            Ident::new(&table.name)?,
                         ]);
-                        let subsource_name = UnresolvedItemName::unqualified(&table.name);
+                        let subsource_name = Ident::new(&table.name)?;
+                        let subsource_name = UnresolvedItemName::unqualified(subsource_name);
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
@@ -431,8 +668,12 @@ async fn purify_create_source(
                 );
             }
 
-            postgres::validate_requested_subsources(&config, &validated_requested_subsources)
-                .await?;
+            postgres::validate_requested_subsources(
+                &config,
+                &validated_requested_subsources,
+                &connection_context.ssh_tunnel_manager,
+            )
+            .await?;
 
             let text_cols_dict = postgres::generate_text_columns(
                 &publication_catalog,
@@ -575,19 +816,26 @@ async fn purify_create_source(
         },
         None => {
             let (item, prefix) = source_name.0.split_last().unwrap();
-            let mut suggested_name = prefix.to_vec();
-            suggested_name.push(format!("{}_progress", item).into());
+            let item_name = Ident::try_generate_name(item.to_string(), "_progress", |candidate| {
+                let mut suggested_name = prefix.to_vec();
+                suggested_name.push(candidate.clone());
 
-            let partial = normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
-            let qualified = scx.allocate_qualified_name(partial)?;
-            let found_name = scx.catalog.find_available_name(qualified);
-            let full_name = scx.catalog.resolve_full_name(&found_name);
+                let partial = normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
+                let qualified = scx.allocate_qualified_name(partial)?;
+                Ok::<_, PlanError>(!scx.item_exists(&qualified))
+            })?;
+
+            let mut full_name = prefix.to_vec();
+            full_name.push(item_name);
+            let full_name = normalize::unresolved_item_name(UnresolvedItemName(full_name))?;
+            let qualified_name = scx.allocate_qualified_name(full_name)?;
+            let full_name = scx.catalog.resolve_full_name(&qualified_name);
 
             (
                 UnresolvedItemName::from(full_name.clone()),
                 crate::names::ResolvedItemName::Item {
                     id: transient_id,
-                    qualifiers: found_name.qualifiers,
+                    qualifiers: qualified_name.qualifiers,
                     full_name,
                     print_id: true,
                 },
@@ -710,9 +958,13 @@ async fn purify_alter_source(
         .config(&*connection_context.secrets_reader)
         .await?;
 
-    let mut publication_tables =
-        mz_postgres_util::publication_info(&config, &pg_source_connection.publication, None)
-            .await?;
+    let mut publication_tables = mz_postgres_util::publication_info(
+        &connection_context.ssh_tunnel_manager,
+        &config,
+        &pg_source_connection.publication,
+        None,
+    )
+    .await?;
 
     if publication_tables.is_empty() {
         Err(PgSourcePurificationError::EmptyPublication(
@@ -739,9 +991,9 @@ async fn purify_alter_source(
         let table_desc = &pg_source_connection.publication_details.tables[native_idx];
         current_subsources.insert(
             UnresolvedItemName(vec![
-                pg_connection.database.clone().into(),
-                table_desc.namespace.clone().into(),
-                table_desc.name.clone().into(),
+                Ident::new(pg_connection.database.clone())?,
+                Ident::new(table_desc.namespace.clone())?,
+                Ident::new(table_desc.name.clone())?,
             ]),
             native_idx,
         );
@@ -755,7 +1007,12 @@ async fn purify_alter_source(
         }
     }
 
-    postgres::validate_requested_subsources(&config, &validated_requested_subsources).await?;
+    postgres::validate_requested_subsources(
+        &config,
+        &validated_requested_subsources,
+        &connection_context.ssh_tunnel_manager,
+    )
+    .await?;
     let mut subsource_id_counter = 0;
     let get_transient_subsource_id = move || {
         subsource_id_counter += 1;
@@ -799,9 +1056,9 @@ async fn purify_alter_source(
     for (i, table) in publication_tables.iter().enumerate() {
         new_name_to_output_map.insert(
             UnresolvedItemName(vec![
-                pg_connection.database.clone().into(),
-                table.namespace.clone().into(),
-                table.name.clone().into(),
+                Ident::new(pg_connection.database.clone())?,
+                Ident::new(table.namespace.clone())?,
+                Ident::new(table.name.clone())?,
             ]),
             i,
         );
@@ -949,7 +1206,10 @@ async fn purify_csr_connection_proto(
                 _ => sql_bail!("{} is not a schema registry connection", connection),
             };
 
-            let ccsr_client = ccsr_connection.connect(connection_context).await?;
+            let ccsr_client = ccsr_connection
+                .connect(connection_context)
+                .await
+                .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
             let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
             let key = compile_proto(&format!("{}-key", topic), &ccsr_client)
@@ -1001,7 +1261,10 @@ async fn purify_csr_connection_avro(
             Connection::Csr(connection) => connection.clone().into_inline_connection(catalog),
             _ => sql_bail!("{} is not a schema registry connection", connection),
         };
-        let ccsr_client = csr_connection.connect(connection_context).await?;
+        let ccsr_client = csr_connection
+            .connect(connection_context)
+            .await
+            .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
         let Schema {
             key_schema,

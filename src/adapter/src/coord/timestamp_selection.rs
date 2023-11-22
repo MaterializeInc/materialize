@@ -27,7 +27,7 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{event, Level};
 
-use crate::catalog::{Catalog, CatalogState};
+use crate::catalog::CatalogState;
 use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineContext;
@@ -516,7 +516,7 @@ impl Coordinator {
         session: &Session,
     ) -> Result<mz_repr::Timestamp, AdapterError> {
         let temp_storage = RowArena::new();
-        prep_scalar_expr(catalog, &mut timestamp, ExprPrepStyle::AsOfUpTo)?;
+        prep_scalar_expr(&mut timestamp, ExprPrepStyle::AsOfUpTo)?;
         let evaled = timestamp.eval(&[], &temp_storage)?;
         if evaled.is_null() {
             coord_bail!("can't use {} as a mz_timestamp for AS OF or UP TO", evaled);
@@ -542,7 +542,7 @@ impl Coordinator {
             }
             _ => coord_bail!(
                 "can't use {} as a mz_timestamp for AS OF or UP TO",
-                Catalog::for_session_state(catalog, session).humanize_column_type(&ty)
+                catalog.for_session(session).humanize_column_type(&ty)
             ),
         })
     }

@@ -259,6 +259,10 @@ impl<'a> Parser<'a> {
                 &DOUBLE_LINE_REGEX
             })?
             .trim_start();
+        // We don't want to advance the expected output past the column names so rewriting works,
+        // but need to be able to parse past them, so remember the position before possible column
+        // names.
+        let query_output_str = output_str;
         let column_names = if check_column_names {
             Some(
                 split_at(&mut output_str, &LINE_REGEX)?
@@ -321,7 +325,7 @@ impl<'a> Parser<'a> {
                 column_names,
                 mode: self.mode,
                 output,
-                output_str,
+                output_str: query_output_str,
             }),
             location,
         })

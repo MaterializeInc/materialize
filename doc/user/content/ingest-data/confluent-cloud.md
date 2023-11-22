@@ -10,6 +10,9 @@ menu:
     name: "Confluent Cloud"
 ---
 
+[//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
+with the Postgres ones. We should include spill to disk in the guidance then."
+
 This guide goes through the required steps to connect Materialize to a Confluent Cloud Kafka cluster.
 
 If you already have a Confluent Cloud Kafka cluster, you can skip step 1 and directly move on to [Create an API Key](#create-an-api-key). You can also skip step 3 if you already have a Confluent Cloud Kafka cluster up and running, and have created a topic that you want to create a source for.

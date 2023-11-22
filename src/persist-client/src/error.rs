@@ -11,42 +11,10 @@
 
 use std::fmt::Debug;
 
-use mz_persist::location::{Determinate, ExternalError, Indeterminate};
 use timely::progress::{Antichain, Timestamp};
 
 use crate::internal::paths::PartialBatchKey;
-use crate::{ShardId, WriterId};
-
-/// An indication of whether the given error type indicates an operation
-/// _definitely_ failed or if it _maybe_ failed.
-///
-/// This is more commonly called definite and indefinite, but "definite" already
-/// means something very specific within Materialize.
-pub trait Determinacy {
-    /// Whether errors of this type are determinate or indeterminate.
-    ///
-    /// True indicates a determinate error: one where the operation definitely
-    /// failed.
-    ///
-    /// False indicates an indeterminate error: one where the operation may have
-    /// failed, but may have succeeded (the most common example being a
-    /// timeout).
-    const DETERMINANT: bool;
-}
-
-impl Determinacy for Determinate {
-    const DETERMINANT: bool = true;
-}
-
-impl Determinacy for Indeterminate {
-    const DETERMINANT: bool = false;
-}
-
-// An external error's variant declares whether it's determinate, but at the
-// type level we have to fall back to indeterminate.
-impl Determinacy for ExternalError {
-    const DETERMINANT: bool = false;
-}
+use crate::ShardId;
 
 /// An error resulting from invalid usage of the API.
 #[derive(Debug)]
@@ -93,14 +61,6 @@ pub enum InvalidUsage<T> {
         /// The expected upper of the batch
         expected_upper: Antichain<T>,
     },
-    /// An update in the batch was beyond the expected since
-    /// This is an error when `upper.less_than(since)`
-    UpdateBeyondSince {
-        /// The timestamp of the update
-        ts: T,
-        /// The expected since of the batch
-        expected_since: Antichain<T>,
-    },
     /// A [crate::batch::Batch] or [crate::fetch::LeasedBatchPart] was
     /// given to a [crate::write::WriteHandle] from a different shard
     BatchNotFromThisShard {
@@ -111,8 +71,6 @@ pub enum InvalidUsage<T> {
     },
     /// The requested codecs don't match the actual ones in durable storage.
     CodecMismatch(Box<CodecMismatch>),
-    /// An unregistered or expired [crate::write::WriterId] was used by [crate::write::WriteHandle]
-    UnknownWriter(WriterId),
 }
 
 impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
@@ -148,28 +106,16 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
                 "timestamp {:?} is beyond the expected batch upper: {:?}",
                 ts, expected_upper
             ),
-            InvalidUsage::UpdateBeyondSince { ts, expected_since } => write!(
-                f,
-                "timestamp {:?} is beyond the expected batch since: {:?}",
-                ts, expected_since
-            ),
             InvalidUsage::BatchNotFromThisShard {
                 batch_shard,
                 handle_shard,
             } => write!(f, "batch was from {} not {}", batch_shard, handle_shard),
             InvalidUsage::CodecMismatch(err) => std::fmt::Display::fmt(err, f),
-            InvalidUsage::UnknownWriter(writer_id) => {
-                write!(f, "writer id {} is not registered", writer_id)
-            }
         }
     }
 }
 
 impl<T: Debug> std::error::Error for InvalidUsage<T> {}
-
-impl<T> Determinacy for InvalidUsage<T> {
-    const DETERMINANT: bool = true;
-}
 
 /// The requested codecs don't match the actual ones in durable storage.
 #[derive(Debug)]
@@ -188,10 +134,6 @@ pub struct CodecMismatch {
 }
 
 impl std::error::Error for CodecMismatch {}
-
-impl Determinacy for CodecMismatch {
-    const DETERMINANT: bool = true;
-}
 
 impl std::fmt::Display for CodecMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -22,6 +22,7 @@ use mz_sql_parser::ast::{
     DeferredItemName, Ident, Value, WithOptionValue,
 };
 use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
+use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
 use crate::catalog::ErsatzCatalog;
 use crate::names::{Aug, PartialItemName};
@@ -52,6 +53,7 @@ pub(super) fn derive_catalog_from_publication_tables<'a>(
 pub(super) async fn validate_requested_subsources(
     config: &Config,
     requested_subsources: &[(UnresolvedItemName, UnresolvedItemName, &PostgresTableDesc)],
+    ssh_tunnel_manager: &SshTunnelManager,
 ) -> Result<(), PlanError> {
     // This condition would get caught during the catalog transaction, but produces a
     // vague, non-contextual error. Instead, error here so we can suggest to the user
@@ -103,14 +105,15 @@ pub(super) async fn validate_requested_subsources(
         .map(|(UnresolvedItemName(inner), _, _)| [inner[1].as_str(), inner[2].as_str()])
         .collect();
 
-    privileges::check_table_privileges(config, tables_to_check_permissions).await?;
+    privileges::check_table_privileges(config, tables_to_check_permissions, ssh_tunnel_manager)
+        .await?;
 
     let oids: Vec<_> = requested_subsources
         .iter()
         .map(|(_, _, table_desc)| table_desc.oid)
         .collect();
 
-    replica_identity::check_replica_identity_full(config, oids).await?;
+    replica_identity::check_replica_identity_full(config, oids, ssh_tunnel_manager).await?;
 
     Ok(())
 }
@@ -146,6 +149,15 @@ pub(super) fn generate_text_columns(
                 })?;
 
         if !desc.columns.iter().any(|column| column.name == col) {
+            let column = mz_repr::ColumnName::from(col);
+            let similar = desc
+                .columns
+                .iter()
+                .filter_map(|c| {
+                    let c_name = mz_repr::ColumnName::from(c.name.clone());
+                    c_name.is_similar(&column).then_some(c_name)
+                })
+                .collect();
             return Err(PlanError::InvalidOptionValue {
                 option_name: option_name.to_string(),
                 err: Box::new(PlanError::UnknownColumn {
@@ -153,13 +165,15 @@ pub(super) fn generate_text_columns(
                         normalize::unresolved_item_name(fully_qualified_name)
                             .expect("known to be of valid len"),
                     ),
-                    column: mz_repr::ColumnName::from(col),
+                    column,
+                    similar,
                 }),
             });
         }
 
         // Rewrite fully qualified name.
-        fully_qualified_name.0.push(col.as_str().to_string().into());
+        let col_ident = Ident::new(col.as_str().to_string())?;
+        fully_qualified_name.0.push(col_ident);
         *name = fully_qualified_name;
 
         let new = text_cols_dict
@@ -210,7 +224,7 @@ where
         let mut columns = vec![];
         let text_cols_dict = text_cols_dict.remove(&table.oid);
         for c in table.columns.iter() {
-            let name = Ident::new(c.name.clone());
+            let name = Ident::new(c.name.clone())?;
             let ty = match &text_cols_dict {
                 Some(names) if names.contains(&c.name) => mz_pgrepr::Type::Text,
                 _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
@@ -250,7 +264,7 @@ where
             let mut key_columns = vec![];
 
             for col_num in key.cols {
-                key_columns.push(Ident::new(
+                let ident = Ident::new(
                     table
                         .columns
                         .iter()
@@ -258,11 +272,12 @@ where
                         .expect("key exists as column")
                         .name
                         .clone(),
-                ))
+                )?;
+                key_columns.push(ident);
             }
 
             let constraint = mz_sql_parser::ast::TableConstraint::Unique {
-                name: Some(Ident::new(key.name)),
+                name: Some(Ident::new(key.name)?),
                 columns: key_columns,
                 is_primary: key.is_primary,
                 nulls_not_distinct: key.nulls_not_distinct,
@@ -349,11 +364,18 @@ mod privileges {
 
     use mz_postgres_util::{Config, PostgresError};
 
+    use super::SshTunnelManager;
     use crate::plan::PlanError;
     use crate::pure::PgSourcePurificationError;
 
-    async fn check_schema_privileges(config: &Config, schemas: Vec<&str>) -> Result<(), PlanError> {
-        let client = config.connect("check_schema_privileges").await?;
+    async fn check_schema_privileges(
+        config: &Config,
+        schemas: Vec<&str>,
+        ssh_tunnel_manager: &SshTunnelManager,
+    ) -> Result<(), PlanError> {
+        let client = config
+            .connect("check_schema_privileges", ssh_tunnel_manager)
+            .await?;
 
         let schemas_len = schemas.len();
 
@@ -417,11 +439,14 @@ mod privileges {
     pub async fn check_table_privileges(
         config: &Config,
         tables: Vec<[&str; 2]>,
+        ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<(), PlanError> {
         let schemas = tables.iter().map(|t| t[0]).collect();
-        check_schema_privileges(config, schemas).await?;
+        check_schema_privileges(config, schemas, ssh_tunnel_manager).await?;
 
-        let client = config.connect("check_table_privileges").await?;
+        let client = config
+            .connect("check_table_privileges", ssh_tunnel_manager)
+            .await?;
 
         let tables_len = tables.len();
 
@@ -494,6 +519,7 @@ mod replica_identity {
 
     use mz_postgres_util::{Config, PostgresError};
 
+    use super::SshTunnelManager;
     use crate::plan::PlanError;
     use crate::pure::PgSourcePurificationError;
 
@@ -501,8 +527,11 @@ mod replica_identity {
     pub async fn check_replica_identity_full(
         config: &Config,
         oids: Vec<Oid>,
+        ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<(), PlanError> {
-        let client = config.connect("check_replica_identity_full").await?;
+        let client = config
+            .connect("check_replica_identity_full", ssh_tunnel_manager)
+            .await?;
 
         let oids_len = oids.len();
 

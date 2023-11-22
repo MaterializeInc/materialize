@@ -20,22 +20,27 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(external_minio=True),
+    Materialized(external_minio=True, catalog_store="stash"),
     Testdrive(no_reset=True, external_minio=True, consistent_seed=True),
 ]
 
 PRE_INCIDENT_MZ = Materialized(
     image="materialize/materialized:v0.68.0",
     external_minio=True,
+    catalog_store="stash",
 )
 
 REJECT_LEGACY_MZ = Materialized(
     external_minio=True,
     environment_extra=["FAILPOINTS=reject_legacy_upsert_errors=panic"],
+    catalog_store="stash",
 )
 
 
 def workflow_default(c: Composition) -> None:
+    """This test can no longer run as it requires the use of v0.68.0
+    Upgrades from v0.68.0 to HEAD are no longer supported.
+    """
     c.up("zookeeper", "kafka", "schema-registry")
 
     with c.override(PRE_INCIDENT_MZ):

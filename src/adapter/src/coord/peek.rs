@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use std::{fmt, mem};
 
 use futures::TryFutureExt;
+use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
@@ -39,8 +40,6 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use uuid::Uuid;
-
-use crate::client::ConnectionId;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::Message;
@@ -75,10 +74,28 @@ pub enum PeekResponseUnary {
 #[derive(Debug)]
 pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
     desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
-    id: GlobalId,
+    pub(crate) id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: BTreeMap<usize, usize>,
     thinned_arity: usize,
+}
+
+impl<T> PeekDataflowPlan<T> {
+    pub fn new(
+        desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        id: GlobalId,
+        key: Vec<MirScalarExpr>,
+        permutation: BTreeMap<usize, usize>,
+        thinned_arity: usize,
+    ) -> Self {
+        Self {
+            desc,
+            id,
+            key,
+            permutation,
+            thinned_arity,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
@@ -366,59 +383,6 @@ impl FastPathPlan {
 }
 
 impl crate::coord::Coordinator {
-    /// Creates a [`PeekPlan`] for the given `dataflow`.
-    ///
-    /// The result will be a [`PeekPlan::FastPath`] plan iff the [`create_fast_path_plan`]
-    /// call succeeds, or a [`PeekPlan::SlowPath`] plan wrapping a [`PeekDataflowPlan`]
-    /// otherwise.
-    pub(crate) fn create_peek_plan(
-        &self,
-        mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-        view_id: GlobalId,
-        compute_instance: ComputeInstanceId,
-        index_id: GlobalId,
-        key: Vec<MirScalarExpr>,
-        permutation: BTreeMap<usize, usize>,
-        thinned_arity: usize,
-        finishing: &RowSetFinishing,
-    ) -> Result<PeekPlan, AdapterError> {
-        // try to produce a `FastPathPlan`
-        let fast_path_plan = create_fast_path_plan(
-            &mut dataflow,
-            view_id,
-            Some(finishing),
-            self.catalog.system_config().persist_fast_path_limit(),
-        )?;
-        // derive a PeekPlan from the optional FastPathPlan
-        let peek_plan = fast_path_plan.map_or_else(
-            // finalize the dataflow and produce a PeekPlan::SlowPath as a default
-            || {
-                // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
-                // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
-                if let Some(as_of) = dataflow.as_of.as_ref() {
-                    if !as_of.is_empty() {
-                        if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1))
-                        {
-                            dataflow.until = timely::progress::Antichain::from_elem(next);
-                        }
-                    }
-                }
-                let desc = self.finalize_dataflow(dataflow, compute_instance)?;
-
-                Ok::<_, AdapterError>(PeekPlan::SlowPath(PeekDataflowPlan {
-                    desc,
-                    id: index_id,
-                    key,
-                    permutation,
-                    thinned_arity,
-                }))
-            },
-            // produce a PeekPlan::FastPath if possible
-            |plan| Ok::<_, AdapterError>(PeekPlan::FastPath(plan)),
-        )?;
-        Ok(peek_plan)
-    }
-
     /// Implements a peek plan produced by `create_plan` above.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn implement_peek_plan(
@@ -487,6 +451,9 @@ impl crate::coord::Coordinator {
         }
 
         let timestamp = determination.timestamp_context.timestamp_or_default();
+        if let Some(id) = ctx_extra.contents() {
+            self.set_statement_execution_timestamp(id, timestamp)
+        }
 
         if let PeekPlan::FastPath(FastPathPlan::PeekPersist(id, mfp_plan)) = fast_path {
             let mut cursor = self
@@ -498,7 +465,8 @@ impl crate::coord::Coordinator {
             let metrics = self.metrics.clone();
             let handle: JoinHandle<Result<PeekResponseUnary, String>> =
                 mz_ore::task::spawn(|| "persist::peek", async move {
-                    let mut limit_remaining = finishing.limit.unwrap_or(usize::MAX);
+                    let mut limit_remaining =
+                        finishing.limit.unwrap_or(usize::MAX) + finishing.offset;
 
                     // Re-used state for processing and building rows.
                     let mut accum = vec![];

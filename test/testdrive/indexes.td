@@ -24,7 +24,7 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 
 # Sources do not have indexes automatically created
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -312,6 +312,7 @@ mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels
 mz_dataflow_operator_reachability_raw_s2_primary_idx        mz_dataflow_operator_reachability_raw        mz_introspection    {address,port,worker_id,update_type,time}
 mz_dataflow_operators_per_worker_s2_primary_idx             mz_dataflow_operators_per_worker             mz_introspection    {id,worker_id}
 mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx mz_dataflow_shutdown_durations_histogram_raw mz_introspection    {worker_id,duration_ns}
+mz_frontiers_ind                                            mz_frontiers                                 mz_introspection    {object_id}
 mz_indexes_ind                                              mz_indexes                                   mz_introspection    {id}
 mz_materialized_views_ind                                   mz_materialized_views                        mz_introspection    {id}
 mz_message_batch_counts_received_raw_s2_primary_idx         mz_message_batch_counts_received_raw         mz_introspection    {channel_id,from_worker_id,to_worker_id}
@@ -320,6 +321,7 @@ mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_re
 mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_object_dependencies_ind                                  mz_object_dependencies                       mz_introspection    {object_id}
 mz_object_lifetimes_ind                                     mz_object_lifetimes                          mz_introspection    {id}
+mz_object_transitive_dependencies_ind                       mz_object_transitive_dependencies            mz_introspection    {object_id}
 mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_introspection    {worker_id,duration_ns}
 mz_roles_ind                                                mz_roles                                     mz_introspection    {id}
 mz_scheduling_elapsed_raw_s2_primary_idx                    mz_scheduling_elapsed_raw                    mz_introspection    {id,worker_id}

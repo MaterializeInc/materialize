@@ -10,6 +10,17 @@
 # Test creating a Postgres source using SSH
 
 > CREATE SECRET pgpass AS 'postgres'
+
+! CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    HOST postgres2,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass,
+    SSH TUNNEL thancred
+  );
+contains: HOST specified more than once
+
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
     DATABASE postgres,

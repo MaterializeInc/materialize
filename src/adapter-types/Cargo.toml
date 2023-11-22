@@ -1,0 +1,15 @@
+[package]
+name = "mz-adapter-types"
+description = "Types for Materialize's adapter layer."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+mz-ore = { path = "../ore" }
+mz-repr = { path = "../repr" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

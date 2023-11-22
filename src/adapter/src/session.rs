@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
 use mz_ore::now::EpochMillis;
@@ -45,7 +46,8 @@ use tokio::sync::watch;
 use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
 
-use crate::client::{ConnectionId, RecordFirstRowStream};
+use crate::catalog::CatalogState;
+use crate::client::RecordFirstRowStream;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
@@ -209,6 +211,13 @@ impl<T: TimestampManipulation> Session<T> {
             .pcx
     }
 
+    fn new_pcx(&self, mut wall_time: DateTime<Utc>) -> PlanContext {
+        if let Some(mock_time) = self.vars().unsafe_new_transaction_wall_time() {
+            wall_time = *mock_time;
+        }
+        PlanContext::new(wall_time)
+    }
+
     /// Starts an explicit transaction, or changes an implicit to an explicit
     /// transaction.
     pub fn start_transaction(
@@ -228,7 +237,8 @@ impl<T: TimestampManipulation> Session<T> {
                 }
                 TransactionOps::None
                 | TransactionOps::Writes(_)
-                | TransactionOps::SingleStatement { .. } => false,
+                | TransactionOps::SingleStatement { .. }
+                | TransactionOps::DDL { .. } => false,
             };
 
             if read_write_prohibited && access == Some(TransactionAccessMode::ReadWrite) {
@@ -241,7 +251,7 @@ impl<T: TimestampManipulation> Session<T> {
                 let id = self.next_transaction_id;
                 self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
                 self.transaction = TransactionStatus::InTransaction(Transaction {
-                    pcx: PlanContext::new(wall_time),
+                    pcx: self.new_pcx(wall_time),
                     ops: TransactionOps::None,
                     write_lock_guard: None,
                     access,
@@ -275,7 +285,7 @@ impl<T: TimestampManipulation> Session<T> {
             let id = self.next_transaction_id;
             self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
             let txn = Transaction {
-                pcx: PlanContext::new(wall_time),
+                pcx: self.new_pcx(wall_time),
                 ops: TransactionOps::None,
                 write_lock_guard: None,
                 access: None,
@@ -985,6 +995,17 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
+    /// Snapshot of the catalog that reflects DDL operations run in this transaction.
+    pub fn catalog_state(&self) -> Option<&CatalogState> {
+        match self.inner() {
+            Some(Transaction {
+                ops: TransactionOps::DDL { state, .. },
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
     /// Reports whether any operations have been executed as part of this transaction
     pub fn contains_ops(&self) -> bool {
         match self.inner() {
@@ -1083,6 +1104,26 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                     TransactionOps::SingleStatement { .. } => {
                         return Err(AdapterError::SingleStatementTransaction)
                     }
+                    TransactionOps::DDL {
+                        ops: og_ops,
+                        revision: og_revision,
+                        state: og_state,
+                    } => match add_ops {
+                        TransactionOps::DDL {
+                            ops: new_ops,
+                            revision: new_revision,
+                            state: new_state,
+                        } => {
+                            if *og_revision != new_revision {
+                                return Err(AdapterError::DDLTransactionRace);
+                            }
+                            if !new_ops.is_empty() {
+                                *og_ops = new_ops;
+                                *og_state = new_state;
+                            }
+                        }
+                        _ => return Err(AdapterError::DDLOnlyTransaction),
+                    },
                 }
             }
             TransactionStatus::Default | TransactionStatus::Failed(_) => {
@@ -1141,7 +1182,8 @@ impl<T> Transaction<T> {
             | TransactionOps::None
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_)
-            | TransactionOps::SingleStatement { .. } => None,
+            | TransactionOps::SingleStatement { .. }
+            | TransactionOps::DDL { .. } => None,
         }
     }
 
@@ -1152,7 +1194,8 @@ impl<T> Transaction<T> {
             TransactionOps::None
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_)
-            | TransactionOps::SingleStatement { .. } => None,
+            | TransactionOps::SingleStatement { .. }
+            | TransactionOps::DDL { .. } => None,
         }
     }
 
@@ -1234,6 +1277,15 @@ pub enum TransactionOps<T> {
         /// The statement params.
         params: mz_sql::plan::Params,
     },
+    /// This transaction has run some _simple_ DDL and must do nothing else.
+    DDL {
+        /// Catalog operations that have already run, and must run before each subsequent op.
+        ops: Vec<crate::catalog::Op>,
+        /// In-memory state that reflects the previously applied ops.
+        state: CatalogState,
+        /// Transient revision of the `Catalog` when this transaction started.
+        revision: u64,
+    },
 }
 
 impl<T> TransactionOps<T> {
@@ -1243,7 +1295,8 @@ impl<T> TransactionOps<T> {
             TransactionOps::None
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_)
-            | TransactionOps::SingleStatement { .. } => None,
+            | TransactionOps::SingleStatement { .. }
+            | TransactionOps::DDL { .. } => None,
         }
     }
 }

@@ -86,12 +86,12 @@ use fail::FailScenario;
 use futures::future;
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_compute::server::ComputeInstanceContext;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
 use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
-use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
@@ -153,6 +153,13 @@ struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
+    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// one.
+    ///
+    /// This flag is only used to force clusterd restarts when the value in
+    /// environmentd is changed.
+    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", action = clap::ArgAction::Set, default_value="false")]
+    enable_persist_txn_tables: bool,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -212,22 +219,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
         .await?;
 
-    if args.tracing.log_filter.is_some() {
-        halt!(
-            "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
-             `log_filter` system variable. In the rare case the filter is needed before the \
-             process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
-        )
-    }
-    if args.tracing.opentelemetry_filter.is_some() {
-        halt!(
-            "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
-            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
-            is needed before the process has access to the system variable, use \
-            `MZ_STARTUP_OPENTELEMETRY_FILTER` / `--startup-opentelemetry-filter`."
-        )
-    }
-
     let tracing_handle = Arc::new(tracing_handle);
 
     // Keep this _after_ the mz_ore::tracing::configure call so that its panic
@@ -239,7 +230,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
-    mz_metrics::rusage::register_metrics_into(&metrics_registry).await;
+    mz_metrics::register_metrics_into(&metrics_registry).await;
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
@@ -260,7 +251,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         );
         let listener = Listener::bind(args.internal_http_listen_addr).await?;
         axum::Server::builder(listener).serve(
-            mz_prof::http::router(&BUILD_INFO)
+            mz_prof_http::router(&BUILD_INFO)
                 .route(
                     "/api/livez",
                     routing::get(mz_http_util::handle_liveness_check),
@@ -333,7 +324,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             secrets_reader,
             None,
         ),
-        StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit)?,
+        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
     )?;
     info!(
         "listening for storage controller connections on {}",
@@ -350,12 +341,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
 
     // Start compute server.
-    let (_compute_server, compute_client) =
-        mz_compute::server::serve(mz_cluster::server::ClusterConfig {
+    let (_compute_server, compute_client) = mz_compute::server::serve(
+        mz_cluster::server::ClusterConfig {
             metrics_registry,
             persist_clients,
             tracing_handle,
-        })?;
+        },
+        ComputeInstanceContext {
+            scratch_directory: args.scratch_directory,
+        },
+    )?;
     info!(
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr

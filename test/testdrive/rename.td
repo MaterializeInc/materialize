@@ -24,7 +24,7 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 
 # Create library of objects and verify names
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -832,3 +832,48 @@ renamed_j
 > ALTER VIEW v_orig RENAME TO v_dontcare
 > CREATE VIEW v_orig AS SELECT 1
 > CREATE DEFAULT INDEX ON v_orig
+
+# Test renaming a schema that contains objects.
+
+> CREATE SCHEMA to_be_renamed;
+
+> SET SCHEMA TO to_be_renamed;
+
+> CREATE SOURCE mz_data
+  FROM KAFKA CONNECTION public.kafka_conn (TOPIC 'testdrive-data-rename-schema-${testdrive.seed}')
+  FORMAT AVRO USING SCHEMA '${writer-schema}'
+
+> CREATE DEFAULT INDEX ON mz_data
+
+> CREATE SINK sink1 FROM mz_data
+  INTO KAFKA CONNECTION public.kafka_conn (TOPIC 'testdrive-snk1-rename-schema-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION public.csr_conn
+  ENVELOPE DEBEZIUM
+
+> SET SCHEMA TO public;
+
+# Check the initial state of the create_sql.
+
+> SHOW CREATE SOURCE to_be_renamed.mz_data;
+name                                create_sql
+---------------------------------------------------------------------------------------------------------------------------------------------------
+materialize.to_be_renamed.mz_data  "CREATE SOURCE \"materialize\".\"to_be_renamed\".\"mz_data\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-rename-schema-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"to_be_renamed\".\"mz_data_progress\""
+
+> SHOW CREATE SINK to_be_renamed.sink1;
+name                                create_sql
+---------------------------------------------------------------------------------------------------------------------------------------------------
+materialize.to_be_renamed.sink1    "CREATE SINK \"materialize\".\"to_be_renamed\".\"sink1\" FROM \"materialize\".\"to_be_renamed\".\"mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"
+
+# Make sure the create_sql got updated.
+
+> ALTER SCHEMA to_be_renamed RENAME TO foo_bar;
+
+> SHOW CREATE SOURCE foo_bar.mz_data;
+name                                create_sql
+---------------------------------------------------------------------------------------------------------------------------------------------------
+materialize.foo_bar.mz_data  "CREATE SOURCE \"materialize\".\"foo_bar\".\"mz_data\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-rename-schema-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"foo_bar\".\"mz_data_progress\""
+
+> SHOW CREATE SINK foo_bar.sink1;
+name                                create_sql
+---------------------------------------------------------------------------------------------------------------------------------------------------
+materialize.foo_bar.sink1    "CREATE SINK \"materialize\".\"foo_bar\".\"sink1\" FROM \"materialize\".\"foo_bar\".\"mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"

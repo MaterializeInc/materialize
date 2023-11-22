@@ -36,7 +36,7 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
 {"a": 4, "b": 3001}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE non_dbz_data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
@@ -160,7 +160,7 @@ a
 > SET cluster_replica = r1
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-ArrangeBy[[Column(0)]]
+"ArrangeBy[[Column(0)]] [val: empty]"
 ArrangeBy[[Column(0)]]-errors
 "Arranged TopK input"
 "Reduced TopK input"

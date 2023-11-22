@@ -7,8 +7,9 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-mz-sql-parser = { path = "../sql-parser" }
+mz-sql-parser = { path = "../sql-parser", default-features = false }
 pretty = "0.12.3"
+thiserror = "1.0.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
@@ -17,7 +18,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 mz-sql-parser = { path = "../sql-parser", features = ["test"] }
 
 [features]
-default = ["workspace-hack"]
+default = ["workspace-hack", "mz-sql-parser/workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

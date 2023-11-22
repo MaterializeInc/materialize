@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 #
 # ci_logged_errors_detect.py - Detect errors in log files during CI and find
-# associated open Github issues in Materialize repository.
+# associated open GitHub issues in Materialize repository.
 
 import argparse
 import os
@@ -22,23 +22,10 @@ from materialize import ci_util, spawn, ui
 
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
+
+# Unexpected failures, report them
 ERROR_RE = re.compile(
     r"""
-    # This block contains expected failures, don't report them
-    ^((?!.*
-    # Expected in restart test
-    ( restart-materialized-1\ \ \|\ thread\ 'coordinator'\ panicked\ at\ 'can't\ persist\ timestamp
-    # Expected in cluster test
-    | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
-    # Emitted by tests employing explicit mz_panic()
-    | forced\ panic
-    # Expected once compute cluster has panicked, brings no new information
-    | timely\ communication\ error:
-    # Expected once compute cluster has panicked, only happens in CI
-    | aborting\ because\ propagate_crashes\ is\ enabled
-    ))
-    .)*
-    # This block contains unexpected failures, report them
     ( panicked\ at
     | segfault\ at
     | trap\ invalid\ opcode
@@ -66,6 +53,35 @@ ERROR_RE = re.compile(
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
     | unrecognized\ configuration\ parameter
+    | Coordinator\ is\ stuck
+    )
+    """,
+    re.VERBOSE,
+)
+
+# Expected failures, don't report them
+IGNORE_RE = re.compile(
+    r"""
+    # Expected in restart test
+    ( restart-materialized-1\ \ \|\ thread\ 'coordinator'\ panicked\ at\ 'can't\ persist\ timestamp
+    # Expected in restart test
+    | restart-materialized-1\ *|\ thread\ 'coordinator'\ panicked\ at\ 'external\ operation\ .*\ failed\ unrecoverably.*
+    # Expected in cluster test
+    | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
+    # Emitted by tests employing explicit mz_panic()
+    | forced\ panic
+    # Expected once compute cluster has panicked, brings no new information
+    | timely\ communication\ error:
+    # Expected once compute cluster has panicked, only happens in CI
+    | aborting\ because\ propagate_crashes\ is\ enabled
+    # Expected when CRDB is corrupted
+    | restart-materialized-1\ .*relation\ \\"fence\\"\ does\ not\ exist
+    # Expected when CRDB is corrupted
+    | restart-materialized-1\ .*relation\ "consensus"\ does\ not\ exist
+    # Will print a separate panic line which will be handled and contains the relevant information
+    | internal\ error:\ panic\ at\ the\ `.*`\ optimization\ stage
+    # redpanda INFO logging
+    | larger\ sizes\ prevent\ running\ out\ of\ memory
     )
     """,
     re.VERBOSE,
@@ -92,7 +108,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="""
 ci-logged-errors-detect detects errors in log files during CI and finds
-associated open Github issues in Materialize repository.""",
+associated open GitHub issues in Materialize repository.""",
     )
 
     parser.add_argument("log_files", nargs="+", help="log files to search in")
@@ -211,8 +227,9 @@ def annotate_logged_errors(log_files: list[str]) -> int:
 
     if unknown_errors:
         print(
-            f"--- Failing test because of {len(unknown_errors)} unknown error(s) in logs"
+            f"+++ Failing test because of {len(unknown_errors)} unknown error(s) in logs:"
         )
+        print(unknown_errors)
 
     return len(unknown_errors)
 
@@ -222,8 +239,7 @@ def get_error_logs(log_files: list[str]) -> list[ErrorLog]:
     for log_file in log_files:
         with open(log_file) as f:
             for line_nr, line in enumerate(f):
-                match = ERROR_RE.search(line)
-                if match:
+                if ERROR_RE.search(line) and not IGNORE_RE.search(line):
                     # environmentd segfaults during normal shutdown in coverage builds, see #20016
                     # Ignoring this in regular ways would still be quite spammy.
                     if (
@@ -242,8 +258,7 @@ def get_known_issues_from_github_page(page: int = 1) -> Any:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    token = os.getenv("GITHUB_TOKEN")
-    if token:
+    if token := os.getenv("GITHUB_TOKEN"):
         headers["Authorization"] = f"Bearer {token}"
 
     response = requests.get(
@@ -252,7 +267,7 @@ def get_known_issues_from_github_page(page: int = 1) -> Any:
     )
 
     if response.status_code != 200:
-        raise ValueError(f"Bad return code from Github: {response.status_code}")
+        raise ValueError(f"Bad return code from GitHub: {response.status_code}")
 
     issues_json = response.json()
     assert issues_json["incomplete_results"] == False

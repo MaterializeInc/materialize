@@ -9,22 +9,26 @@
 
 //! Prometheus monitoring metrics.
 
+use async_stream::stream;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::StreamExt;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
     DeleteOnDropGauge, GaugeVecExt, IntCounter, MakeCollector, MetricsRegistry, UIntGauge,
+    UIntGaugeVec,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo,
+    VersionedData,
 };
 use mz_persist::metrics::S3BlobMetrics;
 use mz_persist::retry::RetryStream;
@@ -468,6 +472,7 @@ impl MetricsVecs {
             get: self.external_op_metrics("blob_get", true),
             list_keys: self.external_op_metrics("blob_list_keys", false),
             delete: self.external_op_metrics("blob_delete", false),
+            restore: self.external_op_metrics("restore", false),
             delete_noop: self.external_blob_delete_noop_count.clone(),
             blob_sizes: self.external_blob_sizes.clone(),
             rtt_latency: self.external_rtt_latency.with_label_values(&["blob"]),
@@ -476,6 +481,7 @@ impl MetricsVecs {
 
     fn consensus_metrics(&self) -> ConsensusMetrics {
         ConsensusMetrics {
+            list_keys: self.external_op_metrics("consensus_list_keys", false),
             head: self.external_op_metrics("consensus_head", false),
             compare_and_set: self.external_op_metrics("consensus_cas", true),
             scan: self.external_op_metrics("consensus_scan", false),
@@ -1180,6 +1186,9 @@ pub struct ShardsMetrics {
     blob_sets: mz_ore::metrics::IntCounterVec,
     live_writers: mz_ore::metrics::UIntGaugeVec,
     unconsolidated_snapshot: mz_ore::metrics::IntCounterVec,
+    backpressure_emitted_bytes: IntCounterVec,
+    backpressure_last_backpressured_bytes: UIntGaugeVec,
+    backpressure_retired_bytes: IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1347,6 +1356,23 @@ impl ShardsMetrics {
                 help: "in snapshot_and_read, the number of times consolidating the raw data wasn't enough to produce consolidated output",
                 var_labels: ["shard", "name"],
             )),
+            backpressure_emitted_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_emitted_bytes",
+                help: "A counter with the number of emitted bytes.",
+                var_labels: ["shard", "name"],
+            )),
+            backpressure_last_backpressured_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_last_backpressured_bytes",
+                help: "The last count of bytes we are waiting to be retired in \
+                    the operator. This cannot be directly compared to \
+                    `retired_bytes`, but CAN indicate that backpressure is happening.",
+                var_labels: ["shard", "name"],
+            )),
+            backpressure_retired_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_retired_bytes",
+                help:"A counter with the number of bytes retired by downstream processing.",
+                var_labels: ["shard", "name"],
+            )),
             shards,
         }
     }
@@ -1420,6 +1446,10 @@ pub struct ShardMetrics {
     pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub live_writers: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub unconsolidated_snapshot: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
+    pub backpressure_last_backpressured_bytes:
+        Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+    pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
 }
 
 impl ShardMetrics {
@@ -1513,7 +1543,22 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             unconsolidated_snapshot: shards_metrics
                 .unconsolidated_snapshot
-                .get_delete_on_drop_counter(vec![shard, name.to_string()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+            backpressure_emitted_bytes: Arc::new(
+                shards_metrics
+                    .backpressure_emitted_bytes
+                    .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+            ),
+            backpressure_last_backpressured_bytes: Arc::new(
+                shards_metrics
+                    .backpressure_last_backpressured_bytes
+                    .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            ),
+            backpressure_retired_bytes: Arc::new(
+                shards_metrics
+                    .backpressure_retired_bytes
+                    .get_delete_on_drop_counter(vec![shard, name.to_string()]),
+            ),
         }
     }
 
@@ -1944,6 +1989,7 @@ pub struct PushdownMetrics {
     pub(crate) parts_audited_bytes: IntCounter,
     pub(crate) parts_stats_trimmed_count: IntCounter,
     pub(crate) parts_stats_trimmed_bytes: IntCounter,
+    pub parts_mismatched_stats_count: IntCounter,
 }
 
 impl PushdownMetrics {
@@ -1980,6 +2026,10 @@ impl PushdownMetrics {
             parts_stats_trimmed_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_stats_trimmed_bytes",
                 help: "total bytes trimmed from part stats",
+            )),
+            parts_mismatched_stats_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_mismatched_stats_count",
+                help: "number of parts read with unexpectedly the incorrect type of stats",
             )),
         }
     }
@@ -2092,6 +2142,41 @@ impl ExternalOpMetrics {
         };
         res
     }
+
+    fn run_stream<'a, R: 'a, S, OpFn, ErrFn>(
+        &'a self,
+        op_fn: OpFn,
+        mut on_err_fn: ErrFn,
+    ) -> impl futures::Stream<Item = Result<R, ExternalError>> + 'a
+    where
+        S: futures::Stream<Item = Result<R, ExternalError>> + Unpin + 'a,
+        OpFn: FnOnce() -> S,
+        ErrFn: FnMut(&AlertsMetrics, &ExternalError) + 'a,
+    {
+        self.started.inc();
+        let start = Instant::now();
+        let mut stream = op_fn();
+        stream! {
+            let mut succeeded = true;
+            while let Some(res) = stream.next().await {
+                if let Err(err) = res.as_ref() {
+                    on_err_fn(&self.alerts_metrics, err);
+                    succeeded = false;
+                }
+                yield res;
+            }
+            if succeeded {
+                self.succeeded.inc()
+            } else {
+                self.failed.inc()
+            }
+            let elapsed_seconds = start.elapsed().as_secs_f64();
+            self.seconds.inc_by(elapsed_seconds);
+            if let Some(h) = &self.seconds_histogram {
+                h.observe(elapsed_seconds);
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -2100,6 +2185,7 @@ pub struct BlobMetrics {
     get: ExternalOpMetrics,
     list_keys: ExternalOpMetrics,
     delete: ExternalOpMetrics,
+    restore: ExternalOpMetrics,
     delete_noop: IntCounter,
     blob_sizes: Histogram,
     pub rtt_latency: Gauge,
@@ -2208,10 +2294,19 @@ impl Blob for MetricsBlob {
         }
         Ok(bytes)
     }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        self.metrics
+            .blob
+            .restore
+            .run_op(|| self.blob.restore(key), Self::on_err)
+            .await
+    }
 }
 
 #[derive(Debug)]
 pub struct ConsensusMetrics {
+    list_keys: ExternalOpMetrics,
     head: ExternalOpMetrics,
     compare_and_set: ExternalOpMetrics,
     scan: ExternalOpMetrics,
@@ -2243,6 +2338,15 @@ impl MetricsConsensus {
 
 #[async_trait]
 impl Consensus for MetricsConsensus {
+    fn list_keys(&self) -> ResultStream<String> {
+        Box::pin(
+            self.metrics
+                .consensus
+                .list_keys
+                .run_stream(|| self.consensus.list_keys(), Self::on_err),
+        )
+    }
+
     #[instrument(name = "consensus::head", skip_all, fields(shard=key))]
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let res = self

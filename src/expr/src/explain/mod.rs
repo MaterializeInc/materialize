@@ -101,7 +101,7 @@ impl<'a> ExplainSource<'a> {
             let pushdown = op
                 .predicates
                 .iter()
-                .filter(|(_, e)| mfp_mapped.expr(e))
+                .filter(|(_, e)| mfp_mapped.expr(e).pushdownable())
                 .map(|(_, e)| e)
                 .collect();
             Some(PushdownInfo { pushdown })

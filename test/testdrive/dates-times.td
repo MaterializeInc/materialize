@@ -46,7 +46,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"d": 0, "ts_millis": 65000000, "ts_micros": 65000000}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -108,7 +108,7 @@ $ kafka-verify-data format=avro sink=materialize.public.ts_precision_sink sort-m
 {"key": true} {"key": true, "ts": 123456, "ts0": 0, "ts1": 100, "ts2": 120, "ts3": 123, "ts4": 123500, "ts5": 123460, "ts6": 123456, "tstz": 123456, "tstz0": 0, "tstz1": 100, "tstz2": 120, "tstz3": 123, "tstz4": 123500, "tstz5": 123460, "tstz6": 123456}
 
 ! SELECT '1970-01-01T00:00:00.123456'::timestamp(-1)
-contains:Expected literal unsigned integer
+contains:precision for type timestamp or timestamptz must be between 0 and 6
 
 ! SELECT '1970-01-01T00:00:00.123456'::timestamp(7)
 contains:precision for type timestamp or timestamptz must be between 0 and 6

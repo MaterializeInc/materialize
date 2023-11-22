@@ -44,6 +44,8 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM;
 
+            $ kafka-verify-topic sink=materialize.public.sink{i} await-value-schema=true
+
             > CREATE SOURCE sink{i}_check
               IN CLUSTER storage_shared_fate
               FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-storage-shared-fate-sink{i}-${{testdrive.seed}}')
@@ -73,7 +75,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > CREATE CLUSTER storage_shared_fate REPLICAS (storage_shared_fate_replica (SIZE '{CLUSTER_SIZE}-1'));
 
-            > CREATE CONNECTION kafka TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+            > CREATE CONNECTION kafka TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT)
 
             $ kafka-create-topic topic=storage-shared-fate partitions={CLUSTER_SIZE*4}
 

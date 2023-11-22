@@ -58,7 +58,7 @@ def speaker(prefix: str) -> Callable[..., None]:
     return say
 
 
-header = speaker("==> ")
+header = speaker("--- ")
 say = speaker("")
 
 
@@ -149,10 +149,10 @@ def shell_quote(args: Iterable[Any]) -> str:
 
 
 def env_is_truthy(env_var: str) -> bool:
-    """Return true if `env_var` is set and is not one of: 0, '', no"""
+    """Return true if `env_var` is set and is not one of: 0, '', no, false"""
     env = os.getenv(env_var)
     if env is not None:
-        return env not in ("", "0", "no")
+        return env not in ("", "0", "no", "false")
     return False
 
 

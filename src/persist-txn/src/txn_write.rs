@@ -51,8 +51,8 @@ where
     ///
     /// The timestamp will be assigned at commit time.
     ///
-    /// TODO(txn): Allow this to spill to s3 (for bounded memory) once persist
-    /// can make the ts rewrite op efficient.
+    /// TODO: Allow this to spill to s3 (for bounded memory) once persist can
+    /// make the ts rewrite op efficient.
     #[allow(clippy::unused_async)]
     pub async fn write(&mut self, data_id: &ShardId, key: K, val: V, diff: D) {
         self.writes
@@ -91,23 +91,18 @@ where
             .into_option()
             .expect("txns shard should not be closed");
 
-        // Validate that the involved data shards are all registered. txns_upper
-        // only advances in the loop below, so we only have to check
-        // registration once.
-        let () = handle.txns_cache.update_ge(&txns_upper).await;
-        for (data_id, _) in self.writes.iter() {
-            let registered_before_commit_ts = handle
-                .txns_cache
-                .data_since(data_id)
-                .map_or(false, |x| x < commit_ts);
-            assert!(
-                registered_before_commit_ts,
-                "{} should be registered before commit at {:?}",
-                data_id, commit_ts
-            );
-        }
-
         loop {
+            // Validate that the involved data shards are all registered.
+            let () = handle.txns_cache.update_ge(&txns_upper).await;
+            for (data_id, _) in self.writes.iter() {
+                assert!(
+                    handle.txns_cache.registered_at(data_id, &commit_ts),
+                    "{} should be registered to commit at {:?}",
+                    data_id,
+                    commit_ts
+                );
+            }
+
             // txns_upper is the (inclusive) minimum timestamp at which we
             // could possibly write. If our requested commit timestamp is before
             // that, then it's no longer possible to write and the caller needs
@@ -292,7 +287,7 @@ mod tests {
     use mz_persist_client::PersistClient;
 
     use crate::tests::writer;
-    use crate::txn_read::TxnsCache;
+    use crate::txn_cache::TxnsCache;
 
     use super::*;
 
@@ -433,10 +428,21 @@ mod tests {
             let (txns_id, client, log) = (txns.txns_id(), client.clone(), log.clone());
 
             let task = async move {
-                let data_write = writer(&client, d0).await;
                 let mut txns = TxnsHandle::expect_open_id(client.clone(), txns_id).await;
-                let register_ts = txns.register(1, [data_write]).await.unwrap();
-                debug!("{} registered at {}", idx, register_ts);
+                let mut register_ts = 1;
+                loop {
+                    let data_write = writer(&client, d0).await;
+                    match txns.register(register_ts, [data_write]).await {
+                        Ok(()) => {
+                            debug!("{} registered at {}", idx, register_ts);
+                            break;
+                        }
+                        Err(ts) => {
+                            register_ts = ts;
+                            continue;
+                        }
+                    }
+                }
 
                 // Add some jitter to the commit timestamps (to create gaps) and
                 // to the execution (to create interleaving).
@@ -527,15 +533,36 @@ mod tests {
     // Regression test for a bug caught during code review, where it was
     // possible to commit to an unregistered data shard.
     #[mz_ore::test(tokio::test)]
-    #[should_panic(expected = "should be registered")]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn commit_unregistered_table() {
-        let mut txns = TxnsHandle::expect_open(PersistClient::new_for_tests().await).await;
-        let d0 = txns.expect_register(2).await;
+        let client = PersistClient::new_for_tests().await;
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
 
-        let mut txn = txns.begin();
-        txn.write(&d0, "foo".into(), (), 1).await;
         // This panics because the commit ts is before the register ts.
-        let _ = txn.commit_at(&mut txns, 1).await;
+        let commit = mz_ore::task::spawn(|| "", {
+            let (txns_id, client) = (txns.txns_id(), client.clone());
+            async move {
+                let mut txns = TxnsHandle::expect_open_id(client, txns_id).await;
+                let mut txn = txns.begin();
+                txn.write(&ShardId::new(), "foo".into(), (), 1).await;
+                txn.commit_at(&mut txns, 1).await
+            }
+        });
+        assert!(commit.await.is_err());
+
+        let d0 = txns.expect_register(2).await;
+        txns.forget(3, d0).await.unwrap();
+
+        // This panics because the commit ts is after the forget ts.
+        let commit = mz_ore::task::spawn(|| "", {
+            let (txns_id, client) = (txns.txns_id(), client.clone());
+            async move {
+                let mut txns = TxnsHandle::expect_open_id(client, txns_id).await;
+                let mut txn = txns.begin();
+                txn.write(&d0, "foo".into(), (), 1).await;
+                txn.commit_at(&mut txns, 4).await
+            }
+        });
+        assert!(commit.await.is_err());
     }
 }

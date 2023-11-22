@@ -14,13 +14,15 @@ import pytest
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.all_checks import *  # noqa: F401 F403
+from materialize.checks.all_checks.ssh import SshKafka, SshPg
 from materialize.checks.checks import Check
 from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
 from materialize.checks.executors import CloudtestExecutor
 from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.wait import wait
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
+from materialize.util import all_subclasses
 from materialize.version_list import VersionsFromDocs
 
 LOGGER = logging.getLogger(__name__)
@@ -64,5 +66,7 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
     )
 
     executor = CloudtestExecutor(application=mz, version=LAST_RELEASED_VERSION)
-    scenario = CloudtestUpgrade(checks=Check.__subclasses__(), executor=executor)
+    # No SSH bastion host in cloudtest (yet)
+    checks = list(all_subclasses(Check) - {SshPg, SshKafka})
+    scenario = CloudtestUpgrade(checks=checks, executor=executor)
     scenario.run()

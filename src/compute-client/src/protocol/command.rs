@@ -10,7 +10,7 @@
 //! Compute protocol commands.
 
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
-use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::{DataflowDescription, YieldSpec};
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cfg::PersistParameters;
@@ -357,14 +357,22 @@ pub struct ComputeParameters {
     /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
     /// [`SubscribeBatch::updates`]: super::response::SubscribeBatch::updates
     pub max_result_size: Option<u32>,
-    /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-    pub dataflow_max_inflight_bytes: Option<usize>,
+    /// The maximum number of in-flight bytes emitted by persist_sources feeding
+    /// dataflows.
+    ///
+    /// NB: This value is optional, so the outer option indicates if this update
+    /// includes an override and the inner option is part of the config value.
+    pub dataflow_max_inflight_bytes: Option<Option<usize>>,
+    /// The yielding behavior with which linear joins should be rendered.
+    pub linear_join_yielding: Option<YieldSpec>,
     /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
     pub enable_mz_join_core: Option<bool>,
     /// Whether to activate jemalloc heap profiling.
     pub enable_jemalloc_profiling: Option<bool>,
     /// Enable arrangement type specialization.
     pub enable_specialized_arrangements: Option<bool>,
+    /// Enable lgalloc for columnation.
+    pub enable_columnation_lgalloc: Option<bool>,
     /// Persist client configuration.
     pub persist: PersistParameters,
     /// Tracing configuration.
@@ -379,9 +387,11 @@ impl ComputeParameters {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
+            linear_join_yielding,
             enable_mz_join_core,
             enable_jemalloc_profiling,
             enable_specialized_arrangements,
+            enable_columnation_lgalloc,
             persist,
             tracing,
             grpc_client,
@@ -393,6 +403,9 @@ impl ComputeParameters {
         if dataflow_max_inflight_bytes.is_some() {
             self.dataflow_max_inflight_bytes = dataflow_max_inflight_bytes;
         }
+        if linear_join_yielding.is_some() {
+            self.linear_join_yielding = linear_join_yielding;
+        }
         if enable_mz_join_core.is_some() {
             self.enable_mz_join_core = enable_mz_join_core;
         }
@@ -402,6 +415,10 @@ impl ComputeParameters {
 
         if enable_specialized_arrangements.is_some() {
             self.enable_specialized_arrangements = enable_specialized_arrangements;
+        }
+
+        if enable_columnation_lgalloc.is_some() {
+            self.enable_columnation_lgalloc = enable_columnation_lgalloc;
         }
 
         self.persist.update(persist);
@@ -419,10 +436,16 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn into_proto(&self) -> ProtoComputeParameters {
         ProtoComputeParameters {
             max_result_size: self.max_result_size.into_proto(),
-            dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.into_proto(),
+            dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.map(|x| {
+                ProtoComputeMaxInflightBytesConfig {
+                    dataflow_max_inflight_bytes: x.into_proto(),
+                }
+            }),
+            linear_join_yielding: self.linear_join_yielding.into_proto(),
             enable_mz_join_core: self.enable_mz_join_core.into_proto(),
             enable_jemalloc_profiling: self.enable_jemalloc_profiling.into_proto(),
             enable_specialized_arrangements: self.enable_specialized_arrangements.into_proto(),
+            enable_columnation_lgalloc: self.enable_columnation_lgalloc.into_proto(),
             persist: Some(self.persist.into_proto()),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
@@ -432,10 +455,15 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn from_proto(proto: ProtoComputeParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             max_result_size: proto.max_result_size.into_rust()?,
-            dataflow_max_inflight_bytes: proto.dataflow_max_inflight_bytes.into_rust()?,
+            dataflow_max_inflight_bytes: proto
+                .dataflow_max_inflight_bytes
+                .map(|x| x.dataflow_max_inflight_bytes.into_rust())
+                .transpose()?,
+            linear_join_yielding: proto.linear_join_yielding.into_rust()?,
             enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
             enable_jemalloc_profiling: proto.enable_jemalloc_profiling.into_rust()?,
             enable_specialized_arrangements: proto.enable_specialized_arrangements.into_rust()?,
+            enable_columnation_lgalloc: proto.enable_columnation_lgalloc.into_rust()?,
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoComputeParameters::persist")?,

@@ -22,7 +22,12 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr, SubscribeOutput,
+    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
+    IfExistsBehavior, OrderByExpr, SubscribeOutput, UnresolvedItemName,
+};
+use mz_sql_parser::ident;
+use mz_storage_types::sinks::{
+    KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection,
 };
 
 use crate::ast::display::AstDisplay;
@@ -39,7 +44,9 @@ use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
-use crate::plan::{self, side_effecting_func, ExplainTimestampPlan};
+use crate::plan::{
+    self, side_effecting_func, CreateSinkPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
+};
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
@@ -83,7 +90,6 @@ pub fn plan_insert(
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
     expr.bind_parameters(params)?;
-    let expr = expr.optimize_and_lower(&crate::plan::OptimizerConfig {})?;
     let returning = returning
         .expr
         .into_iter()
@@ -111,7 +117,7 @@ pub fn plan_delete(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_delete_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Delete, params, rtw_plan)
+    plan_read_then_write(MutationKind::Delete, scx, params, rtw_plan)
 }
 
 pub fn describe_update(
@@ -128,11 +134,12 @@ pub fn plan_update(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_update_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Update, params, rtw_plan)
+    plan_read_then_write(MutationKind::Update, scx, params, rtw_plan)
 }
 
 pub fn plan_read_then_write(
     kind: MutationKind,
+    scx: &StatementContext,
     params: &Params,
     query::ReadThenWritePlan {
         id,
@@ -142,7 +149,7 @@ pub fn plan_read_then_write(
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
     selection.bind_parameters(params)?;
-    let selection = selection.optimize_and_lower(&crate::plan::OptimizerConfig {})?;
+    let selection = selection.lower(scx.catalog.system_vars())?;
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(params)?;
@@ -256,6 +263,15 @@ pub fn describe_explain_timestamp(
         .with_params(describe_select(scx, SelectStatement { query, as_of: None })?.param_types))
 }
 
+pub fn describe_explain_schema(
+    _: &StatementContext,
+    ExplainSinkSchemaStatement { .. }: ExplainSinkSchemaStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    let mut relation_desc = RelationDesc::empty();
+    relation_desc = relation_desc.with_column("Schema", ScalarType::String.nullable(false));
+    Ok(StatementDesc::new(Some(relation_desc)))
+}
+
 pub fn plan_explain_plan(
     scx: &StatementContext,
     ExplainPlanStatement {
@@ -319,16 +335,10 @@ pub fn plan_explain_plan(
             let query::PlannedQuery {
                 expr: mut raw_plan,
                 desc,
-                finishing,
+                finishing: row_set_finishing,
                 scope: _,
             } = query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
             raw_plan.bind_parameters(params)?;
-
-            let row_set_finishing = if finishing.is_trivial(desc.arity()) {
-                None
-            } else {
-                Some(finishing)
-            };
 
             if broken {
                 scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
@@ -337,6 +347,7 @@ pub fn plan_explain_plan(
             crate::plan::Explainee::Statement(ExplaineeStatement::Query {
                 raw_plan,
                 row_set_finishing,
+                desc,
                 broken,
             })
         }
@@ -413,6 +424,56 @@ pub fn plan_explain_plan(
     }))
 }
 
+pub fn plan_explain_schema(
+    scx: &StatementContext,
+    explain_schema: ExplainSinkSchemaStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let ExplainSinkSchemaStatement {
+        schema_for,
+        mut statement,
+    } = explain_schema;
+
+    // Force the sink's name to one that's guaranteed not to exist, by virtue of
+    // being a non-existent item in a schema under the system's control, so that
+    // `plan_create_sink` doesn't complain about the name already existing.
+    statement.name = Some(UnresolvedItemName::qualified(&[
+        ident!("mz_catalog"),
+        ident!("mz_explain_schema"),
+    ]));
+
+    crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
+
+    match ddl::plan_create_sink(scx, statement)? {
+        Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {
+            StorageSinkConnection::Kafka(KafkaSinkConnection {
+                format:
+                    KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
+                        key_schema,
+                        value_schema,
+                        ..
+                    }),
+                ..
+            }) => {
+                let schema = match schema_for {
+                    ExplainSinkSchemaFor::Key => {
+                        key_schema.ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?
+                    }
+                    ExplainSinkSchemaFor::Value => value_schema,
+                };
+
+                Ok(Plan::ExplainSinkSchema(ExplainSinkSchemaPlan {
+                    sink_from: sink.from,
+                    json_schema: schema,
+                }))
+            }
+            _ => bail_unsupported!(
+                "EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas"
+            ),
+        },
+        _ => unreachable!("plan_create_sink returns a CreateSinkPlan"),
+    }
+}
+
 pub fn plan_explain_timestamp(
     scx: &StatementContext,
     ExplainTimestampStatement { format, query }: ExplainTimestampStatement<Aug>,
@@ -457,8 +518,9 @@ pub fn plan_query(
         scope,
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(params)?;
+
     Ok(query::PlannedQuery {
-        expr: expr.optimize_and_lower(&crate::plan::OptimizerConfig {})?,
+        expr: expr.lower(scx.catalog.system_vars())?,
         desc,
         finishing,
         scope,
@@ -673,6 +735,7 @@ pub fn plan_subscribe(
                 Err(PlanError::UnknownColumn {
                     table: None,
                     column,
+                    similar: _,
                 }) if &column == &mz_diff => {
                     // mz_diff is being used in an expression. Since mz_diff isn't part of the table
                     // it looks like an unknown column. Instead, return a better error

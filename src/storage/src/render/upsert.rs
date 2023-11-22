@@ -39,12 +39,13 @@ use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
+use crate::healthcheck::HealthStatusUpdate;
 use crate::render::sources::OutputIndex;
 use crate::render::upsert::types::{
     upsert_bincode_opts, AutoSpillBackend, InMemoryHashMap, RocksDBParams, UpsertState,
     UpsertStateBackend,
 };
-use crate::source::types::{HealthStatus, HealthStatusUpdate, UpsertMetrics};
+use crate::source::types::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 
 mod rocksdb;
@@ -233,6 +234,11 @@ where
         let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
         let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
         let rocksdb_dir = scratch_directory
+            .join("storage")
+            .join("upsert")
+            .join(source_config.id.to_string())
+            .join(source_config.worker_id.to_string());
+        let legacy_rocksdb_dir = scratch_directory
             .join(source_config.id.to_string())
             .join(source_config.worker_id.to_string());
 
@@ -253,6 +259,7 @@ where
                     AutoSpillBackend::new(
                         RocksDBParams {
                             instance_path: rocksdb_dir,
+                            legacy_instance_path: legacy_rocksdb_dir,
                             env,
                             tuning_config: tuning,
                             shared_metrics: rocksdb_shared_metrics,
@@ -277,6 +284,7 @@ where
                     rocksdb::RocksDB::new(
                         mz_rocksdb::RocksDBInstance::new(
                             &rocksdb_dir,
+                            &legacy_rocksdb_dir,
                             mz_rocksdb::InstanceOptions::defaults_with_env(env),
                             tuning,
                             rocksdb_shared_metrics,
@@ -728,13 +736,7 @@ async fn process_upsert_state_error<G: Scope>(
     >,
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,
 ) {
-    let update = HealthStatusUpdate {
-        update: HealthStatus::StalledWithError {
-            error: e.context(context).to_string_with_causes(),
-            hint: None,
-        },
-        should_halt: true,
-    };
+    let update = HealthStatusUpdate::halting(e.context(context).to_string_with_causes(), None);
     health_output.give(health_cap, (0, update)).await;
     std::future::pending::<()>().await;
     unreachable!("pending future never returns");

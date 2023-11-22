@@ -23,6 +23,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 # `heaptrack`, that only work with the system allocator.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 mz-prof = { path = "../prof", default-features = false }
+mz-prof-http = { path = "../prof-http", default-features = false }
 # According to jemalloc developers, `background_threads` should always be
 # enabled, except in "esoteric" situations that don't apply to Materialize
 # (namely, if the application relies on new threads not being created for
@@ -34,7 +35,12 @@ tikv-jemallocator = { version = "0.5.0", features = ["profiling", "stats", "unpr
 [features]
 default = ["workspace-hack"]
 # Whether to enable the use of jemalloc on platforms that support it.
-jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc"]
+jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc", "mz-prof-http/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+# The only reason we depend on mz-prof-http
+# from this package is so that we can force its `jemalloc`
+# option to be enabled when this package's is, which
+# makes all the Materialize binaries correctly
+# serve heap profiling tools at the `/prof` endpoints.
+normal = ["workspace-hack", "mz-prof-http"]

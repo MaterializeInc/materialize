@@ -11,11 +11,11 @@
 
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
-use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::slice;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,12 +33,14 @@ use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, L
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
+use timely::progress::frontier::AntichainRef;
 use timely::progress::{timestamp::Refines, Antichain, Timestamp};
 use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
+use crate::cfg::RetryParameters;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
 use crate::stats::PartStats;
@@ -52,18 +54,9 @@ use crate::{Diagnostics, PersistClient, ShardId};
 /// The `map_filter_project` argument, if supplied, may be partially applied,
 /// and any un-applied part of the argument will be left behind in the argument.
 ///
-/// Users of this function have the ability to apply flow control to the output
-/// to limit the in-flight data (measured in bytes) it can emit. The flow control
-/// input is a timely stream that communicates the frontier at which the data
-/// emitted from by this source have been dropped.
-///
-/// **Note:** Because this function is reading batches from `persist`, it is working
-/// at batch granularity. In practice, the source will be overshooting the target
-/// flow control upper by an amount that is related to the size of batches.
-///
-/// If no flow control is desired an empty stream whose frontier immediately advances
-/// to the empty antichain can be used. An easy easy of creating such stream is by
-/// using [`timely::dataflow::operators::generic::operator::empty`].
+/// The `desc_transformer` interposes an operator in the stream before the
+/// chosen data is fetched. This is currently used to provide flow control... see
+/// usages for details.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
@@ -77,6 +70,8 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     should_fetch_part: F,
+    // If Some, an override for the default listen sleep retry parameters.
+    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
 ) -> (
     Stream<Child<'g, G, T>, FetchedPart<K, V, G::Timestamp, D>>,
     Rc<dyn Any>,
@@ -85,7 +80,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
-    F: FnMut(&PartStats) -> bool + 'static,
+    F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
@@ -98,7 +93,7 @@ where
         Stream<Child<'g, G, T>, (usize, SerdeLeasedBatchPart)>,
         Rc<dyn Any>,
     ),
-    C: Future<Output = PersistClient> + 'static,
+    C: Future<Output = PersistClient> + Send + 'static,
 {
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
@@ -134,6 +129,7 @@ where
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
         should_fetch_part,
+        listen_sleep,
     );
     let descs = descs.enter(scope);
     let (descs, backpressure_token) = match desc_transformer {
@@ -154,22 +150,6 @@ where
     )
 }
 
-/// Flow control configuration.
-/// TODO(guswynn): move to `persist_source`
-#[derive(Debug)]
-pub struct FlowControl<G: Scope> {
-    /// Stream providing in-flight frontier updates.
-    ///
-    /// As implied by its type, this stream never emits data, only progress updates.
-    ///
-    /// TODO: Replace `Infallible` with `!` once the latter is stabilized.
-    pub progress_stream: Stream<G, Infallible>,
-    /// Maximum number of in-flight bytes.
-    pub max_inflight_bytes: usize,
-    /// TODO(guswynn): explain
-    pub summary: <G::Timestamp as Timestamp>::Summary,
-}
-
 #[derive(Debug)]
 struct ActivateOnDrop {
     token_rx: tokio::sync::mpsc::Receiver<()>,
@@ -186,7 +166,7 @@ impl Drop for ActivateOnDrop {
 pub(crate) fn shard_source_descs<K, V, D, F, G>(
     scope: &G,
     name: &str,
-    client: impl Future<Output = PersistClient> + 'static,
+    client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
@@ -195,12 +175,14 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     mut should_fetch_part: F,
+    // If Some, an override for the default listen sleep retry parameters.
+    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, Rc<dyn Any>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
-    F: FnMut(&PartStats) -> bool + 'static,
+    F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
@@ -258,22 +240,31 @@ where
         let token_is_dropped = token_tx.closed();
         tokio::pin!(token_is_dropped);
 
-        let create_read_handle = async {
-            let read = client.await
-                .open_leased_reader::<K, V, G::Timestamp, D>(
-                    shard_id,
-                    key_schema,
-                    val_schema,
-                    Diagnostics {
-                        shard_name: name_owned.clone(),
-                        handle_purpose: format!("shard_source({})", name_owned),
-                    }
-                )
-                .await
-                .expect("could not open persist shard");
-
-            read
-        };
+        // Internally, the `open_leased_reader` call registers a new LeasedReaderId and then fires
+        // up a background tokio task to heartbeat it. It is possible that we might get a
+        // particularly adversarial scheduling where the CRDB query to register the id is sent and
+        // then our Future is not polled again for a long time, resulting is us never spawning the
+        // heartbeat task. Run reader creation in a task to attempt to defend against this.
+        //
+        // TODO: Really we likely need to swap the inners of all persist operators to be
+        // communicating with a tokio task over a channel, but that's much much harder, so for now
+        // we whack the moles as we see them.
+        let create_read_handle = mz_ore::task::spawn(|| format!("shard_source_reader({})", name_owned), {
+            let diagnostics = Diagnostics {
+                handle_purpose: format!("shard_source({})", name_owned),
+                shard_name: name_owned.clone(),
+            };
+            async move {
+                client.await
+                    .open_leased_reader::<K, V, G::Timestamp, D>(
+                        shard_id,
+                        key_schema,
+                        val_schema,
+                        diagnostics,
+                    )
+                    .await
+            }
+        });
 
         tokio::pin!(create_read_handle);
 
@@ -292,6 +283,8 @@ where
             }
             Either::Right((read, _)) => {
                 read
+                    .expect("reader creation shouldn't panic")
+                    .expect("could not open persist shard")
             }
         };
         let cfg = read.cfg.clone();
@@ -364,7 +357,8 @@ where
 
             let mut done = false;
             while !done {
-                for event in subscription.next().await {
+                let listen_retry = listen_sleep.as_ref().map(|retry| retry());
+                for event in subscription.next(listen_retry).await {
                     if let ListenEvent::Progress(ref progress) = event {
                         // If `until.less_equal(progress)`, it means that all subsequent batches will
                         // contain only times greater or equal to `until`, which means they can be
@@ -443,7 +437,7 @@ where
                                 // TODO: Push the filter down into the Subscribe?
                                 if cfg.dynamic.stats_filter_enabled() {
                                     let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
-                                        should_fetch_part(&stats.decode())
+                                        should_fetch_part(&stats.decode(), AntichainRef::new(slice::from_ref(&current_ts)))
                                     });
                                     let bytes = u64::cast_from(part_desc.encoded_size_bytes);
                                     if should_fetch {
@@ -579,10 +573,11 @@ where
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 for (_idx, part) in data.drain(..) {
-                    let (leased_part, fetched) = fetcher
-                        .fetch_leased_part(fetcher.leased_part_from_exchangeable(part))
-                        .await;
-                    let fetched = fetched.expect("shard_id should match across all workers");
+                    let leased_part = fetcher.leased_part_from_exchangeable(part);
+                    let fetched = fetcher
+                        .fetch_leased_part(&leased_part)
+                        .await
+                        .expect("shard_id should match across all workers");
                     {
                         // Do very fine-grained output activation/session
                         // creation to ensure that we don't hold activated
@@ -664,7 +659,8 @@ mod tests {
                         Arc::new(
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),
                         ),
-                        |_fetch| true,
+                        |_fetch, _frontier| true,
+                        false.then_some(|| unreachable!()),
                     );
                     (stream.leave(), token)
                 });
@@ -732,7 +728,8 @@ mod tests {
                         Arc::new(
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),
                         ),
-                        |_fetch| true,
+                        |_fetch, _frontier| true,
+                        false.then_some(|| unreachable!()),
                     );
                     (stream.leave(), token)
                 });

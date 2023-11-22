@@ -79,18 +79,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::atomic;
 use std::time::Duration;
 use std::{io, process};
 
 use aws_credential_types::Credentials;
 use aws_types::region::Region;
+use clap::clap_derive::ArgEnum;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
-use mz_testdrive::Config;
+use mz_sql::catalog::EnvironmentId;
+use mz_testdrive::{CatalogConfig, Config};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -213,16 +214,34 @@ struct Args {
     /// Materialize.
     #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
     materialize_param: Vec<(String, String)>,
-    /// Validate the stash state of the specified postgres connection string.
-    #[clap(long, value_name = "POSTGRES_URL")]
-    validate_postgres_stash: Option<String>,
+    /// Postgres connection string of the stash state.
+    #[clap(
+        long,
+        value_name = "POSTGRES_URL",
+        required_if_eq("validate-catalog-store", "stash"),
+        required_if_eq("validate-catalog-store", "shadow")
+    )]
+    postgres_stash: Option<String>,
+    /// Validate the catalog state of the specified catalog kind.
+    #[clap(long, arg_enum, value_name = "CATALOG_STORE")]
+    validate_catalog_store: Option<CatalogKind>,
 
     // === Persist options. ===
     /// Handle to the persist consensus system.
-    #[clap(long, value_name = "PERSIST_CONSENSUS_URL")]
+    #[clap(
+        long,
+        value_name = "PERSIST_CONSENSUS_URL",
+        required_if_eq("validate-catalog-store", "persist"),
+        required_if_eq("validate-catalog-store", "shadow")
+    )]
     persist_consensus_url: Option<String>,
     /// Handle to the persist blob storage.
-    #[clap(long, value_name = "PERSIST_BLOB_URL")]
+    #[clap(
+        long,
+        value_name = "PERSIST_BLOB_URL",
+        required_if_eq("validate-catalog-store", "persist"),
+        required_if_eq("validate-catalog-store", "shadow")
+    )]
     persist_blob_url: Option<String>,
 
     // === Confluent options. ===
@@ -298,18 +317,20 @@ struct Args {
     )]
     aws_secret_access_key: String,
 
-    // This should be kept in sync with the value that environmentd
-    // is started with, or the tests of catalog serialization will get confused.
     #[clap(long)]
-    variable_length_row_encoding: bool,
+    environment_id: String,
+}
+
+#[derive(ArgEnum, Debug, Clone)]
+enum CatalogKind {
+    Stash,
+    Persist,
+    Shadow,
 }
 
 #[tokio::main]
 async fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
-
-    mz_repr::VARIABLE_LENGTH_ROW_ENCODING
-        .store(args.variable_length_row_encoding, atomic::Ordering::SeqCst);
 
     tracing_subscriber::fmt()
         .with_env_filter(args.log_filter)
@@ -392,6 +413,36 @@ async fn main() {
         arg_vars.insert(name.to_string(), val.to_string());
     }
 
+    let materialize_catalog_config = match args.validate_catalog_store {
+        Some(kind) => Some(match kind {
+            CatalogKind::Stash => CatalogConfig::Stash {
+                url: args.postgres_stash.expect("required for stash catalog"),
+            },
+
+            CatalogKind::Persist => CatalogConfig::Persist {
+                persist_consensus_url: args
+                    .persist_consensus_url
+                    .clone()
+                    .expect("required for persist catalog"),
+                persist_blob_url: args
+                    .persist_blob_url
+                    .clone()
+                    .expect("required for persist catalog"),
+            },
+            CatalogKind::Shadow => CatalogConfig::Shadow {
+                url: args.postgres_stash.expect("required for shadow catalog"),
+                persist_consensus_url: args
+                    .persist_consensus_url
+                    .clone()
+                    .expect("required for shadow catalog"),
+                persist_blob_url: args
+                    .persist_blob_url
+                    .clone()
+                    .expect("required for shadow catalog"),
+            },
+        }),
+        None => None,
+    };
     let config = Config {
         // === Testdrive options. ===
         arg_vars,
@@ -411,8 +462,10 @@ async fn main() {
         materialize_http_port: args.materialize_http_port,
         materialize_internal_http_port: args.materialize_internal_http_port,
         materialize_params: args.materialize_param,
-        materialize_catalog_postgres_stash: args.validate_postgres_stash,
+        materialize_catalog_config,
         build_info: &BUILD_INFO,
+        environment_id: <EnvironmentId as std::str::FromStr>::from_str(&args.environment_id)
+            .unwrap(),
 
         // === Persist options. ===
         persist_consensus_url: args.persist_consensus_url,

@@ -93,32 +93,35 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
+use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_build_info::{build_info, BuildInfo};
-use mz_catalog::{
-    BootstrapArgs, OpenableDurableCatalogState, ReadOnlyDurableCatalogState, StashConfig,
-};
+use mz_catalog::durable::{BootstrapArgs, OpenableDurableCatalogState, StashConfig};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_ore::server::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_ore::task;
 use mz_ore::tracing::TracingHandle;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
+use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
+use tracing::info;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 
 pub mod http;
 mod telemetry;
+#[cfg(feature = "test")]
+pub mod test_util;
 
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
@@ -143,8 +146,6 @@ pub struct Config {
     pub tls: Option<TlsCertConfig>,
     /// Frontegg JWT authentication configuration.
     pub frontegg: Option<FronteggAuthentication>,
-    /// Number of concurrent requests accepted for webhooks, `None` indicates a default limit.
-    pub concurrent_webhook_req_count: Option<usize>,
 
     // === Connection options. ===
     /// Configuration for source and sink connections created by the storage
@@ -159,10 +160,18 @@ pub struct Config {
     pub secrets_controller: Arc<dyn SecretsController>,
     /// VpcEndpoint controller configuration.
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
+    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// one.
+    ///
+    /// If specified, this overrides the value stored in Launch Darkly (and
+    /// mirrored to the catalog stash's "config" collection).
+    pub enable_persist_txn_tables_cli: Option<bool>,
 
     // === Adapter options. ===
-    /// The PostgreSQL URL for the adapter stash.
-    pub adapter_stash_url: String,
+    /// Catalog configuration.
+    pub catalog_config: CatalogConfig,
+    /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
+    pub timestamp_oracle_url: Option<String>,
 
     // === Bootstrap options. ===
     /// The cloud ID of this environment.
@@ -240,6 +249,29 @@ pub struct ListenersConfig {
     pub internal_http_listen_addr: SocketAddr,
 }
 
+/// Configuration for the Catalog.
+#[derive(Debug, Clone)]
+pub enum CatalogConfig {
+    /// The catalog contents are stored the stash.
+    Stash {
+        /// The PostgreSQL URL for the adapter stash.
+        url: String,
+    },
+    /// The catalog contents are stored in persist.
+    Persist {
+        /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
+        persist_clients: Arc<PersistClientCache>,
+    },
+    /// The catalog contents are stored in both persist and the stash and their contents are
+    /// compared. This is mostly used for testing purposes.
+    Shadow {
+        /// The PostgreSQL URL for the adapter stash.
+        url: String,
+        /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
+        persist_clients: Arc<PersistClientCache>,
+    },
+}
+
 /// Listeners for an `environmentd` server.
 pub struct Listeners {
     // Drop order matters for these fields.
@@ -273,12 +305,12 @@ impl Listeners {
             internal_http_listen_addr,
         }: ListenersConfig,
     ) -> Result<Listeners, anyhow::Error> {
-        let sql = mz_ore::server::listen(sql_listen_addr).await?;
-        let http = mz_ore::server::listen(http_listen_addr).await?;
-        let balancer_sql = mz_ore::server::listen(balancer_sql_listen_addr).await?;
-        let balancer_http = mz_ore::server::listen(balancer_http_listen_addr).await?;
-        let internal_sql = mz_ore::server::listen(internal_sql_listen_addr).await?;
-        let internal_http = mz_ore::server::listen(internal_http_listen_addr).await?;
+        let sql = mz_server_core::listen(&sql_listen_addr).await?;
+        let http = mz_server_core::listen(&http_listen_addr).await?;
+        let balancer_sql = mz_server_core::listen(&balancer_sql_listen_addr).await?;
+        let balancer_http = mz_server_core::listen(&balancer_http_listen_addr).await?;
+        let internal_sql = mz_server_core::listen(&internal_sql_listen_addr).await?;
+        let internal_http = mz_server_core::listen(&internal_http_listen_addr).await?;
         Ok(Listeners {
             sql,
             http,
@@ -317,18 +349,14 @@ impl Listeners {
             internal_http: (internal_http_listener, internal_http_conns),
         } = self;
 
-        let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(
-            &config.adapter_stash_url,
-        )?)?;
-
         // Validate TLS configuration, if present.
         let (pgwire_tls, http_tls) = match &config.tls {
             None => (None, None),
             Some(tls_config) => {
                 let context = tls_config.context()?;
-                let pgwire_tls = mz_ore::server::TlsConfig {
+                let pgwire_tls = mz_server_core::TlsConfig {
                     context: context.clone(),
-                    mode: mz_ore::server::TlsMode::Require,
+                    mode: mz_server_core::TlsMode::Require,
                 };
                 let http_tls = http::TlsConfig {
                     context,
@@ -342,7 +370,6 @@ impl Listeners {
 
         let (ready_to_promote_tx, ready_to_promote_rx) = oneshot::channel();
         let (promote_leader_tx, promote_leader_rx) = oneshot::channel();
-        let stash_schema = None;
 
         // Start the internal HTTP server.
         //
@@ -360,23 +387,25 @@ impl Listeners {
                 ready_to_promote: ready_to_promote_rx,
                 internal_console_redirect_url: config.internal_console_redirect_url,
             });
-            mz_ore::server::serve(internal_http_conns, internal_http_server)
+            mz_server_core::serve(internal_http_conns, internal_http_server)
         });
 
-        let mut openable_adapter_storage = mz_catalog::stash_backed_catalog_state(StashConfig {
-            stash_factory: mz_stash::StashFactory::from_metrics(Arc::clone(
-                &config.controller.stash_metrics,
-            )),
-            stash_url: config.adapter_stash_url.clone(),
-            schema: stash_schema.clone(),
-            tls: tls.clone(),
-        });
+        // Get the current timestamp so we can record when we booted.
+        let boot_ts = (config.now)();
 
         'leader_promotion: {
             let Some(deploy_generation) = config.deploy_generation else {
                 break 'leader_promotion;
             };
             tracing::info!("Requested deploy generation {deploy_generation}");
+
+            let mut openable_adapter_storage = catalog_opener(
+                &config.catalog_config,
+                &config.controller,
+                &config.environment_id,
+            )
+            .await?;
+
             if !openable_adapter_storage.is_initialized().await? {
                 tracing::info!("Stash doesn't exist so there's no current deploy generation. We won't wait to be leader");
                 break 'leader_promotion;
@@ -386,15 +415,12 @@ impl Listeners {
             tracing::info!("Found stash generation {stash_generation:?}");
             if stash_generation < Some(deploy_generation) {
                 tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
-                if let Err(e) = openable_adapter_storage
+                match openable_adapter_storage
                     .open_savepoint(
-                        config.now.clone(),
+                        boot_ts.clone(),
                         &BootstrapArgs {
                             default_cluster_replica_size: config
                                 .bootstrap_default_cluster_replica_size
-                                .clone(),
-                            builtin_cluster_replica_size: config
-                                .bootstrap_builtin_cluster_replica_size
                                 .clone(),
                             bootstrap_role: config.bootstrap_role.clone(),
                         },
@@ -402,9 +428,12 @@ impl Listeners {
                     )
                     .await
                 {
-                    return Err(
-                        anyhow!(e).context("Stash upgrade would have failed with this error")
-                    );
+                    Ok(adapter_storage) => Box::new(adapter_storage).expire().await,
+                    Err(e) => {
+                        return Err(
+                            anyhow!(e).context("Stash upgrade would have failed with this error")
+                        )
+                    }
                 }
 
                 if let Err(()) = ready_to_promote_tx.send(()) {
@@ -426,21 +455,31 @@ impl Listeners {
             }
         }
 
-        let mut adapter_storage = Box::new(
-            openable_adapter_storage
-                .open(
-                    config.now.clone(),
-                    &BootstrapArgs {
-                        default_cluster_replica_size: config
-                            .bootstrap_default_cluster_replica_size
-                            .clone(),
-                        builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
-                        bootstrap_role: config.bootstrap_role,
-                    },
-                    config.deploy_generation,
-                )
-                .await?,
-        );
+        let mut openable_adapter_storage = catalog_opener(
+            &config.catalog_config,
+            &config.controller,
+            &config.environment_id,
+        )
+        .await?;
+        // Get the value from Launch Darkly as of the last time this environment
+        // was running. (Ideally it would be the current value, but that's
+        // harder: we don't want to block startup on it if LD is down and it
+        // would also require quite a bit of abstraction breakage.)
+        let enable_persist_txn_tables_stash_ld = openable_adapter_storage
+            .get_enable_persist_txn_tables()
+            .await?;
+        let mut adapter_storage = openable_adapter_storage
+            .open(
+                boot_ts,
+                &BootstrapArgs {
+                    default_cluster_replica_size: config
+                        .bootstrap_default_cluster_replica_size
+                        .clone(),
+                    bootstrap_role: config.bootstrap_role,
+                },
+                config.deploy_generation,
+            )
+            .await?;
 
         // Load the adapter catalog from disk.
         if !config
@@ -463,7 +502,22 @@ impl Listeners {
         );
 
         // Initialize controller.
-        let controller = mz_controller::Controller::new(config.controller, envd_epoch).await;
+        let mut enable_persist_txn_tables = enable_persist_txn_tables_stash_ld.unwrap_or(false);
+        if let Some(value) = config.enable_persist_txn_tables_cli {
+            enable_persist_txn_tables = value;
+        }
+        info!(
+            "enable_persist_txn_tables value of {} computed from stash {:?} and flag {:?}",
+            enable_persist_txn_tables,
+            enable_persist_txn_tables_stash_ld,
+            config.enable_persist_txn_tables_cli,
+        );
+        let controller = mz_controller::Controller::new(
+            config.controller,
+            envd_epoch,
+            enable_persist_txn_tables,
+        )
+        .await;
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
@@ -481,9 +535,11 @@ impl Listeners {
 
         // Initialize adapter.
         let segment_client = config.segment_api_key.map(mz_segment::Client::new);
+        let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             dataflow_client: controller,
             storage: adapter_storage,
+            timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
             build_info: &BUILD_INFO,
@@ -494,6 +550,7 @@ impl Listeners {
             cloud_resource_controller: config.cloud_resource_controller,
             cluster_replica_sizes: config.cluster_replica_sizes,
             default_storage_cluster_size: config.default_storage_cluster_size,
+            builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
             availability_zones: config.availability_zones,
             system_parameter_defaults: config.system_parameter_defaults,
             connection_context: config.connection_context,
@@ -506,6 +563,7 @@ impl Listeners {
             aws_account_id: config.aws_account_id,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             active_connection_count: Arc::clone(&active_connection_count),
+            webhook_concurrency_limit: webhook_concurrency_limit.clone(),
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
         })
@@ -527,7 +585,7 @@ impl Listeners {
                 internal: false,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            mz_ore::server::serve(sql_conns, sql_server)
+            mz_server_core::serve(sql_conns, sql_server)
         });
 
         // Launch internal SQL server.
@@ -540,7 +598,7 @@ impl Listeners {
                     //
                     // TODO(benesch): migrate all internal applications to TLS and
                     // remove `TlsMode::Allow`.
-                    pgwire_tls.mode = mz_ore::server::TlsMode::Allow;
+                    pgwire_tls.mode = mz_server_core::TlsMode::Allow;
                     pgwire_tls
                 }),
                 adapter_client: adapter_client.clone(),
@@ -549,7 +607,7 @@ impl Listeners {
                 internal: true,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            mz_ore::server::serve(internal_sql_conns, internal_sql_server)
+            mz_server_core::serve(internal_sql_conns, internal_sql_server)
         });
 
         // Launch HTTP server.
@@ -561,12 +619,10 @@ impl Listeners {
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
                 active_connection_count: Arc::clone(&active_connection_count),
-                concurrent_webhook_req_count: config
-                    .concurrent_webhook_req_count
-                    .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
+                concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics.clone(),
             });
-            mz_ore::server::serve(http_conns, http_server)
+            mz_server_core::serve(http_conns, http_server)
         });
 
         // Launch HTTP server exposed to balancers
@@ -578,12 +634,10 @@ impl Listeners {
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin,
                 active_connection_count: Arc::clone(&active_connection_count),
-                concurrent_webhook_req_count: config
-                    .concurrent_webhook_req_count
-                    .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
+                concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics,
             });
-            mz_ore::server::serve(balancer_http_conns, balancer_http_server)
+            mz_server_core::serve(balancer_http_conns, balancer_http_server)
         });
 
         // Launch SQL server exposed to balancers
@@ -596,7 +650,7 @@ impl Listeners {
                 internal: false,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            mz_ore::server::serve(balancer_sql_conns, balancer_sql_server)
+            mz_server_core::serve(balancer_sql_conns, balancer_sql_server)
         });
 
         // Start telemetry reporting loop.
@@ -648,6 +702,68 @@ impl Listeners {
     pub fn internal_http_local_addr(&self) -> SocketAddr {
         self.internal_http.0.local_addr()
     }
+}
+
+async fn catalog_opener(
+    catalog_config: &CatalogConfig,
+    controller_config: &ControllerConfig,
+    environment_id: &EnvironmentId,
+) -> Result<Box<dyn OpenableDurableCatalogState>, anyhow::Error> {
+    Ok(match catalog_config {
+        CatalogConfig::Stash { url } => {
+            info!("Using stash backed catalog");
+            let stash_factory =
+                mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
+            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
+            Box::new(mz_catalog::durable::stash_backed_catalog_state(
+                StashConfig {
+                    stash_factory,
+                    stash_url: url.clone(),
+                    schema: None,
+                    tls,
+                },
+            ))
+        }
+        CatalogConfig::Persist { persist_clients } => {
+            info!("Using persist backed catalog");
+            let persist_client = persist_clients
+                .open(controller_config.persist_location.clone())
+                .await?;
+
+            Box::new(
+                mz_catalog::durable::persist_backed_catalog_state(
+                    persist_client,
+                    environment_id.organization_id(),
+                )
+                .await,
+            )
+        }
+        CatalogConfig::Shadow {
+            url,
+            persist_clients,
+        } => {
+            info!("Using shadow catalog");
+            let stash_factory =
+                mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
+            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
+            let persist_client = persist_clients
+                .open(controller_config.persist_location.clone())
+                .await?;
+            Box::new(
+                mz_catalog::durable::shadow_catalog_state(
+                    StashConfig {
+                        stash_factory,
+                        stash_url: url.clone(),
+                        schema: None,
+                        tls,
+                    },
+                    persist_client,
+                    environment_id.organization_id(),
+                )
+                .await,
+            )
+        }
+    })
 }
 
 /// A running `environmentd` server.

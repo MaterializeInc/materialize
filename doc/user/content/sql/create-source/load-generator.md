@@ -352,7 +352,7 @@ To create the load generator source and its associated subsources:
 CREATE SOURCE tpch
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 1)
   FOR ALL TABLES
-  WITH (SIZE = '3xsmall');
+  WITH (SIZE = '2xsmall');
 ```
 
 To display the created subsources:
@@ -363,7 +363,7 @@ SHOW SOURCES;
 ```nofmt
       name     |      type      |  size
 ---------------+----------------+---------
- tpch          | load-generator | 3xsmall
+ tpch          | load-generator | 2xsmall
  tpch_progress | progress       |
  supplier      | subsource      |
  region        | subsource      |

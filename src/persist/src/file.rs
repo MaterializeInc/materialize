@@ -22,18 +22,20 @@ use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, BlobMetadata, ExternalError};
+use crate::location::{Atomicity, Blob, BlobMetadata, Determinate, ExternalError};
 
 /// Configuration for opening a [FileBlob].
 #[derive(Debug, Clone)]
 pub struct FileBlobConfig {
     base_dir: PathBuf,
+    pub(crate) tombstone: bool,
 }
 
 impl<P: AsRef<Path>> From<P> for FileBlobConfig {
     fn from(base_dir: P) -> Self {
         FileBlobConfig {
             base_dir: base_dir.as_ref().to_path_buf(),
+            tombstone: false,
         }
     }
 }
@@ -42,14 +44,21 @@ impl<P: AsRef<Path>> From<P> for FileBlobConfig {
 #[derive(Debug)]
 pub struct FileBlob {
     base_dir: PathBuf,
+    tombstone: bool,
 }
 
 impl FileBlob {
     /// Opens the given location for non-exclusive read-write access.
     pub async fn open(config: FileBlobConfig) -> Result<Self, ExternalError> {
-        let base_dir = config.base_dir;
+        let FileBlobConfig {
+            base_dir,
+            tombstone,
+        } = config;
         fs::create_dir_all(&base_dir).await.map_err(Error::from)?;
-        Ok(FileBlob { base_dir })
+        Ok(FileBlob {
+            base_dir,
+            tombstone,
+        })
     }
 
     fn blob_path(&self, key: &str) -> PathBuf {
@@ -113,6 +122,16 @@ impl Blob for FileBlob {
                         path.display()
                     )));
                 }
+            }
+
+            // "Real" blobs don't have extensions. We want to exclude "expected" extensions
+            // like soft-deleted blobs or in-progress writes, and complain otherwise.
+            match path.extension().and_then(|os| os.to_str()) {
+                Some("bak" | "tmp") => continue,
+                Some(other) => Err(ExternalError::from(anyhow!(
+                    "Found blob with unexpected suffix: {other}"
+                )))?,
+                None => {}
             }
 
             // The file name is guaranteed to be non-None iff the path is a
@@ -220,7 +239,17 @@ impl Blob for FileBlob {
             }
         };
 
-        if let Err(err) = fs::remove_file(&file_path).await {
+        let result = if self.tombstone {
+            // Instead of removing the file, rename it!
+            let mut tombstone_name = file_path.clone();
+            assert_eq!(tombstone_name.extension(), None);
+            tombstone_name.set_extension("bak");
+            fs::rename(&file_path, &tombstone_name).await
+        } else {
+            fs::remove_file(&file_path).await
+        };
+
+        if let Err(err) = result {
             // delete is documented to succeed if the key doesn't exist.
             if err.kind() == ErrorKind::NotFound {
                 return Ok(None);
@@ -236,6 +265,25 @@ impl Blob for FileBlob {
         });
 
         Ok(Some(usize::cast_from(size_bytes)))
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
+
+        if fs::try_exists(&file_path).await? {
+            return Ok(());
+        }
+
+        let mut tombstone_name = file_path.clone();
+        assert_eq!(tombstone_name.extension(), None);
+        tombstone_name.set_extension("bak");
+        match fs::rename(&tombstone_name, &file_path).await {
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                // TODO: should we treat not-found as determinate elsewhere also?
+                Err(Determinate::new(anyhow!("no tombstone or file for key: {key}")).into())
+            }
+            other => Ok(other?),
+        }
     }
 }
 
@@ -253,6 +301,17 @@ mod tests {
             let instance_dir = temp_dir.path().join(path);
             FileBlob::open(instance_dir.into())
         })
-        .await
+        .await?;
+
+        let temp_dir = tempfile::tempdir().map_err(Error::from)?;
+        blob_impl_test(move |path| {
+            let instance_dir = temp_dir.path().join(path);
+            let mut cfg: FileBlobConfig = instance_dir.into();
+            cfg.tombstone = true;
+            FileBlob::open(cfg)
+        })
+        .await?;
+
+        Ok(())
     }
 }

@@ -11,6 +11,8 @@
 
 use std::any::Any;
 use std::convert::Infallible;
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -22,10 +24,13 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
+use mz_persist_client::metrics::Metrics;
 use mz_persist_client::operators::shard_source::shard_source;
 use mz_persist_client::stats::PartStats;
+use mz_persist_txn::operator::txns_progress;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
@@ -36,33 +41,77 @@ use mz_repr::{
     ColumnType, Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationDesc,
     RelationType, Row, RowArena, ScalarType, Timestamp,
 };
-use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::probe::ProbeNotify;
+use serde::{Deserialize, Serialize};
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Capability, OkErr};
+use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
-use timely::dataflow::operators::{Enter, Leave};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::ScopeParent;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::timestamp::PathSummary;
-use timely::progress::timestamp::Refines;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::error;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::metrics::BackpressureMetrics;
+
+/// This opaque token represents progress within a timestamp, allowing finer-grained frontier
+/// progress than would otherwise be possible.
+///
+/// This is "opaque" since we'd like to reserve the right to change the definition in the future
+/// without downstreams being able to rely on the precise representation. (At the moment, this
+/// is a simple batch counter, though we may change it to eg. reflect progress through the keyspace
+/// in the future.)
+#[derive(
+    Copy, Clone, PartialEq, Default, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize, Hash,
+)]
+pub struct Subtime(u64);
+
+impl PartialOrder for Subtime {
+    fn less_equal(&self, other: &Self) -> bool {
+        self.0.less_equal(&other.0)
+    }
+}
+
+impl TotalOrder for Subtime {}
+
+impl PathSummary<Subtime> for Subtime {
+    fn results_in(&self, src: &Subtime) -> Option<Subtime> {
+        self.0.results_in(&src.0).map(Subtime)
+    }
+
+    fn followed_by(&self, other: &Self) -> Option<Self> {
+        self.0.followed_by(&other.0).map(Subtime)
+    }
+}
+
+impl TimelyTimestamp for Subtime {
+    type Summary = Subtime;
+
+    fn minimum() -> Self {
+        Subtime(0)
+    }
+}
+
+impl Subtime {
+    /// The smallest non-zero summary for the opaque timestamp type.
+    pub const fn least_summary() -> Self {
+        Subtime(1)
+    }
+}
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -86,7 +135,7 @@ use crate::metrics::BackpressureMetrics;
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<G, YFn>(
+pub fn persist_source<G>(
     scope: &mut G,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
@@ -94,8 +143,7 @@ pub fn persist_source<G, YFn>(
     as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
-    flow_control: Option<FlowControl<G>>,
-    yield_fn: YFn,
+    max_inflight_bytes: Option<usize>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -103,38 +151,108 @@ pub fn persist_source<G, YFn>(
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
 {
-    let (stream, token) = scope.scoped(
-        &format!("skip_granular_backpressure({})", source_id),
-        |scope| {
-            let (stream, token) = persist_source_core(
-                scope,
-                source_id,
-                persist_clients,
-                metadata,
-                as_of,
-                until,
-                map_filter_project,
-                flow_control.map(|fc| FlowControl {
-                    progress_stream: fc.progress_stream.enter(scope),
-                    max_inflight_bytes: fc.max_inflight_bytes,
-                    summary: Refines::to_inner(fc.summary),
-                    metrics: fc.metrics,
-                }),
-                yield_fn,
-            );
-            (stream.leave(), token)
-        },
-    );
+    let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
+
+    let (stream, token) = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
+        let (flow_control, feedback_handle) = match max_inflight_bytes {
+            Some(max_inflight_bytes) => {
+                let backpressure_metrics = BackpressureMetrics {
+                    emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
+                    last_backpressured_bytes: Arc::clone(
+                        &shard_metrics.backpressure_last_backpressured_bytes,
+                    ),
+                    retired_bytes: Arc::clone(&shard_metrics.backpressure_retired_bytes),
+                };
+
+                let (feedback_handle, feedback_data) = scope.feedback(Default::default());
+                let flow_control = FlowControl {
+                    progress_stream: feedback_data,
+                    max_inflight_bytes,
+                    summary: (Default::default(), Subtime::least_summary()),
+                    metrics: Some(backpressure_metrics),
+                };
+                (Some(flow_control), Some(feedback_handle))
+            }
+            None => (None, None),
+        };
+
+        // Our default listen sleeps are tuned for the case of a shard that is
+        // written once a second, but persist-txns allows these to be lazy.
+        // Override the tuning to reduce crdb load. The pubsub fallback
+        // responsibility is then replaced by manual "one state" wakeups in the
+        // txns_progress operator.
+        let cfg = persist_clients.cfg().clone();
+        let subscribe_sleep = match metadata.txns_shard {
+            Some(_) => Some(move || cfg.dynamic.txns_data_shard_retry_params()),
+            None => None,
+        };
+
+        let (stream, token) = persist_source_core(
+            scope,
+            source_id,
+            Arc::clone(&persist_clients),
+            metadata.clone(),
+            as_of.clone(),
+            until,
+            map_filter_project,
+            flow_control,
+            subscribe_sleep,
+        );
+
+        let stream = match feedback_handle {
+            Some(feedback_handle) => {
+                let handle = mz_timely_util::probe::Handle::default();
+                let probe = mz_timely_util::probe::source(
+                    scope.clone(),
+                    format!("decode_backpressure_probe({source_id})"),
+                    handle.clone(),
+                );
+                probe.connect_loop(feedback_handle);
+                stream.probe_notify_with(vec![handle])
+            }
+            None => stream,
+        };
+
+        (stream.leave(), token)
+    });
+    // If a txns_shard was provided, then this shard is in the persist-txn
+    // system. This means the "logical" upper may be ahead of the "physical"
+    // upper. Render a dataflow operator that passes through the input and
+    // translates the progress frontiers as necessary.
+    let (stream, txns_token) = match metadata.txns_shard {
+        Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _>(
+            stream,
+            &source_id.to_string(),
+            async move {
+                persist_clients
+                    .open(metadata.persist_location)
+                    .await
+                    .expect("location is valid")
+            },
+            txns_shard,
+            metadata.data_shard,
+            as_of
+                .expect("as_of is provided for table sources")
+                .into_option()
+                .expect("shard is not closed"),
+            Arc::new(metadata.relation_desc),
+            Arc::new(UnitSchema),
+        ),
+        None => {
+            let token: Rc<dyn Any> = Rc::new(());
+            (stream, token)
+        }
+    };
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((row, t.0, r)),
         Err(err) => Err((err, t.0, r)),
     });
+    let token = Rc::new((token, txns_token));
     (ok_stream, err_stream, token)
 }
 
-type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, u64)>;
+type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)>;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -143,7 +261,7 @@ type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, u64)>;
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 #[allow(clippy::needless_borrow)]
-pub fn persist_source_core<'g, G, YFn>(
+pub fn persist_source_core<'g, G>(
     scope: &RefinedScope<'g, G>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
@@ -152,28 +270,26 @@ pub fn persist_source_core<'g, G, YFn>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<RefinedScope<'g, G>>>,
-    yield_fn: YFn,
+    // If Some, an override for the default listen sleep retry parameters.
+    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
 ) -> (
-    Stream<RefinedScope<'g, G>, (Result<Row, DataflowError>, (mz_repr::Timestamp, u64), Diff)>,
+    Stream<
+        RefinedScope<'g, G>,
+        (
+            Result<Row, DataflowError>,
+            (mz_repr::Timestamp, Subtime),
+            Diff,
+        ),
+    >,
     Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
 {
+    let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
     let desc = metadata.relation_desc.clone();
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
-    let time_range = if let Some(lower) = as_of.as_ref().and_then(|a| a.as_option().copied()) {
-        // If we have a lower bound, we can provide a bound on mz_now to our filter pushdown.
-        // The range is inclusive, so it's safe to use the maximum timestamp as the upper bound when
-        // `until ` is the empty antichain.
-        // TODO: continually narrow this as the frontier progresses.
-        let upper = until.as_option().copied().unwrap_or(Timestamp::MAX);
-        ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper))
-    } else {
-        ResultSpec::anything()
-    };
 
     let desc_transformer = match flow_control {
         Some(flow_control) => Some(move |mut scope: _, descs: &Stream<_, _>, chosen_worker| {
@@ -189,6 +305,12 @@ where
         None => None,
     };
 
+    let metrics = Arc::clone(persist_clients.metrics());
+    let filter_name = name.clone();
+    // The `until` gives us an upper bound on the possible values of `mz_now` this query may see.
+    // Ranges are inclusive, so it's safe to use the maximum timestamp as the upper bound when
+    // `until ` is the empty antichain.
+    let upper = until.as_option().cloned().unwrap_or(Timestamp::MAX);
     let (fetched, token) = shard_source(
         &mut scope.clone(),
         &name,
@@ -205,16 +327,27 @@ where
         desc_transformer,
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
-        move |stats| {
+        move |stats, frontier| {
+            let time_range = if let Some(lower) = frontier.as_option().copied() {
+                ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper))
+            } else {
+                ResultSpec::nothing()
+            };
             if let Some(plan) = &filter_plan {
-                let stats = PersistSourceDataStats { desc: &desc, stats };
-                filter_may_match(desc.typ(), time_range.clone(), stats, plan)
+                let stats = PersistSourceDataStats {
+                    name: &filter_name,
+                    metrics: &metrics,
+                    desc: &desc,
+                    stats,
+                };
+                filter_may_match(desc.typ(), time_range, stats, plan)
             } else {
                 true
             }
         },
+        listen_sleep,
     );
-    let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
+    let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);
     (rows, token)
 }
 
@@ -226,8 +359,7 @@ fn filter_may_match(
 ) -> bool {
     let arena = RowArena::new();
     let mut ranges = ColumnSpecs::new(relation_type, &arena);
-    // TODO: even better if we can use the lower bound of the part itself!
-    ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range.clone());
+    ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
     if stats.err_count().into_iter().any(|count| count > 0) {
         // If the error collection is nonempty, we always keep the part.
@@ -242,16 +374,15 @@ fn filter_may_match(
     result.may_contain(Datum::True) || result.may_fail()
 }
 
-pub fn decode_and_mfp<G, YFn>(
+pub fn decode_and_mfp<G>(
+    cfg: PersistConfig,
     fetched: &Stream<G, FetchedPart<SourceData, (), Timestamp, Diff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-    yield_fn: YFn,
 ) -> Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
 where
-    G: Scope<Timestamp = (mz_repr::Timestamp, u64)>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
+    G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
 {
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
@@ -291,6 +422,11 @@ where
                 }
             });
 
+            // Get the yield fuel once per schedule to amortize the cost of
+            // loading the atomic.
+            let yield_fuel = cfg.storage_source_decode_fuel();
+            let yield_fn = |_, work| work >= yield_fuel;
+
             let mut work = 0;
             let start_time = Instant::now();
             let mut output = updates_output.activate();
@@ -300,7 +436,7 @@ where
                     &mut work,
                     &name,
                     start_time,
-                    &yield_fn,
+                    yield_fn,
                     &until,
                     map_filter_project.as_ref(),
                     &mut datum_vec,
@@ -323,7 +459,7 @@ where
 /// Pending work to read from fetched parts
 struct PendingWork {
     /// The time at which the work should happen.
-    capability: Capability<(mz_repr::Timestamp, u64)>,
+    capability: Capability<(mz_repr::Timestamp, Subtime)>,
     /// Pending fetched part.
     fetched_part: FetchedPart<SourceData, (), Timestamp, Diff>,
 }
@@ -342,7 +478,7 @@ impl PendingWork {
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
         output: &mut ConsolidateBuffer<
-            (mz_repr::Timestamp, u64),
+            (mz_repr::Timestamp, Subtime),
             Result<Row, DataflowError>,
             Diff,
             P,
@@ -351,8 +487,12 @@ impl PendingWork {
     where
         P: Push<
             Bundle<
-                (mz_repr::Timestamp, u64),
-                (Result<Row, DataflowError>, (mz_repr::Timestamp, u64), Diff),
+                (mz_repr::Timestamp, Subtime),
+                (
+                    Result<Row, DataflowError>,
+                    (mz_repr::Timestamp, Subtime),
+                    Diff,
+                ),
             >,
         >,
         YFn: Fn(Instant, usize) -> bool,
@@ -365,6 +505,13 @@ impl PendingWork {
             match (key, val) {
                 (Ok(SourceData(Ok(row))), Ok(())) => {
                     if let Some(mfp) = map_filter_project {
+                        // We originally accounted work as the number of outputs, to give downstream
+                        // operators a chance to reduce down anything we've emitted. This mfp call
+                        // might have a restrictive filter, which would have been counted as no
+                        // work. However, in practice, we've been decode_and_mfp be a source of
+                        // interactivity loss during rehydration, so we now also count each mfp
+                        // evaluation against our fuel.
+                        *work += 1;
                         let arena = mz_repr::RowArena::new();
                         let mut datums_local = datum_vec.borrow_with(&row);
                         for result in mfp.evaluate(
@@ -429,19 +576,33 @@ impl PendingWork {
 
 #[derive(Debug)]
 pub(crate) struct PersistSourceDataStats<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) metrics: &'a Metrics,
     pub(crate) desc: &'a RelationDesc,
     pub(crate) stats: &'a PartStats,
 }
 
-fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> {
+fn downcast_stats<'a, T: Data>(
+    metrics: &Metrics,
+    name: &str,
+    col_name: &str,
+    stats: &'a dyn DynStats,
+) -> Option<&'a T::Stats> {
     match stats.as_any().downcast_ref::<T::Stats>() {
         Some(x) => Some(x),
         None => {
-            error!(
-                "unexpected stats type for {}: {}",
+            // TODO: There is a known instance of this #22680. While we look
+            // into it, log at warn instead of error to avoid spamming Sentry.
+            // Once we fix it, flip this back to error.
+            warn!(
+                "unexpected stats type for {} {} {}: expected {} got {}",
+                name,
+                col_name,
                 std::any::type_name::<T>(),
+                std::any::type_name::<T::Stats>(),
                 stats.type_name()
             );
+            metrics.pushdown.parts_mismatched_stats_count.inc();
             None
         }
     }
@@ -505,7 +666,8 @@ impl PersistSourceDataStats<'_> {
                 scalar_type: ScalarType::Jsonb,
                 nullable: false,
             } => {
-                let byte_stats = downcast_stats::<Vec<u8>>(&**stats)?;
+                let byte_stats =
+                    downcast_stats::<Vec<u8>>(self.metrics, self.name, name.as_str(), &**stats)?;
                 let value_range = match byte_stats {
                     BytesStats::Json(json_stats) => {
                         Self::json_spec(ok_stats.some.len, json_stats, arena)
@@ -518,7 +680,12 @@ impl PersistSourceDataStats<'_> {
                 scalar_type: ScalarType::Jsonb,
                 nullable: true,
             } => {
-                let option_stats = downcast_stats::<Option<Vec<u8>>>(&**stats)?;
+                let option_stats = downcast_stats::<Option<Vec<u8>>>(
+                    self.metrics,
+                    self.name,
+                    name.as_str(),
+                    &**stats,
+                )?;
                 let null_range = match option_stats.none {
                     0 => ResultSpec::nothing(),
                     _ => ResultSpec::null(),
@@ -555,11 +722,18 @@ impl PersistSourceDataStats<'_> {
     }
 
     fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec> {
-        struct ColValues<'a>(&'a dyn DynStats, &'a RowArena, Option<usize>);
+        struct ColValues<'a>(
+            &'a Metrics,
+            &'a str,
+            &'a str,
+            &'a dyn DynStats,
+            &'a RowArena,
+            Option<usize>,
+        );
         impl<'a> DatumToPersistFn<Option<ResultSpec<'a>>> for ColValues<'a> {
             fn call<T: DatumToPersist>(self) -> Option<ResultSpec<'a>> {
-                let ColValues(stats, arena, total_count) = self;
-                let stats = downcast_stats::<T::Data>(stats)?;
+                let ColValues(metrics, name, col_name, stats, arena, total_count) = self;
+                let stats = downcast_stats::<T::Data>(metrics, name, col_name, stats)?;
                 let make_datum = |lower| arena.make_datum(|packer| T::decode(lower, packer));
                 let min = stats.lower().map(make_datum);
                 let max = stats.upper().map(make_datum);
@@ -586,7 +760,14 @@ impl PersistSourceDataStats<'_> {
             .col::<Option<DynStruct>>("ok")
             .expect("ok column should be a struct")?;
         let stats = ok_stats.some.cols.get(name.as_str())?;
-        typ.to_persist(ColValues(stats.as_ref(), arena, self.len()))?
+        typ.to_persist(ColValues(
+            self.metrics,
+            self.name,
+            name.as_str(),
+            stats.as_ref(),
+            arena,
+            self.len(),
+        ))?
     }
 }
 
@@ -603,7 +784,6 @@ impl Backpressureable for (usize, SerdeLeasedBatchPart) {
 }
 
 /// Flow control configuration.
-/// TODO(guswynn): move to `persist_source`
 #[derive(Debug)]
 pub struct FlowControl<G: Scope> {
     /// Stream providing in-flight frontier updates.
@@ -629,7 +809,7 @@ pub struct FlowControl<G: Scope> {
 /// and a `summary`. Note that the `data` input expects all the second part of the tuple
 /// timestamp to be 0, and all data to be on the `chosen_worker` worker.
 ///
-/// The `summary` represents the _minimum_ range of timestamp's that needs to be emitted before
+/// The `summary` represents the _minimum_ range of timestamps that needs to be emitted before
 /// reasoning about `max_inflight_bytes`. In practice this means that we may overshoot
 /// `max_inflight_bytes`.
 ///
@@ -641,11 +821,11 @@ pub fn backpressure<T, G, O>(
     flow_control: FlowControl<G>,
     chosen_worker: usize,
     // A probe used to inspect this operator during unit-testing
-    probe: Option<UnboundedSender<(Antichain<(T, u64)>, usize, usize)>>,
+    probe: Option<UnboundedSender<(Antichain<(T, Subtime)>, usize, usize)>>,
 ) -> (Stream<G, O>, Rc<dyn Any>)
 where
     T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
-    G: Scope<Timestamp = (T, u64)>,
+    G: Scope<Timestamp = (T, Subtime)>,
     O: Backpressureable + std::fmt::Debug,
 {
     let worker_index = scope.index();
@@ -675,16 +855,20 @@ where
 
     // Helper method used to synthesize current and next frontier for ordered times.
     fn synthesize_frontiers<T: PartialOrder + Clone>(
-        mut frontier: Antichain<(T, u64)>,
-        mut time: (T, u64),
+        mut frontier: Antichain<(T, Subtime)>,
+        mut time: (T, Subtime),
         part_number: &mut u64,
-    ) -> ((T, u64), Antichain<(T, u64)>, Antichain<(T, u64)>) {
+    ) -> (
+        (T, Subtime),
+        Antichain<(T, Subtime)>,
+        Antichain<(T, Subtime)>,
+    ) {
         let mut next_frontier = frontier.clone();
-        time.1 = *part_number;
+        time.1 = Subtime(*part_number);
         frontier.insert(time.clone());
         *part_number += 1;
         let mut next_time = time.clone();
-        next_time.1 = *part_number;
+        next_time.1 = Subtime(*part_number);
         next_frontier.insert(next_time);
         (time, frontier, next_frontier)
     }
@@ -693,7 +877,7 @@ where
     // ensures that we order the parts by time.
     let data_input = async_stream::stream!({
         let mut part_number = 0;
-        let mut parts: Vec<((T, u64), O)> = Vec::new();
+        let mut parts: Vec<((T, Subtime), O)> = Vec::new();
         loop {
             match data_input.next_mut().await {
                 None => {
@@ -894,11 +1078,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::stats::PartStats;
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::columnar::{PartEncoder, Schema};
     use mz_persist_types::part::PartBuilder;
-    use timely::dataflow::operators::Probe;
+    use timely::dataflow::operators::{Enter, Probe};
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::sync::oneshot;
 
@@ -942,7 +1127,10 @@ mod tests {
             let part = part.finish()?;
             let stats = part.key_stats()?;
 
+            let metrics = Metrics::new(&PersistConfig::new_for_tests(), &MetricsRegistry::new());
             let stats = PersistSourceDataStats {
+                name: "test",
+                metrics: &metrics,
                 stats: &PartStats { key: stats },
                 desc: &schema,
             };
@@ -975,36 +1163,35 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // Reports undefined behavior
     fn test_backpressure_non_granular() {
         use Step::*;
         backpressure_runner(
             vec![(50, Part(101)), (50, Part(102)), (100, Part(1))],
             100,
-            (1, 0),
+            (1, Subtime(0)),
             vec![
                 // Assert we backpressure only after we have emitted
                 // the entire timestamp.
-                AssertOutputFrontier((50, 2)),
+                AssertOutputFrontier((50, Subtime(2))),
                 AssertBackpressured {
-                    frontier: (1, 0),
+                    frontier: (1, Subtime(0)),
                     inflight_parts: 1,
                     retired_parts: 0,
                 },
                 AssertBackpressured {
-                    frontier: (51, 0),
+                    frontier: (51, Subtime(0)),
                     inflight_parts: 1,
                     retired_parts: 0,
                 },
                 ProcessXParts(2),
                 AssertBackpressured {
-                    frontier: (101, 0),
+                    frontier: (101, Subtime(0)),
                     inflight_parts: 2,
                     retired_parts: 2,
                 },
                 // Assert we make later progress once processing
                 // the parts.
-                AssertOutputFrontier((100, 3)),
+                AssertOutputFrontier((100, Subtime(3))),
             ],
             true,
         );
@@ -1017,29 +1204,29 @@ mod tests {
                 (52, Part(1000)),
             ],
             50,
-            (1, 0),
+            (1, Subtime(0)),
             vec![
                 // Assert we backpressure only after we emitted enough bytes
-                AssertOutputFrontier((51, 3)),
+                AssertOutputFrontier((51, Subtime(3))),
                 AssertBackpressured {
-                    frontier: (1, 0),
+                    frontier: (1, Subtime(0)),
                     inflight_parts: 3,
                     retired_parts: 0,
                 },
                 ProcessXParts(3),
                 AssertBackpressured {
-                    frontier: (52, 0),
+                    frontier: (52, Subtime(0)),
                     inflight_parts: 3,
                     retired_parts: 2,
                 },
                 AssertBackpressured {
-                    frontier: (53, 0),
+                    frontier: (53, Subtime(0)),
                     inflight_parts: 1,
                     retired_parts: 1,
                 },
                 // Assert we make later progress once processing
                 // the parts.
-                AssertOutputFrontier((52, 4)),
+                AssertOutputFrontier((52, Subtime(4))),
             ],
             true,
         );
@@ -1059,33 +1246,33 @@ mod tests {
                 (100, Part(100)),
             ],
             100,
-            (1, 0),
+            (1, Subtime(0)),
             vec![
-                AssertOutputFrontier((51, 3)),
+                AssertOutputFrontier((51, Subtime(3))),
                 // Assert we backpressure after we have emitted enough bytes.
                 // We assert twice here because we get updates as
                 // `flow_control` progresses from `(0, 0)`->`(0, 1)`-> a real frontier.
                 AssertBackpressured {
-                    frontier: (1, 0),
+                    frontier: (1, Subtime(0)),
                     inflight_parts: 3,
                     retired_parts: 0,
                 },
                 AssertBackpressured {
-                    frontier: (51, 0),
+                    frontier: (51, Subtime(0)),
                     inflight_parts: 3,
                     retired_parts: 0,
                 },
                 ProcessXParts(1),
                 // Our output frontier doesn't move, as the downstream frontier hasn't moved past
                 // 50.
-                AssertOutputFrontier((51, 3)),
+                AssertOutputFrontier((51, Subtime(3))),
                 // After we process all of `50`, we can start emitting data at `52`, but only until
                 // we exhaust out budget. We don't need to emit all of `52` because we have emitted
                 // all of `51`.
                 ProcessXParts(1),
-                AssertOutputFrontier((52, 4)),
+                AssertOutputFrontier((52, Subtime(4))),
                 AssertBackpressured {
-                    frontier: (52, 0),
+                    frontier: (52, Subtime(0)),
                     inflight_parts: 3,
                     retired_parts: 2,
                 },
@@ -1097,43 +1284,42 @@ mod tests {
                 // parts at `52`
                 // This is an intermediate state.
                 AssertBackpressured {
-                    frontier: (53, 0),
+                    frontier: (53, Subtime(0)),
                     inflight_parts: 2,
                     retired_parts: 1,
                 },
                 // After we process all of `52`, we can continue to the next time.
                 ProcessXParts(5),
                 AssertBackpressured {
-                    frontier: (101, 0),
+                    frontier: (101, Subtime(0)),
                     inflight_parts: 5,
                     retired_parts: 5,
                 },
-                AssertOutputFrontier((100, 9)),
+                AssertOutputFrontier((100, Subtime(9))),
             ],
             true,
         );
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // Reports undefined behavior
     fn test_backpressure_granular() {
         use Step::*;
         backpressure_runner(
             vec![(50, Part(101)), (50, Part(101))],
             100,
-            (0, 1),
+            (0, Subtime(1)),
             vec![
                 // Advance our frontier to outputting a single part.
-                AssertOutputFrontier((50, 1)),
+                AssertOutputFrontier((50, Subtime(1))),
                 // Receive backpressure updates until our frontier is up-to-date but
                 // not beyond the parts (while considering the summary).
                 AssertBackpressured {
-                    frontier: (0, 1),
+                    frontier: (0, Subtime(1)),
                     inflight_parts: 1,
                     retired_parts: 0,
                 },
                 AssertBackpressured {
-                    frontier: (50, 1),
+                    frontier: (50, Subtime(1)),
                     inflight_parts: 1,
                     retired_parts: 0,
                 },
@@ -1141,12 +1327,12 @@ mod tests {
                 ProcessXParts(1),
                 // Assert that we clear the backpressure status
                 AssertBackpressured {
-                    frontier: (50, 2),
+                    frontier: (50, Subtime(2)),
                     inflight_parts: 1,
                     retired_parts: 1,
                 },
                 // Ensure we make progress to the next part.
-                AssertOutputFrontier((50, 2)),
+                AssertOutputFrontier((50, Subtime(2))),
             ],
             false,
         );
@@ -1159,33 +1345,33 @@ mod tests {
                 (52, Part(100)),
             ],
             50,
-            (0, 1),
+            (0, Subtime(1)),
             vec![
                 // we can emit 3 parts before we hit the backpressure limit
-                AssertOutputFrontier((51, 3)),
+                AssertOutputFrontier((51, Subtime(3))),
                 AssertBackpressured {
-                    frontier: (0, 1),
+                    frontier: (0, Subtime(1)),
                     inflight_parts: 3,
                     retired_parts: 0,
                 },
                 AssertBackpressured {
-                    frontier: (50, 1),
+                    frontier: (50, Subtime(1)),
                     inflight_parts: 3,
                     retired_parts: 0,
                 },
                 // Retire the single part.
                 ProcessXParts(1),
                 AssertBackpressured {
-                    frontier: (50, 2),
+                    frontier: (50, Subtime(2)),
                     inflight_parts: 3,
                     retired_parts: 1,
                 },
                 // Ensure we make progress, and then
                 // can retire the next 2 parts.
-                AssertOutputFrontier((52, 4)),
+                AssertOutputFrontier((52, Subtime(4))),
                 ProcessXParts(2),
                 AssertBackpressured {
-                    frontier: (52, 4),
+                    frontier: (52, Subtime(4)),
                     inflight_parts: 3,
                     retired_parts: 2,
                 },
@@ -1194,7 +1380,7 @@ mod tests {
         );
     }
 
-    type Time = (u64, u64);
+    type Time = (u64, Subtime);
     #[derive(Clone, Debug)]
     struct Part(usize);
     impl Backpressureable for Part {
@@ -1252,7 +1438,7 @@ mod tests {
                         token,
                         backpressured,
                         finalizer_tx,
-                    ) = scope.scoped::<(u64, u64), _, _>("hybrid", |scope| {
+                    ) = scope.scoped::<(u64, Subtime), _, _>("hybrid", |scope| {
                         let (input, finalizer_tx) =
                             iterator_operator(scope.clone(), input.into_iter());
 
@@ -1386,7 +1572,7 @@ mod tests {
     /// An operator that emits `Part`'s at the specified timestamps. Does not
     /// drop its capability until it gets a signal from the `Sender` it returns.
     fn iterator_operator<
-        G: Scope<Timestamp = (u64, u64)>,
+        G: Scope<Timestamp = (u64, Subtime)>,
         I: Iterator<Item = (u64, Part)> + 'static,
     >(
         scope: G,
@@ -1402,7 +1588,7 @@ mod tests {
             while let Some(element) = input.next() {
                 let time = element.0.clone();
                 let part = element.1;
-                last = Some((time, 0));
+                last = Some((time, Subtime(0)));
                 output_handle
                     .give(&capability.as_ref().unwrap().delayed(&last.unwrap()), part)
                     .await;

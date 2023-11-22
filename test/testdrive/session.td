@@ -28,6 +28,7 @@ DateStyle                           "ISO, MDY"              "Sets the display fo
 emit_introspection_query_notice     on                      "Whether to print a notice when querying per-replica introspection sources."
 emit_timestamp_notice               off                     "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize)."
 emit_trace_id_notice                off                     "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
+enable_alter_swap                   on                      "Whether the ALTER SWAP feature for objects is allowed (Materialize)."
 enable_comment                      on                      "Whether the COMMENT ON feature for objects is allowed (Materialize)."
 enable_rbac_checks                  on                      "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 enable_session_rbac_checks          off                     "User facing session boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
@@ -69,6 +70,7 @@ statement_logging_sample_rate       1.0                     "User-facing session
 statement_timeout                   "10 s"                  "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds."
 TimeZone                            UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
+unsafe_new_transaction_wall_time    ""                      "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. If not set, uses the system's clock."
 enable_consolidate_after_union_negate on                    "consolidation after Unions that have a Negated input (Materialize)."
 enable_sink_doc_on_option           on                     "Whether DOC ON option for sinks is allowed (Materialize)."
 

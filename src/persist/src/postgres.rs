@@ -14,17 +14,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use deadpool_postgres::{Object, PoolError};
+use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 
 use crate::error::Error;
-use crate::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
+use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
 
 // These `sql_stats_automatic_collection_enabled` are for the cost-based
 // optimizer but all the queries against this table are single-table and very
@@ -138,6 +140,11 @@ impl PostgresConsensusConfig {
             fn connection_pool_max_size(&self) -> usize {
                 2
             }
+
+            fn connection_pool_max_wait(&self) -> Option<Duration> {
+                Some(Duration::from_secs(1))
+            }
+
             fn connection_pool_ttl(&self) -> Duration {
                 Duration::MAX
             }
@@ -215,6 +222,23 @@ impl PostgresConsensus {
 
 #[async_trait]
 impl Consensus for PostgresConsensus {
+    fn list_keys(&self) -> ResultStream<String> {
+        let q = "SELECT DISTINCT shard FROM consensus";
+
+        Box::pin(try_stream! {
+            // NB: it's important that we hang on to this client for the lifetime of the stream,
+            // to avoid returning it to the pool prematurely.
+            let client = self.get_connection().await?;
+            let statement = client.prepare_cached(q).await?;
+            let params: &[String] = &[];
+            let mut rows = Box::pin(client.query_raw(&statement, params).await?);
+            while let Some(row) = rows.next().await {
+                let shard: String = row?.try_get("shard")?;
+                yield shard;
+            }
+        })
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
@@ -407,6 +431,33 @@ mod tests {
         consensus.drop_and_recreate().await?;
 
         assert_eq!(consensus.head(&key).await, Ok(None));
+
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn postgres_consensus_blocking() -> Result<(), ExternalError> {
+        let config = match PostgresConsensusConfig::new_for_test()? {
+            Some(config) => config,
+            None => {
+                info!(
+                    "{} env not set: skipping test that uses external service",
+                    PostgresConsensusConfig::EXTERNAL_TESTS_POSTGRES_URL
+                );
+                return Ok(());
+            }
+        };
+
+        let consensus: PostgresConsensus = PostgresConsensus::open(config.clone()).await?;
+        // Max size in test is 2... let's saturate the pool.
+        let _conn1 = consensus.get_connection().await?;
+        let _conn2 = consensus.get_connection().await?;
+
+        // And finally, we should see the next connect time out.
+        let conn3 = consensus.get_connection().await;
+
+        assert!(conn3.is_err());
 
         Ok(())
     }

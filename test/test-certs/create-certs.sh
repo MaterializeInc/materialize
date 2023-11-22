@@ -10,13 +10,18 @@
 # by the Apache License, Version 2.0.
 
 # This code creates TLS certificates for the various TLS-enabled services that
-# appear throughout our mzcompose infrastructure. See test/kafka-ssl for a
+# appear throughout our mzcompose infrastructure. See test/kafka-auth for a
 # representative example.
 #
 # For each service, we generate:
 #
 #   * A PEM-formatted certificate and key, signed by the "ca" CA, in the files
-#     SERVICE.crt and SERVICE.key.
+#     SERVICE.crt and SERVICE.key. The certificate is valid for the hostnames
+#     `SERVICE` and `*.SERVICE.local`. The latter wildcard is useful when it's
+#     necessary to run multiple copies of the service at different hostnames
+#     using the same TLS certificate (e.g., `replica1.SERVICE.local` and
+#     `replica2.SERVICE.local`). The `.local` suffix is required as TLS wildcard
+#     certificates are not valid for top-level domains (e.g., `*.SERVICE`).
 #   * A PKCS#12-formatted archive containing the above certificate and key in a
 #     file named SERVICE.p12.
 #
@@ -26,10 +31,10 @@
 #     SERVICE.crt, and SERVICE.key.
 #
 #   * A PEM-formatted certificate and key, signed by the "ca-selective" CA, in
-#     the files materialize-SERVICE.crt and materialize-SERVICE.key.
+#     the files materialized-SERVICE.crt and materialized-SERVICE.key.
 #
 #   * A Java TrustStore named SERVICE.truststore.jks that contains ca.crt and
-#     materialize-SERVICE.crt.
+#     materialized-SERVICE.crt.
 #
 # The idea is that you configure services to use SERVICE.key as a client
 # certificate when communicating with other services, and to trust ca.crt
@@ -88,6 +93,7 @@ create_cert() {
         -sha256 \
         -batch \
         -subj "/CN=$common_name" \
+        -addext "subjectAltName = DNS:$common_name, DNS:*.$common_name.local" \
         -passin pass:$SSL_SECRET \
         -passout pass:$SSL_SECRET \
 
@@ -100,6 +106,7 @@ create_cert() {
         -sha256 \
         -days 36500 \
         -CAcreateserial \
+        -copy_extensions copy \
         -passin pass:$SSL_SECRET \
 
     # Export key and certificate as a PKCS#12 archive for import into JKSs.
@@ -128,7 +135,7 @@ create_cert() {
         -passout pass:$SSL_SECRET
 }
 
-for i in materialized producer postgres certuser no_describe_configs
+for i in materialized producer postgres certuser balancerd frontegg-mock
 do
     create_cert $i "ca" $i
 
@@ -173,9 +180,6 @@ do
         -noprompt -storepass $SSL_SECRET -keypass $SSL_SECRET
 
 done
-
-
-echo $SSL_SECRET > secrets/cert_creds
 
 # Ensure files are readable for any user.
 chmod -R a+r secrets/

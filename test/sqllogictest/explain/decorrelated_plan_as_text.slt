@@ -110,14 +110,14 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
 ----
 Threshold
   Union
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Project (#0)
         CrossJoin
           Constant
             - ()
           Get materialize.public.t
     Negate
-      Distinct group_by=[#0]
+      Distinct project=[#0]
         Project (#1)
           CrossJoin
             Constant
@@ -175,9 +175,9 @@ Return
             CrossJoin
               Union
                 Negate
-                  Distinct
+                  Distinct project=[]
                     Get l0
-                Distinct
+                Distinct project=[]
                   Constant
                     - ()
               Constant
@@ -229,9 +229,9 @@ Return
                 Join on=(#0 = #1)
                   Union
                     Negate
-                      Distinct group_by=[#0]
+                      Distinct project=[#0]
                         Get l5
-                    Distinct group_by=[#0]
+                    Distinct project=[#0]
                       Get l4
                   Get l4
               Constant
@@ -239,13 +239,13 @@ Return
 With
   cte l5 =
     Map (true)
-      Distinct group_by=[#0]
+      Distinct project=[#0]
         Filter (#0 > #2)
           CrossJoin
             Get l4
             Get materialize.public.mv
   cte l4 =
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get l3
   cte l3 =
     Project (#0, #1)
@@ -260,22 +260,22 @@ With
                   Join on=(#0 = #1)
                     Union
                       Negate
-                        Distinct group_by=[#0]
+                        Distinct project=[#0]
                           Get l2
-                      Distinct group_by=[#0]
+                      Distinct project=[#0]
                         Get l1
                     Get l1
                 Constant
                   - (false)
   cte l2 =
     Map (true)
-      Distinct group_by=[#0]
+      Distinct project=[#0]
         Filter (#0 < #1)
           CrossJoin
             Get l1
             Get materialize.public.mv
   cte l1 =
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Get l0
   cte l0 =
     Filter (true AND true)
@@ -294,7 +294,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
 Return
   Project (#8, #9)
     Map (#4, #7)
-      Join on=(eq(#0, #2, #5) AND eq(#1, #3, #6))
+      Join on=(#0 = #2 = #5 AND #1 = #3 = #6)
         Get l0
         Project (#0, #1, #3)
           Join on=(#1 = #2)
@@ -306,9 +306,9 @@ Return
                   Join on=(#0 = #1)
                     Union
                       Negate
-                        Distinct group_by=[#0]
+                        Distinct project=[#0]
                           Get l4
-                      Distinct group_by=[#0]
+                      Distinct project=[#0]
                         Get l2
                     Get l2
                 Constant
@@ -323,9 +323,9 @@ Return
                   Join on=(#0 = #1)
                     Union
                       Negate
-                        Distinct group_by=[#0]
+                        Distinct project=[#0]
                           Get l8
-                      Distinct group_by=[#0]
+                      Distinct project=[#0]
                         Get l6
                     Get l6
                 Constant
@@ -347,10 +347,10 @@ With
             Get l6
             Get materialize.public.mv
   cte l6 =
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get l5
   cte l5 =
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Get l0
   cte l4 =
     Union
@@ -368,10 +368,10 @@ With
             Get l2
             Get materialize.public.v
   cte l2 =
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get l1
   cte l1 =
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Get l0
   cte l0 =
     CrossJoin
@@ -502,7 +502,7 @@ Return
               Project (#0, #1)
                 Join on=(#1 = #2)
                   Get l2
-                  Distinct group_by=[#0]
+                  Distinct project=[#0]
                     Project (#3)
                       Get l3
             Get l2
@@ -519,7 +519,7 @@ With
                   Project (#0, #1)
                     Join on=(#1 = #2)
                       Get l0
-                      Distinct group_by=[#0]
+                      Distinct project=[#0]
                         Project (#1)
                           Get l1
                 Get l0
@@ -608,9 +608,9 @@ Return
                 Join on=(#0 = #1)
                   Union
                     Negate
-                      Distinct group_by=[#0]
+                      Distinct project=[#0]
                         Get l5
-                    Distinct group_by=[#0]
+                    Distinct project=[#0]
                       Get l4
                   Get l4
               Constant
@@ -622,7 +622,7 @@ With
         Get l4
         Get materialize.public.t
   cte l4 =
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Get l3
   cte l3 =
     Filter true
@@ -637,9 +637,9 @@ With
                   Join on=(#0 = #1)
                     Union
                       Negate
-                        Distinct group_by=[#0]
+                        Distinct project=[#0]
                           Get l2
-                      Distinct group_by=[#0]
+                      Distinct project=[#0]
                         Get l1
                     Get l1
                 Constant
@@ -650,7 +650,7 @@ With
         Get l1
         Get materialize.public.t
   cte l1 =
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Get l0
   cte l0 =
     CrossJoin
@@ -704,9 +704,9 @@ Return
                       Join on=(#0 = #2 AND #1 = #3)
                         Union
                           Negate
-                            Distinct group_by=[#0, #1]
+                            Distinct project=[#0, #1]
                               Get l5
-                          Distinct group_by=[#0, #1]
+                          Distinct project=[#0, #1]
                             Get l4
                         Get l4
                     Constant
@@ -718,7 +718,7 @@ With
         Get l4
         Get materialize.public.t
   cte l4 =
-    Distinct group_by=[#1, #0]
+    Distinct project=[#1, #0]
       Get l3
   cte l3 =
     Union
@@ -728,9 +728,9 @@ With
           Join on=(#0 = #1)
             Union
               Negate
-                Distinct group_by=[#0]
+                Distinct project=[#0]
                   Get l2
-              Distinct group_by=[#0]
+              Distinct project=[#0]
                 Get l1
             Get l1
         Constant
@@ -741,7 +741,7 @@ With
         Get l1
         Get materialize.public.t
   cte l1 =
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Get l0
   cte l0 =
     CrossJoin
@@ -762,9 +762,9 @@ Return
         CrossJoin
           Union
             Negate
-              Distinct
+              Distinct project=[]
                 Get l0
-            Distinct
+            Distinct project=[]
               Constant
                 - ()
           Constant

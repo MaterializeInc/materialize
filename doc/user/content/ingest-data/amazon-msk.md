@@ -11,6 +11,9 @@ menu:
     name: "Amazon MSK"
 ---
 
+[//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
+with the Postgres ones. We should include spill to disk in the guidance then."
+
 This guide goes through the required steps to connect Materialize to an Amazon MSK cluster.
 
 ## Before you begin
@@ -55,11 +58,8 @@ In Materialize, create a source connection that uses the SSH tunnel connection y
 
 ```sql
 CREATE CONNECTION kafka_connection TO KAFKA (
-BROKERS (
-    'broker1:9092' USING SSH TUNNEL ssh_connection,
-    'broker2:9092' USING SSH TUNNEL ssh_connection
-    -- Add all Kafka brokers
-    )
+  BROKER 'broker1:9092',
+  SSH TUNNEL ssh_connection
 );
 ```
 

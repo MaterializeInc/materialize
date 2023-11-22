@@ -133,7 +133,7 @@ DATE_TIME_OPERATION_TYPES.append(
 DATE_TIME_OPERATION_TYPES.append(
     DbOperation(
         "$ AT TIME ZONE $::TEXT",
-        [DateTimeOperationParam(), TIME_ZONE_PARAM],
+        [DateTimeOperationParam(support_time=False), TIME_ZONE_PARAM],
         DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
     )
 )
@@ -141,7 +141,7 @@ DATE_TIME_OPERATION_TYPES.append(
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
         "timezone",
-        [TIME_ZONE_PARAM, DateTimeOperationParam()],
+        [TIME_ZONE_PARAM, DateTimeOperationParam(support_time=False)],
         DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
     )
 )

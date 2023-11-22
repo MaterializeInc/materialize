@@ -92,19 +92,24 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
+use axum::response::IntoResponse;
+use axum::{routing, Router};
 use bytes::BytesMut;
+use futures::TryFutureExt;
+use hyper::StatusCode;
 use mz_build_info::{build_info, BuildInfo};
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
-use mz_ore::metric;
-use mz_ore::metrics::{ComputedGauge, MetricsRegistry};
+use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
-use mz_ore::server::{listen, TlsCertConfig, TlsConfig, TlsMode};
 use mz_ore::task::JoinSetExt;
+use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
     ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION, VERSION_3,
 };
+use mz_server_core::{listen, ConnectionStream, ListenerHandle, TlsCertConfig, TlsConfig, TlsMode};
 use openssl::ssl::{NameType, Ssl, SslContext};
+use prometheus::{IntCounterVec, IntGaugeVec};
 use semver::Version;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -121,6 +126,8 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 pub struct BalancerConfig {
     /// Info about which version of the code is running.
     build_version: Version,
+    /// Listen address for internal HTTP health and metrics server.
+    internal_http_listen_addr: SocketAddr,
     /// Listen address for pgwire connections.
     pgwire_listen_addr: SocketAddr,
     /// Listen address for HTTPS connections.
@@ -129,39 +136,44 @@ pub struct BalancerConfig {
     resolver: Resolver,
     https_addr_template: String,
     tls: Option<TlsCertConfig>,
+    metrics_registry: MetricsRegistry,
 }
 
 impl BalancerConfig {
     pub fn new(
         build_info: &BuildInfo,
+        internal_http_listen_addr: SocketAddr,
         pgwire_listen_addr: SocketAddr,
         https_listen_addr: SocketAddr,
         resolver: Resolver,
         https_addr_template: String,
         tls: Option<TlsCertConfig>,
+        metrics_registry: MetricsRegistry,
     ) -> Self {
         Self {
             build_version: build_info.semver_version(),
+            internal_http_listen_addr,
             pgwire_listen_addr,
             https_listen_addr,
             resolver,
             https_addr_template,
             tls,
+            metrics_registry,
         }
     }
 }
 
 /// Prometheus monitoring metrics.
 #[derive(Debug)]
-pub struct Metrics {
+pub struct BalancerMetrics {
     _uptime: ComputedGauge,
 }
 
-impl Metrics {
-    /// Returns a new [Metrics] instance connected to the given registry.
-    pub fn new(cfg: &BalancerConfig, registry: &MetricsRegistry) -> Self {
+impl BalancerMetrics {
+    /// Returns a new [BalancerMetrics] instance connected to the registry in cfg.
+    pub fn new(cfg: &BalancerConfig) -> Self {
         let start = Instant::now();
-        let uptime = registry.register_computed_gauge(
+        let uptime = cfg.metrics_registry.register_computed_gauge(
             metric!(
                 name: "mz_balancer_metadata_seconds",
                 help: "server uptime, labels are build metadata",
@@ -172,27 +184,34 @@ impl Metrics {
             ),
             move || start.elapsed().as_secs_f64(),
         );
-        Metrics { _uptime: uptime }
+        BalancerMetrics { _uptime: uptime }
     }
 }
 
 pub struct BalancerService {
     cfg: BalancerConfig,
-    _metrics: Metrics,
+    pub pgwire: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    pub https: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    internal_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    _metrics: BalancerMetrics,
 }
 
 impl BalancerService {
-    pub fn new(cfg: BalancerConfig, metrics: Metrics) -> Self {
-        Self {
+    pub async fn new(cfg: BalancerConfig) -> Result<Self, anyhow::Error> {
+        let pgwire = listen(&cfg.pgwire_listen_addr).await?;
+        let https = listen(&cfg.https_listen_addr).await?;
+        let internal_http = listen(&cfg.internal_http_listen_addr).await?;
+        let metrics = BalancerMetrics::new(&cfg);
+        Ok(Self {
             cfg,
+            pgwire,
+            https,
+            internal_http,
             _metrics: metrics,
-        }
+        })
     }
 
     pub async fn serve(self) -> Result<(), anyhow::Error> {
-        let (_pgwire_listen_handle, pgwire_stream) = listen(self.cfg.pgwire_listen_addr).await?;
-        let (_https_listen_handle, https_stream) = listen(self.cfg.https_listen_addr).await?;
-
         let (pgwire_tls, https_tls) = match &self.cfg.tls {
             Some(tls) => {
                 let context = tls.context()?;
@@ -207,30 +226,57 @@ impl BalancerService {
             None => (None, None),
         };
 
+        let metrics = ServerMetricsConfig::register_into(&self.cfg.metrics_registry);
+
         let mut set = JoinSet::new();
         {
             let pgwire = PgwireBalancer {
                 resolver: Arc::new(self.cfg.resolver),
                 tls: pgwire_tls,
+                metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
             };
             set.spawn_named(|| "pgwire_stream", async move {
-                mz_ore::server::serve(pgwire_stream, pgwire).await;
+                mz_server_core::serve(self.pgwire.1, pgwire).await;
             });
         }
         {
             let https = HttpsBalancer {
                 tls: Arc::new(https_tls),
                 resolve_template: Arc::from(self.cfg.https_addr_template),
+                metrics: ServerMetrics::new(metrics, "https"),
             };
             set.spawn_named(|| "https_stream", async move {
-                mz_ore::server::serve(https_stream, https).await;
+                mz_server_core::serve(self.https.1, https).await;
+            });
+        }
+        {
+            let router = Router::new()
+                .route(
+                    "/metrics",
+                    routing::get(move || async move {
+                        mz_http_util::handle_prometheus(&self.cfg.metrics_registry).await
+                    }),
+                )
+                .route(
+                    "/api/livez",
+                    routing::get(mz_http_util::handle_liveness_check),
+                )
+                .route("/api/readyz", routing::get(handle_readiness_check));
+
+            let internal_http = InternalHttpServer { router };
+            set.spawn_named(|| "internal_http_stream", async move {
+                mz_server_core::serve(self.internal_http.1, internal_http).await;
             });
         }
 
         println!("balancerd {} listening...", BUILD_INFO.human_version());
         println!(" TLS enabled: {}", self.cfg.tls.is_some());
-        println!(" pgwire address: {}", self.cfg.pgwire_listen_addr);
-        println!(" HTTPS address: {}", self.cfg.https_listen_addr);
+        println!(" pgwire address: {}", self.pgwire.0.local_addr());
+        println!(" HTTPS address: {}", self.https.0.local_addr());
+        println!(
+            " internal HTTP address: {}",
+            self.internal_http.0.local_addr()
+        );
 
         // The tasks should never exit, so complain if they do.
         while let Some(res) = set.join_next().await {
@@ -241,10 +287,117 @@ impl BalancerService {
     }
 }
 
+#[allow(clippy::unused_async)]
+async fn handle_readiness_check() -> impl IntoResponse {
+    (StatusCode::OK, "ready")
+}
+
+struct InternalHttpServer {
+    router: Router,
+}
+
+impl mz_server_core::Server for InternalHttpServer {
+    const NAME: &'static str = "internal_http";
+
+    fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
+        let router = self.router.clone();
+        Box::pin(async {
+            let http = hyper::server::conn::Http::new();
+            http.serve_connection(conn, router).err_into().await
+        })
+    }
+}
+
+/// Wraps an IntGauge and automatically `inc`s on init and `drop`s on drop. Callers should not call
+/// `inc().`. Useful for handling multiple task exit points, for example in the case of a panic.
+struct GaugeGuard {
+    gauge: IntGauge,
+}
+
+impl From<IntGauge> for GaugeGuard {
+    fn from(gauge: IntGauge) -> Self {
+        let _self = Self { gauge };
+        _self.gauge.inc();
+        _self
+    }
+}
+
+impl Drop for GaugeGuard {
+    fn drop(&mut self) {
+        self.gauge.dec();
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ServerMetricsConfig {
+    connection_status: IntCounterVec,
+    active_connections: IntGaugeVec,
+}
+
+impl ServerMetricsConfig {
+    fn register_into(registry: &MetricsRegistry) -> Self {
+        let connection_status = registry.register(metric!(
+            name: "mz_balancer_connection_status",
+            help: "Count of completed network connections, by status",
+            var_labels: ["source", "status"],
+        ));
+        let active_connections = registry.register(metric!(
+            name: "mz_balancer_connection_active",
+            help: "Count of currently open network connections.",
+            var_labels: ["source"],
+        ));
+        Self {
+            connection_status,
+            active_connections,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ServerMetrics {
+    inner: ServerMetricsConfig,
+    source: &'static str,
+}
+
+impl ServerMetrics {
+    fn new(inner: ServerMetricsConfig, source: &'static str) -> Self {
+        let self_ = Self { inner, source };
+
+        // Pre-initialize labels we are planning to use to ensure they are all always emitted as
+        // time series.
+        self_.connection_status(false);
+        self_.connection_status(true);
+        drop(self_.active_connections());
+
+        self_
+    }
+
+    fn connection_status(&self, is_ok: bool) -> IntCounter {
+        self.inner
+            .connection_status
+            .with_label_values(&[self.source, Self::status_label(is_ok)])
+    }
+
+    fn active_connections(&self) -> GaugeGuard {
+        self.inner
+            .active_connections
+            .with_label_values(&[self.source])
+            .into()
+    }
+
+    fn status_label(is_ok: bool) -> &'static str {
+        if is_ok {
+            "success"
+        } else {
+            "error"
+        }
+    }
+}
+
 struct PgwireBalancer {
     tls: Option<TlsConfig>,
     resolver: Arc<Resolver>,
-    // todo: metrics
+    metrics: ServerMetrics,
 }
 
 impl PgwireBalancer {
@@ -315,7 +468,6 @@ impl PgwireBalancer {
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
-        let client_stream = conn.inner_mut();
         let mut mz_stream = TcpStream::connect(envd_addr).await?;
         let mut buf = BytesMut::new();
 
@@ -325,11 +477,35 @@ impl PgwireBalancer {
             params,
         };
         startup.encode(&mut buf)?;
-        if let Some(password) = password {
-            let password = FrontendMessage::Password { password };
-            password.encode(&mut buf)?;
-        }
         mz_stream.write_all(&buf).await?;
+        let client_stream = conn.inner_mut();
+
+        // Read a single backend message, which may be a password request. Send ours if so.
+        // Otherwise start shuffling bytes. message type (len 1, 'R') + message len (len 4, 8_i32) +
+        // auth type (len 4, 3_i32).
+        let mut maybe_auth_frame = [0; 1 + 4 + 4];
+        let nread = netio::read_exact_or_eof(&mut mz_stream, &mut maybe_auth_frame).await?;
+        // 'R' for auth message, 0008 for message length, 0003 for password cleartext variant.
+        // See: https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-AUTHENTICATIONCLEARTEXTPASSWORD
+        const AUTH_PASSWORD_CLEARTEXT: [u8; 9] = [b'R', 0, 0, 0, 8, 0, 0, 0, 3];
+        if nread == AUTH_PASSWORD_CLEARTEXT.len()
+            && maybe_auth_frame == AUTH_PASSWORD_CLEARTEXT
+            && password.is_some()
+        {
+            // If we got exactly a cleartext password request and have one, send it.
+            let Some(password) = password else {
+                unreachable!("verified some above");
+            };
+            let password = FrontendMessage::Password { password };
+            buf.clear();
+            password.encode(&mut buf)?;
+            mz_stream.write_all(&buf).await?;
+            mz_stream.flush().await?;
+        } else {
+            // Otherwise pass on the bytes we just got. This *might* even be a password request, but
+            // we don't have a password. In which case it can be forwarded up to the client.
+            client_stream.write_all(&maybe_auth_frame[0..nread]).await?;
+        }
 
         // Now blindly shuffle bytes back and forth until closed.
         // TODO: Limit total memory use.
@@ -339,20 +515,21 @@ impl PgwireBalancer {
     }
 }
 
-impl mz_ore::server::Server for PgwireBalancer {
+impl mz_server_core::Server for PgwireBalancer {
     const NAME: &'static str = "pgwire_balancer";
 
-    fn handle_connection(&self, conn: TcpStream) -> mz_ore::server::ConnectionHandler {
+    fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
         let tls = self.tls.clone();
         let resolver = Arc::clone(&self.resolver);
+        let metrics = self.metrics.clone();
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.
-            let _result: Result<(), anyhow::Error> = async move {
+            let active_guard = metrics.active_connections();
+            let result: Result<(), anyhow::Error> = async move {
                 let mut conn = Conn::Unencrypted(conn);
                 loop {
                     let message = decode_startup(&mut conn).await?;
-
                     conn = match message {
                         // Clients sometimes hang up during the startup sequence, e.g.
                         // because they receive an unacceptable response to an
@@ -406,7 +583,8 @@ impl mz_ore::server::Server for PgwireBalancer {
                 }
             }
             .await;
-            // metrics.connection_status(result.is_ok()).inc();
+            drop(active_guard);
+            metrics.connection_status(result.is_ok()).inc();
             Ok(())
         })
     }
@@ -415,57 +593,64 @@ impl mz_ore::server::Server for PgwireBalancer {
 struct HttpsBalancer {
     tls: Arc<Option<SslContext>>,
     resolve_template: Arc<str>,
-    // todo: metrics
+    metrics: ServerMetrics,
 }
 
-impl mz_ore::server::Server for HttpsBalancer {
+impl mz_server_core::Server for HttpsBalancer {
     const NAME: &'static str = "https_balancer";
 
-    fn handle_connection(&self, conn: TcpStream) -> mz_ore::server::ConnectionHandler {
+    fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
         let tls_context = Arc::clone(&self.tls);
         let resolve_template = Arc::clone(&self.resolve_template);
+        let metrics = self.metrics.clone();
         Box::pin(async move {
-            let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
-                match &*tls_context {
-                    Some(tls_context) => {
-                        let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
-                        if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                            let _ = ssl_stream.get_mut().shutdown().await;
-                            return Err(e.into());
+            let active_guard = metrics.active_connections();
+            let result = Box::pin(async move {
+                let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
+                    match &*tls_context {
+                        Some(tls_context) => {
+                            let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
+                            if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                                let _ = ssl_stream.get_mut().shutdown().await;
+                                return Err(e.into());
+                            }
+                            let servername: Option<String> =
+                                ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
+                                    match sn.split_once('.') {
+                                        Some((left, _right)) => left,
+                                        None => sn,
+                                    }
+                                    .into()
+                                });
+                            debug!("servername: {servername:?}");
+                            (Box::new(ssl_stream), servername)
                         }
-                        let servername: Option<String> =
-                            ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
-                                debug!("full servername: {sn}");
-                                match sn.split_once('.') {
-                                    Some((left, _right)) => left,
-                                    None => sn,
-                                }
-                                .into()
-                            });
-                        debug!("servername: {servername:?}");
-                        (Box::new(ssl_stream), servername)
-                    }
-                    _ => (Box::new(conn), None),
+                        _ => (Box::new(conn), None),
+                    };
+
+                let addr: String = match servername {
+                    Some(servername) => resolve_template.replace("{}", &servername),
+                    None => resolve_template.to_string(),
+                };
+                debug!("https address: {addr}");
+
+                let mut addrs = tokio::net::lookup_host(&*addr).await?;
+                let Some(envd_addr) = addrs.next() else {
+                    error!("{addr} did not resolve to any addresses");
+                    anyhow::bail!("internal error");
                 };
 
-            let addr: String = match servername {
-                Some(servername) => resolve_template.replace("{}", &servername),
-                None => resolve_template.to_string(),
-            };
-            debug!("https address: {addr}");
+                let mut mz_stream = TcpStream::connect(envd_addr).await?;
 
-            let mut addrs = tokio::net::lookup_host(&*addr).await?;
-            let Some(envd_addr) = addrs.next() else {
-                error!("{addr} did not resolve to any addresses");
-                anyhow::bail!("internal error");
-            };
+                // Now blindly shuffle bytes back and forth until closed.
+                // TODO: Limit total memory use.
+                tokio::io::copy_bidirectional(&mut client_stream, &mut mz_stream).await?;
 
-            let mut mz_stream = TcpStream::connect(envd_addr).await?;
-
-            // Now blindly shuffle bytes back and forth until closed.
-            // TODO: Limit total memory use.
-            tokio::io::copy_bidirectional(&mut client_stream, &mut mz_stream).await?;
-
+                Ok(())
+            })
+            .await;
+            drop(active_guard);
+            metrics.connection_status(result.is_ok()).inc();
             Ok(())
         })
     }
@@ -474,8 +659,9 @@ impl mz_ore::server::Server for HttpsBalancer {
 trait ClientStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 
+#[derive(Debug)]
 pub enum Resolver {
-    Static(SocketAddr),
+    Static(String),
     Frontegg(FronteggResolver),
 }
 
@@ -514,29 +700,41 @@ impl Resolver {
                 };
 
                 let addr = addr_template.replace("{}", &claims.tenant_id.to_string());
-                let mut addrs = tokio::net::lookup_host(&addr).await?;
-                let Some(addr) = addrs.next() else {
-                    error!("{addr} did not resolve to any addresses");
-                    anyhow::bail!("internal error");
-                };
+                let addr = lookup(&addr).await?;
                 Ok(ResolvedAddr {
                     addr,
                     password: Some(password),
                 })
             }
-            Resolver::Static(addr) => Ok(ResolvedAddr {
-                addr: addr.clone(),
-                password: None,
-            }),
+            Resolver::Static(addr) => {
+                let addr = lookup(addr).await?;
+                Ok(ResolvedAddr {
+                    addr,
+                    password: None,
+                })
+            }
         }
     }
 }
 
+async fn lookup(addr: &str) -> Result<SocketAddr, anyhow::Error> {
+    let mut addrs = tokio::net::lookup_host(&addr).await?;
+    match addrs.next() {
+        Some(addr) => Ok(addr),
+        None => {
+            error!("{addr} did not resolve to any addresses");
+            anyhow::bail!("internal error")
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct FronteggResolver {
     pub auth: FronteggAuthentication,
     pub addr_template: String,
 }
 
+#[derive(Debug)]
 struct ResolvedAddr {
     addr: SocketAddr,
     password: Option<String>,

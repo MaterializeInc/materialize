@@ -11,7 +11,7 @@
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
 from materialize.cloudtest.k8s.environmentd import EnvironmentdStatefulSet
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 
 class ReplaceEnvironmentdStatefulSet(Action):

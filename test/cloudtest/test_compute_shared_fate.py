@@ -35,7 +35,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > INSERT INTO t1 SELECT 234000 + generate_series FROM generate_series(1, 1000);
 
-            > CREATE CONNECTION kafka TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+            > CREATE CONNECTION kafka TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE SOURCE s1
               FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-shared-fate-${{testdrive.seed}}')

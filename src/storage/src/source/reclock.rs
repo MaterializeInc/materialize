@@ -390,6 +390,11 @@ where
             inner: Rc::clone(&self.inner),
         }
     }
+
+    /// The number of remap bindings in the trace
+    pub fn size(&self) -> usize {
+        self.inner.borrow().remap_trace.len()
+    }
 }
 
 impl<FromTime: Timestamp, IntoTime: Timestamp + Lattice + Display> Drop
@@ -688,6 +693,7 @@ mod tests {
             data_shard: ShardId::new(),
             status_shard: None,
             relation_desc: RelationDesc::empty(),
+            txns_shard: None,
         };
 
         let clock_stream = futures::stream::iter((0..).map(|seconds| {

@@ -47,7 +47,7 @@ The framework uses a PRNG with a known random seed. The CI output will contain l
 
 ```
 --- Random seed is 123456789
---- Checks to use: [<class 'materialize.checks.pg_cdc.PgCdc'>, <class 'materialize.checks.sink.SinkUpsert'>]
+--- Checks to use: [<class 'materialize.checks.all_checks.pg_cdc.PgCdc'>, <class 'materialize.checks.all_checks.sink.SinkUpsert'>]
 ```
 --- Testing upgrade scenario with id 1234: [BeginUpgradeSequence, BeginVersion(v0.42.4), ...
 ```

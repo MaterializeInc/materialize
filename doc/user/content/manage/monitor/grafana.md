@@ -67,8 +67,7 @@ which has been tried and tested in production environments.
      ...
    ```
 
-3. Then, configure the `queries` that the Prometheus SQL Exporter should run at
-   the specified `interval` to export metrics from Materialize.
+3. Then, configure the `queries` that the Prometheus SQL Exporter should run at the specified `interval`. Take [these considerations](#considerations) into account when exporting metrics from Materialize.
 
    ```yaml
     ...
@@ -192,3 +191,12 @@ defined in the sample `config.yml`.
     <br>
 
     <img width="1728" alt="Template Grafana monitoring dashboard" src="https://github.com/joacoc/materialize/assets/11491779/500fdc03-546c-4f56-b2c3-dc4e92e04328">
+
+## Considerations
+
+Before adding a custom query, make sure to consider the following:
+
+1. The label set cannot repeat across rows within the results of the same query.
+2. Columns must not contain `NULL` values.
+3. Value columns must be of type `float`.
+4. Queries can impact cluster performance.

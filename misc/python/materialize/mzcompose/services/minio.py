@@ -12,6 +12,8 @@ from materialize.mzcompose.service import (
     Service,
 )
 
+MINIO_BLOB_URI = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
+
 
 class Minio(Service):
     def __init__(
@@ -45,5 +47,19 @@ class Minio(Service):
                     "interval": "1s",
                     "start_period": "30s",
                 },
+            },
+        )
+
+
+class Mc(Service):
+    def __init__(
+        self,
+        name: str = "mc",
+        image: str = "minio/mc:RELEASE.2023-07-07T05-25-51Z",
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
             },
         )

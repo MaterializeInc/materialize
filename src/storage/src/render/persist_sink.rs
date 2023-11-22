@@ -454,7 +454,7 @@ where
                     Diagnostics {
                         shard_name: collection_id.to_string(),
                         handle_purpose: format!(
-                            "compute::persist_sink::mint_batch_descriptions {}",
+                            "storage::persist_sink::mint_batch_descriptions {}",
                             collection_id
                         ),
                     },
@@ -618,7 +618,7 @@ where
                 Arc::new(UnitSchema),
                 Diagnostics {
                     shard_name: collection_id.to_string(),
-                    handle_purpose: format!("compute::persist_sink::write_batches {}", collection_id),
+                    handle_purpose: format!("storage::persist_sink::write_batches {}", collection_id),
                 },
             )
             .await
@@ -956,7 +956,7 @@ where
     // description.
 
     let (shutdown_button, errors) = append_op.build_fallible(move |caps| Box::pin(async move {
-        let [upper_cap]: &mut [_; 1] = caps.try_into().unwrap();
+        let [upper_cap_set]: &mut [_; 1] = caps.try_into().unwrap();
 
         // This may SEEM unnecessary, but metrics contains extra
         // `DeleteOnDrop`-wrapped fields that will NOT be moved into this
@@ -1015,10 +1015,7 @@ where
         // shared upper. All other workers have already cleared this
         // upper above.
         current_upper.borrow_mut().clone_from(write.upper());
-        match current_upper.borrow().as_option() {
-            Some(ts) => upper_cap.as_mut().unwrap().downgrade(ts),
-            None => *upper_cap = None,
-        };
+        upper_cap_set.downgrade(current_upper.borrow().iter());
         source_statistics.initialize_snapshot_committed(write.upper());
 
         // The current input frontiers.
@@ -1236,10 +1233,7 @@ where
                 match result {
                     Ok(()) => {
                         current_upper.borrow_mut().clone_from(&batch_upper);
-                        match current_upper.borrow().as_option() {
-                            Some(ts) => upper_cap.as_mut().unwrap().downgrade(ts),
-                            None => *upper_cap = None,
-                        };
+                        upper_cap_set.downgrade(current_upper.borrow().iter());
                     }
                     Err(mismatch) => {
                         // _Best effort_ Clean up in case we didn't manage to append the

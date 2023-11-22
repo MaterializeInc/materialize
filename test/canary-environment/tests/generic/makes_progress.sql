@@ -11,9 +11,11 @@
 -- {{ model }} must be mentioned somewhere in the query or dbt will croak */
 
 {% set query %}
+   SET CLUSTER = qa_canary_environment_compute;
    BEGIN;
    DECLARE c1 CURSOR FOR SUBSCRIBE ( SELECT * FROM {{ model }} )  WITH (SNAPSHOT = FALSE);
-   FETCH 1 c1 WITH (timeout='60s');
+   -- TODO: Switch timeout back to 60s after #22061 is fixed
+   FETCH 1 c1 WITH (timeout='300s');
 {% endset %}
 
 {% set result = run_query(query) %}

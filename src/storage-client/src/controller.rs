@@ -52,7 +52,9 @@ pub enum IntrospectionType {
     SinkStatusHistory,
     SourceStatusHistory,
     ShardMapping,
+
     Frontiers,
+    ReplicaFrontiers,
 
     // Note that this single-shard introspection source will be changed to per-replica,
     // once we allow multiplexing multiple sources/sinks on a single cluster.
@@ -63,6 +65,10 @@ pub enum IntrospectionType {
     StatementExecutionHistory,
     SessionHistory,
     PreparedStatementHistory,
+
+    // Collections written by the compute controller.
+    ComputeDependencies,
+    ComputeReplicaHeartbeats,
 }
 
 /// Describes how data is written to the collection.
@@ -168,23 +174,6 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub instance_id: StorageInstanceId,
 }
 
-/// Opaque token to ensure `prepare_export` is called before `create_exports`.  This token proves
-/// that compaction is being held back on `from_id` at least until `id` is created.  It should be
-/// held while the AS OF is determined.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CreateExportToken<T = mz_repr::Timestamp> {
-    pub id: GlobalId,
-    pub from_id: GlobalId,
-    pub acquired_since: Antichain<T>,
-}
-
-impl CreateExportToken {
-    /// Returns the ID of the export with which the token is associated.
-    pub fn id(&self) -> GlobalId {
-        self.id
-    }
-}
-
 /// A cursor over a snapshot, allowing us to read just part of a snapshot in its
 /// consolidated form.
 pub struct SnapshotCursor<T: Codec64 + Timestamp + Lattice> {
@@ -227,7 +216,7 @@ pub trait StorageController: Debug + Send {
     /// created with zero replicas.
     ///
     /// Panics if a storage instance with the given ID already exists.
-    fn create_instance(&mut self, id: StorageInstanceId, variable_length_row_encoding: bool);
+    fn create_instance(&mut self, id: StorageInstanceId);
 
     /// Drops the storage instance with the given ID.
     ///
@@ -307,15 +296,13 @@ pub trait StorageController: Debug + Send {
     /// subsequent calls to `alter_collection` are guaranteed to succeed.
     fn check_alter_collection(
         &mut self,
-        id: GlobalId,
-        desc: IngestionDescription,
+        collections: &BTreeMap<GlobalId, IngestionDescription>,
     ) -> Result<(), StorageError>;
 
     /// Alter the identified collection to use the described ingestion.
     async fn alter_collection(
         &mut self,
-        id: GlobalId,
-        desc: IngestionDescription,
+        collections: BTreeMap<GlobalId, IngestionDescription>,
     ) -> Result<(), StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
@@ -330,21 +317,8 @@ pub trait StorageController: Debug + Send {
     /// Create the sinks described by the `ExportDescription`.
     async fn create_exports(
         &mut self,
-        exports: Vec<(
-            CreateExportToken<Self::Timestamp>,
-            ExportDescription<Self::Timestamp>,
-        )>,
+        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
-
-    /// Notify the storage controller to prepare for an export to be created
-    fn prepare_export(
-        &mut self,
-        id: GlobalId,
-        from_id: GlobalId,
-    ) -> Result<CreateExportToken<Self::Timestamp>, StorageError>;
-
-    /// Cancel the pending export
-    fn cancel_prepare_export(&mut self, token: CreateExportToken<Self::Timestamp>);
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
@@ -395,14 +369,14 @@ pub trait StorageController: Debug + Send {
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
-        &self,
+        &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot_cursor(
-        &self,
+        &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
@@ -497,22 +471,43 @@ pub trait StorageController: Debug + Send {
     async fn inspect_persist_state(&self, id: GlobalId)
         -> Result<serde_json::Value, anyhow::Error>;
 
-    /// Records the current frontiers of all known storage objects.
+    /// Records the current read and write frontiers of all known storage objects.
     ///
-    /// The provided `frontiers` are merged with the frontiers known to the
-    /// storage controller. If `frontiers` contains entries with object IDs
-    /// that are known to storage controller, the contents of `frontiers` take
-    /// precedence.
+    /// The provided `external_frontiers` are merged with the frontiers known to
+    /// the storage controller. If `external_frontiers` contains entries with
+    /// object IDs that are known to storage controller, the storage
+    /// controller's frontiers take precedence. The rationale is that the
+    /// storage controller should be the authority on frontiers of storage
+    /// objects, not the caller of this method.
     async fn record_frontiers(
+        &mut self,
+        external_frontiers: BTreeMap<
+            GlobalId,
+            (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
+        >,
+    );
+
+    /// Records the current per-replica write frontiers of all known storage objects.
+    ///
+    /// The provided `external_frontiers` are merged with the frontiers known to
+    /// the storage controller. If `external_frontiers` contains entries with
+    /// object IDs that are known to storage controller, the storage
+    /// controller's frontiers take precedence. The rationale is that the
+    /// storage controller should be the authority on frontiers of storage
+    /// objects, not the caller of this method.
+    async fn record_replica_frontiers(
         &mut self,
         external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
     );
 
-    async fn send_statement_log_updates(
+    /// Records updates for the given introspection type.
+    ///
+    /// Rows passed in `updates` MUST have the correct schema for the given introspection type,
+    /// as readers rely on this and might panic otherwise.
+    async fn record_introspection_updates(
         &mut self,
-        statement_execution_history_updates: Vec<(Row, Diff)>,
-        prepared_statement_history_updates: Vec<Row>,
-        session_history_updates: Vec<Row>,
+        type_: IntrospectionType,
+        updates: Vec<(Row, Diff)>,
     );
 }
 
@@ -721,6 +716,11 @@ impl<T: Timestamp> ExportState<T> {
     /// Returns the cluster to which the export is bound.
     pub fn cluster_id(&self) -> StorageInstanceId {
         self.description.instance_id
+    }
+
+    /// Returns whether the export was dropped.
+    pub fn is_dropped(&self) -> bool {
+        self.read_capability.is_empty()
     }
 }
 /// A "oneshot"-like channel that allows you to append a set of updates to a pre-defined [`GlobalId`].

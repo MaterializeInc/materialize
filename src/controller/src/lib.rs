@@ -94,7 +94,6 @@ use std::mem;
 use std::num::NonZeroI64;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::{Peekable, StreamExt};
@@ -173,17 +172,8 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified subscribe.
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
-    /// Notification that we have received a message from the given compute replica
-    /// at the given time.
-    ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
-    /// Notification about compute dependency updates.
-    ComputeDependencyUpdate {
-        id: GlobalId,
-        dependencies: Vec<GlobalId>,
-        diff: i64,
-    },
 }
 
 impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
@@ -195,18 +185,6 @@ impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
             ComputeControllerResponse::SubscribeResponse(id, tail) => {
                 ControllerResponse::SubscribeResponse(id, tail)
             }
-            ComputeControllerResponse::ReplicaHeartbeat(id, when) => {
-                ControllerResponse::ComputeReplicaHeartbeat(id, when)
-            }
-            ComputeControllerResponse::DependencyUpdate {
-                id,
-                dependencies,
-                diff,
-            } => ControllerResponse::ComputeDependencyUpdate {
-                id,
-                dependencies,
-                diff,
-            },
         }
     }
 }
@@ -251,6 +229,9 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
+    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// one.
+    enable_persist_txn_tables: bool,
 
     /// Arguments for secrets readers.
     pub secrets_args: SecretsReaderCliArgs,
@@ -259,6 +240,16 @@ pub struct Controller<T = mz_repr::Timestamp> {
 impl<T> Controller<T> {
     pub fn active_compute(&mut self) -> ActiveComputeController<T> {
         self.compute.activate(&mut *self.storage)
+    }
+
+    pub fn set_default_idle_arrangement_merge_effort(&mut self, value: u32) {
+        self.compute
+            .set_default_idle_arrangement_merge_effort(value);
+    }
+
+    pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
+        self.compute
+            .set_default_arrangement_exert_proportionality(value);
     }
 }
 
@@ -319,6 +310,7 @@ where
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn process(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
@@ -327,7 +319,7 @@ where
                 Ok(None)
             }
             Readiness::Compute => {
-                let response = self.active_compute().process();
+                let response = self.active_compute().process().await;
                 Ok(response.map(Into::into))
             }
             Readiness::Metrics => Ok(self
@@ -343,8 +335,13 @@ where
     }
 
     async fn record_frontiers(&mut self) {
-        let compute_frontiers = self.compute.replica_write_frontiers();
+        let compute_frontiers = self.compute.collection_frontiers();
         self.storage.record_frontiers(compute_frontiers).await;
+
+        let compute_replica_frontiers = self.compute.replica_write_frontiers();
+        self.storage
+            .record_replica_frontiers(compute_replica_frontiers)
+            .await;
     }
 
     /// Produces a timestamp that reflects all data available in
@@ -378,7 +375,13 @@ where
     mz_storage_controller::Controller<T>: StorageController<Timestamp = T>,
 {
     /// Creates a new controller.
-    pub async fn new(config: ControllerConfig, envd_epoch: NonZeroI64) -> Self {
+    pub async fn new(
+        config: ControllerConfig,
+        envd_epoch: NonZeroI64,
+        // Whether to use the new persist-txn tables implementation or the
+        // legacy one.
+        enable_persist_txn_tables: bool,
+    ) -> Self {
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
             config.storage_stash_url,
@@ -388,6 +391,7 @@ where
             config.stash_metrics,
             envd_epoch,
             config.metrics_registry.clone(),
+            enable_persist_txn_tables,
         )
         .await;
 
@@ -413,6 +417,7 @@ where
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
             frontiers_ticker,
             persist_pubsub_url: config.persist_pubsub_url,
+            enable_persist_txn_tables,
             secrets_args: config.secrets_args,
         }
     }

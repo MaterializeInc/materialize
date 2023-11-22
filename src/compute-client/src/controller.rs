@@ -31,10 +31,8 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
-use std::sync::mpsc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::{future, FutureExt};
 use mz_build_info::BuildInfo;
@@ -45,10 +43,8 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, Row};
-use mz_stash_types::objects::proto;
-use mz_storage_client::controller::{ReadPolicy, StorageController};
+use mz_repr::{Diff, GlobalId, Row};
+use mz_storage_client::controller::{IntrospectionType, ReadPolicy, StorageController};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
@@ -73,22 +69,15 @@ mod replica;
 
 pub mod error;
 
+type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
+
 /// Responses from the compute controller.
 #[derive(Debug)]
 pub enum ComputeControllerResponse<T> {
-    /// See [`ComputeResponse::PeekResponse`](crate::protocol::response::ComputeResponse::PeekResponse).
+    /// See [`ComputeResponse::PeekResponse`].
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// See [`ComputeResponse::SubscribeResponse`](crate::protocol::response::ComputeResponse::SubscribeResponse).
+    /// See [`ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
-    /// A notification that we heard a response from the given replica at the
-    /// given time.
-    ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
-    /// A notification about dependency updates.
-    DependencyUpdate {
-        id: GlobalId,
-        dependencies: Vec<GlobalId>,
-        diff: i64,
-    },
 }
 
 /// Replica configuration
@@ -119,22 +108,6 @@ impl ComputeReplicaLogging {
     }
 }
 
-impl RustType<proto::ReplicaLogging> for ComputeReplicaLogging {
-    fn into_proto(&self) -> proto::ReplicaLogging {
-        proto::ReplicaLogging {
-            log_logging: self.log_logging,
-            interval: self.interval.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: proto::ReplicaLogging) -> Result<Self, TryFromProtoError> {
-        Ok(ComputeReplicaLogging {
-            log_logging: proto.log_logging,
-            interval: proto.interval.into_rust()?,
-        })
-    }
-}
-
 /// A controller for the compute layer.
 pub struct ComputeController<T> {
     instances: BTreeMap<ComputeInstanceId, Instance<T>>,
@@ -143,11 +116,13 @@ pub struct ComputeController<T> {
     initialized: bool,
     /// Compute configuration to apply to new instances.
     config: ComputeParameters,
+    /// Default value for `idle_arrangement_merge_effort`.
+    default_idle_arrangement_merge_effort: u32,
+    /// Default value for `arrangement_exert_proportionality`.
+    default_arrangement_exert_proportionality: u32,
     /// A replica response to be handled by the corresponding `Instance` on a subsequent call to
     /// `ActiveComputeController::process`.
     stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
-    /// Times we have last received responses from replicas.
-    replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
     /// The compute controller metrics
@@ -155,9 +130,14 @@ pub struct ComputeController<T> {
 
     /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
     /// `ActiveComputeController::process`.
-    response_rx: mpsc::Receiver<ComputeControllerResponse<T>>,
+    response_rx: crossbeam_channel::Receiver<ComputeControllerResponse<T>>,
     /// Response sender that's passed to new `Instance`s.
-    response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
+    response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+    /// Receiver for introspection updates produced by `Instance`s, to be recorded on subsequent
+    /// calls to `ActiveComputeController::process`.
+    introspection_rx: crossbeam_channel::Receiver<IntrospectionUpdates>,
+    /// Introspection updates sender that's passed to new `Instance`s.
+    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
 }
 
 impl<T> ComputeController<T> {
@@ -167,19 +147,23 @@ impl<T> ComputeController<T> {
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
-        let (response_tx, response_rx) = mpsc::channel();
+        let (response_tx, response_rx) = crossbeam_channel::unbounded();
+        let (introspection_tx, introspection_rx) = crossbeam_channel::unbounded();
 
         Self {
             instances: BTreeMap::new(),
             build_info,
             initialized: false,
             config: Default::default(),
+            default_idle_arrangement_merge_effort: 1000,
+            default_arrangement_exert_proportionality: 16,
             stashed_replica_response: None,
-            replica_heartbeats: BTreeMap::new(),
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
             response_rx,
             response_tx,
+            introspection_rx,
+            introspection_tx,
         }
     }
 
@@ -239,12 +223,32 @@ impl<T> ComputeController<T> {
             .instance(instance_id)?
             .collection_reverse_dependencies(id))
     }
+
+    pub fn set_default_idle_arrangement_merge_effort(&mut self, value: u32) {
+        self.default_idle_arrangement_merge_effort = value;
+    }
+
+    pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
+        self.default_arrangement_exert_proportionality = value;
+    }
 }
 
 impl<T> ComputeController<T>
 where
     T: Clone,
 {
+    /// Returns the read and write frontiers for each collection.
+    pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
+        let collections = self.instances.values().flat_map(|i| i.collections_iter());
+        collections
+            .map(|(id, collection)| {
+                let since = collection.read_frontier().to_owned();
+                let upper = collection.write_frontier().to_owned();
+                (*id, (since, upper))
+            })
+            .collect()
+    }
+
     /// Returns the write frontier for each collection installed on each replica.
     pub fn replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
         let mut result = BTreeMap::new();
@@ -268,7 +272,6 @@ where
         &mut self,
         id: ComputeInstanceId,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
-        variable_length_row_encoding: bool,
     ) -> Result<(), InstanceExists> {
         if self.instances.contains_key(&id) {
             return Err(InstanceExists(id));
@@ -282,7 +285,7 @@ where
                 self.envd_epoch,
                 self.metrics.for_instance(id),
                 self.response_tx.clone(),
-                variable_length_row_encoding,
+                self.introspection_tx.clone(),
             ),
         );
 
@@ -341,8 +344,12 @@ where
             // We still have a response stashed, which we are immediately ready to process.
             return;
         }
-        if !self.replica_heartbeats.is_empty() {
-            // We have replica heartbeats waiting to be processes.
+        if !self.response_rx.is_empty() {
+            // We have responses waiting to be processed.
+            return;
+        }
+        if !self.introspection_rx.is_empty() {
+            // We have introspection updates waiting to be processed.
             return;
         }
         if self.instances.values().any(|i| i.wants_processing()) {
@@ -366,7 +373,6 @@ where
         let ((instance_id, result), _index, _remaining) = future::select_all(receives).await;
         match result {
             Ok((replica_id, resp)) => {
-                self.replica_heartbeats.insert(replica_id, Utc::now());
                 self.stashed_replica_response = Some((instance_id, replica_id, resp));
             }
             Err(_) => {
@@ -421,10 +427,6 @@ impl<T> ActiveComputeController<'_, T> {
     }
 }
 
-/// Default value for `idle_arrangement_merge_effort` if none is supplied.
-// TODO(#16906): Test if 1000 is a good default.
-const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: u32 = 1000;
-
 impl<T> ActiveComputeController<'_, T>
 where
     T: Timestamp + Lattice,
@@ -445,7 +447,11 @@ where
 
         let idle_arrangement_merge_effort = config
             .idle_arrangement_merge_effort
-            .unwrap_or(DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT);
+            .unwrap_or(self.compute.default_idle_arrangement_merge_effort);
+
+        // TODO(teskje): make configurable via replica option
+        let arrangement_exert_proportionality =
+            self.compute.default_arrangement_exert_proportionality;
 
         let replica_config = ReplicaConfig {
             location,
@@ -456,6 +462,7 @@ where
                 index_logs: Default::default(),
             },
             idle_arrangement_merge_effort,
+            arrangement_exert_proportionality,
             grpc_client: self.compute.config.grpc_client.clone(),
         };
 
@@ -562,7 +569,8 @@ where
     }
 
     /// Processes the work queued by [`ComputeController::ready`].
-    pub fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub async fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
         // Update controller state metrics.
         for instance in self.compute.instances.values_mut() {
             instance.refresh_state_metrics();
@@ -573,22 +581,18 @@ where
             instance.activate(self.storage).rehydrate_failed_replicas();
         }
 
+        // Record pending introspection updates.
+        self.record_introspection_updates().await;
+
         // Process pending ready responses.
         match self.compute.response_rx.try_recv() {
             Ok(response) => return Some(response),
-            Err(mpsc::TryRecvError::Empty) => (),
-            Err(mpsc::TryRecvError::Disconnected) => {
+            Err(crossbeam_channel::TryRecvError::Empty) => (),
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
                 // This should never happen, since the `ComputeController` is always holding on to
                 // a copy of the `response_tx`.
                 panic!("response_tx has disconnected");
             }
-        }
-
-        // Process pending replica heartbeats.
-        if let Some((replica_id, when)) = self.compute.replica_heartbeats.pop_first() {
-            return Some(ComputeControllerResponse::ReplicaHeartbeat(
-                replica_id, when,
-            ));
         }
 
         // Process pending responses from replicas.
@@ -607,6 +611,15 @@ where
         }
 
         None
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn record_introspection_updates(&mut self) {
+        for (type_, updates) in self.compute.introspection_rx.try_iter() {
+            self.storage
+                .record_introspection_updates(type_, updates)
+                .await;
+        }
     }
 }
 
@@ -666,6 +679,30 @@ pub struct CollectionState<T> {
     replica_write_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
 }
 
+impl<T> CollectionState<T> {
+    /// Reports the current read capability.
+    pub fn read_capability(&self) -> &Antichain<T> {
+        &self.implied_capability
+    }
+
+    /// Reports the current read frontier.
+    pub fn read_frontier(&self) -> AntichainRef<T> {
+        self.read_capabilities.frontier()
+    }
+
+    /// Reports the current write frontier.
+    pub fn write_frontier(&self) -> AntichainRef<T> {
+        self.write_frontier.borrow()
+    }
+
+    /// Reports the IDs of the dependencies of this collection.
+    fn dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        let compute = self.compute_dependencies.iter().copied();
+        let storage = self.storage_dependencies.iter().copied();
+        compute.chain(storage)
+    }
+}
+
 impl<T: Timestamp> CollectionState<T> {
     /// Creates a new collection state, with an initial read policy valid from `since`.
     pub fn new(
@@ -693,20 +730,5 @@ impl<T: Timestamp> CollectionState<T> {
         let mut state = Self::new(since, Vec::new(), Vec::new());
         state.log_collection = true;
         state
-    }
-
-    /// Reports the current read capability.
-    pub fn read_capability(&self) -> &Antichain<T> {
-        &self.implied_capability
-    }
-
-    /// Reports the current read frontier.
-    pub fn read_frontier(&self) -> AntichainRef<T> {
-        self.read_capabilities.frontier()
-    }
-
-    /// Reports the current write frontier.
-    pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier.borrow()
     }
 }

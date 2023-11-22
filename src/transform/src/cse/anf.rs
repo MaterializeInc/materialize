@@ -31,8 +31,8 @@ use crate::TransformCtx;
 
 impl crate::Transform for ANF {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "anf")
     )]

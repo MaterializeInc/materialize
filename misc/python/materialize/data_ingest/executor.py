@@ -21,9 +21,11 @@ from confluent_kafka.serialization import (  # type: ignore
     SerializationContext,
 )
 from pg8000.exceptions import InterfaceError
+from pg8000.native import identifier
 
 from materialize.data_ingest.data_type import Backend
 from materialize.data_ingest.field import Field, formatted_value
+from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
 from materialize.data_ingest.transaction import Transaction
 
@@ -32,10 +34,22 @@ class Executor:
     num_transactions: int
     ports: dict[str, int]
     mz_conn: pg8000.Connection
+    fields: list[Field]
+    database: str
+    schema: str
 
-    def __init__(self, ports: dict[str, int]) -> None:
+    def __init__(
+        self,
+        ports: dict[str, int],
+        fields: list[Field] = [],
+        database: str = "",
+        schema: str = "public",
+    ) -> None:
         self.num_transactions = 0
         self.ports = ports
+        self.fields = fields
+        self.database = database
+        self.schema = schema
         self.reconnect()
 
     def reconnect(self) -> None:
@@ -43,9 +57,12 @@ class Executor:
             host="localhost",
             port=self.ports["materialized"],
             user="materialize",
-            database="materialize",
+            database=self.database,
         )
         self.mz_conn.autocommit = True
+
+    def create(self) -> None:
+        raise NotImplementedError
 
     def run(self, transaction: Transaction) -> None:
         raise NotImplementedError
@@ -60,12 +77,35 @@ class Executor:
             self.reconnect()
             with self.mz_conn.cursor() as cur:
                 self.execute(cur, query)
-        except:
-            print(f"Query failed: {query}")
-            raise
+        except Exception as e:
+            print(f"Query failed: {query} {e}")
+            raise QueryError(str(e), query)
+
+    def execute_with_retry_on_error(
+        self,
+        cur: pg8000.Cursor,
+        query: str,
+        required_error_message_substrs: list[str],
+        max_tries: int = 5,
+        wait_time_in_sec: int = 1,
+    ) -> None:
+        for try_count in range(1, max_tries + 1):
+            try:
+                self.execute(cur, query)
+                return
+            except Exception as e:
+                if not any([s in e.__str__() for s in required_error_message_substrs]):
+                    raise
+                elif try_count == max_tries:
+                    raise
+                else:
+                    time.sleep(wait_time_in_sec)
 
 
 class PrintExecutor(Executor):
+    def create(self) -> None:
+        pass
+
     def run(self, transaction: Transaction) -> None:
         print("Transaction:")
         print("  ", transaction.row_lists)
@@ -83,20 +123,21 @@ class KafkaExecutor(Executor):
     key_serialization_context: SerializationContext
     topic: str
     table: str
-    fields: list[Field]
 
     def __init__(
         self,
         num: int,
         ports: dict[str, int],
         fields: list[Field],
+        database: str,
+        schema: str = "public",
     ):
-        super().__init__(ports)
+        super().__init__(ports, fields, database, schema)
 
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
-        self.fields = fields
 
+    def create(self) -> None:
         schema = {
             "type": "record",
             "name": "value",
@@ -105,7 +146,7 @@ class KafkaExecutor(Executor):
                     "name": field.name,
                     "type": str(field.data_type.name(Backend.AVRO)).lower(),
                 }
-                for field in fields
+                for field in self.fields
                 if not field.is_key
             ],
         }
@@ -118,12 +159,12 @@ class KafkaExecutor(Executor):
                     "name": field.name,
                     "type": str(field.data_type.name(Backend.AVRO)).lower(),
                 }
-                for field in fields
+                for field in self.fields
                 if field.is_key
             ],
         }
 
-        kafka_conf = {"bootstrap.servers": f"localhost:{ports['kafka']}"}
+        kafka_conf = {"bootstrap.servers": f"localhost:{self.ports['kafka']}"}
 
         a = AdminClient(kafka_conf)
         fs = a.create_topics(
@@ -135,13 +176,14 @@ class KafkaExecutor(Executor):
         )
         for topic, f in fs.items():
             f.result()
-            print(f"Topic {topic} created")
 
         # NOTE: this _could_ be refactored, but since we are fairly certain at
         # this point there will be exactly one topic it should be fine.
         topic = list(fs.keys())[0]
 
-        schema_registry_conf = {"url": f"http://localhost:{ports['schema-registry']}"}
+        schema_registry_conf = {
+            "url": f"http://localhost:{self.ports['schema-registry']}"
+        }
         registry = SchemaRegistryClient(schema_registry_conf)
 
         self.avro_serializer = AvroSerializer(
@@ -172,10 +214,10 @@ class KafkaExecutor(Executor):
         with self.mz_conn.cursor() as cur:
             self.execute(
                 cur,
-                f"""CREATE SOURCE {self.table}
-                    FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
+                f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
+                    FROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC '{self.topic}')
                     FORMAT AVRO
-                    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                    USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn
                     ENVELOPE UPSERT""",
             )
         self.mz_conn.autocommit = False
@@ -229,39 +271,47 @@ class KafkaExecutor(Executor):
 class PgExecutor(Executor):
     pg_conn: pg8000.Connection
     table: str
+    source: str
+    num: int
 
     def __init__(
         self,
         num: int,
         ports: dict[str, int],
         fields: list[Field],
+        database: str,
+        schema: str = "public",
     ):
-        super().__init__(ports)
+        super().__init__(ports, fields, database, schema)
+        self.table = f"table{num}"
+        self.source = f"postgres_source{num}"
+        self.num = num
+
+    def create(self) -> None:
         self.pg_conn = pg8000.connect(
             host="localhost",
             user="postgres",
             password="postgres",
-            port=ports["postgres"],
+            port=self.ports["postgres"],
         )
-        self.table = f"table{num}"
 
         values = [
-            f"{field.name} {str(field.data_type.name(Backend.POSTGRES)).lower()}"
-            for field in fields
+            f"{identifier(field.name)} {str(field.data_type.name(Backend.POSTGRES)).lower()}"
+            for field in self.fields
         ]
-        keys = [field.name for field in fields if field.is_key]
+        keys = [field.name for field in self.fields if field.is_key]
 
         self.pg_conn.autocommit = True
         with self.pg_conn.cursor() as cur:
             self.execute(
                 cur,
-                f"""DROP TABLE IF EXISTS {self.table};
-                    CREATE TABLE {self.table} (
+                f"""DROP TABLE IF EXISTS {identifier(self.table)};
+                    CREATE TABLE {identifier(self.table)} (
                         {", ".join(values)},
-                        PRIMARY KEY ({", ".join(keys)}));
-                    ALTER TABLE {self.table} REPLICA IDENTITY FULL;
-                    CREATE USER postgres{num} WITH SUPERUSER PASSWORD 'postgres';
-                    ALTER USER postgres{num} WITH replication;
+                        PRIMARY KEY ({", ".join([identifier(key) for key in keys])}));
+                    ALTER TABLE {identifier(self.table)} REPLICA IDENTITY FULL;
+                    CREATE USER postgres{self.num} WITH SUPERUSER PASSWORD 'postgres';
+                    ALTER USER postgres{self.num} WITH replication;
                     DROP PUBLICATION IF EXISTS postgres_source;
                     CREATE PUBLICATION postgres_source FOR ALL TABLES;""",
             )
@@ -269,20 +319,20 @@ class PgExecutor(Executor):
 
         self.mz_conn.autocommit = True
         with self.mz_conn.cursor() as cur:
-            self.execute(cur, f"CREATE SECRET pgpass{num} AS 'postgres'")
+            self.execute(cur, f"CREATE SECRET pgpass{self.num} AS 'postgres'")
             self.execute(
                 cur,
-                f"""CREATE CONNECTION pg{num} FOR POSTGRES
+                f"""CREATE CONNECTION pg{self.num} FOR POSTGRES
                     HOST 'postgres',
                     DATABASE postgres,
-                    USER postgres{num},
-                    PASSWORD SECRET pgpass{num}""",
+                    USER postgres{self.num},
+                    PASSWORD SECRET pgpass{self.num}""",
             )
             self.execute(
                 cur,
-                f"""CREATE SOURCE postgres_source{num}
-                    FROM POSTGRES CONNECTION pg{num} (PUBLICATION 'postgres_source')
-                    FOR TABLES ({self.table} AS {self.table})""",
+                f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
+                    FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION 'postgres_source')
+                    FOR TABLES ({identifier(self.table)} AS {identifier(self.table)})""",
             )
         self.mz_conn.autocommit = False
 
@@ -296,7 +346,7 @@ class PgExecutor(Executor):
                         )
                         self.execute(
                             cur,
-                            f"""INSERT INTO {self.table}
+                            f"""INSERT INTO {identifier(self.table)}
                                 VALUES ({values_str})
                             """,
                         )
@@ -305,15 +355,17 @@ class PgExecutor(Executor):
                             str(formatted_value(value)) for value in row.values
                         )
                         keys_str = ", ".join(
-                            field.name for field in row.fields if field.is_key
+                            identifier(field.name)
+                            for field in row.fields
+                            if field.is_key
                         )
                         update_str = ", ".join(
-                            f"{field.name} = EXCLUDED.{field.name}"
+                            f"{identifier(field.name)} = EXCLUDED.{identifier(field.name)}"
                             for field in row.fields
                         )
                         self.execute(
                             cur,
-                            f"""INSERT INTO {self.table}
+                            f"""INSERT INTO {identifier(self.table)}
                                 VALUES ({values_str})
                                 ON CONFLICT ({keys_str})
                                 DO UPDATE SET {update_str}
@@ -321,13 +373,13 @@ class PgExecutor(Executor):
                         )
                     elif row.operation == Operation.DELETE:
                         cond_str = " AND ".join(
-                            f"{field.name} = {formatted_value(value)}"
+                            f"{identifier(field.name)} = {formatted_value(value)}"
                             for field, value in zip(row.fields, row.values)
                             if field.is_key
                         )
                         self.execute(
                             cur,
-                            f"""DELETE FROM {self.table}
+                            f"""DELETE FROM {identifier(self.table)}
                                 WHERE {cond_str}
                             """,
                         )
@@ -341,50 +393,61 @@ class KafkaRoundtripExecutor(Executor):
     table_original: str
     topic: str
     known_keys: set[tuple[str]]
+    num: int
 
     def __init__(
         self,
         num: int,
         ports: dict[str, int],
         fields: list[Field],
+        database: str,
+        schema: str = "public",
     ):
-        super().__init__(ports)
+        super().__init__(ports, fields, database, schema)
         self.table_original = f"table_rt_source{num}"
         self.table = f"table_rt{num}"
         self.topic = f"data-ingest-rt-{num}"
+        self.num = num
         self.known_keys = set()
 
+    def create(self) -> None:
         values = [
             f"{field.name} {str(field.data_type.name(Backend.POSTGRES)).lower()}"
-            for field in fields
+            for field in self.fields
         ]
-        keys = [field.name for field in fields if field.is_key]
+        keys = [field.name for field in self.fields if field.is_key]
 
         self.mz_conn.autocommit = True
-        with self.mz_conn.cursor() as cur:
-            self.execute(cur, f"DROP TABLE IF EXISTS {self.table_original}")
+        with (self.mz_conn.cursor() as cur):
+            self.execute(cur, f"DROP TABLE IF EXISTS {identifier(self.table_original)}")
             self.execute(
                 cur,
-                f"""CREATE TABLE {self.table_original} (
+                f"""CREATE TABLE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)} (
                         {", ".join(values)},
                         PRIMARY KEY ({", ".join(keys)}));""",
             )
             self.execute(
                 cur,
-                f"""CREATE SINK sink{num} FROM {self.table_original}
+                f"""CREATE SINK {identifier(self.database)}.{identifier(self.schema)}.sink{self.num} FROM {identifier(self.table_original)}
                     INTO KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
-                    KEY ({", ".join(keys)})
+                    KEY ({", ".join([identifier(key) for key in keys])})
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                     ENVELOPE DEBEZIUM""",
             )
-            self.execute(
+            self.execute_with_retry_on_error(
                 cur,
-                f"""CREATE SOURCE {self.table}
+                f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
                     FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                     ENVELOPE DEBEZIUM""",
+                wait_time_in_sec=1,
+                max_tries=15,
+                required_error_message_substrs=[
+                    "No value schema found",
+                    "Key schema is required for ENVELOPE DEBEZIUM",
+                ],
             )
         self.mz_conn.autocommit = False
 
@@ -403,7 +466,7 @@ class KafkaRoundtripExecutor(Executor):
                         )
                         self.execute(
                             cur,
-                            f"""INSERT INTO {self.table_original}
+                            f"""INSERT INTO {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
                                 VALUES ({values_str})
                             """,
                         )
@@ -418,18 +481,18 @@ class KafkaRoundtripExecutor(Executor):
                             # Can't update anything if there are no values, only a key, and the key is already in the table
                             if non_key_values:
                                 cond_str = " AND ".join(
-                                    f"{field.name} = {formatted_value(value)}"
+                                    f"{identifier(field.name)} = {formatted_value(value)}"
                                     for field, value in zip(row.fields, row.values)
                                     if field.is_key
                                 )
                                 set_str = ", ".join(
-                                    f"{field.name} = {formatted_value(value)}"
+                                    f"{identifier(field.name)} = {formatted_value(value)}"
                                     for field, value in non_key_values
                                 )
                                 self.mz_conn.autocommit = True
                                 self.execute(
                                     cur,
-                                    f"""UPDATE {self.table_original}
+                                    f"""UPDATE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
                                         SET {set_str}
                                         WHERE {cond_str}
                                     """,
@@ -441,21 +504,21 @@ class KafkaRoundtripExecutor(Executor):
                             )
                             self.execute(
                                 cur,
-                                f"""INSERT INTO {self.table_original}
+                                f"""INSERT INTO {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
                                     VALUES ({values_str})
                                 """,
                             )
                             self.known_keys.add(key_values)
                     elif row.operation == Operation.DELETE:
                         cond_str = " AND ".join(
-                            f"{field.name} = {formatted_value(value)}"
+                            f"{identifier(field.name)} = {formatted_value(value)}"
                             for field, value in zip(row.fields, row.values)
                             if field.is_key
                         )
                         self.mz_conn.autocommit = True
                         self.execute(
                             cur,
-                            f"""DELETE FROM {self.table_original}
+                            f"""DELETE FROM {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
                                 WHERE {cond_str}
                             """,
                         )

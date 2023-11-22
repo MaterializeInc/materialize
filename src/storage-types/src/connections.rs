@@ -18,7 +18,7 @@ use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader};
 use mz_kafka_util::client::{
-    BrokerRewrite, BrokerRewritingClientContext, MzClientContext, MzKafkaError,
+    BrokerRewrite, MzClientContext, MzKafkaError, TunnelingClientContext,
     DEFAULT_FETCH_METADATA_TIMEOUT,
 };
 use mz_proto::tokio_postgres::any_ssl_mode;
@@ -26,8 +26,9 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
-use mz_ssh_util::keys::SshKeyPairSet;
+use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
+use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use mz_tracing::CloneableEnvFilter;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -37,11 +38,12 @@ use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::ClientContext;
 use serde::{Deserialize, Serialize};
 use tokio::net;
+use tokio::runtime::Handle;
 use tokio_postgres::config::SslMode;
 use url::Url;
 
 use crate::connections::aws::AwsConfig;
-use crate::ssh_tunnels::{ManagedSshTunnelHandle, SshTunnelManager};
+use crate::errors::{ContextCreationError, CsrConnectError};
 
 pub mod aws;
 pub mod inline;
@@ -242,6 +244,13 @@ impl Connection<InlinedConnection> {
             o => unreachable!("{o:?} is not an SSH connection"),
         }
     }
+
+    pub fn unwrap_csr(self) -> <InlinedConnection as ConnectionAccess>::Csr {
+        match self {
+            Self::Csr(conn) => conn,
+            o => unreachable!("{o:?} is not a Kafka connection"),
+        }
+    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -257,14 +266,13 @@ pub struct KafkaTlsConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct SaslConfig {
-    pub sasl_mechanism: String,
+pub struct KafkaSaslConfig {
+    pub mechanism: String,
     pub username: StringOrSecret,
     pub password: GlobalId,
-    pub tls_root_cert: Option<StringOrSecret>,
 }
 
-impl Arbitrary for SaslConfig {
+impl Arbitrary for KafkaSaslConfig {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -273,35 +281,13 @@ impl Arbitrary for SaslConfig {
             any::<String>(),
             StringOrSecret::arbitrary(),
             GlobalId::arbitrary(),
-            proptest::option::of(any::<StringOrSecret>()),
         )
-            .prop_map(
-                |(sasl_mechanism, username, password, tls_root_cert)| SaslConfig {
-                    sasl_mechanism,
-                    username,
-                    password,
-                    tls_root_cert,
-                },
-            )
+            .prop_map(|(mechanism, username, password)| KafkaSaslConfig {
+                mechanism,
+                username,
+                password,
+            })
             .boxed()
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum KafkaSecurity {
-    Tls(KafkaTlsConfig),
-    Sasl(SaslConfig),
-}
-
-impl From<KafkaTlsConfig> for KafkaSecurity {
-    fn from(c: KafkaTlsConfig) -> Self {
-        KafkaSecurity::Tls(c)
-    }
-}
-
-impl From<SaslConfig> for KafkaSecurity {
-    fn from(c: SaslConfig) -> Self {
-        KafkaSecurity::Sasl(c)
     }
 }
 
@@ -347,9 +333,14 @@ impl RustType<ProtoKafkaBroker> for KafkaBroker {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
     pub brokers: Vec<KafkaBroker<C>>,
+    /// A tunnel through which to route traffic,
+    /// that can be overridden for individual brokers
+    /// in `brokers`.
+    pub default_tunnel: Tunnel<C>,
     pub progress_topic: Option<String>,
-    pub security: Option<KafkaSecurity>,
     pub options: BTreeMap<String, StringOrSecret>,
+    pub tls: Option<KafkaTlsConfig>,
+    pub sasl: Option<KafkaSaslConfig>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
@@ -359,8 +350,10 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
         let KafkaConnection {
             brokers,
             progress_topic,
-            security,
+            default_tunnel,
             options,
+            tls,
+            sasl,
         } = self;
 
         let brokers = brokers
@@ -371,8 +364,10 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
         KafkaConnection {
             brokers,
             progress_topic,
-            security,
+            default_tunnel: default_tunnel.into_inline_connection(&r),
             options,
+            tls,
+            sasl,
         }
     }
 }
@@ -390,45 +385,46 @@ impl KafkaConnection {
         connection_context: &ConnectionContext,
         context: C,
         extra_options: &BTreeMap<&str, String>,
-    ) -> Result<T, anyhow::Error>
+    ) -> Result<T, ContextCreationError>
     where
         C: ClientContext,
-        T: FromClientConfigAndContext<BrokerRewritingClientContext<C>>,
+        T: FromClientConfigAndContext<TunnelingClientContext<C>>,
     {
         let mut options = self.options.clone();
+
+        // Ensure that Kafka topics are *not* automatically created when
+        // consuming, producing, or fetching metadata for a topic. This ensures
+        // that we don't accidentally create topics with the wrong number of
+        // partitions.
+        options.insert("allow.auto.create.topics".into(), "false".into());
+
         options.insert(
             "bootstrap.servers".into(),
             self.brokers.iter().map(|b| &b.address).join(",").into(),
         );
-        match self.security.clone() {
-            Some(KafkaSecurity::Tls(KafkaTlsConfig {
-                root_cert,
-                identity,
-            })) => {
-                options.insert("security.protocol".into(), "SSL".into());
-                if let Some(root_cert) = root_cert {
-                    options.insert("ssl.ca.pem".into(), root_cert);
-                }
-                if let Some(identity) = identity {
-                    options.insert("ssl.key.pem".into(), StringOrSecret::Secret(identity.key));
-                    options.insert("ssl.certificate.pem".into(), identity.cert);
-                }
+        let security_protocol = match (self.tls.is_some(), self.sasl.is_some()) {
+            (false, false) => "PLAINTEXT",
+            (true, false) => "SSL",
+            (false, true) => "SASL_PLAINTEXT",
+            (true, true) => "SASL_SSL",
+        };
+        options.insert("security.protocol".into(), security_protocol.into());
+        if let Some(tls) = &self.tls {
+            if let Some(root_cert) = &tls.root_cert {
+                options.insert("ssl.ca.pem".into(), root_cert.clone());
             }
-            Some(KafkaSecurity::Sasl(SaslConfig {
-                sasl_mechanism: mechanisms,
-                username,
-                password,
-                tls_root_cert: certificate_authority,
-            })) => {
-                options.insert("security.protocol".into(), "SASL_SSL".into());
-                options.insert("sasl.mechanisms".into(), StringOrSecret::String(mechanisms));
-                options.insert("sasl.username".into(), username);
-                options.insert("sasl.password".into(), StringOrSecret::Secret(password));
-                if let Some(certificate_authority) = certificate_authority {
-                    options.insert("ssl.ca.pem".into(), certificate_authority);
-                }
+            if let Some(identity) = &tls.identity {
+                options.insert("ssl.key.pem".into(), StringOrSecret::Secret(identity.key));
+                options.insert("ssl.certificate.pem".into(), identity.cert.clone());
             }
-            None => (),
+        }
+        if let Some(sasl) = &self.sasl {
+            options.insert("sasl.mechanisms".into(), (&sasl.mechanism).into());
+            options.insert("sasl.username".into(), sasl.username.clone());
+            options.insert(
+                "sasl.password".into(),
+                StringOrSecret::Secret(sasl.password),
+            );
         }
 
         let mut config = mz_kafka_util::client::create_new_client_config(
@@ -446,7 +442,35 @@ impl KafkaConnection {
             config.set(*k, v);
         }
 
-        let mut context = BrokerRewritingClientContext::new(context);
+        let mut context = TunnelingClientContext::new(
+            context,
+            Handle::current(),
+            connection_context.ssh_tunnel_manager.clone(),
+        );
+
+        match &self.default_tunnel {
+            Tunnel::Direct => {
+                // By default, don't offer a default override for broker address lookup.
+            }
+            Tunnel::AwsPrivatelink(_) => {
+                unreachable!("top-level AwsPrivatelink tunnels are not supported yet")
+            }
+            Tunnel::Ssh(ssh_tunnel) => {
+                let secret = connection_context
+                    .secrets_reader
+                    .read(ssh_tunnel.connection_id)
+                    .await?;
+                let key_pair = SshKeyPair::from_bytes(&secret)?;
+
+                context.set_default_ssh_tunnel(SshTunnelConfig {
+                    host: ssh_tunnel.connection.host.clone(),
+                    port: ssh_tunnel.connection.port,
+                    user: ssh_tunnel.connection.user.clone(),
+                    key_pair,
+                });
+            }
+        }
+
         for broker in &self.brokers {
             let mut addr_parts = broker.address.splitn(2, ':');
             let addr = BrokerAddr {
@@ -459,6 +483,14 @@ impl KafkaConnection {
             match &broker.tunnel {
                 Tunnel::Direct => {
                     // By default, don't override broker address lookup.
+                    //
+                    // N.B.
+                    //
+                    // We _could_ pre-setup the default ssh tunnel for all known brokers here, but
+                    // we avoid doing because:
+                    // - Its not necessary.
+                    // - Not doing so makes it easier to test the `FailedDefaultSshTunnel` path
+                    // in the `TunnelingClientContext`.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
                     let host = mz_cloud_resources::vpc_endpoint_host(
@@ -466,28 +498,32 @@ impl KafkaConnection {
                         aws_privatelink.availability_zone.as_deref(),
                     );
                     let port = aws_privatelink.port;
-                    context.add_broker_rewrite(addr, move || BrokerRewrite {
-                        host: host.clone(),
-                        port,
-                    });
+                    context.add_broker_rewrite(
+                        addr,
+                        BrokerRewrite {
+                            host: host.clone(),
+                            port,
+                        },
+                    );
                 }
                 Tunnel::Ssh(ssh_tunnel) => {
-                    let ssh_tunnel = ssh_tunnel
-                        .connect(
-                            connection_context,
-                            &addr.host,
-                            addr.port.parse().context("parsing broker port")?,
+                    context
+                        .add_ssh_tunnel(
+                            addr,
+                            SshTunnelConfig {
+                                host: ssh_tunnel.connection.host.clone(),
+                                port: ssh_tunnel.connection.port,
+                                user: ssh_tunnel.connection.user.clone(),
+                                key_pair: SshKeyPair::from_bytes(
+                                    &connection_context
+                                        .secrets_reader
+                                        .read(ssh_tunnel.connection_id)
+                                        .await?,
+                                )?,
+                            },
                         )
                         .await
-                        .context("creating ssh tunnel")?;
-
-                    context.add_broker_rewrite(addr, move || {
-                        let addr = ssh_tunnel.local_addr();
-                        BrokerRewrite {
-                            host: addr.ip().to_string(),
-                            port: Some(addr.port()),
-                        }
-                    });
+                        .map_err(ContextCreationError::Ssh)?;
                 }
             }
         }
@@ -560,49 +596,24 @@ impl RustType<ProtoKafkaConnectionTlsConfig> for KafkaTlsConfig {
     }
 }
 
-impl RustType<ProtoKafkaConnectionSaslConfig> for SaslConfig {
+impl RustType<ProtoKafkaConnectionSaslConfig> for KafkaSaslConfig {
     fn into_proto(&self) -> ProtoKafkaConnectionSaslConfig {
         ProtoKafkaConnectionSaslConfig {
-            sasl_mechanism: self.sasl_mechanism.into_proto(),
+            mechanism: self.mechanism.into_proto(),
             username: Some(self.username.into_proto()),
             password: Some(self.password.into_proto()),
-            tls_root_cert: self.tls_root_cert.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoKafkaConnectionSaslConfig) -> Result<Self, TryFromProtoError> {
-        Ok(SaslConfig {
-            sasl_mechanism: proto.sasl_mechanism,
+        Ok(KafkaSaslConfig {
+            mechanism: proto.mechanism,
             username: proto
                 .username
                 .into_rust_if_some("ProtoKafkaConnectionSaslConfig::username")?,
             password: proto
                 .password
                 .into_rust_if_some("ProtoKafkaConnectionSaslConfig::password")?,
-            tls_root_cert: proto.tls_root_cert.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoKafkaConnectionSecurity> for KafkaSecurity {
-    fn into_proto(&self) -> ProtoKafkaConnectionSecurity {
-        use proto_kafka_connection_security::Kind;
-        ProtoKafkaConnectionSecurity {
-            kind: Some(match self {
-                KafkaSecurity::Tls(config) => Kind::Tls(config.into_proto()),
-                KafkaSecurity::Sasl(config) => Kind::Sasl(config.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaConnectionSecurity) -> Result<Self, TryFromProtoError> {
-        use proto_kafka_connection_security::Kind;
-        let kind = proto.kind.ok_or_else(|| {
-            TryFromProtoError::missing_field("ProtoKafkaConnectionSecurity::kind")
-        })?;
-        Ok(match kind {
-            Kind::Tls(s) => KafkaSecurity::Tls(KafkaTlsConfig::from_proto(s)?),
-            Kind::Sasl(s) => KafkaSecurity::Sasl(SaslConfig::from_proto(s)?),
         })
     }
 }
@@ -611,26 +622,32 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn into_proto(&self) -> ProtoKafkaConnection {
         ProtoKafkaConnection {
             brokers: self.brokers.into_proto(),
+            default_tunnel: Some(self.default_tunnel.into_proto()),
             progress_topic: self.progress_topic.into_proto(),
-            security: self.security.into_proto(),
             options: self
                 .options
                 .iter()
                 .map(|(k, v)| (k.clone(), v.into_proto()))
                 .collect(),
+            tls: self.tls.into_proto(),
+            sasl: self.sasl.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoKafkaConnection) -> Result<Self, TryFromProtoError> {
         Ok(KafkaConnection {
             brokers: proto.brokers.into_rust()?,
+            default_tunnel: proto
+                .default_tunnel
+                .into_rust_if_some("ProtoKafkaConnection::default_tunnel")?,
             progress_topic: proto.progress_topic,
-            security: proto.security.into_rust()?,
             options: proto
                 .options
                 .into_iter()
                 .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
                 .collect::<Result<_, _>>()?,
+            tls: proto.tls.into_rust()?,
+            sasl: proto.sasl.into_rust()?,
         })
     }
 }
@@ -683,7 +700,7 @@ impl CsrConnection {
     pub async fn connect(
         &self,
         connection_context: &ConnectionContext,
-    ) -> Result<mz_ccsr::Client, anyhow::Error> {
+    ) -> Result<mz_ccsr::Client, CsrConnectError> {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
             let root_cert = root_cert
@@ -752,7 +769,8 @@ impl CsrConnection {
                         // could default to 8081...
                         self.url.port().unwrap_or(80),
                     )
-                    .await?;
+                    .await
+                    .map_err(CsrConnectError::Ssh)?;
 
                 // Carefully inject the SSH tunnel into the client
                 // configuration. This is delicate because we need TLS
@@ -809,7 +827,7 @@ impl CsrConnection {
             }
         }
 
-        client_config.build()
+        Ok(client_config.build()?)
     }
 
     async fn validate(
@@ -817,7 +835,8 @@ impl CsrConnection {
         _id: GlobalId,
         connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
-        self.connect(connection_context).await?;
+        let client = self.connect(connection_context).await?;
+        client.list_subjects().await?;
         Ok(())
     }
 }
@@ -1017,14 +1036,15 @@ impl PostgresConnection<InlinedConnection> {
                 connection,
             }) => {
                 let secret = secrets_reader.read(*connection_id).await?;
-                let key_set = SshKeyPairSet::from_bytes(&secret)?;
-                let key_pair = key_set.primary().clone();
-                mz_postgres_util::TunnelConfig::Ssh(SshTunnelConfig {
-                    host: connection.host.clone(),
-                    port: connection.port,
-                    user: connection.user.clone(),
-                    key_pair,
-                })
+                let key_pair = SshKeyPair::from_bytes(&secret)?;
+                mz_postgres_util::TunnelConfig::Ssh {
+                    config: SshTunnelConfig {
+                        host: connection.host.clone(),
+                        port: connection.port,
+                        user: connection.user.clone(),
+                        key_pair,
+                    },
+                }
             }
             Tunnel::AwsPrivatelink(connection) => {
                 assert!(connection.port.is_none());
@@ -1043,7 +1063,12 @@ impl PostgresConnection<InlinedConnection> {
         connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
         let config = self.config(&*connection_context.secrets_reader).await?;
-        config.connect("connection validation").await?;
+        config
+            .connect(
+                "connection validation",
+                &connection_context.ssh_tunnel_manager,
+            )
+            .await?;
         Ok(())
     }
 }
@@ -1309,8 +1334,17 @@ impl SshTunnel<InlinedConnection> {
         connection_context
             .ssh_tunnel_manager
             .connect(
-                &*connection_context.secrets_reader,
-                self,
+                SshTunnelConfig {
+                    host: self.connection.host.clone(),
+                    port: self.connection.port,
+                    user: self.connection.user.clone(),
+                    key_pair: SshKeyPair::from_bytes(
+                        &connection_context
+                            .secrets_reader
+                            .read(self.connection_id)
+                            .await?,
+                    )?,
+                },
                 remote_host,
                 remote_port,
             )
@@ -1325,8 +1359,7 @@ impl SshConnection {
         connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
         let secret = connection_context.secrets_reader.read(id).await?;
-        let key_set = SshKeyPairSet::from_bytes(&secret)?;
-        let key_pair = key_set.primary().clone();
+        let key_pair = SshKeyPair::from_bytes(&secret)?;
         let config = SshTunnelConfig {
             host: self.host.clone(),
             port: self.port,

@@ -258,7 +258,7 @@ Explained Query:
     ArrangeBy keys=[[]] // { arity: 1 }
       ReadStorage materialize.public.t1 // { arity: 1 }
     ArrangeBy keys=[[]] // { arity: 0 }
-      Distinct // { arity: 0 }
+      Distinct project=[] // { arity: 0 }
         Project () // { arity: 0 }
           ReadStorage materialize.public.t2 // { arity: 1 }
 
@@ -277,7 +277,7 @@ Explained Query:
       ArrangeBy keys=[[#0]] // { arity: 2 }
         ReadStorage materialize.public.t3 // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 0 }
-        Distinct // { arity: 0 }
+        Distinct project=[] // { arity: 0 }
           Project () // { arity: 0 }
             ReadStorage materialize.public.t2 // { arity: 1 }
 
@@ -296,7 +296,7 @@ Explained Query:
       ArrangeBy keys=[[#1]] // { arity: 2 }
         ReadStorage materialize.public.t3 // { arity: 2 }
       ArrangeBy keys=[[#0]] // { arity: 1 }
-        Distinct group_by=[#0] // { arity: 1 }
+        Distinct project=[#0] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
 
 EOF
@@ -466,10 +466,10 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 1 }
             Get l0 // { arity: 1 }
           ArrangeBy keys=[[#0]] // { arity: 1 }
-            Distinct group_by=[#0] // { arity: 1 }
+            Distinct project=[#0] // { arity: 1 }
               ReadStorage materialize.public.x // { arity: 1 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
 
 EOF
@@ -504,10 +504,10 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 1 }
             Get l0 // { arity: 1 }
           ArrangeBy keys=[[#0]] // { arity: 1 }
-            Distinct group_by=[#0] // { arity: 1 }
+            Distinct project=[#0] // { arity: 1 }
               ReadStorage materialize.public.x // { arity: 1 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
 
 EOF
@@ -536,7 +536,7 @@ Explained Query:
                   Get l0 // { arity: 1 }
   With
     cte l1 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         Project (#0) // { arity: 1 }
           Filter (#0 <= #1) // { arity: 2 }
             CrossJoin type=differential // { arity: 2 }
@@ -547,7 +547,7 @@ Explained Query:
               ArrangeBy keys=[[]] // { arity: 1 }
                 ReadStorage materialize.public.x // { arity: 1 }
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
 
 EOF
@@ -650,7 +650,7 @@ WHERE a IN (9, 0)
 ----
 Explained Query:
   Map (1) // { arity: 1 }
-    Distinct // { arity: 0 }
+    Distinct project=[] // { arity: 0 }
       Project () // { arity: 0 }
         ReadStorage materialize.public.y // { arity: 1 }
 

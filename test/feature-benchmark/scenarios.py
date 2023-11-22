@@ -9,6 +9,7 @@
 
 
 from math import ceil, floor
+from textwrap import dedent
 
 from parameterized import parameterized_class  # type: ignore
 
@@ -164,6 +165,33 @@ true
   /* B */
 """
             + "\n".join([str(x) for x in range(self.n() - 1000, self.n())])
+        )
+
+
+class FastPathLimit(FastPath):
+    """Benchmark the case SELECT * FROM source LIMIT <i> , optimized by #21615"""
+
+    def init(self) -> list[Action]:
+        return [
+            TdAction(
+                f"""
+                > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {self.n()})
+                """
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            dedent(
+                """
+                > SELECT 1;
+                  /* A */
+                1
+                > SELECT * FROM v1 LIMIT 100
+                  /* B */
+                """
+            )
+            + "\n".join([str(x) for x in range(1, 101)])
         )
 
 
@@ -797,8 +825,8 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}')
@@ -834,8 +862,8 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
             """
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -874,8 +902,8 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
@@ -918,8 +946,8 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
@@ -996,8 +1024,8 @@ class KafkaRestartBig(ScenarioBig):
     def init(self) -> Action:
         return TdAction(
             """
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${testdrive.seed}')
@@ -1058,8 +1086,8 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE s1
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}')
@@ -1102,8 +1130,8 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
     def init(self) -> Action:
         return TdAction(
             f"""
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -1131,6 +1159,8 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+
+$ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await-key-schema=true
 
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
 
@@ -1414,8 +1444,8 @@ ALTER SYSTEM SET max_sources = {self.n() * 2};
 ALTER SYSTEM SET max_sinks = {self.n() * 2};
 ALTER SYSTEM SET max_tables = {self.n() * 2};
 
-> CREATE CONNECTION IF NOT EXISTS s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -1452,3 +1482,63 @@ ALTER SYSTEM SET max_tables = {self.n() * 2};
 """
             ),
         ]
+
+
+class HydrateIndex(Scenario):
+    """Measure the time it takes for an index to hydrate when a cluster comes online."""
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                """
+> CREATE CLUSTER idx_cluster SIZE '16', REPLICATION FACTOR 1
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP TABLE IF EXISTS t1 CASCADE
+> CREATE TABLE t1 (f1 INTEGER, f2 INTEGER)
+> ALTER CLUSTER idx_cluster SET (REPLICATION FACTOR 0)
+> CREATE INDEX i1 IN CLUSTER idx_cluster ON t1(f1)
+> INSERT INTO t1 (f1) SELECT {self.unique_values()} FROM {self.join()}
+> UPDATE t1 SET f1 = f1 + 100000
+> UPDATE t1 SET f1 = f1 + 1000000
+> UPDATE t1 SET f1 = f1 + 10000000
+> UPDATE t1 SET f1 = f1 + 100000000
+> UPDATE t1 SET f1 = f1 + 1000000000
+> SELECT 1
+  /* A */
+1
+> ALTER CLUSTER idx_cluster SET (REPLICATION FACTOR 1)
+> SET CLUSTER = idx_cluster
+? EXPLAIN SELECT COUNT(*) FROM t1
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          ReadIndex on=t1 i1=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.i1 (*** full scan ***)
+
+> SELECT COUNT(*) FROM t1
+  /* B */
+{self._n}
+> SET CLUSTER = default
+"""
+        )

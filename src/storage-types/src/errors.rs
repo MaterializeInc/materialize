@@ -7,15 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::anyhow;
 use std::error::Error;
 use std::fmt::Display;
 
 use bytes::BufMut;
 use mz_expr::EvalError;
+use mz_kafka_util::client::TunnelingClientContext;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
+use mz_ssh_util::tunnel::SshTunnelStatus;
 use proptest_derive::Arbitrary;
 use prost::Message;
+use rdkafka::error::KafkaError;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -750,6 +754,12 @@ mod columnation {
                         EvalError::IfNullError(x) => {
                             EvalError::IfNullError(self.string_region.copy(x))
                         }
+                        EvalError::InvalidIanaTimezoneId(x) => {
+                            EvalError::InvalidIanaTimezoneId(self.string_region.copy(x))
+                        }
+                        EvalError::PrettyError(x) => {
+                            EvalError::PrettyError(self.string_region.copy(x))
+                        }
                     };
                     let reference = self.eval_error_region.copy_iter(once(err));
                     let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
@@ -907,8 +917,7 @@ mod columnation {
 
         proptest! {
             #[mz_ore::test]
-            // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-            #[cfg_attr(miri, ignore)]
+            #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
             fn dataflow_error_roundtrip(expect in any::<DataflowError>()) {
                 let actual = columnation_roundtrip(&expect);
                 proptest::prop_assert_eq!(&expect, &actual[0])
@@ -987,6 +996,89 @@ impl From<EnvelopeError> for DataflowError {
     fn from(e: EnvelopeError) -> Self {
         Self::EnvelopeError(Box::new(e))
     }
+}
+
+/// An error returned by `KafkaConnection::create_with_context`.
+#[derive(thiserror::Error, Debug)]
+pub enum ContextCreationError {
+    // This ends up double-printing `ssh:` in status tables, but makes for
+    // a better experience during ddl.
+    #[error("ssh: {0}")]
+    Ssh(#[source] anyhow::Error),
+    #[error(transparent)]
+    KafkaError(#[from] KafkaError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+/// An extension trait for `Result<T, E>` that makes producing `ContextCreationError`s easier.
+pub trait ContextCreationErrorExt<T> {
+    /// Override the error case with an ssh error from `cx`, if there is one.
+    fn check_ssh_status<C>(self, cx: &TunnelingClientContext<C>)
+        -> Result<T, ContextCreationError>;
+    /// Add context to the errors within the variants of `ContextCreationError`, without
+    /// altering the `Ssh` variant.
+    fn add_context(self, msg: &'static str) -> Result<T, ContextCreationError>;
+}
+
+impl<T, E> ContextCreationErrorExt<T> for Result<T, E>
+where
+    ContextCreationError: From<E>,
+{
+    fn check_ssh_status<C>(
+        self,
+        cx: &TunnelingClientContext<C>,
+    ) -> Result<T, ContextCreationError> {
+        self.map_err(|e| {
+            if let SshTunnelStatus::Errored(e) = cx.tunnel_status() {
+                ContextCreationError::Ssh(anyhow!(e))
+            } else {
+                ContextCreationError::from(e)
+            }
+        })
+    }
+
+    fn add_context(self, msg: &'static str) -> Result<T, ContextCreationError> {
+        self.map_err(|e| {
+            let e = ContextCreationError::from(e);
+            match e {
+                // We need to preserve the `Ssh` variant here, so we add the context inside of it.
+                ContextCreationError::Ssh(e) => ContextCreationError::Ssh(anyhow!(e.context(msg))),
+                ContextCreationError::Other(e) => {
+                    ContextCreationError::Other(anyhow!(e.context(msg)))
+                }
+                ContextCreationError::KafkaError(e) => {
+                    ContextCreationError::Other(anyhow!(anyhow!(e).context(msg)))
+                }
+            }
+        })
+    }
+}
+
+impl From<CsrConnectError> for ContextCreationError {
+    fn from(csr: CsrConnectError) -> ContextCreationError {
+        use ContextCreationError::*;
+
+        match csr {
+            CsrConnectError::Ssh(e) => Ssh(e),
+            other => Other(anyhow::anyhow!(other)),
+        }
+    }
+}
+
+/// An error returned by `CsrConnection::connect`.
+#[derive(thiserror::Error, Debug)]
+pub enum CsrConnectError {
+    // This ends up double-printing `ssh:` in status tables, but makes for
+    // a better experience during ddl.
+    #[error("ssh: {0}")]
+    Ssh(#[source] anyhow::Error),
+    #[error(transparent)]
+    NativeTls(#[from] native_tls::Error),
+    #[error(transparent)]
+    Openssl(#[from] openssl::error::ErrorStack),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 #[cfg(test)]

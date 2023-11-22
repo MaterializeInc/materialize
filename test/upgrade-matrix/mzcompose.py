@@ -15,6 +15,8 @@ from collections.abc import Generator
 
 import networkx as nx
 
+from materialize.util import all_subclasses
+
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
@@ -37,14 +39,16 @@ from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
-from materialize.util import MzVersion
 from materialize.version_list import VersionsFromDocs
 
 SERVICES = [
@@ -52,7 +56,10 @@ SERVICES = [
     Postgres(),
     Redpanda(auto_create_topics=True),
     Debezium(redpanda=True),
-    Materialized(),  # Overriden inside Platform Checks
+    Minio(setup_materialize=True),
+    Materialized(
+        external_minio=True, catalog_store="stash"
+    ),  # Overriden inside Platform Checks
     TestdriveService(
         default_timeout="300s",
         no_reset=True,
@@ -63,12 +70,13 @@ SERVICES = [
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
         ],
     ),
+    SshBastionHost(),
 ]
 
 
 def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
-    c.up("cockroach", "redpanda", "postgres", "debezium")
+    c.up("cockroach", "redpanda", "postgres", "debezium", "ssh-bastion-host")
 
 
 def teardown(c: Composition) -> None:
@@ -124,10 +132,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"--- Random seed is {args.seed}")
     random.seed(args.seed)
 
+    all_checks = {check.__name__: check for check in all_subclasses(Check)}
     checks = (
-        [globals()[check] for check in args.check]
+        [all_checks[check] for check in args.check]
         if args.check
-        else Check.__subclasses__()
+        else list(all_subclasses(Check))
     )
 
     print(f"--- Checks to use: {checks}")

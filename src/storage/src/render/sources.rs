@@ -22,6 +22,7 @@ use mz_ore::metrics::{CounterVecExt, GaugeVecExt};
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_operators::persist_source;
+use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
@@ -33,14 +34,15 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::operators::{Concat, ConnectLoop, Exchange, Feedback, Leave, OkErr};
+use timely::dataflow::operators::{Concat, ConnectLoop, Exchange, Feedback, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp as _};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
+use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::render::upsert::UpsertKey;
-use crate::source::types::{DecodeResult, HealthStatusUpdate, SourceOutput};
+use crate::source::types::{DecodeResult, SourceOutput};
 use crate::source::{self, RawSourceCreationConfig, SourceCreationParams};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
@@ -84,7 +86,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
     )>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, HealthStatusMessage>,
     Rc<dyn Any>,
 ) {
     // Tokens that we should return from the method.
@@ -261,7 +263,7 @@ fn render_source_stream<G>(
     Collection<G, Row, Diff>,
     Collection<G, DataflowError, Diff>,
     Vec<Rc<dyn Any>>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, HealthStatusMessage>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -359,8 +361,6 @@ where
                                     Antichain::new(),
                                     None,
                                     None,
-                                    // Copy the logic in DeltaJoin/Get/Join to start.
-                                    |_timer, count| count > 1_000_000,
                                 );
                             let (tx_source_ok, tx_source_err) = (
                                 tx_source_ok_stream.as_collection(),
@@ -462,7 +462,7 @@ where
                                                         progress_stream: feedback_data,
                                                         max_inflight_bytes:
                                                             storage_dataflow_max_inflight_bytes,
-                                                        summary: (Default::default(), 1),
+                                                        summary: (Default::default(), Subtime::least_summary()),
                                                         metrics: backpressure_metrics.clone(),
                                                     }),
                                                     backpressure_metrics,
@@ -482,8 +482,7 @@ where
                                         Antichain::new(),
                                         None,
                                         flow_control,
-                                        // Copy the logic in DeltaJoin/Get/Join to start.
-                                        |_timer, count| count > 1_000_000,
+                                        false.then_some(|| unreachable!()),
                                     );
                                     (
                                         stream.as_collection(),
@@ -549,7 +548,11 @@ where
                                 None => upsert.as_collection(),
                             };
 
-                            (upsert.leave(), health_update.leave())
+                            (upsert.leave(), health_update.map(|(index, update)| HealthStatusMessage {
+                                index,
+                                namespace: StatusNamespace::Upsert,
+                                update
+                            }).leave())
                         },
                     );
 

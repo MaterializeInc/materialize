@@ -71,6 +71,32 @@ If you can successfully connect to CockroachDB with either
 `psql postgres://root@localhost:26257` or `cockroach sql --insecure`, you're
 all set.
 
+### Python
+
+Materialize's build and test infrastructure is largely written in [Python];
+running our integration tests, in particular, requires a local Python
+environment. Most of this should be taken care of by the `bin/pyactivate`
+script, which constructs a local virtual environment and keeps necessary
+dependencies up to date.
+
+We support, as a minimum version, the default Python provided in the [most
+recent Ubuntu LTS release](https://wiki.ubuntu.com/Releases). As of October 2023
+this is Python 3.10, provided in Ubuntu "Jammy Jellyfish". Earlier versions may
+work but are not supported. Our recommended installation methods are:
+
+- macOS: [Homebrew](https://brew.sh)
+- Linux: System package manager if possible, or [community package repositories](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa) if necessary
+- Windows: [Microsoft App Store](https://apps.microsoft.com/detail/python-3-11/9NRWMJP3717K?hl=en-US&gl=US)
+- Cross-platform: [Nix] [flake](../../misc/nix)
+
+If none of the above work well for you, these are a few other methods that have
+worked for us in the past, but are not formally supported:
+
+- [pyenv](https://github.com/pyenv/pyenv)
+- [asdf](https://asdf-vm.com/)
+- [Pixi](https://github.com/prefix-dev/pixi)
+- [Conda](https://docs.conda.io/en/latest/)
+
 ### Confluent Platform
 
 The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with
@@ -377,6 +403,37 @@ acceptable for:
     entry. Changes to Materialize very rarely require changes in rust-dec, so
     maintaining the two separately does not introduce much overhead.
 
+## Dependency management and auditing
+
+We use the Mozilla-developed native Rust cargo-vet tool for dependency auditing
+to help ensure the security and reliability of external dependencies. Cargo-vet
+allows developers to audit their dependencies by checking for known security
+vulnerabilities, licensing issues, and overall health of the dependencies, which
+include factors like maintenance status, version stability, and community trust.
+
+For a developer, the basic workflow with cargo-vet starts with integrating it
+into their Rust development process. After installing cargo-vet locally, the
+developer runs it against their project’s Cargo.toml and Cargo.lock files.
+Cargo-vet will then analyze the list of dependencies and output a report
+detailing the status of each dependency.
+
+All crates currently in use have been added to the audited list, but CI will
+fail on PRs with new unaudited dependencies (or after 'cargo update'). Complete
+information on using cargo-vet are available in the book at
+https://mozilla.github.io/cargo-vet/how-it-works.html but in summary:
+
+  * cargo vet inspect some-crate
+  * cargo vet certify some-crate
+
+The 'certify' step will record an entry in the audits.toml file certifying the crate has been reviewed and is appropriate to use. Example:
+
+```toml
+[[audits.aws-sdk-s3]]
+who = "Matt Arthur <matthewleearthur@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.26.0"
+```
+
 ## Developer tools
 
 ### Editors and IDEs
@@ -505,3 +562,5 @@ source /path/to/materialize/misc/completions/zsh/*
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rustup]: https://www.rust-lang.org/tools/install
 [sqlparser]: https://github.com/MaterializeInc/sqlparser
+[Python]: https://www.python.org
+[Nix]: https://nixos.wiki/wiki/Flakes

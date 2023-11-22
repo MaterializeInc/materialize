@@ -12,6 +12,16 @@
 # pg_hba.conf if you modify the existing user names or add new ones.
 
 > CREATE SECRET pgpass AS 'postgres'
+
+! CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass,
+    BROKER '${testdrive.kafka-addr}'
+  )
+contains:POSTGRES connections do not support BROKER values
+
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
     DATABASE postgres,
@@ -526,8 +536,7 @@ true
 2 two_two
 5 five
 
-# TODO: should only be 'running' w/ resolution of #20666
-> SELECT status = 'starting' OR status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_pk_table';
+> SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_pk_table';
 true
 
 > DROP SOURCE large_cluster;
@@ -598,6 +607,17 @@ DELETE FROM conflict_schema.conflict_table;
     "enum_table"
   );
 contains: invalid TEXT COLUMNS option value: column "pk_table.col_dne" does not exist
+
+! CREATE SOURCE case_sensitive_names
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [pk_table."F2"]
+  )
+  FOR TABLES (
+    "enum_table"
+  );
+contains: invalid TEXT COLUMNS option value: column "pk_table.F2" does not exist
+hint: The similarly named column "pk_table.f2" does exist.
 
 ! CREATE SOURCE enum_source
   FROM POSTGRES CONNECTION pg (
@@ -713,8 +733,8 @@ INSERT INTO pk_table VALUES (99999);
 # should be "materialize.public.pk_table"
 
 > SELECT error FROM mz_internal.mz_source_statuses where name in ('enum_source', 'mz_source');
-"publication \"mz_source\" does not exist"
-"publication \"mz_source\" does not exist"
+"postgres: publication \"mz_source\" does not exist"
+"postgres: publication \"mz_source\" does not exist"
 
 > DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;

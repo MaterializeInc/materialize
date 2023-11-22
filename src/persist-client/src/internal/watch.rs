@@ -304,7 +304,7 @@ mod tests {
             .unwrap();
         let mut snapshot = Box::pin(read.snapshot(Antichain::from_elem(0)));
         assert!(Pin::new(&mut snapshot).poll(&mut cx).is_pending());
-        let mut listen_next_batch = Box::pin(listen.next());
+        let mut listen_next_batch = Box::pin(listen.next(None));
         assert!(Pin::new(&mut listen_next_batch).poll(&mut cx).is_pending());
 
         // Now update the frontier, which should allow the snapshot to resolve

@@ -80,7 +80,8 @@ mod util;
 
 use mz_sql_parser::ast::*;
 use mz_sql_parser::parser::{parse_statements, ParserStatementError};
-use pretty::*;
+use pretty::RcDoc;
+use thiserror::Error;
 
 use crate::doc::{
     doc_create_materialized_view, doc_create_view, doc_display, doc_insert, doc_select_statement,
@@ -88,7 +89,7 @@ use crate::doc::{
 
 const TAB: isize = 4;
 
-pub fn to_doc(v: &Statement<Raw>) -> RcDoc {
+fn to_doc<T: AstInfo>(v: &Statement<T>) -> RcDoc {
     match v {
         Statement::Select(v) => doc_select_statement(v),
         Statement::Insert(v) => doc_insert(v),
@@ -98,19 +99,30 @@ pub fn to_doc(v: &Statement<Raw>) -> RcDoc {
     }
 }
 
-pub fn to_pretty(stmt: &Statement<Raw>, width: usize) -> String {
-    let mut w = Vec::new();
-    to_doc(stmt).render(width, &mut w).unwrap();
-    let mut s = String::from_utf8(w).unwrap();
-    s.push(';');
-    s
+/// Pretty prints a statement at a width.
+pub fn to_pretty<T: AstInfo>(stmt: &Statement<T>, width: usize) -> String {
+    format!("{};", to_doc(stmt).pretty(width))
 }
 
-pub fn pretty_strs(str: &str, width: usize) -> Result<Vec<String>, ParserStatementError> {
+/// Parses `str` into SQL statements and pretty prints them.
+pub fn pretty_strs(str: &str, width: usize) -> Result<Vec<String>, Error> {
     let stmts = parse_statements(str)?;
     Ok(stmts.iter().map(|s| to_pretty(&s.ast, width)).collect())
 }
 
-pub fn pretty_str(str: &str, width: usize) -> Result<String, ParserStatementError> {
-    Ok(pretty_strs(str, width)?.join("\n\n"))
+/// Parses `str` into a single SQL statement and pretty prints it.
+pub fn pretty_str(str: &str, width: usize) -> Result<String, Error> {
+    let stmts = parse_statements(str)?;
+    if stmts.len() != 1 {
+        return Err(Error::ExpectedOne);
+    }
+    Ok(to_pretty(&stmts[0].ast, width))
+}
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error(transparent)]
+    Parser(#[from] ParserStatementError),
+    #[error("expected exactly one statement")]
+    ExpectedOne,
 }

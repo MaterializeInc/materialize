@@ -17,7 +17,7 @@ reset-server
 statement ok
 CREATE CLUSTER foo SIZE '1'
 
-statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET, found dot
+statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
 ALTER CLUSTER foo.bar SET (SIZE '2')
 
 statement ok
@@ -55,7 +55,7 @@ SELECT id, name, managed, replication_factor, size FROM mz_clusters
 ----
 s1  mz_system  false  NULL  NULL
 s2  mz_introspection  false  NULL  NULL
-u1  default  true  1  1
+u1  default  true  1  2
 
 
 query T rowsort
@@ -124,9 +124,9 @@ CREATE CLUSTER baz REPLICAS (), INTROSPECTION INTERVAL 1
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  1
-mz_introspection  r1  1
-mz_system  r1  1
+default  r1  2
+mz_introspection  r1  2
+mz_system  r1  2
 
 statement error db error: ERROR: unknown cluster replica size abc
 CREATE CLUSTER foo SIZE 'abc', REPLICATION FACTOR 3
@@ -137,12 +137,12 @@ CREATE CLUSTER foo SIZE '1', REPLICATION FACTOR 3
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  1
+default  r1  2
 foo  r1  1
 foo  r2  1
 foo  r3  1
-mz_introspection  r1  1
-mz_system  r1  1
+mz_introspection  r1  2
+mz_system  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -155,12 +155,12 @@ ALTER CLUSTER foo SET (MANAGED = false)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  1
+default  r1  2
 foo  r1  1
 foo  r2  1
 foo  r3  1
-mz_introspection  r1  1
-mz_system  r1  1
+mz_introspection  r1  2
+mz_system  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -182,12 +182,12 @@ ALTER CLUSTER foo SET (MANAGED, SIZE '1')
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  1
+default  r1  2
 foo  r1  1
 foo  r2  1
 foo  r3  1
-mz_introspection  r1  1
-mz_system  r1  1
+mz_introspection  r1  2
+mz_system  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -216,10 +216,10 @@ ALTER CLUSTER foo SET (REPLICATION FACTOR 1)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  1
+default  r1  2
 foo  r1  1
-mz_introspection  r1  1
-mz_system  r1  1
+mz_introspection  r1  2
+mz_system  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -235,11 +235,11 @@ CREATE SOURCE loadgen IN CLUSTER foo FROM LOAD GENERATOR COUNTER
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  1
+default  r1  2
 foo  r1  1
 foo  r2  1
-mz_introspection  r1  1
-mz_system  r1  1
+mz_introspection  r1  2
+mz_system  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -252,10 +252,10 @@ ALTER CLUSTER foo RESET (REPLICATION FACTOR)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  1
+default  r1  2
 foo  r1  1
-mz_introspection  r1  1
-mz_system  r1  1
+mz_introspection  r1  2
+mz_system  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -268,10 +268,10 @@ ALTER CLUSTER foo SET (SIZE '2')
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  1
+default  r1  2
 foo  r1  2
-mz_introspection  r1  1
-mz_system  r1  1
+mz_introspection  r1  2
+mz_system  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -284,10 +284,10 @@ ALTER CLUSTER foo SET (SIZE '1', REPLICATION FACTOR 1)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  1
+default  r1  2
 foo  r1  1
-mz_introspection  r1  1
-mz_system  r1  1
+mz_introspection  r1  2
+mz_system  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -319,16 +319,16 @@ DROP CLUSTER REPLICA foo.r1
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  1
-mz_introspection  r1  1
-mz_system  r1  1
+default  r1  2
+mz_introspection  r1  2
+mz_system  r1  2
 
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
 ----
-r1  1  1  18446744073709000000  18446744073709551615  1  1
-r1  1  1  18446744073709000000  18446744073709551615  1  1
-r1  1  1  18446744073709000000  18446744073709551615  1  1
+r1  2  1  18446744073709000000  18446744073709551615  2  1
+r1  2  1  18446744073709000000  18446744073709551615  2  1
+r1  2  1  18446744073709000000  18446744073709551615  2  1
 
 statement ok
 DROP CLUSTER foo CASCADE

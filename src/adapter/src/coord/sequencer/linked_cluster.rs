@@ -9,6 +9,7 @@
 
 //! Coordinator functionality to sequence linked-cluster-related plans
 
+use mz_catalog::LINKED_CLUSTER_REPLICA_NAME;
 use std::time::Duration;
 
 use mz_compute_client::controller::ComputeReplicaConfig;
@@ -20,7 +21,7 @@ use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::SourceSinkClusterConfig;
 
-use crate::catalog::{self, ClusterConfig, ClusterVariant, LINKED_CLUSTER_REPLICA_NAME};
+use crate::catalog::{self, ClusterConfig, ClusterVariant};
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
 use crate::session::Session;
@@ -78,7 +79,7 @@ impl Coordinator {
         ops: &mut Vec<catalog::Op>,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let location = mz_catalog::ReplicaLocation::Managed {
+        let location = mz_catalog::durable::ReplicaLocation::Managed {
             size: size.to_string(),
             availability_zone: None,
             disk,

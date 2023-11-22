@@ -171,7 +171,7 @@ With
   cte l0 =
     Project (#0, #1)
       Filter (#0 > #2)
-        Get materialize.public.t
+        ReadStorage materialize.public.t
 ```
 
 Many operators need to refer to columns in their input. These are displayed like
@@ -185,15 +185,15 @@ about the implementation in the `Join` operator can be requested with [the `join
 ```text
 Join on=(#1 = #2 AND #3 = #4) type=delta
   implementation
-    %0:t » %1:u[#0]KA » %2:v[#0]KA
-    %1:u » %0:t[#1]KA » %2:v[#0]KA
-    %2:v » %1:u[#1]KA » %0:t[#1]KA
+    %0:t » %1:u[#0]K » %2:v[#0]K
+    %1:u » %0:t[#1]K » %2:v[#0]K
+    %2:v » %1:u[#1]K » %0:t[#1]K
   ArrangeBy keys=[[#1]]
-    Get materialize.public.t
+    ReadStorage materialize.public.t
   ArrangeBy keys=[[#0], [#1]]
-    Get materialize.public.u
+    ReadStorage materialize.public.u
   ArrangeBy keys=[[#0]]
-    Get materialize.public.v
+    ReadStorage materialize.public.v
 ```
 The `%0`, `%1`, etc. refer to each of the join inputs.
 A *differential* join shows one join path, which is simply a sequence of binary
@@ -219,8 +219,8 @@ that implements the rest of the plan.
 ```
 Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
   CrossJoin
-    Get materialize.public.r
-    Get materialize.public.s
+    ReadStorage materialize.public.r
+    ReadStorage materialize.public.s
 ```
 
 Below the plan, a "Used indexes" section indicates which indexes will be used by the query, [and in what way](/transform-data/optimization/#use-explain-to-verify-index-usage).
@@ -407,5 +407,4 @@ MATERIALIZED VIEW my_mat_view;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations and types in the explainee are contained in.
-- `USAGE` privileges on all types used in the explainee.
+- `USAGE` privileges on the schemas that all relations in the explainee are contained in.

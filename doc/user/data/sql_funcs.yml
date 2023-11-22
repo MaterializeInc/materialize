@@ -292,6 +292,12 @@
   - signature: 'get_byte(b: bytea, n: int) -> int'
     description: Return the `n`th byte from `b`, where the left-most byte in `b` is at the 0th position.
 
+  - signature: 'constant_time_eq(a: bytea, b: bytea) -> bool'
+    description: Performs a constant-time comparison between byte arrays `a` and `b`. Returns `true` if the arrays are identical, otherwise returns `false`. This method is designed to mitigate timing attacks by ensuring the comparison takes the same amount of time regardless of the content of the arrays.
+
+  - signature: 'constant_time_eq(a: text, b: text) -> bool'
+    description: Performs a constant-time comparison between strings `a` and `b` by first converting them to byte sequences. Returns `true` if the strings are identical, otherwise returns `false`. This method is designed to mitigate timing attacks by ensuring the comparison takes the same amount of time regardless of the content of the strings.
+
   - signature: 'left(s: str, n: int) -> str'
     description: The first `n` characters of `s`. If `n` is negative, all but the last `|n|` characters of `s`.
 
@@ -530,6 +536,17 @@
     description: 'Converts `timestamp with time zone` from UTC to specified time zone, expressed as the local time. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
     url: timezone-and-at-time-zone
 
+  - signature: |-
+      timezone_offset(zone: str, when: timestamptz) ->
+      (abbrev: str, base_utc_offset: interval, dst_offset: interval)
+    description: >-
+      Describes a time zone's offset from UTC at a specified moment.
+      `zone` must be a valid IANA Time Zone Database identifier.
+      `when` is a `timestamp with time zone` that specifies the moment at which to determine `zone`'s offset from UTC.
+      `abbrev` is the abbreviation for `zone` that is in use at the specified moment (e.g., `EST` or `EDT`).
+      `base_utc_offset` is the base offset from UTC at the specified moment (e.g., `-5 hours`). Positive offsets mean east of Greenwich; negative offsets mean west of Greenwich.
+      `dst_offset` is the additional offset at the specified moment due to Daylight Saving Time rules (e.g., `1 hours`). If non-zero, Daylight Saving Time is in effect.
+
   - signature: 'to_timestamp(val: double precision) -> timestamptz'
     description: Converts Unix epoch (seconds since 00:00:00 UTC on January 1, 1970)
       to timestamp
@@ -700,7 +717,23 @@
         Computes the SHA-512 hash of the given bytea `data`.
 
 - type: Window
-  description: Window functions compute values across sets of rows related to the current query.
+  description: >-
+    Window functions compute values across sets of rows related to the current row.
+    For example, you can use a window aggregation to smooth measurement data by computing the average of the last 5
+    measurements before every row as follows:
+    ```
+    SELECT avg(measurement) OVER (ORDER BY time ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) FROM measurements;
+    ```.
+    Window functions always need an `OVER` clause. For the `OVER` clause, Materialize supports the same
+    [syntax as PostgreSQL](https://www.postgresql.org/docs/current/tutorial-window.html), but currently
+    only with the `ROWS` frame mode (except for the default frame, which is
+    `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`, and is supported).
+    In addition to the below window functions, you can use the `OVER` clause with any aggregation function
+    (e.g., `sum`, `avg`) as well. Using an aggregation with an `OVER` clause is called a _window aggregation_. A
+    window aggregation computes the aggregate not on the groups specified by the `GROUP BY` clause, but on the frames
+    specified inside the `OVER` clause. (Note that a window aggregation produces exactly one output value _for each input
+    row_. This is different from a standard aggregation, which produces one output value for each _group_ specified by
+    the `GROUP BY` clause.)
   functions:
   - signature: 'dense_rank() -> int'
     description: >-

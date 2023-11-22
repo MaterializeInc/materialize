@@ -22,4 +22,6 @@ try bin/doc --document-private-items
 
 try bin/xcompile cargo test --locked --doc
 
+try bin/ci-closed-issues-detect --changed-lines-only
+
 try_status_report

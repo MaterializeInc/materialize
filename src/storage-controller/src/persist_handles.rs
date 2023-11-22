@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
+use std::fmt::Write;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
@@ -22,14 +23,18 @@ use itertools::Itertools;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
+use mz_persist_client::ShardId;
+use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
 use mz_storage_client::client::{StorageResponse, TimestamplessUpdate, Update};
+use mz_storage_types::controller::TxnsCodecRow;
 use mz_storage_types::sources::SourceData;
+use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
-use tracing::Instrument;
+use tracing::{debug, Instrument, Span};
 
 use crate::{PersistEpoch, StorageError};
 
@@ -228,7 +233,7 @@ pub struct PersistTableWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampM
 /// Commands for [PersistTableWriteWorker].
 #[derive(Debug)]
 enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
-    Register(GlobalId, WriteHandle<SourceData, (), T, Diff>),
+    Register(T, Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     DropHandle(GlobalId),
     Append {
@@ -240,195 +245,88 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     Shutdown,
 }
 
-// TODO(txn): This impl is duplicative of PersistMonotonicWriteWorker, but it's
-// an intermediate state. The impl of this one will be completely replaced by
-// #20954.
+async fn append_work<T2: Timestamp + Lattice + Codec64>(
+    frontier_responses: &tokio::sync::mpsc::UnboundedSender<StorageResponse<T2>>,
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T2, Diff>>,
+    mut commands: BTreeMap<GlobalId, (tracing::Span, Vec<Update<T2>>, Antichain<T2>)>,
+) -> Result<(), Vec<GlobalId>> {
+    let futs = FuturesUnordered::new();
+
+    // We cannot iterate through the updates and then set off a persist call
+    // on the write handle because we cannot mutably borrow the write handle
+    // multiple times.
+    //
+    // Instead, we first group the update by ID above and then iterate
+    // through all available write handles and see if there are any updates
+    // for it. If yes, we send them all in one go.
+    for (id, write) in write_handles.iter_mut() {
+        if let Some((span, updates, new_upper)) = commands.remove(id) {
+            let persist_upper = write.upper().clone();
+            let updates = updates
+                .into_iter()
+                .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
+
+            futs.push(async move {
+                let persist_upper = persist_upper.clone();
+                write
+                    .compare_and_append(updates.clone(), persist_upper.clone(), new_upper.clone())
+                    .instrument(span.clone())
+                    .await
+                    .expect("cannot append updates")
+                    .or(Err(*id))?;
+
+                Ok::<_, GlobalId>((*id, new_upper))
+            })
+        }
+    }
+
+    // Ensure all futures run to completion, and track status of each of them individually
+    let (new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .partition_result();
+
+    // It is not strictly an error for the controller to hang up.
+    let _ = frontier_responses.send(StorageResponse::FrontierUppers(new_uppers));
+
+    if failed_appends.is_empty() {
+        Ok(())
+    } else {
+        Err(failed_appends)
+    }
+}
+
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWriteWorker<T> {
-    pub(crate) fn new(
+    pub(crate) fn new_legacy(
         frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     ) -> Self {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
+        let (tx, rx) =
+            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
+        mz_ore::task::spawn(
+            || "PersistTableWriteWorker",
+            legacy_table_worker(rx, frontier_responses),
+        );
+        Self {
+            inner: Arc::new(PersistTableWriteWorkerInner::new(tx)),
+        }
+    }
 
+    pub(crate) fn new_txns(
+        frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+        txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
+    ) -> Self {
+        let (tx, rx) =
+            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
         mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
-            let mut write_handles =
-                BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, Diff>>::new();
-
-            let mut shutdown = false;
-            while !shutdown {
-                tokio::select! {
-                    cmd = rx.recv() => {
-                        if let Some(cmd) = cmd {
-                            // Peel off all available commands.
-                            // We do this in case we can consolidate commands.
-                            // It would be surprising to receive multiple concurrent `Append` commands,
-                            // but we might receive multiple *empty* `Append` commands.
-                            let mut commands = VecDeque::new();
-                            commands.push_back(cmd);
-                            while let Ok(cmd) = rx.try_recv() {
-                                commands.push_back(cmd);
-                            }
-
-                            // Accumulated updates and upper frontier.
-                            let mut all_updates = BTreeMap::default();
-                            let mut all_responses = Vec::default();
-
-                            while let Some((span, command)) = commands.pop_front() {
-                                match command {
-                                    PersistTableWriteCmd::Register(id, write_handle) => {
-                                        let previous = write_handles.insert(id, write_handle);
-                                        if previous.is_some() {
-                                            panic!(
-                                                "already registered a WriteHandle for collection {:?}",
-                                                id
-                                            );
-                                        }
-                                    }
-                                    PersistTableWriteCmd::Update(id, write_handle) => {
-                                        write_handles.insert(id, write_handle).expect("PersistTableWriteCmd::Update only valid for updating extant write handles");
-                                    },
-                                    PersistTableWriteCmd::DropHandle(id) => {
-                                        // n.b. this should only remove the
-                                        // handle from the persist worker and
-                                        // not take any additional action such
-                                        // as closing the shard it's connected
-                                        // to because dataflows might still be
-                                        // using it.
-                                        write_handles.remove(&id);
-                                    }
-                                    PersistTableWriteCmd::Append{write_ts, advance_to, updates, tx} => {
-                                        let mut ids = BTreeSet::new();
-                                        for (id, updates_no_ts) in updates {
-                                            ids.insert(id);
-                                            let (old_span, updates, old_upper) =
-                                                all_updates.entry(id).or_insert_with(|| {
-                                                    (
-                                                        span.clone(),
-                                                        Vec::default(),
-                                                        Antichain::from_elem(T::minimum()),
-                                                    )
-                                                });
-
-                                            if old_span.id() != span.id() {
-                                                // Link in any spans for `Append`
-                                                // operations that we lump together by
-                                                // doing this. This is not ideal,
-                                                // because we only have a true tracing
-                                                // history for the "first" span that we
-                                                // process, but it's better than
-                                                // nothing.
-                                                old_span.follows_from(span.id());
-                                            }
-                                            let updates_with_ts = updates_no_ts.into_iter().map(|x| Update{ row: x.row, timestamp: write_ts.clone(), diff: x.diff });
-                                            updates.extend(updates_with_ts);
-                                            old_upper.join_assign(&Antichain::from_elem(advance_to.clone()));
-                                        }
-                                        all_responses.push((ids, tx));
-                                    }
-                                    PersistTableWriteCmd::Shutdown => {
-                                        shutdown = true;
-                                    }
-                                }
-                            }
-
-                            async fn append_work<T2: Timestamp + Lattice + Codec64>(
-                                frontier_responses: &tokio::sync::mpsc::UnboundedSender<
-                                    StorageResponse<T2>,
-                                >,
-                                write_handles: &mut BTreeMap<
-                                    GlobalId,
-                                    WriteHandle<SourceData, (), T2, Diff>,
-                                >,
-                                mut commands: BTreeMap<
-                                    GlobalId,
-                                    (tracing::Span, Vec<Update<T2>>, Antichain<T2>),
-                                >,
-                            ) -> Result<(), Vec<GlobalId>> {
-                                let futs = FuturesUnordered::new();
-
-                                // We cannot iterate through the updates and then set off a persist call
-                                // on the write handle because we cannot mutably borrow the write handle
-                                // multiple times.
-                                //
-                                // Instead, we first group the update by ID above and then iterate
-                                // through all available write handles and see if there are any updates
-                                // for it. If yes, we send them all in one go.
-                                for (id, write) in write_handles.iter_mut() {
-                                    if let Some((span, updates, new_upper)) = commands.remove(id) {
-                                        let persist_upper = write.upper().clone();
-                                        let updates = updates
-                                            .into_iter()
-                                            .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
-
-                                        futs.push(async move {
-                                            let persist_upper = persist_upper.clone();
-                                            write
-                                                .compare_and_append(
-                                                    updates.clone(),
-                                                    persist_upper.clone(),
-                                                    new_upper.clone(),
-                                                )
-                                                .instrument(span.clone())
-                                                .await
-                                                .expect("cannot append updates")
-                                                .or(Err(*id))?;
-
-                                            Ok::<_, GlobalId>((*id, new_upper))
-                                        })
-                                    }
-                                }
-
-                                use futures::StreamExt;
-                                // Ensure all futures run to completion, and track status of each of them individually
-                                let (new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
-                                    .collect::<Vec<_>>()
-                                    .await
-                                    .into_iter()
-                                    .partition_result();
-
-                                // It is not strictly an error for the controller to hang up.
-                                let _ =
-                                    frontier_responses.send(StorageResponse::FrontierUppers(new_uppers));
-
-                                if failed_appends.is_empty() {
-                                    Ok(())
-                                } else {
-                                    Err(failed_appends)
-                                }
-                            }
-
-                            let result =
-                                append_work(&frontier_responses, &mut write_handles, all_updates).await;
-
-                            for (ids, response) in all_responses {
-                                let result = match &result {
-                                    Err(bad_ids) => {
-                                        let filtered: Vec<_> = bad_ids.iter().filter(|id| ids.contains(id)).copied().collect();
-                                        if filtered.is_empty() {
-                                            Ok(())
-                                        } else {
-                                            Err(StorageError::InvalidUppers(filtered))
-                                        }
-                                    }
-                                    Ok(()) => Ok(()),
-                                };
-                                // It is not an error for the other end to hang up.
-                                let _ = response.send(result);
-                            }
-
-                            if shutdown {
-                                tracing::trace!("shutting down persist write append task");
-                                break;
-                            }
-                        } else {
-                            shutdown = true;
-                        }
-                    }
-                }
-            }
-
-            tracing::info!("PersistTableWriteWorker shutting down");
+            let mut worker = TxnsTableWorker {
+                frontier_responses,
+                txns,
+                write_handles: BTreeMap::new(),
+                tidy: Tidy::default(),
+            };
+            worker.run(rx).await
         });
-
         Self {
             inner: Arc::new(PersistTableWriteWorkerInner::new(tx)),
         }
@@ -436,10 +334,10 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 
     pub(crate) fn register(
         &self,
-        id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        register_ts: T,
+        ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>,
     ) {
-        self.send(PersistTableWriteCmd::Register(id, write_handle))
+        self.send(PersistTableWriteCmd::Register(register_ts, ids_handles))
     }
 
     /// Update the existing write handle associated with `id` to `write_handle`.
@@ -486,6 +384,331 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 
     fn send(&self, cmd: PersistTableWriteCmd<T>) {
         self.inner.send(cmd);
+    }
+}
+
+async fn legacy_table_worker<T: Timestamp + Lattice + Codec64 + TimestampManipulation>(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd<T>)>,
+    frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+) {
+    let mut write_handles = BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, Diff>>::new();
+
+    let mut shutdown = false;
+    while let Some(cmd) = rx.recv().await {
+        // Peel off all available commands.
+        // We do this in case we can consolidate commands.
+        // It would be surprising to receive multiple concurrent `Append` commands,
+        // but we might receive multiple *empty* `Append` commands.
+        let mut commands = VecDeque::new();
+        commands.push_back(cmd);
+        while let Ok(cmd) = rx.try_recv() {
+            commands.push_back(cmd);
+        }
+
+        // Accumulated updates and upper frontier.
+        let mut all_updates = BTreeMap::default();
+        let mut all_responses = Vec::default();
+
+        while let Some((span, command)) = commands.pop_front() {
+            match command {
+                PersistTableWriteCmd::Register(_register_ts, ids_handles) => {
+                    // register_ts will be used by the upcoming txns impl of the table
+                    // worker.
+                    for (id, write_handle) in ids_handles {
+                        let previous = write_handles.insert(id, write_handle);
+                        if previous.is_some() {
+                            panic!("already registered a WriteHandle for collection {:?}", id);
+                        }
+                    }
+                }
+                PersistTableWriteCmd::Update(id, write_handle) => {
+                    write_handles.insert(id, write_handle).expect(
+                        "PersistTableWriteCmd::Update only valid for updating extant write handles",
+                    );
+                }
+                PersistTableWriteCmd::DropHandle(id) => {
+                    // n.b. this should only remove the
+                    // handle from the persist worker and
+                    // not take any additional action such
+                    // as closing the shard it's connected
+                    // to because dataflows might still be
+                    // using it.
+                    write_handles.remove(&id);
+                }
+                PersistTableWriteCmd::Append {
+                    write_ts,
+                    advance_to,
+                    updates,
+                    tx,
+                } => {
+                    let mut ids = BTreeSet::new();
+                    for (id, updates_no_ts) in updates {
+                        ids.insert(id);
+                        let (old_span, updates, old_upper) =
+                            all_updates.entry(id).or_insert_with(|| {
+                                (
+                                    span.clone(),
+                                    Vec::default(),
+                                    Antichain::from_elem(T::minimum()),
+                                )
+                            });
+
+                        if old_span.id() != span.id() {
+                            // Link in any spans for `Append`
+                            // operations that we lump together by
+                            // doing this. This is not ideal,
+                            // because we only have a true tracing
+                            // history for the "first" span that we
+                            // process, but it's better than
+                            // nothing.
+                            old_span.follows_from(span.id());
+                        }
+                        let updates_with_ts = updates_no_ts.into_iter().map(|x| Update {
+                            row: x.row,
+                            timestamp: write_ts.clone(),
+                            diff: x.diff,
+                        });
+                        updates.extend(updates_with_ts);
+                        old_upper.join_assign(&Antichain::from_elem(advance_to.clone()));
+                    }
+                    all_responses.push((ids, tx));
+                }
+                PersistTableWriteCmd::Shutdown => shutdown = true,
+            }
+        }
+
+        let result = append_work(&frontier_responses, &mut write_handles, all_updates).await;
+
+        for (ids, response) in all_responses {
+            let result = match &result {
+                Err(bad_ids) => {
+                    let filtered: Vec<_> = bad_ids
+                        .iter()
+                        .filter(|id| ids.contains(id))
+                        .copied()
+                        .collect();
+                    if filtered.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(StorageError::InvalidUppers(filtered))
+                    }
+                }
+                Ok(()) => Ok(()),
+            };
+            // It is not an error for the other end to hang up.
+            let _ = response.send(result);
+        }
+
+        if shutdown {
+            tracing::trace!("shutting down persist write append task");
+            break;
+        }
+    }
+
+    tracing::info!("PersistTableWriteWorker shutting down");
+}
+
+struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
+    frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+    txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
+    write_handles: BTreeMap<GlobalId, ShardId>,
+    tidy: Tidy,
+}
+
+impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T> {
+    async fn run(
+        &mut self,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd<T>)>,
+    ) {
+        while let Some((span, command)) = rx.recv().await {
+            match command {
+                PersistTableWriteCmd::Register(register_ts, ids_handles) => {
+                    self.register(register_ts, ids_handles)
+                        .instrument(span)
+                        .await
+                }
+                PersistTableWriteCmd::Update(_id, _write_handle) => {
+                    unimplemented!("TODO: Support migrations on persist-txn backed collections")
+                }
+                PersistTableWriteCmd::DropHandle(id) => self.drop_handle(id).instrument(span).await,
+                PersistTableWriteCmd::Append {
+                    write_ts,
+                    advance_to,
+                    updates,
+                    tx,
+                } => {
+                    self.append(write_ts, advance_to, updates, tx)
+                        .instrument(span)
+                        .await
+                }
+                PersistTableWriteCmd::Shutdown => {
+                    tracing::info!("PersistTableWriteWorker shutting down via command");
+                    return;
+                }
+            }
+        }
+
+        tracing::info!("PersistTableWriteWorker shutting down via input exhaustion");
+    }
+
+    async fn register(
+        &mut self,
+        register_ts: T,
+        ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, i64>)>,
+    ) {
+        for (id, write_handle) in ids_handles.iter() {
+            debug!(
+                "tables register {} {:.9}",
+                id,
+                write_handle.shard_id().to_string()
+            );
+            let previous = self.write_handles.insert(*id, write_handle.shard_id());
+            if previous.is_some() {
+                panic!("already registered a WriteHandle for collection {:?}", id);
+            }
+        }
+        // Registering also advances the logical upper of all shards in the txns set.
+        let new_uppers = ids_handles
+            .iter()
+            .map(|(id, _)| {
+                (
+                    *id,
+                    Antichain::from_elem(TimestampManipulation::step_forward(&register_ts)),
+                )
+            })
+            .collect();
+        let handles = ids_handles.into_iter().map(|(_, handle)| handle);
+        let res = self.txns.register(register_ts.clone(), handles).await;
+        match res {
+            Ok(_ts) => {
+                self.send_new_uppers(new_uppers);
+            }
+            Err(current) => {
+                panic!(
+                    "cannot register {:?} at {:?} because txns is at {:?}",
+                    new_uppers.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+                    register_ts,
+                    current
+                );
+            }
+        }
+    }
+
+    async fn drop_handle(&mut self, id: GlobalId) {
+        debug!("tables drop {}", id);
+        // n.b. this should only remove the handle from the persist
+        // worker and not take any additional action such as closing
+        // the shard it's connected to because dataflows might still
+        // be using it.
+        if let Some(data_id) = self.write_handles.remove(&id) {
+            // We don't currently get a timestamp allocated for this, thread one
+            // through if inventing one here becomes an issue.
+            let mut ts = T::minimum();
+            loop {
+                match self.txns.forget(ts, data_id).await {
+                    Ok(()) => break,
+                    Err(new_ts) => ts = new_ts,
+                }
+            }
+        }
+    }
+
+    async fn append(
+        &mut self,
+        write_ts: T,
+        advance_to: T,
+        updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+    ) {
+        debug!(
+            "tables append timestamp={:?} advance_to={:?} len={} ids={:?}{}",
+            write_ts,
+            advance_to,
+            updates.iter().flat_map(|(_, x)| x).count(),
+            updates
+                .iter()
+                .map(|(x, _)| x.to_string())
+                .collect::<BTreeSet<_>>(),
+            updates.iter().filter(|(_, v)| !v.is_empty()).fold(
+                String::new(),
+                |mut output, (k, v)| {
+                    let _ = write!(output, "\n  {}: {:?}", k, v.first());
+                    output
+                }
+            )
+        );
+        // TODO: persist-txn doesn't take an advance_to yet, it uses
+        // timestamp.step_forward. This is the same in all cases, so just assert that
+        // for now. Note that this uses the _persist_ StepForward, not the
+        // TimestampManipulation one (the impls are the same) because that's what
+        // persist-txn uses.
+        assert_eq!(
+            advance_to,
+            mz_persist_types::StepForward::step_forward(&write_ts)
+        );
+
+        let mut txn = self.txns.begin();
+        for (id, updates) in updates {
+            let Some(data_id) = self.write_handles.get(&id) else {
+                // HACK: When creating a table we get an append that includes it
+                // before it's been registered. When this happens there are no
+                // updates, so it's ~fine to ignore it.
+                assert!(updates.is_empty(), "{}: {:?}", id, updates);
+                continue;
+            };
+            for update in updates {
+                let () = txn
+                    .write(data_id, SourceData(Ok(update.row)), (), update.diff)
+                    .await;
+            }
+        }
+        // Sneak in any txns shard tidying from previous commits.
+        txn.tidy(std::mem::take(&mut self.tidy));
+        let txn_res = txn.commit_at(&mut self.txns, write_ts.clone()).await;
+        let response = match txn_res {
+            Ok(apply) => {
+                // TODO: Do the applying in a background task. This will be a
+                // significant INSERT latency performance win.
+                debug!("applying {:?}", apply);
+                self.tidy.merge(apply.apply(&mut self.txns).await);
+                // Committing a txn advances the logical upper of _every_ data
+                // shard in the txns set, not just the ones that were written
+                // to, so send new upper information for all registered data
+                // shards.
+                let new_uppers = self
+                    .write_handles
+                    .keys()
+                    .map(|id| (*id, Antichain::from_elem(advance_to.clone())))
+                    .collect();
+                self.send_new_uppers(new_uppers);
+
+                // We don't serve any reads out of this TxnsHandle, so go ahead
+                // and compact as aggressively as we can (i.e. to the time we
+                // just wrote).
+                let () = self.txns.compact_to(write_ts).await;
+
+                Ok(())
+            }
+            Err(current) => {
+                self.tidy.merge(txn.take_tidy());
+                debug!(
+                    "unable to commit txn at {:?} current={:?}",
+                    write_ts, current
+                );
+                Err(StorageError::InvalidUppers(
+                    self.write_handles.keys().copied().collect(),
+                ))
+            }
+        };
+        // It is not an error for the other end to hang up.
+        let _ = tx.send(response);
+    }
+
+    fn send_new_uppers(&self, new_uppers: Vec<(GlobalId, Antichain<T>)>) {
+        // It is not strictly an error for the controller to hang up.
+        let _ = self
+            .frontier_responses
+            .send(StorageResponse::FrontierUppers(new_uppers));
     }
 }
 
@@ -555,9 +778,6 @@ enum PersistMonotonicWriteCmd<T: Timestamp + Lattice + Codec64> {
     Shutdown,
 }
 
-// TODO(txn): This impl is duplicative of PersistTableWriteWorker, but it's
-// an intermediate state. The impl of the table one will be completely replaced
-// by #20954.
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicWriteWorker<T> {
     pub(crate) fn new(
         frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
@@ -569,208 +789,137 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                 BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, Diff>>::new();
 
             let mut shutdown = false;
-            while !shutdown {
-                tokio::select! {
-                    cmd = rx.recv() => {
-                        if let Some(cmd) = cmd {
-                            // Peel off all available commands.
-                            // We do this in case we can consolidate commands.
-                            // It would be surprising to receive multiple concurrent `Append` commands,
-                            // but we might receive multiple *empty* `Append` commands.
-                            let mut commands = VecDeque::new();
-                            commands.push_back(cmd);
-                            while let Ok(cmd) = rx.try_recv() {
-                                commands.push_back(cmd);
+            while let Some(cmd) = rx.recv().await {
+                // Peel off all available commands.
+                // We do this in case we can consolidate commands.
+                // It would be surprising to receive multiple concurrent `Append` commands,
+                // but we might receive multiple *empty* `Append` commands.
+                let mut commands = VecDeque::new();
+                commands.push_back(cmd);
+                while let Ok(cmd) = rx.try_recv() {
+                    commands.push_back(cmd);
+                }
+
+                // Accumulated updates and upper frontier.
+                let mut all_updates = BTreeMap::default();
+                let mut all_responses = Vec::default();
+
+                while let Some((span, command)) = commands.pop_front() {
+                    match command {
+                        PersistMonotonicWriteCmd::Register(id, write_handle) => {
+                            let previous = write_handles.insert(id, write_handle);
+                            if previous.is_some() {
+                                panic!("already registered a WriteHandle for collection {:?}", id);
                             }
+                        }
+                        PersistMonotonicWriteCmd::Update(id, write_handle) => {
+                            write_handles.insert(id, write_handle).expect("PersistMonotonicWriteCmd::Update only valid for updating extant write handles");
+                        }
+                        PersistMonotonicWriteCmd::DropHandle(id) => {
+                            // n.b. this should only remove the
+                            // handle from the persist worker and
+                            // not take any additional action such
+                            // as closing the shard it's connected
+                            // to because dataflows might still be
+                            // using it.
+                            write_handles.remove(&id);
+                        }
+                        PersistMonotonicWriteCmd::Append(updates, response) => {
+                            let mut ids = BTreeSet::new();
+                            for (id, update, upper) in updates {
+                                ids.insert(id);
+                                let (old_span, updates, old_upper) =
+                                    all_updates.entry(id).or_insert_with(|| {
+                                        (
+                                            span.clone(),
+                                            Vec::default(),
+                                            Antichain::from_elem(T::minimum()),
+                                        )
+                                    });
 
-                            // Accumulated updates and upper frontier.
-                            let mut all_updates = BTreeMap::default();
-                            let mut all_responses = Vec::default();
-
-                            while let Some((span, command)) = commands.pop_front() {
-                                match command {
-                                    PersistMonotonicWriteCmd::Register(id, write_handle) => {
-                                        let previous = write_handles.insert(id, write_handle);
-                                        if previous.is_some() {
-                                            panic!(
-                                                "already registered a WriteHandle for collection {:?}",
-                                                id
-                                            );
-                                        }
-                                    }
-                                    PersistMonotonicWriteCmd::Update(id, write_handle) => {
-                                        write_handles.insert(id, write_handle).expect("PersistMonotonicWriteCmd::Update only valid for updating extant write handles");
-                                    },
-                                    PersistMonotonicWriteCmd::DropHandle(id) => {
-                                        // n.b. this should only remove the
-                                        // handle from the persist worker and
-                                        // not take any additional action such
-                                        // as closing the shard it's connected
-                                        // to because dataflows might still be
-                                        // using it.
-                                        write_handles.remove(&id);
-                                    }
-                                    PersistMonotonicWriteCmd::Append(updates, response) => {
-                                        let mut ids = BTreeSet::new();
-                                        for (id, update, upper) in updates {
-                                            ids.insert(id);
-                                            let (old_span, updates, old_upper) =
-                                                all_updates.entry(id).or_insert_with(|| {
-                                                    (
-                                                        span.clone(),
-                                                        Vec::default(),
-                                                        Antichain::from_elem(T::minimum()),
-                                                    )
-                                                });
-
-                                            if old_span.id() != span.id() {
-                                                // Link in any spans for `Append`
-                                                // operations that we lump together by
-                                                // doing this. This is not ideal,
-                                                // because we only have a true tracing
-                                                // history for the "first" span that we
-                                                // process, but it's better than
-                                                // nothing.
-                                                old_span.follows_from(span.id());
-                                            }
-                                            updates.extend(update);
-                                            old_upper.join_assign(&Antichain::from_elem(upper));
-                                        }
-                                        all_responses.push((ids, response));
-                                    }
-                                    PersistMonotonicWriteCmd::MonotonicAppend(updates, response) => {
-                                        let mut updates_outer = Vec::with_capacity(updates.len());
-                                        for (id, update, at_least) in updates {
-                                            let current_upper = write_handles[&id].upper().clone();
-                                            if update.is_empty() && current_upper.is_empty() {
-                                                // Ignore timestamp advancement for
-                                                // closed collections. TODO? Make this a
-                                                // correctable error
-                                                continue;
-                                            }
-
-                                            let lower = if current_upper.less_than(&at_least) {
-                                                at_least
-                                            } else {
-                                                current_upper.into_option().expect("cannot append data to closed collection")
-                                            };
-
-                                            let upper = lower.step_forward();
-                                            let update = update
-                                                .into_iter()
-                                                .map(|TimestamplessUpdate { row, diff }| Update {
-                                                    row,
-                                                    diff,
-                                                    timestamp: lower.clone(),
-                                                })
-                                                .collect::<Vec<_>>();
-
-                                            updates_outer.push((id, update, upper));
-                                        }
-                                        commands.push_front((
-                                            span,
-                                            PersistMonotonicWriteCmd::Append(updates_outer, response),
-                                        ));
-                                    }
-                                    PersistMonotonicWriteCmd::Shutdown => {
-                                        shutdown = true;
-                                    }
+                                if old_span.id() != span.id() {
+                                    // Link in any spans for `Append`
+                                    // operations that we lump together by
+                                    // doing this. This is not ideal,
+                                    // because we only have a true tracing
+                                    // history for the "first" span that we
+                                    // process, but it's better than
+                                    // nothing.
+                                    old_span.follows_from(span.id());
                                 }
+                                updates.extend(update);
+                                old_upper.join_assign(&Antichain::from_elem(upper));
                             }
-
-                            async fn append_work<T2: Timestamp + Lattice + Codec64>(
-                                frontier_responses: &tokio::sync::mpsc::UnboundedSender<
-                                    StorageResponse<T2>,
-                                >,
-                                write_handles: &mut BTreeMap<
-                                    GlobalId,
-                                    WriteHandle<SourceData, (), T2, Diff>,
-                                >,
-                                mut commands: BTreeMap<
-                                    GlobalId,
-                                    (tracing::Span, Vec<Update<T2>>, Antichain<T2>),
-                                >,
-                            ) -> Result<(), Vec<GlobalId>> {
-                                let futs = FuturesUnordered::new();
-
-                                // We cannot iterate through the updates and then set off a persist call
-                                // on the write handle because we cannot mutably borrow the write handle
-                                // multiple times.
-                                //
-                                // Instead, we first group the update by ID above and then iterate
-                                // through all available write handles and see if there are any updates
-                                // for it. If yes, we send them all in one go.
-                                for (id, write) in write_handles.iter_mut() {
-                                    if let Some((span, updates, new_upper)) = commands.remove(id) {
-                                        let persist_upper = write.upper().clone();
-                                        let updates = updates
-                                            .into_iter()
-                                            .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
-
-                                        futs.push(async move {
-                                            let persist_upper = persist_upper.clone();
-                                            write
-                                                .compare_and_append(
-                                                    updates.clone(),
-                                                    persist_upper.clone(),
-                                                    new_upper.clone(),
-                                                )
-                                                .instrument(span.clone())
-                                                .await
-                                                .expect("cannot append updates")
-                                                .or(Err(*id))?;
-
-                                            Ok::<_, GlobalId>((*id, new_upper))
-                                        })
-                                    }
+                            all_responses.push((ids, response));
+                        }
+                        PersistMonotonicWriteCmd::MonotonicAppend(updates, response) => {
+                            let mut updates_outer = Vec::with_capacity(updates.len());
+                            for (id, update, at_least) in updates {
+                                let current_upper = write_handles[&id].upper().clone();
+                                if update.is_empty() && current_upper.is_empty() {
+                                    // Ignore timestamp advancement for
+                                    // closed collections. TODO? Make this a
+                                    // correctable error
+                                    continue;
                                 }
 
-                                use futures::StreamExt;
-                                // Ensure all futures run to completion, and track status of each of them individually
-                                let (new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
-                                    .collect::<Vec<_>>()
-                                    .await
-                                    .into_iter()
-                                    .partition_result();
-
-                                // It is not strictly an error for the controller to hang up.
-                                let _ =
-                                    frontier_responses.send(StorageResponse::FrontierUppers(new_uppers));
-
-                                if failed_appends.is_empty() {
-                                    Ok(())
+                                let lower = if current_upper.less_than(&at_least) {
+                                    at_least
                                 } else {
-                                    Err(failed_appends)
-                                }
-                            }
-
-                            let result =
-                                append_work(&frontier_responses, &mut write_handles, all_updates).await;
-
-                            for (ids, response) in all_responses {
-                                let result = match &result {
-                                    Err(bad_ids) => {
-                                        let filtered: Vec<_> = bad_ids.iter().filter(|id| ids.contains(id)).copied().collect();
-                                        if filtered.is_empty() {
-                                            Ok(())
-                                        } else {
-                                            Err(StorageError::InvalidUppers(filtered))
-                                        }
-                                    }
-                                    Ok(()) => Ok(()),
+                                    current_upper
+                                        .into_option()
+                                        .expect("cannot append data to closed collection")
                                 };
-                                // It is not an error for the other end to hang up.
-                                let _ = response.send(result);
-                            }
 
-                            if shutdown {
-                                tracing::trace!("shutting down persist write append task");
-                                break;
+                                let upper = TimestampManipulation::step_forward(&lower);
+                                let update = update
+                                    .into_iter()
+                                    .map(|TimestamplessUpdate { row, diff }| Update {
+                                        row,
+                                        diff,
+                                        timestamp: lower.clone(),
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                updates_outer.push((id, update, upper));
                             }
-                        } else {
+                            commands.push_front((
+                                span,
+                                PersistMonotonicWriteCmd::Append(updates_outer, response),
+                            ));
+                        }
+                        PersistMonotonicWriteCmd::Shutdown => {
                             shutdown = true;
                         }
                     }
+                }
+
+                let result =
+                    append_work(&frontier_responses, &mut write_handles, all_updates).await;
+
+                for (ids, response) in all_responses {
+                    let result = match &result {
+                        Err(bad_ids) => {
+                            let filtered: Vec<_> = bad_ids
+                                .iter()
+                                .filter(|id| ids.contains(id))
+                                .copied()
+                                .collect();
+                            if filtered.is_empty() {
+                                Ok(())
+                            } else {
+                                Err(StorageError::InvalidUppers(filtered))
+                            }
+                        }
+                        Ok(()) => Ok(()),
+                    };
+                    // It is not an error for the other end to hang up.
+                    let _ = response.send(result);
+                }
+
+                if shutdown {
+                    tracing::trace!("shutting down persist write append task");
+                    break;
                 }
             }
 

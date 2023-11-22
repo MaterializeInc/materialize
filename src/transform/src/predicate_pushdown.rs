@@ -117,8 +117,8 @@ impl CheckedRecursion for PredicatePushdown {
 
 impl crate::Transform for PredicatePushdown {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "predicate_pushdown")
     )]
@@ -850,6 +850,7 @@ impl PredicatePushdown {
             // equivalences allow the predicate to be rewritten
             // in terms of only columns from that input.
             for (index, push_down) in push_downs.iter_mut().enumerate() {
+                #[allow(deprecated)] // TODO: use `might_error` if possible.
                 if predicate.is_literal_err() || predicate.contains_error_if_null() {
                     // Do nothing. We don't push down literal errors,
                     // as we can't know the join will be non-empty.

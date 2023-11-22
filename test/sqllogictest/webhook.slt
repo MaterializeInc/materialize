@@ -16,16 +16,6 @@ reset-server
 statement ok
 CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
-# We shouldn't be able to create a webhook source unless the feature is enabled.
-statement error creating or pushing data to webhook sources is not supported
-CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK
-    BODY FORMAT BYTES
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_webhook_sources = true
-----
-COMPLETE 0
-
 #
 # Happy Path, valid WEBHOOK sources
 #
@@ -193,28 +183,39 @@ CREATE SOURCE webhook_validation_with_subquery IN CLUSTER webhook_cluster FROM W
     headers->'signature' IN (select * from mz_tables)
   )
 
-statement error expression provided in CHECK is not deterministic
+# Some webhook providers (e.g. Stripe) suggest you should reject any request whose provided
+# timestamp is older than a certain threshold.
+
+statement ok
 CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (HEADERS)
-    headers->'signature' = to_char(now(), 'YYYY/MM/DD HH12:MM:SS')
+    (headers->'event_ts'::text)::timestamp + INTERVAL '30s' >= now()
+  )
+
+statement ok
+CREATE SOURCE webhook_validation_with_current_timestamp IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (HEADERS)
+    headers->'event_ts' = current_timestamp()::text
   )
 
 statement error expression provided in CHECK is not deterministic
-CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_validation_with_mz_now IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (HEADERS)
-    headers->'signature' = mz_now()::text
+    headers->'event_ts' = mz_now()::text
   )
 
 statement error expression provided in CHECK is not deterministic
-CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
+CREATE SOURCE webhook_validation_with_current_db IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT BYTES
   CHECK (
     WITH (HEADERS)
-    headers->'signature' = current_timestamp()::text
+    headers->'database' = current_database()
   )
 
 statement error unknown cluster 'i_do_not_exist'
@@ -222,7 +223,7 @@ CREATE SOURCE webhook_cluster_does_not_exist IN CLUSTER i_do_not_exist FROM WEBH
   BODY FORMAT BYTES;
 
 # Dropping without cascade should fail since there are sources using it.
-statement error cannot drop cluster with active objects
+statement error cannot drop cluster "webhook_cluster" because other objects depend on it
 DROP CLUSTER webhook_cluster;
 
 # Create a webhook source that uses secrets when validating.

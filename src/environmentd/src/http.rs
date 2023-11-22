@@ -43,9 +43,9 @@ use mz_frontegg_auth::{
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::server::{ConnectionHandler, Server};
 use mz_ore::str::StrExt;
 use mz_repr::user::ExternalUserMetadata;
+use mz_server_core::{ConnectionHandler, Server};
 use mz_sql::session::user::{
     User, HTTP_DEFAULT_USER, SUPPORT_USER, SUPPORT_USER_NAME, SYSTEM_USER, SYSTEM_USER_NAME,
 };
@@ -58,6 +58,7 @@ use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_openssl::SslStream;
+use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
@@ -75,7 +76,6 @@ mod webhook;
 
 pub use metrics::Metrics;
 pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
-pub use webhook::CONCURRENCY_LIMIT as WEBHOOK_CONCURRENCY_LIMIT;
 
 /// Maximum allowed size for a request.
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
@@ -87,7 +87,7 @@ pub struct HttpConfig {
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
-    pub concurrent_webhook_req_count: usize,
+    pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
 }
 
@@ -124,7 +124,7 @@ impl HttpServer {
             adapter_client,
             allowed_origin,
             active_connection_count,
-            concurrent_webhook_req_count,
+            concurrent_webhook_req,
             metrics,
         }: HttpConfig,
     ) -> HttpServer {
@@ -180,7 +180,9 @@ impl HttpServer {
                 ServiceBuilder::new()
                     .layer(HandleErrorLayer::new(handle_load_error))
                     .load_shed()
-                    .concurrency_limit(concurrent_webhook_req_count),
+                    .layer(GlobalConcurrencyLimitLayer::with_semaphore(
+                        concurrent_webhook_req,
+                    )),
             );
 
         let router = Router::new()
@@ -887,7 +889,7 @@ fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
         .route("/static/*path", routing::get(root::handle_static));
 
     if profiling {
-        router = router.nest("/prof/", mz_prof::http::router(&BUILD_INFO));
+        router = router.nest("/prof/", mz_prof_http::router(&BUILD_INFO));
     }
 
     router

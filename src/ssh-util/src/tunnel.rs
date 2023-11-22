@@ -13,7 +13,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::bail;
@@ -45,7 +45,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
 
 /// Specifies an SSH tunnel.
-#[derive(PartialEq, Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SshTunnelConfig {
     /// The hostname of the SSH bastion server.
     pub host: String,
@@ -68,6 +68,15 @@ impl fmt::Debug for SshTunnelConfig {
     }
 }
 
+/// The status of a running SSH tunnel.
+#[derive(Clone, Debug)]
+pub enum SshTunnelStatus {
+    /// The SSH tunnel is healthy.
+    Running,
+    /// The SSH tunnel is broken, with the given error message.
+    Errored(String),
+}
+
 impl SshTunnelConfig {
     /// Establishes a connection to the specified host and port via the
     /// configured SSH tunnel.
@@ -84,6 +93,10 @@ impl SshTunnelConfig {
             remote_host, remote_port, self.user, self.host, self.port,
         );
 
+        // N.B.
+        //
+        // We could probably move this into the look and use the above channel to report this
+        // initial connection error, but this is simpler and easier to read!
         info!(%tunnel_id, "connecting to ssh tunnel");
         let mut session = match connect(self).await {
             Ok(s) => s,
@@ -101,23 +114,32 @@ impl SshTunnelConfig {
         };
         info!(%tunnel_id, %local_port, "connected to ssh tunnel");
         let local_port = Arc::new(AtomicU16::new(local_port));
+        let status = Arc::new(Mutex::new(SshTunnelStatus::Running));
 
         let join_handle = task::spawn(|| format!("ssh_session_{remote_host}:{remote_port}"), {
             let config = self.clone();
             let remote_host = remote_host.to_string();
             let local_port = Arc::clone(&local_port);
+            let status = Arc::clone(&status);
             async move {
                 scopeguard::defer! {
                     info!(%tunnel_id, "terminating ssh tunnel");
                 }
+                let mut interval = time::interval(CHECK_INTERVAL);
+                // Just in case checking takes a long time.
+                interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+                // The first tick happens immediately.
+                interval.tick().await;
                 loop {
-                    time::sleep(CHECK_INTERVAL).await;
+                    interval.tick().await;
                     if let Err(e) = session.check().await {
                         warn!(%tunnel_id, "ssh tunnel unhealthy: {}", e.display_with_causes());
                         let s = match connect(&config).await {
                             Ok(s) => s,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
+                                *status.lock().expect("poisoned") =
+                                    SshTunnelStatus::Errored(e.to_string_with_causes());
                                 continue;
                             }
                         };
@@ -125,11 +147,14 @@ impl SshTunnelConfig {
                             Ok(lp) => lp,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
+                                *status.lock().expect("poisoned") =
+                                    SshTunnelStatus::Errored(e.to_string_with_causes());
                                 continue;
                             }
                         };
                         session = s;
-                        local_port.store(lp, Ordering::SeqCst)
+                        local_port.store(lp, Ordering::SeqCst);
+                        *status.lock().expect("poisoned") = SshTunnelStatus::Running;
                     }
                 }
             }
@@ -137,6 +162,7 @@ impl SshTunnelConfig {
 
         Ok(SshTunnelHandle {
             local_port,
+            status,
             _join_handle: join_handle.abort_on_drop(),
         })
     }
@@ -153,6 +179,7 @@ impl SshTunnelConfig {
 #[derive(Debug)]
 pub struct SshTunnelHandle {
     local_port: Arc<AtomicU16>,
+    status: Arc<Mutex<SshTunnelStatus>>,
     _join_handle: AbortOnDropHandle<()>,
 }
 
@@ -164,6 +191,14 @@ impl SshTunnelHandle {
         // that can resolve to IPv6, and the SSH tunnel is only listening for
         // IPv4 connections.
         SocketAddr::from((Ipv4Addr::LOCALHOST, port))
+    }
+
+    /// Returns the current status of the SSH tunnel.
+    ///
+    /// Note this status may be stale, as the health of the underlying SSH
+    /// tunnel is only checked periodically.
+    pub fn check_status(&self) -> SshTunnelStatus {
+        self.status.lock().expect("poisoned").clone()
     }
 }
 

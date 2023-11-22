@@ -27,12 +27,12 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{
     MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
 };
-use timely::dataflow::operators::{Leave, Map};
+use timely::dataflow::operators::Leave;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use tracing::warn;
 
-use crate::sink::SinkStatus;
+use crate::healthcheck::HealthStatusMessage;
 use crate::storage_state::StorageState;
 
 /// _Renders_ complete _differential_ [`Collection`]s
@@ -44,7 +44,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     tokens: &mut Vec<Rc<dyn std::any::Any>>,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
-) -> Stream<G, (usize, SinkStatus)> {
+) -> Stream<G, HealthStatusMessage> {
     let sink_render = get_sink_render_for(&sink.connection);
 
     let (ok_collection, err_collection, source_token) = persist_source::persist_source(
@@ -56,8 +56,6 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         timely::progress::Antichain::new(),
         None,
         None,
-        // Copy the logic in DeltaJoin/Get/Join to start.
-        |_timer, count| count > 1_000_000,
     );
     tokens.push(source_token);
 
@@ -76,7 +74,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         tokens.push(sink_token);
     }
 
-    health.map(|status| (0, status)).leave()
+    health.leave()
 }
 
 #[allow(clippy::borrowed_box)]
@@ -156,7 +154,7 @@ where
     // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
     //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
     let collection = match sink.envelope {
-        Some(SinkEnvelope::Debezium) => {
+        SinkEnvelope::Debezium => {
             // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
             // TODO(#17413): Revisit with cluster unification.
             #[allow(clippy::disallowed_methods)]
@@ -189,7 +187,7 @@ where
             });
             collection
         }
-        Some(SinkEnvelope::Upsert) => {
+        SinkEnvelope::Upsert => {
             // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
             // TODO(#17413): Revisit with cluster unification.
             #[allow(clippy::disallowed_methods)]
@@ -208,7 +206,6 @@ where
             });
             collection
         }
-        None => keyed.map(|(key, value)| (key, Some(value))),
     };
 
     collection
@@ -245,7 +242,7 @@ where
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-    ) -> (Stream<G, SinkStatus>, Option<Rc<dyn Any>>)
+    ) -> (Stream<G, HealthStatusMessage>, Option<Rc<dyn Any>>)
     where
         G: Scope<Timestamp = Timestamp>;
 }

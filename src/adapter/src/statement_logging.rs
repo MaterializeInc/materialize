@@ -10,8 +10,10 @@
 use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_repr::GlobalId;
 use uuid::Uuid;
 
+use crate::session::TransactionId;
 use crate::{AdapterError, ExecuteResponse};
 /// Contains all the information necessary to generate the initial
 /// entry in `mz_statement_execution_history`. We need to keep this
@@ -26,6 +28,10 @@ pub struct StatementBeganExecutionRecord {
     pub cluster_id: Option<ClusterId>,
     pub cluster_name: Option<String>,
     pub application_name: String,
+    pub transaction_isolation: String,
+    pub execution_timestamp: Option<EpochMillis>,
+    pub transaction_id: TransactionId,
+    pub transient_index_id: Option<GlobalId>,
 }
 
 #[derive(Clone, Copy, Debug)]

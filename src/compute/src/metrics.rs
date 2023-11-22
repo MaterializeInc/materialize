@@ -8,8 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{raw, MetricsRegistry, UIntGauge};
+use mz_repr::SharedRow;
 use prometheus::core::{AtomicF64, GenericCounter};
 use prometheus::Histogram;
 
@@ -47,6 +49,11 @@ pub struct ComputeMetrics {
     // yielding, but it should hopefully alert us when there is something to
     // look at.
     pub(crate) timely_step_duration_seconds: Histogram,
+
+    pub(crate) delayed_time_seconds_total: raw::CounterVec,
+
+    /// Heap capacity of the shared row
+    pub(crate) shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
 }
 
 impl ComputeMetrics {
@@ -87,6 +94,17 @@ impl ComputeMetrics {
                 help: "The time spent in each compute step_or_park call",
                 const_labels: {"cluster" => "compute"},
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
+            )),
+            delayed_time_seconds_total: registry.register(metric!(
+                name: "mz_dataflow_delayed_time_seconds_total",
+                help: "The total time dataflow outputs were delayed relative to their inputs.",
+                const_labels: {"cluster" => "compute"},
+                var_labels: ["worker_id"],
+            )),
+            shared_row_heap_capacity_bytes: registry.register(metric!(
+                name: "mz_dataflow_shared_row_heap_capacity_bytes",
+                help: "The heap capacity of the shared row.",
+                var_labels: ["worker_id"],
             ))
         }
     }
@@ -117,6 +135,17 @@ impl ComputeMetrics {
         TraceMetrics {
             maintenance_seconds_total,
             maintenance_active_info,
+        }
+    }
+
+    pub fn for_logging(&self, worker_id: usize) -> LoggingMetrics {
+        let worker = worker_id.to_string();
+        let delayed_time_seconds_total = self
+            .delayed_time_seconds_total
+            .with_label_values(&[&worker]);
+
+        LoggingMetrics {
+            delayed_time_seconds_total,
         }
     }
 
@@ -151,6 +180,16 @@ impl ComputeMetrics {
                 .inc();
         }
     }
+
+    /// Record the heap capacity of the shared row.
+    pub fn record_shared_row_metrics(&self, worker_id: usize) {
+        let worker = worker_id.to_string();
+
+        let binding = SharedRow::get();
+        self.shared_row_heap_capacity_bytes
+            .with_label_values(&[&worker])
+            .set(u64::cast_from(binding.borrow().heap_capacity()));
+    }
 }
 
 /// Metrics maintained by the trace manager.
@@ -162,4 +201,10 @@ pub struct TraceMetrics {
     /// to gain a sense that Materialize is stuck on maintenance before the
     /// maintenance completes
     pub maintenance_active_info: UIntGauge,
+}
+
+/// Metrics maintained by the logging dataflows.
+#[derive(Clone)]
+pub struct LoggingMetrics {
+    pub delayed_time_seconds_total: GenericCounter<AtomicF64>,
 }

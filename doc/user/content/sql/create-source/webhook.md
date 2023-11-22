@@ -155,7 +155,10 @@ CREATE SOURCE my_webhook_source IN CLUSTER my_cluster FROM WEBHOOK
       HEADERS, BODY AS request_body,
       SECRET my_webhook_shared_secret
     )
-    decode(headers->'x-signature', 'base64') = hmac(request_body, my_webhook_shared_secret, 'sha256')
+    constant_time_eq(
+        decode(headers->'x-signature', 'base64'),
+        hmac(request_body, my_webhook_shared_secret, 'sha256')
+    )
   );
 ```
 
@@ -189,7 +192,10 @@ Once you have a few events in _my_webhook_temporary_debug_, you can query it wit
 ```sql
 SELECT
   -- Your would-be CHECK statement.
-  decode(headers->'signature', 'base64') = hmac(headers->'timestamp' || body, 'my key', 'sha512')
+  constant_time_eq(
+    decode(headers->'signature', 'base64'),
+    hmac(headers->'timestamp' || body, 'my key', 'sha512')
+  )
 FROM my_webhook_temporary_debug
 LIMIT 10;
 ```
@@ -291,7 +297,7 @@ FROM WEBHOOK
         BODY AS request_body,
         SECRET basic_hook_auth
       )
-      headers->'authorization' = BASIC_HOOK_AUTH
+      constant_time_eq(headers->'authorization', BASIC_HOOK_AUTH)
     );
 ```
 
@@ -325,7 +331,7 @@ CREATE SOURCE my_event_bridge_source IN CLUSTER my_cluster FROM WEBHOOK
   INCLUDE HEADERS ( NOT 'x-mz-api-key' )
   CHECK (
     WITH ( HEADERS, SECRET event_bridge_api_key AS secret)
-    headers->'x-mz-api-key' = secret
+    constant_time_eq(headers->'x-mz-api-key', secret)
   );
 ```
 

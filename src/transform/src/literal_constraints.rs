@@ -41,8 +41,8 @@ pub struct LiteralConstraints;
 
 impl crate::Transform for LiteralConstraints {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "literal_constraints")
     )]

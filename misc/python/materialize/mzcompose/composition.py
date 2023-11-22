@@ -23,6 +23,7 @@ import inspect
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import time
@@ -248,6 +249,7 @@ class Composition:
         stdin: str | None = None,
         check: bool = True,
         max_tries: int = 1,
+        silent: bool = False,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
 
@@ -260,8 +262,8 @@ class Composition:
             input: A string to provide as stdin for the command.
         """
 
-        if not self.silent:
-            print(f"$ docker compose {' '.join(args)}", file=sys.stderr)
+        if not self.silent and not silent:
+            print(f"--- docker compose {' '.join(args)}", file=sys.stderr)
 
         self.file.seek(0)
 
@@ -322,7 +324,9 @@ class Composition:
             service: The name of a service in the composition.
             private_port: A private port exposed by the service.
         """
-        proc = self.invoke("port", service, str(private_port), capture=True)
+        proc = self.invoke(
+            "port", service, str(private_port), capture=True, silent=True
+        )
         if not proc.stdout.strip():
             raise UIError(
                 f"service f{service!r} is not exposing port {private_port!r}",
@@ -419,9 +423,9 @@ class Composition:
                     not in self.compose["services"]["materialized"]["labels"]
                 ):
                     print("sanity_restart disabled by override(), keeping it disabled")
-                    old_compose["services"]["materialized"]["labels"].remove(
+                    del old_compose["services"]["materialized"]["labels"][
                         "sanity_restart"
-                    )
+                    ]
 
             # Restore the old composition.
             self.compose = old_compose
@@ -471,7 +475,7 @@ class Composition:
             ui.header(f"mzcompose: test case {name} succeeded")
         except Exception as e:
             error = f"{str(type(e))}: {e}"
-            print(f"mzcompose: test case {name} failed: {error}", file=sys.stderr)
+            ui.header(f"mzcompose: test case {name} failed: {error}")
 
             if not isinstance(e, UIError):
                 traceback.print_exc()
@@ -484,10 +488,17 @@ class Composition:
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> Connection:
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
-        conn = pg8000.connect(host="localhost", user=user, password=password, port=port)
+        conn = pg8000.connect(
+            host="localhost",
+            user=user,
+            password=password,
+            port=port,
+            ssl_context=ssl_context,
+        )
         conn.autocommit = True
         return conn
 
@@ -497,9 +508,10 @@ class Composition:
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
-        conn = self.sql_connection(service, user, port, password)
+        conn = self.sql_connection(service, user, port, password, ssl_context)
         return conn.cursor()
 
     def sql(
@@ -534,6 +546,9 @@ class Composition:
         ) as cursor:
             cursor.execute(sql)
             return cursor.fetchall()
+
+    def query_mz_version(self) -> str:
+        return self.sql_query("SELECT mz_version()")[0][0]
 
     def run(
         self,
@@ -625,7 +640,7 @@ class Composition:
         )
 
     def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
-        """Pull fresh service images in case the tag indicates thee underlying image may change over time.
+        """Pull fresh service images in case the tag indicates the underlying image may change over time.
 
         Args:
             services: List of service names
@@ -633,10 +648,26 @@ class Composition:
 
         for service in services:
             if "image" in self.compose["services"][service] and any(
-                self.compose["services"][service]["image"].endswith(tag)
+                tag in self.compose["services"][service]["image"]
                 for tag in [":latest", ":unstable", ":rolling"]
             ):
-                self.invoke("pull", service, max_tries=max_tries)
+                self.pull_single_image_by_service_name(service, max_tries=max_tries)
+
+    def pull_single_image_by_service_name(
+        self, service_name: str, max_tries: int
+    ) -> None:
+        self.invoke("pull", service_name, max_tries=max_tries)
+
+    def try_pull_service_image(self, service: Service, max_tries: int = 2) -> bool:
+        """Tries to pull the specified image and returns if this was successful."""
+        try:
+            with self.override(service):
+                self.pull_single_image_by_service_name(
+                    service.name, max_tries=max_tries
+                )
+                return True
+        except UIError:
+            return False
 
     def up(
         self,

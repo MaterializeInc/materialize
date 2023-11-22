@@ -19,7 +19,7 @@ $ set schema={
 $ kafka-create-topic topic=foobar
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE foobar FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foobar-${testdrive.seed}')

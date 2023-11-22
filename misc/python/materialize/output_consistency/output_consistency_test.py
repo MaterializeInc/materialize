@@ -29,7 +29,10 @@ from materialize.output_consistency.generators.expression_generator import (
 )
 from materialize.output_consistency.generators.query_generator import QueryGenerator
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
-    InconsistencyIgnoreFilter,
+    GenericInconsistencyIgnoreFilter,
+)
+from materialize.output_consistency.ignore_filter.internal_output_inconsistency_ignore_filter import (
+    InternalOutputInconsistencyIgnoreFilter,
 )
 from materialize.output_consistency.input_data.scenarios.evaluation_scenario import (
     EvaluationScenario,
@@ -141,7 +144,9 @@ class OutputConsistencyTest:
 
         randomized_picker = RandomizedPicker(config)
 
-        ignore_filter = self.create_inconsistency_ignore_filter()
+        sql_executors = self.create_sql_executors(config, connection, output_printer)
+
+        ignore_filter = self.create_inconsistency_ignore_filter(sql_executors)
 
         expression_generator = ExpressionGenerator(
             config, randomized_picker, input_data
@@ -150,7 +155,13 @@ class OutputConsistencyTest:
             config, randomized_picker, input_data, ignore_filter
         )
         output_comparator = self.create_result_comparator(ignore_filter)
-        sql_executors = self.create_sql_executors(config, connection, output_printer)
+
+        output_printer.print_info(sql_executors.get_database_infos())
+        output_printer.print_empty_line()
+
+        if not self.shall_run(sql_executors):
+            output_printer.print_info("Not running the test, criteria are not met.")
+            return ConsistencyTestSummary()
 
         test_runner = ConsistencyTestRunner(
             config,
@@ -180,24 +191,31 @@ class OutputConsistencyTest:
 
         return test_summary
 
+    def shall_run(self, sql_executors: SqlExecutors) -> bool:
+        return True
+
     def create_sql_executors(
         self,
         config: ConsistencyTestConfiguration,
         connection: Connection,
         output_printer: OutputPrinter,
     ) -> SqlExecutors:
-        return SqlExecutors(create_sql_executor(config, connection, output_printer))
+        return SqlExecutors(
+            create_sql_executor(config, connection, output_printer, "mz")
+        )
 
     def get_scenario(self) -> EvaluationScenario:
         return EvaluationScenario.OUTPUT_CONSISTENCY
 
     def create_result_comparator(
-        self, ignore_filter: InconsistencyIgnoreFilter
+        self, ignore_filter: GenericInconsistencyIgnoreFilter
     ) -> ResultComparator:
         return ResultComparator(ignore_filter)
 
-    def create_inconsistency_ignore_filter(self) -> InconsistencyIgnoreFilter:
-        return InconsistencyIgnoreFilter()
+    def create_inconsistency_ignore_filter(
+        self, sql_executors: SqlExecutors
+    ) -> GenericInconsistencyIgnoreFilter:
+        return InternalOutputInconsistencyIgnoreFilter()
 
     def create_evaluation_strategies(self) -> list[EvaluationStrategy]:
         return [

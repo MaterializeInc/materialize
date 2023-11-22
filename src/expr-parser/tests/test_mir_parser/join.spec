@@ -20,7 +20,7 @@ roundtrip OK
 
 # Equi-Join
 roundtrip
-Join on=((#1 + #2) = #4 AND eq(#0, #3, #6) AND #5 = #8)
+Join on=((#1 + #2) = #4 AND #0 = #3 = #6 = #7 AND #5 = #8)
   Constant // { types: "(bigint, bigint, text)" }
     - (1, 2, "oh, my!")
   Constant // { types: "(bigint, bigint, text)" }
@@ -32,7 +32,7 @@ roundtrip OK
 
 # Equi-Join
 roundtrip
-Join on=((#0 + #1) = #3 AND eq(#2, #5, #8) AND #4 = (#6 + #7))
+Join on=((#0 + #1) = #3 AND #2 = #5 = #8 AND #4 = (#6 + #7))
   Constant // { types: "(bigint, bigint, text)" }
     - (1, 2, "oh, my!")
   Constant // { types: "(bigint, bigint, text)" }

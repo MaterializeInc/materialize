@@ -106,7 +106,7 @@ SELECT a FROM (SELECT DISTINCT a FROM x UNION ALL SELECT a FROM y) WHERE a = 3
 ----
 Filter (#0 = 3) // { arity: 1 }
   Union // { arity: 1 }
-    Distinct group_by=[#0] // { arity: 1 }
+    Distinct project=[#0] // { arity: 1 }
       Project (#0) // { arity: 1 }
         CrossJoin // { arity: 3 }
           Constant // { arity: 0 }
@@ -126,7 +126,7 @@ SELECT a FROM (SELECT DISTINCT a FROM x UNION ALL SELECT a FROM y) WHERE a = 3
 Explained Query:
   Union // { arity: 1 }
     Map (3) // { arity: 1 }
-      Distinct // { arity: 0 }
+      Distinct project=[] // { arity: 0 }
         Project () // { arity: 0 }
           Filter (#0 = 3) // { arity: 3 }
             ReadStorage materialize.public.x // { arity: 3 }
@@ -330,9 +330,11 @@ Explained Query:
     Get::PassArrangements materialize.public.t1
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
     Get::PassArrangements materialize.public.t2
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t1_f1_ind (differential join)
@@ -443,7 +445,7 @@ Explained Query:
             Project (#0)
               Join on=(#0 = #1) type=differential
                 ArrangeBy keys=[[#0]]
-                  Distinct group_by=[#0]
+                  Distinct project=[#0]
                     Get l0
                 ArrangeBy keys=[[#0]]
                   Project (#0)
@@ -679,7 +681,7 @@ SELECT * FROM ((SELECT * FROM c2) UNION (SELECT * FROM c0));
 ----
 Explained Query:
   Return
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Union
         Get l2
         Get l0

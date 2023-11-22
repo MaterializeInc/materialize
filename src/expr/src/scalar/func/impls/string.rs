@@ -478,11 +478,11 @@ impl LazyUnaryFunc for CastStringToMap {
             ),
             |value_text| -> Result<Datum, EvalError> {
                 let value_text = match value_text {
-                    Cow::Owned(s) => temp_storage.push_string(s),
-                    Cow::Borrowed(s) => s,
+                    Some(Cow::Owned(s)) => Datum::String(temp_storage.push_string(s)),
+                    Some(Cow::Borrowed(s)) => Datum::String(s),
+                    None => Datum::Null,
                 };
-                self.cast_expr
-                    .eval(&[Datum::String(value_text)], temp_storage)
+                self.cast_expr.eval(&[value_text], temp_storage)
             },
         )?;
         let mut pairs: Vec<(String, Datum)> = parsed_map.into_iter().map(|(k, v)| (k, v)).collect();
@@ -1043,7 +1043,10 @@ impl LazyUnaryFunc for QuoteIdent {
             return Ok(Datum::Null);
         }
         let v = d.unwrap_str();
-        let i = mz_sql_parser::ast::Ident::from(v);
+        let i = mz_sql_parser::ast::Ident::new(v).map_err(|err| EvalError::InvalidIdentifier {
+            ident: v.to_string(),
+            detail: Some(err.to_string()),
+        })?;
         let r = temp_storage.push_string(i.to_string());
 
         Ok(Datum::String(r))

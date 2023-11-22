@@ -25,11 +25,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, CreateConnection, CreateConnectionOption, CreateSinkConnection,
-    CreateSourceConnection, CreateSourceFormat, CreateSourceOption, CreateSourceOptionName,
-    DeferredItemName, Envelope, Expr, Format, Ident, KeyConstraint, Query, SelectItem,
-    SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint, TableWithJoins,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AstInfo, ColumnDef, ConnectionOption, CreateConnectionOption, CreateConnectionType,
+    CreateSinkConnection, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
+    CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident, KeyConstraint,
+    MaterializedViewOption, Query, SelectItem, SourceIncludeMetadata, SubscribeOutput, TableAlias,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -85,6 +86,7 @@ pub enum Statement<T: AstInfo> {
     Subscribe(SubscribeStatement<T>),
     ExplainPlan(ExplainPlanStatement<T>),
     ExplainTimestamp(ExplainTimestampStatement<T>),
+    ExplainSinkSchema(ExplainSinkSchemaStatement<T>),
     Declare(DeclareStatement<T>),
     Fetch(FetchStatement<T>),
     Close(CloseStatement),
@@ -153,6 +155,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Subscribe(stmt) => f.write_node(stmt),
             Statement::ExplainPlan(stmt) => f.write_node(stmt),
             Statement::ExplainTimestamp(stmt) => f.write_node(stmt),
+            Statement::ExplainSinkSchema(stmt) => f.write_node(stmt),
             Statement::Declare(stmt) => f.write_node(stmt),
             Statement::Close(stmt) => f.write_node(stmt),
             Statement::Fetch(stmt) => f.write_node(stmt),
@@ -224,6 +227,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Subscribe => "subscribe",
         StatementKind::ExplainPlan => "explain_plan",
         StatementKind::ExplainTimestamp => "explain_timestamp",
+        StatementKind::ExplainSinkSchema => "explain_sink_schema",
         StatementKind::Declare => "declare",
         StatementKind::Fetch => "fetch",
         StatementKind::Close => "close",
@@ -618,12 +622,13 @@ impl<T: AstInfo> AstDisplay for KafkaBrokerAwsPrivatelink<T> {
 }
 impl_display_t!(KafkaBrokerAwsPrivatelink);
 
-/// `CREATE CONNECTION`
+/// `CREATE CONNECTION` refactor WIP
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateConnectionStatement<T: AstInfo> {
     pub name: UnresolvedItemName,
-    pub connection: CreateConnection<T>,
+    pub connection_type: CreateConnectionType,
     pub if_not_exists: bool,
+    pub values: Vec<ConnectionOption<T>>,
     pub with_options: Vec<CreateConnectionOption<T>>,
 }
 
@@ -635,7 +640,11 @@ impl<T: AstInfo> AstDisplay for CreateConnectionStatement<T> {
         }
         f.write_node(&self.name);
         f.write_str(" TO ");
-        self.connection.fmt(f);
+        self.connection_type.fmt(f);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.values));
+        f.write_str(")");
+
         if !self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
@@ -1130,7 +1139,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkOption<T> {
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
-    pub name: UnresolvedItemName,
+    pub name: Option<UnresolvedItemName>,
     pub in_cluster: Option<T::ClusterName>,
     pub if_not_exists: bool,
     pub from: T::ItemName,
@@ -1146,12 +1155,16 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         if self.if_not_exists {
             f.write_str("IF NOT EXISTS ");
         }
-        f.write_node(&self.name);
-        if let Some(cluster) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
-            f.write_node(cluster);
+        if let Some(name) = &self.name {
+            f.write_node(&name);
+            f.write_str(" ");
         }
-        f.write_str(" FROM ");
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str("IN CLUSTER ");
+            f.write_node(cluster);
+            f.write_str(" ");
+        }
+        f.write_str("FROM ");
         f.write_node(&self.from);
         f.write_str(" INTO ");
         f.write_node(&self.connection);
@@ -1235,7 +1248,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
-    pub non_null_assertions: Vec<Ident>,
+    pub with_options: Vec<MaterializedViewOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
@@ -1265,15 +1278,9 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
             f.write_node(cluster);
         }
 
-        if !self.non_null_assertions.is_empty() {
+        if !self.with_options.is_empty() {
             f.write_str(" WITH (");
-            for (i, nna) in self.non_null_assertions.iter().enumerate() {
-                f.write_str("ASSERT NOT NULL ");
-                f.write_node(nna);
-                if i + 1 != self.non_null_assertions.len() {
-                    f.write_str(", ")
-                }
-            }
+            f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
 
@@ -1947,17 +1954,18 @@ impl_display!(AlterObjectRenameStatement);
 pub struct AlterObjectSwapStatement {
     pub object_type: ObjectType,
     pub name_a: UnresolvedObjectName,
-    pub name_b: UnresolvedObjectName,
+    pub name_b: Ident,
 }
 
 impl AstDisplay for AlterObjectSwapStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER ");
-        f.write_node(&self.object_type);
-        f.write_str(" SWAP ");
 
-        f.write_node(&self.name_a);
+        f.write_node(&self.object_type);
         f.write_str(" ");
+        f.write_node(&self.name_a);
+
+        f.write_str(" SWAP WITH ");
         f.write_node(&self.name_b);
     }
 }
@@ -2448,6 +2456,13 @@ pub enum ShowObjectType<T: AstInfo> {
         object_type: Option<SystemObjectType>,
         role: Option<T::RoleName>,
     },
+    DefaultPrivileges {
+        object_type: Option<ObjectType>,
+        role: Option<T::RoleName>,
+    },
+    RoleMembership {
+        role: Option<T::RoleName>,
+    },
 }
 /// `SHOW <object>S`
 ///
@@ -2487,6 +2502,8 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Schema { .. } => "SCHEMAS",
             ShowObjectType::Subsource { .. } => "SUBSOURCES",
             ShowObjectType::Privileges { .. } => "PRIVILEGES",
+            ShowObjectType::DefaultPrivileges { .. } => "DEFAULT PRIVILEGES",
+            ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -2539,6 +2556,26 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
                 f.write_str(" FOR ");
                 f.write_node(role);
             }
+        }
+
+        if let ShowObjectType::DefaultPrivileges { object_type, role } = &self.object_type {
+            if let Some(object_type) = object_type {
+                f.write_str(" ON ");
+                f.write_node(object_type);
+                f.write_str("S");
+            }
+            if let Some(role) = role {
+                f.write_str(" FOR ");
+                f.write_node(role);
+            }
+        }
+
+        if let ShowObjectType::RoleMembership {
+            role: Some(role), ..
+        } = &self.object_type
+        {
+            f.write_str(" FOR ");
+            f.write_node(role);
         }
 
         if let Some(filter) = &self.filter {
@@ -2847,6 +2884,30 @@ impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
     }
 }
 impl_display_t!(ExplainPlanStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplainSinkSchemaFor {
+    Key,
+    Value,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainSinkSchemaStatement<T: AstInfo> {
+    pub schema_for: ExplainSinkSchemaFor,
+    pub statement: CreateSinkStatement<T>,
+}
+
+impl<T: AstInfo> AstDisplay for ExplainSinkSchemaStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXPLAIN ");
+        match &self.schema_for {
+            ExplainSinkSchemaFor::Key => f.write_str("KEY"),
+            ExplainSinkSchemaFor::Value => f.write_str("VALUE"),
+        }
+        f.write_str(" SCHEMA AS JSON FOR ");
+        f.write_node(&self.statement);
+    }
+}
+impl_display_t!(ExplainSinkSchemaStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainTimestampStatement<T: AstInfo> {

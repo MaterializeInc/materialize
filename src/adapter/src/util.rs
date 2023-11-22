@@ -189,13 +189,13 @@ pub fn index_sql(
     use mz_sql::ast::{Expr, Value};
 
     CreateIndexStatement::<Raw> {
-        name: Some(Ident::new(index_name)),
+        name: Some(Ident::new_unchecked(index_name)),
         on_name: RawItemName::Name(mz_sql::normalize::unresolve(view_name)),
         in_cluster: Some(RawClusterName::Resolved(cluster_id.to_string())),
         key_parts: Some(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
+                    Some(n) => Expr::Identifier(vec![Ident::new_unchecked(n.to_string())]),
                     _ => Expr::Value(Value::Number((i + 1).to_string())),
                 })
                 .collect(),
@@ -300,7 +300,7 @@ impl ShouldHalt for crate::catalog::Error {
     }
 }
 
-impl ShouldHalt for mz_catalog::CatalogError {
+impl ShouldHalt for mz_catalog::durable::CatalogError {
     fn should_halt(&self) -> bool {
         match &self {
             Self::Durable(e) => e.should_halt(),
@@ -309,7 +309,7 @@ impl ShouldHalt for mz_catalog::CatalogError {
     }
 }
 
-impl ShouldHalt for mz_catalog::DurableCatalogError {
+impl ShouldHalt for mz_catalog::durable::DurableCatalogError {
     fn should_halt(&self) -> bool {
         self.is_unrecoverable()
     }
@@ -331,7 +331,7 @@ impl ShouldHalt for StorageError {
             | StorageError::ExportInstanceMissing { .. }
             | StorageError::Generic(_)
             | StorageError::DataflowError(_)
-            | StorageError::InvalidAlterSource { .. }
+            | StorageError::InvalidAlter { .. }
             | StorageError::ShuttingDown(_) => false,
             StorageError::IOError(e) => e.is_unrecoverable(),
         }

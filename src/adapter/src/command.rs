@@ -8,37 +8,30 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::Context;
 use derivative::Derivative;
 use enum_kinds::EnumKind;
 use futures::future::BoxFuture;
+use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnType, Datum, GlobalId, Row, RowArena};
-use mz_secrets::cache::CachingSecretsReader;
-use mz_secrets::SecretsReader;
+use mz_repr::{GlobalId, Row};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
-use mz_sql::plan::{
-    ExecuteTimeout, Plan, PlanKind, WebhookHeaders, WebhookValidation, WebhookValidationSecret,
-};
+use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{OwnedVarInput, Var};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
-use mz_storage_client::controller::MonotonicAppender;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
@@ -46,6 +39,7 @@ use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::util::Transmittable;
+use crate::webhook::AppendWebhookResponse;
 use crate::AdapterNotice;
 
 #[derive(Debug)]
@@ -258,199 +252,6 @@ impl IntoIterator for GetVariablesResponse {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
-    }
-}
-
-/// Errors returns when running validation of a webhook request.
-#[derive(thiserror::Error, Debug)]
-pub enum AppendWebhookError {
-    // A secret that we need for validation has gone missing.
-    #[error("could not read a required secret")]
-    MissingSecret,
-    #[error("the provided request body is not UTF-8")]
-    NonUtf8Body,
-    // Note: we should _NEVER_ add more detail to this error, including the actual error we got
-    // when running validation. This is because the error messages might contain info about the
-    // arguments provided to the validation expression, we could contains user SECRETs. So by
-    // including any more detail we might accidentally expose SECRETs.
-    #[error("validation failed")]
-    ValidationError,
-    // Note: we should _NEVER_ add more detail to this error, see above as to why.
-    #[error("internal error when validating request")]
-    InternalError,
-}
-
-/// Contains all of the components necessary for running webhook validation.
-///
-/// To actually validate a webhook request call [`AppendWebhookValidator::eval`].
-pub struct AppendWebhookValidator {
-    validation: WebhookValidation,
-    secrets_reader: CachingSecretsReader,
-}
-
-impl AppendWebhookValidator {
-    pub fn new(validation: WebhookValidation, secrets_reader: CachingSecretsReader) -> Self {
-        AppendWebhookValidator {
-            validation,
-            secrets_reader,
-        }
-    }
-
-    pub async fn eval(
-        self,
-        body: bytes::Bytes,
-        headers: Arc<BTreeMap<String, String>>,
-    ) -> Result<bool, AppendWebhookError> {
-        let AppendWebhookValidator {
-            validation,
-            secrets_reader,
-        } = self;
-
-        let WebhookValidation {
-            expression,
-            secrets,
-            bodies: body_columns,
-            headers: header_columns,
-        } = validation;
-
-        // Use the secrets reader to get any secrets.
-        let mut secret_contents = BTreeMap::new();
-        for WebhookValidationSecret {
-            id,
-            column_idx,
-            use_bytes,
-        } in secrets
-        {
-            let secret = secrets_reader
-                .read(id)
-                .await
-                .map_err(|_| AppendWebhookError::MissingSecret)?;
-            secret_contents.insert(column_idx, (secret, use_bytes));
-        }
-
-        // Create a closure to run our validation, this allows lifetimes and unwind boundaries to
-        // work.
-        let validate = move || {
-            // Gather our Datums for evaluation
-            //
-            // TODO(parkmycar): Re-use the RowArena when we implement rate limiting.
-            let temp_storage = RowArena::default();
-            let mut datums = Vec::with_capacity(
-                body_columns.len() + header_columns.len() + secret_contents.len(),
-            );
-
-            // Append all of our body columns.
-            for (column_idx, use_bytes) in body_columns {
-                assert_eq!(column_idx, datums.len(), "body index and datums mismatch!");
-
-                let datum = if use_bytes {
-                    Datum::Bytes(&body[..])
-                } else {
-                    let s = std::str::from_utf8(&body[..])
-                        .map_err(|_| AppendWebhookError::NonUtf8Body)?;
-                    Datum::String(s)
-                };
-                datums.push(datum);
-            }
-
-            // Append all of our header columns, re-using Row packings.
-            //
-            // TODO(parkmycar): Use `std::cell::OnceCell` when #20779 merges.
-            let headers_byte = once_cell::unsync::OnceCell::new();
-            let headers_text = once_cell::unsync::OnceCell::new();
-            for (column_idx, use_bytes) in header_columns {
-                assert_eq!(column_idx, datums.len(), "index and datums mismatch!");
-
-                let row = if use_bytes {
-                    headers_byte.get_or_init(|| {
-                        let mut row = Row::with_capacity(1);
-                        let mut packer = row.packer();
-                        packer.push_dict(
-                            headers
-                                .iter()
-                                .map(|(name, val)| (name.as_str(), Datum::Bytes(val.as_bytes()))),
-                        );
-                        row
-                    })
-                } else {
-                    headers_text.get_or_init(|| {
-                        let mut row = Row::with_capacity(1);
-                        let mut packer = row.packer();
-                        packer.push_dict(
-                            headers
-                                .iter()
-                                .map(|(name, val)| (name.as_str(), Datum::String(val))),
-                        );
-                        row
-                    })
-                };
-                datums.push(row.unpack_first());
-            }
-
-            // Append all of our secrets to our datums, in the correct column order.
-            for column_idx in datums.len()..datums.len() + secret_contents.len() {
-                // Get the secret that corresponds with what is the next "column";
-                let (secret, use_bytes) = secret_contents
-                    .get(&column_idx)
-                    .expect("more secrets to provide, but none for the next column");
-
-                if *use_bytes {
-                    datums.push(Datum::Bytes(secret));
-                } else {
-                    let secret_str = std::str::from_utf8(&secret[..]).expect("valid UTF-8");
-                    datums.push(Datum::String(secret_str));
-                }
-            }
-
-            // Run our validation
-            let valid = expression
-                .eval(&datums[..], &temp_storage)
-                .map_err(|_| AppendWebhookError::ValidationError)?;
-            match valid {
-                Datum::True => Ok::<_, AppendWebhookError>(true),
-                Datum::False | Datum::Null => Ok(false),
-                _ => unreachable!("Creating a webhook source asserts we return a boolean"),
-            }
-        };
-
-        // Then run the validation itself.
-        let valid = mz_ore::task::spawn_blocking(
-            || "webhook-validator-expr",
-            move || {
-                // Since the validation expression is technically a user defined function, we want to
-                // be extra careful and guard against issues taking down the entire process.
-                mz_ore::panic::catch_unwind(validate).map_err(|_| {
-                    tracing::error!("panic while validating webhook request!");
-                    AppendWebhookError::InternalError
-                })
-            },
-        )
-        .await
-        .context("joining on validation")
-        .map_err(|e| {
-            tracing::error!("Failed to run validation for webhook, {e}");
-            AppendWebhookError::InternalError
-        })??;
-
-        valid
-    }
-}
-
-pub struct AppendWebhookResponse {
-    pub tx: MonotonicAppender,
-    pub body_ty: ColumnType,
-    pub header_tys: WebhookHeaders,
-    pub validator: Option<AppendWebhookValidator>,
-}
-
-impl fmt::Debug for AppendWebhookResponse {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AppendWebhookResponse")
-            .field("tx", &self.tx)
-            .field("body_ty", &self.body_ty)
-            .field("header_tys", &self.header_tys)
-            .field("validate_expr", &"(...)")
-            .finish()
     }
 }
 
@@ -797,6 +598,8 @@ impl ExecuteResponse {
             | AlterItemRename
             | AlterItemSwap
             | AlterNoop
+            | AlterSchemaRename
+            | AlterSchemaSwap
             | AlterSecret
             | AlterSink
             | AlterSource
@@ -839,7 +642,7 @@ impl ExecuteResponse {
             DropOwned => vec![DroppedOwned],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
             ExplainPlan | ExplainTimestamp | Select | ShowAllVariables | ShowCreate
-            | ShowColumns | ShowVariable | InspectShard => {
+            | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => {
                 vec![CopyTo, SendingRows, SendingRowsImmediate]
             }
             Execute | ReadThenWrite => vec![

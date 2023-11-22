@@ -21,6 +21,7 @@ message ProtoCollectionMetadata {
     string data_shard = 3;
     optional string remap_shard = 4;
     optional string status_shard = 5;
+    optional string txns_shard = 7;
 
     mz_repr.relation_and_scalar.ProtoRelationDesc relation_desc = 6;
 }

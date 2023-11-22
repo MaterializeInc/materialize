@@ -21,7 +21,7 @@ use futures::{Future, StreamExt};
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::retry::Retry;
 use mz_stash_types::metrics::Metrics;
-use mz_stash_types::{InternalStashError, StashError, MIN_STASH_VERSION, STASH_VERSION};
+use mz_stash_types::{InternalStashError, StashError};
 use postgres_openssl::MakeTlsConnector;
 use prometheus::Histogram;
 use rand::Rng;
@@ -32,8 +32,7 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, Statement};
 use tracing::{debug, event, info, warn, Level};
 
-use crate::upgrade;
-use crate::{Diff, Id, Timestamp, COLLECTION_CONFIG, USER_VERSION_KEY};
+use crate::{Diff, Id, Timestamp};
 
 // TODO: Change the indexes on data to be more applicable to the current
 // consolidation technique. This will involve a migration (which we don't yet
@@ -791,8 +790,8 @@ impl Stash {
         let stmts = CountedStatements::from(stmts, &self.metrics);
         // Generate statements to execute depending on our mode.
         let (tx_start, tx_end) = match self.txn_mode {
-            TransactionMode::Writeable => ("BEGIN", "COMMIT"),
-            TransactionMode::Readonly => ("BEGIN READ  ONLY", "COMMIT"),
+            TransactionMode::Writeable => ("BEGIN PRIORITY HIGH", "COMMIT"),
+            TransactionMode::Readonly => ("BEGIN READ ONLY PRIORITY HIGH", "COMMIT"),
             TransactionMode::Savepoint => ("SAVEPOINT stash", "RELEASE SAVEPOINT stash"),
         };
         batch_execute(client, tx_start)
@@ -887,75 +886,6 @@ impl Stash {
             return Err(InternalStashError::Fence("unexpected epoch or nonce".into()).into());
         }
         Ok(version == committed_if_version)
-    }
-
-    /// Returns whether this Stash is initialized. We consider a Stash to be initialized if
-    /// it contains an entry in the [`COLLECTION_CONFIG`] with the key of [`USER_VERSION_KEY`].
-    #[tracing::instrument(name = "stash::is_initialized", level = "debug", skip_all)]
-    pub async fn is_initialized(&mut self) -> Result<bool, StashError> {
-        // Check to see what collections exist, this prevents us from unnecessarily creating a
-        // config collection, if one doesn't yet exist.
-        let collections = self.collections().await?;
-        let exists = collections
-            .iter()
-            .any(|(_id, name)| name == COLLECTION_CONFIG.name);
-
-        // If our config collection exists, then we'll try to read a version number.
-        if exists {
-            let items = COLLECTION_CONFIG.iter(self).await?;
-            let contains_version = items
-                .into_iter()
-                .any(|((key, _value), _ts, _diff)| key.key == USER_VERSION_KEY);
-            Ok(contains_version)
-        } else {
-            Ok(false)
-        }
-    }
-
-    #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
-    pub async fn upgrade(&mut self) -> Result<(), StashError> {
-        // Run migrations until we're up-to-date.
-        while run_upgrade(self).await? < STASH_VERSION {}
-
-        async fn run_upgrade(stash: &mut Stash) -> Result<u64, StashError> {
-            stash
-                .with_transaction(move |tx| {
-                    async move {
-                        let version = COLLECTION_CONFIG.version(&tx).await?;
-
-                        // Note(parkmycar): Ideally we wouldn't have to define these extra constants,
-                        // but const expressions aren't yet supported in match statements.
-                        const TOO_OLD_VERSION: u64 = MIN_STASH_VERSION - 1;
-                        const FUTURE_VERSION: u64 = STASH_VERSION + 1;
-                        let incompatible = StashError {
-                            inner: InternalStashError::IncompatibleVersion(version),
-                        };
-
-                        match version {
-                            ..=TOO_OLD_VERSION => return Err(incompatible),
-
-                            35 => upgrade::v35_to_v36::upgrade(&tx).await?,
-                            36 => upgrade::v36_to_v37::upgrade(),
-                            37 => upgrade::v37_to_v38::upgrade(&tx).await?,
-                            38 => upgrade::v38_to_v39::upgrade(&tx).await?,
-                            39 => upgrade::v39_to_v40::upgrade(&tx).await?,
-
-                            // Up-to-date, no migration needed!
-                            STASH_VERSION => return Ok(STASH_VERSION),
-                            FUTURE_VERSION.. => return Err(incompatible),
-                        };
-                        // Set the new version.
-                        let new_version = version + 1;
-                        COLLECTION_CONFIG.set_version(&tx, new_version).await?;
-
-                        Ok(new_version)
-                    }
-                    .boxed()
-                })
-                .await
-        }
-
-        Ok(())
     }
 }
 
@@ -1285,10 +1215,10 @@ impl Consolidator {
                 }
             },
         );
-        // The Config is shared with the Stash, so we update the application name in the
-        // session instead of the Config.
+        // `self.config` is shared with the Stash, so we update the application name in the
+        // session instead of the `self.config`.
         client
-            .execute("SET application_name = 'stash-consolidator'", &[])
+            .batch_execute("SET application_name = 'stash-consolidator'; SET default_transaction_priority = 'low';")
             .await?;
         if let Some(schema) = &self.schema {
             client
@@ -1463,10 +1393,17 @@ impl DebugStashFactory {
 
 impl Drop for DebugStashFactory {
     fn drop(&mut self) {
-        assert!(
-            self.dropped,
-            "You forgot to call `drop()` on a `DebugStashFactory` before dropping it! You may also \
-            see this if a test panicked before calling `drop()`."
-        );
+        let message =
+            "You forgot to call `drop()` on a `DebugStashFactory` before dropping it! You \
+        may also see this if a test panicked before calling `drop()`.";
+
+        if !self.dropped {
+            // Don't double panic so we keep the stack trace relatively small.
+            if std::thread::panicking() {
+                tracing::error!("{message}");
+            } else {
+                panic!("{message}");
+            }
+        }
     }
 }

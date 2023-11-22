@@ -21,6 +21,7 @@ use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{func, CollectionPlan, Id, LetRecLimit, RowSetFinishing};
 // these happen to be unchanged at the moment, but there might be additions later
+use mz_expr::AggregateFunc::WindowAggregate;
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
     WindowFrameBound, WindowFrameUnits,
@@ -233,8 +234,15 @@ pub struct WindowExpr {
     pub func: WindowExprType,
     pub partition_by: Vec<HirScalarExpr>,
     // ORDER BY is represented in a complicated way: `plan_function_order_by` gave us two things:
-    // - the `ColumnOrder`s we have put in `func` above,
-    // - the `HirScalarExpr`s we have put in the following `order_by` field.
+    //  - the `ColumnOrder`s we have put in the `order_by` fields in the `WindowExprType` in `func`
+    //   above,
+    //  - the `HirScalarExpr`s we have put in the following `order_by` field.
+    // These are separated because they are used in different places: the outer `order_by` is used
+    // in the lowering: based on it, we construct a Row that has all the values of the scalar exprs;
+    // the inner `order_by` is used in the rendering to actually execute the ordering on these Rows.
+    // (`WindowExpr` exists only in HIR, but not in MIR.)
+    // Note that the `column` field in the `ColumnOrder`s point into the Row constructed in the
+    // lowering, and not to original input columns.
     pub order_by: Vec<HirScalarExpr>,
 }
 
@@ -346,6 +354,7 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
 pub enum WindowExprType {
     Scalar(ScalarWindowExpr),
     Value(ValueWindowExpr),
+    Aggregate(AggregateWindowExpr),
 }
 
 impl WindowExprType {
@@ -358,6 +367,7 @@ impl WindowExprType {
         match self {
             Self::Scalar(expr) => expr.visit_expressions(f),
             Self::Value(expr) => expr.visit_expressions(f),
+            Self::Aggregate(expr) => expr.visit_expressions(f),
         }
     }
 
@@ -370,6 +380,7 @@ impl WindowExprType {
         match self {
             Self::Scalar(expr) => expr.visit_expressions_mut(f),
             Self::Value(expr) => expr.visit_expressions_mut(f),
+            Self::Aggregate(expr) => expr.visit_expressions_mut(f),
         }
     }
 
@@ -382,6 +393,7 @@ impl WindowExprType {
         match self {
             Self::Scalar(expr) => expr.typ(outers, inner, params),
             Self::Value(expr) => expr.typ(outers, inner, params),
+            Self::Aggregate(expr) => expr.typ(outers, inner, params),
         }
     }
 }
@@ -394,6 +406,7 @@ impl VisitChildren<HirScalarExpr> for WindowExprType {
         match self {
             Self::Scalar(_) => (),
             Self::Value(expr) => expr.visit_children(f),
+            Self::Aggregate(expr) => expr.visit_children(f),
         }
     }
 
@@ -404,6 +417,7 @@ impl VisitChildren<HirScalarExpr> for WindowExprType {
         match self {
             Self::Scalar(_) => (),
             Self::Value(expr) => expr.visit_mut_children(f),
+            Self::Aggregate(expr) => expr.visit_mut_children(f),
         }
     }
 
@@ -415,6 +429,7 @@ impl VisitChildren<HirScalarExpr> for WindowExprType {
         match self {
             Self::Scalar(_) => Ok(()),
             Self::Value(expr) => expr.try_visit_children(f),
+            Self::Aggregate(expr) => expr.try_visit_children(f),
         }
     }
 
@@ -426,6 +441,7 @@ impl VisitChildren<HirScalarExpr> for WindowExprType {
         match self {
             Self::Scalar(_) => Ok(()),
             Self::Value(expr) => expr.try_visit_mut_children(f),
+            Self::Aggregate(expr) => expr.try_visit_mut_children(f),
         }
     }
 }
@@ -518,7 +534,10 @@ impl ScalarWindowFunc {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ValueWindowExpr {
     pub func: ValueWindowFunc,
-    pub args: Box<HirScalarExpr>, // arg list encoded in a record, e.g., `lag(row(#1, 3, null))`
+    // If the argument list has a single element (e.g., for `first_value`), then it's that element.
+    // If the argument list has multiple elements (e.g., for `lag`), then it's encoded in a record,
+    // e.g., `row(#1, 3, null)`.
+    pub args: Box<HirScalarExpr>,
     pub order_by: Vec<ColumnOrder>,
     pub window_frame: WindowFrame,
     pub ignore_nulls: bool,
@@ -643,6 +662,85 @@ impl ValueWindowFunc {
                 input_type.scalar_type.nullable(true)
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AggregateWindowExpr {
+    pub aggregate_expr: AggregateExpr,
+    pub order_by: Vec<ColumnOrder>,
+    pub window_frame: WindowFrame,
+}
+
+impl AggregateWindowExpr {
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_children` instead."]
+    pub fn visit_expressions<'a, F, E>(&'a self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&'a HirScalarExpr) -> Result<(), E>,
+    {
+        f(&self.aggregate_expr.expr)
+    }
+
+    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_mut_children` instead."]
+    pub fn visit_expressions_mut<'a, F, E>(&'a mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&'a mut HirScalarExpr) -> Result<(), E>,
+    {
+        f(&mut self.aggregate_expr.expr)
+    }
+
+    fn typ(
+        &self,
+        outers: &[RelationType],
+        inner: &RelationType,
+        params: &BTreeMap<usize, ScalarType>,
+    ) -> ColumnType {
+        self.aggregate_expr
+            .func
+            .output_type(self.aggregate_expr.expr.typ(outers, inner, params))
+    }
+
+    pub fn into_expr(self) -> (Box<HirScalarExpr>, mz_expr::AggregateFunc) {
+        (
+            self.aggregate_expr.expr,
+            WindowAggregate {
+                wrapped_aggregate: Box::new(self.aggregate_expr.func.into_expr()),
+                order_by: self.order_by,
+                window_frame: self.window_frame,
+            },
+        )
+    }
+}
+
+impl VisitChildren<HirScalarExpr> for AggregateWindowExpr {
+    fn visit_children<F>(&self, mut f: F)
+    where
+        F: FnMut(&HirScalarExpr),
+    {
+        f(&self.aggregate_expr.expr)
+    }
+
+    fn visit_mut_children<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut HirScalarExpr),
+    {
+        f(&mut self.aggregate_expr.expr)
+    }
+
+    fn try_visit_children<F, E>(&self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&HirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        f(&self.aggregate_expr.expr)
+    }
+
+    fn try_visit_mut_children<F, E>(&mut self, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&mut HirScalarExpr) -> Result<(), E>,
+        E: From<RecursionLimitError>,
+    {
+        f(&mut self.aggregate_expr.expr)
     }
 }
 
@@ -1168,6 +1266,14 @@ impl HirRelationExpr {
                 aggregates,
                 ..
             } => group_key.len() + aggregates.len(),
+        }
+    }
+
+    /// If self is a constant, return the value and the type, otherwise `None`.
+    pub fn as_const(&self) -> Option<(&Vec<Row>, &RelationType)> {
+        match self {
+            Self::Constant { rows, typ } => Some((rows, typ)),
+            _ => None,
         }
     }
 

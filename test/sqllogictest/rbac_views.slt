@@ -18,11 +18,6 @@ ALTER SYSTEM SET enable_rbac_checks TO true;
 ----
 COMPLETE 0
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO true;
-----
-COMPLETE 0
-
 # SHOW ROLE MEMBERS
 
 statement ok
@@ -62,6 +57,19 @@ SELECT * FROM mz_internal.mz_show_my_role_members ORDER BY role, member
 r2,r1,mz_system
 r3,r2,mz_system
 COMPLETE 2
+
+query TTT
+SELECT * FROM (SHOW ROLE MEMBERSHIP) ORDER BY role, member
+----
+r2  r1  mz_system
+r3  r2  mz_system
+r5  r4  mz_system
+
+query TTT
+SELECT * FROM (SHOW ROLE MEMBERSHIP FOR r2) ORDER BY role, member
+----
+r2  r1  mz_system
+r3  r2  mz_system
 
 # SHOW SYSTEM PRIVILEGES
 
@@ -489,14 +497,38 @@ materialize,NULL,NULL,table,r1,SELECT
 PUBLIC,NULL,NULL,type,PUBLIC,USAGE
 COMPLETE 6
 
+query TTTTTT
+SELECT * FROM (SHOW DEFAULT PRIVILEGES) ORDER BY object_type, database, schema, grantee
+----
+materialize  materialize  s     connection  r3      USAGE
+r5           NULL         NULL  database    PUBLIC  CREATE
+PUBLIC       NULL         NULL  schema      r4      USAGE
+materialize  materialize  s     secret      r5      USAGE
+materialize  d            NULL  table       r1      UPDATE
+materialize  NULL         NULL  table       r1      INSERT
+materialize  NULL         NULL  table       r1      SELECT
+PUBLIC       NULL         NULL  type        PUBLIC  USAGE
+
+query TTTTTT
+SELECT * FROM (SHOW DEFAULT PRIVILEGES ON TABLES) ORDER BY object_type, database, schema, grantee
+----
+materialize  d            NULL  table       r1      UPDATE
+materialize  NULL         NULL  table       r1      INSERT
+materialize  NULL         NULL  table       r1      SELECT
+
+query TTTTTT
+SELECT * FROM (SHOW DEFAULT PRIVILEGES FOR r1) ORDER BY object_type, database, schema, grantee
+----
+materialize  materialize  s     connection  r3      USAGE
+r5           NULL         NULL  database    PUBLIC  CREATE
+materialize  d            NULL  table       r1      UPDATE
+materialize  NULL         NULL  table       r1      INSERT
+materialize  NULL         NULL  table       r1      SELECT
+PUBLIC       NULL         NULL  type        PUBLIC  USAGE
+
 # Disable rbac checks.
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
 ----
 COMPLETE 0

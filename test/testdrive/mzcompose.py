@@ -57,6 +57,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--replicas", type=int, default=1, help="use multiple replicas")
 
     parser.add_argument(
+        "--default-timeout",
+        type=str,
+        help="set the default timeout for Testdrive",
+    )
+
+    parser.add_argument(
         "files",
         nargs="*",
         default=["*.td"],
@@ -77,7 +83,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
         aws_region=args.aws_region,
-        validate_postgres_stash="materialized",
+        postgres_stash="materialized",
+        validate_catalog_store="shadow",
+        default_timeout=args.default_timeout,
+        volumes_extra=["mzdata:/mzdata"],
     )
 
     materialized = Materialized(

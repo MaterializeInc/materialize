@@ -23,7 +23,7 @@ use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, Del
 use mz_compute_types::plan::join::JoinClosure;
 use mz_expr::MirScalarExpr;
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
-use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena};
+use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::columnation::Columnation;
@@ -269,8 +269,9 @@ where
                             update_stream.flat_map_fallible("DeltaJoinFinalization", {
                                 // Reuseable allocation for unpacking.
                                 let mut datums = DatumVec::new();
-                                let mut row_builder = Row::default();
                                 move |row| {
+                                    let binding = SharedRow::get();
+                                    let mut row_builder = binding.borrow_mut();
                                     let temp_storage = RowArena::new();
                                     let mut datums_local = datums.borrow_with(&row);
                                     // TODO(mcsherry): re-use `row` allocation.
@@ -324,11 +325,11 @@ where
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
-        SpecializedArrangement::Bytes9Row(key_types, inner) => build_halfjoin(
+        SpecializedArrangement::RowUnit(inner) => build_halfjoin(
             updates,
             inner,
-            Some(key_types),
             None,
+            Some(vec![]),
             prev_key,
             prev_thinning,
             comparison,
@@ -364,16 +365,16 @@ fn dispatch_build_halfjoin_trace<G, T, CF>(
 )
 where
     G: Scope,
-    T: Timestamp + Lattice,
-    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
-        SpecializedArrangementImport::Bytes9Row(key_types, inner) => build_halfjoin(
+        SpecializedArrangementImport::RowUnit(inner) => build_halfjoin(
             updates,
             inner,
-            Some(key_types),
             None,
+            Some(vec![]),
             prev_key,
             prev_thinning,
             comparison,
@@ -430,34 +431,28 @@ where
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
-        let mut row_buf = Row::default();
+        let mut key_buf = K::default();
         move |(row, time)| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
-            row_buf.packer().try_extend(
+            let key = key_buf.try_from_datum_iter(
                 prev_key
                     .iter()
                     .map(|e| e.eval(&datums_local, &temp_storage)),
+                updates_key_types.as_deref(),
             )?;
-            let row_key = row_buf.clone();
-            row_buf
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
+            row_builder
                 .packer()
                 .extend(prev_thinning.iter().map(|&c| datums_local[c]));
-            let row_value = row_buf.clone();
+            let row_value = row_builder.clone();
 
-            Ok((
-                K::from_row(row_key, updates_key_types.as_deref()),
-                row_value,
-                time,
-            ))
+            Ok((key, row_value, time))
         }
     });
 
-    let mut key_buf = Row::default();
-    let mut lookup_row_buf = Row::default();
-
     let mut datums = DatumVec::new();
-    let mut row_builder = Row::default();
 
     if closure.could_error() {
         let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
@@ -474,12 +469,19 @@ where
                 // shutting down.
                 shutdown_token.probe()?;
 
-                let key = key.into_row(&mut key_buf, trace_key_types.as_deref());
-                let lookup_row =
-                    lookup_row.into_row(&mut lookup_row_buf, trace_val_types.as_deref());
-
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
-                let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
+
+                let key = key.into_datum_iter(trace_key_types.as_deref());
+                let stream_row = stream_row.into_datum_iter(None);
+                let lookup_row = lookup_row.into_datum_iter(trace_val_types.as_deref());
+
+                let mut datums_local = datums.borrow();
+                datums_local.extend(key);
+                datums_local.extend(stream_row);
+                datums_local.extend(lookup_row);
+
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
                 let diff = diff1.clone() * diff2.clone();
                 let dout = (row, time.clone());
@@ -514,12 +516,19 @@ where
                 // shutting down.
                 shutdown_token.probe()?;
 
-                let key = key.into_row(&mut key_buf, trace_key_types.as_deref());
-                let lookup_row =
-                    lookup_row.into_row(&mut lookup_row_buf, trace_val_types.as_deref());
-
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
-                let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
+
+                let key = key.into_datum_iter(trace_key_types.as_deref());
+                let stream_row = stream_row.into_datum_iter(None);
+                let lookup_row = lookup_row.into_datum_iter(trace_val_types.as_deref());
+
+                let mut datums_local = datums.borrow();
+                datums_local.extend(key);
+                datums_local.extend(stream_row);
+                datums_local.extend(lookup_row);
+
                 let row = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
                     .expect("Closure claimed to never errer");
@@ -544,10 +553,10 @@ where
     G::Timestamp: crate::render::RenderTimestamp,
 {
     match trace {
-        SpecializedArrangement::Bytes9Row(key_types, inner) => build_update_stream(
+        SpecializedArrangement::RowUnit(inner) => build_update_stream(
             inner,
-            Some(key_types),
             None,
+            Some(vec![]),
             as_of,
             source_relation,
             initial_closure,
@@ -567,14 +576,14 @@ fn dispatch_build_update_stream_trace<G, T>(
 ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
-    T: Timestamp + Lattice,
-    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
 {
     match trace {
-        SpecializedArrangementImport::Bytes9Row(key_types, inner) => build_update_stream(
+        SpecializedArrangementImport::RowUnit(inner) => build_update_stream(
             inner,
-            Some(key_types),
             None,
+            Some(vec![]),
             as_of,
             source_relation,
             initial_closure,
@@ -610,10 +619,6 @@ where
         inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));
     }
 
-    let mut key_buf = Row::default();
-    let mut val_buf = Row::default();
-
-    let mut row_buf = Row::default();
     let (ok_stream, err_stream) =
         trace
             .stream
@@ -621,6 +626,8 @@ where
                 let mut datums = DatumVec::new();
                 Box::new(move |input, ok_output, err_output| {
                     input.for_each(|time, data| {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
                         let mut ok_session = ok_output.session(&time);
                         let mut err_session = err_output.session(&time);
 
@@ -635,20 +642,23 @@ where
                                         if source_relation == 0
                                             || !inner_as_of.elements().contains(time)
                                         {
-                                            let key = key
-                                                .into_row(&mut key_buf, trace_key_types.as_deref());
-                                            let val = val
-                                                .into_row(&mut val_buf, trace_val_types.as_deref());
-
                                             let temp_storage = RowArena::new();
-                                            let mut datums_local =
-                                                datums.borrow_with_many(&[key, val]);
+
+                                            let key =
+                                                key.into_datum_iter(trace_key_types.as_deref());
+                                            let val =
+                                                val.into_datum_iter(trace_val_types.as_deref());
+
+                                            let mut datums_local = datums.borrow();
+                                            datums_local.extend(key);
+                                            datums_local.extend(val);
+
                                             if !initial_closure.is_identity() {
                                                 match initial_closure
                                                     .apply(
                                                         &mut datums_local,
                                                         &temp_storage,
-                                                        &mut row_buf,
+                                                        &mut row_builder,
                                                     )
                                                     .transpose()
                                                 {
@@ -666,8 +676,8 @@ where
                                                 }
                                             } else {
                                                 let row = {
-                                                    row_buf.packer().extend(&*datums_local);
-                                                    row_buf.clone()
+                                                    row_builder.packer().extend(&*datums_local);
+                                                    row_builder.clone()
                                                 };
                                                 ok_session.give((row, time.clone(), diff.clone()));
                                             }

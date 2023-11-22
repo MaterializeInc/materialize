@@ -21,7 +21,7 @@ ALTER SYSTEM SET enable_kafka_config_denylist_options = true
 $ kafka-create-topic topic=t0
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -31,7 +31,7 @@ $ kafka-create-topic topic=t0
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, TOPIC 'missing_topic')
   FORMAT TEXT
   INCLUDE OFFSET
-contains:UnknownTopicOrPartition (Broker: Unknown topic or partition)
+contains:Topic does not exist
 
 ! CREATE SOURCE pick_one
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, START OFFSET=[1], TOPIC 'testdrive-t0-${testdrive.seed}')

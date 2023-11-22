@@ -47,8 +47,8 @@ impl CheckedRecursion for ColumnKnowledge {
 impl crate::Transform for ColumnKnowledge {
     /// Transforms an expression through accumulated knowledge.
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "column_knowledge")
     )]

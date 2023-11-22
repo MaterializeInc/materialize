@@ -36,8 +36,8 @@ pub struct Join;
 
 impl crate::Transform for Join {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "join_fusion")
     )]

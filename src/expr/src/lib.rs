@@ -96,13 +96,16 @@ pub mod virtual_syntax;
 pub mod visit;
 
 pub use id::{Id, LocalId, PartitionId, ProtoId, ProtoLocalId, ProtoPartitionId, SourceInstanceId};
-pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace};
+pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace, TraceSummary};
 pub use linear::plan::{MfpPlan, SafeMfpPlan};
 pub use linear::util::{join_permutations, permutation_for_arrangement};
 pub use linear::{
     memoize_expr, MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan,
 };
-pub use relation::func::{AggregateFunc, AnalyzedRegex, CaptureGroupDesc, LagLeadType, TableFunc};
+pub use relation::func::{
+    AggregateFunc, AnalyzedRegex, CaptureGroupDesc, LagLeadType, NaiveOneByOneAggr, OneByOneAggr,
+    TableFunc,
+};
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
     canonicalize, compare_columns, non_nullable_columns, AccessStrategy, AggregateExpr,

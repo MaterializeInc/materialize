@@ -13,13 +13,14 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use mz_ore::soft_assert;
-use mz_ore::str::{bracketed, closure_to_display, separated, Indent, IndentLike, StrExt};
+use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{
     CompactScalarSeq, ExprHumanizer, HumanizedAttributes, IndexUsageType, Indices,
     PlanRenderingContext, RenderingContext,
 };
 use mz_repr::{GlobalId, Row};
+use mz_sql_parser::ast::Ident;
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
 use crate::{
@@ -127,9 +128,8 @@ where
                     // anonymous columns for each source expression before we can
                     // pass it to the ExplainSource rendering code.
                     if let Some(cols) = cols.as_mut() {
-                        let from = cols.len();
-                        let to = from + src.op.expressions.len();
-                        cols.extend((from..to).map(|i| format!("#{i}")))
+                        let anonymous = std::iter::repeat(String::new());
+                        cols.extend(anonymous.take(src.op.expressions.len()))
                     };
                     // Render source with humanized expressions.
                     HumanizedExpr::new(src, cols.as_ref()).fmt_text(f, &mut ctx)?;
@@ -425,6 +425,14 @@ impl MirRelationExpr {
                             AccessStrategy::Persist => {
                                 write!(f, "{}ReadStorage {}", ctx.indent, humanize(id))?;
                             }
+                            AccessStrategy::SameDataflow => {
+                                write!(
+                                    f,
+                                    "{}ReadGlobalFromSameDataflow {}",
+                                    ctx.indent,
+                                    humanize(id)
+                                )?;
+                            }
                             AccessStrategy::Index(index_accesses) => {
                                 let mut grouped_index_accesses = BTreeMap::new();
                                 for (idx_id, usage_type) in index_accesses {
@@ -537,13 +545,8 @@ impl MirRelationExpr {
                     let equivalences = separated(
                         " AND ",
                         equivalences.iter().map(|equivalence| {
-                            let equivalences = equivalence.len();
                             let equivalence = HumanizedExpr::seq(equivalence, cols);
-                            if equivalences == 2 {
-                                bracketed("", "", separated(" = ", equivalence))
-                            } else {
-                                bracketed("eq(", ")", separated(", ", equivalence))
-                            }
+                            separated(" = ", equivalence)
                         }),
                     );
                     write!(f, "{}Join on=({})", ctx.indent, equivalences)?;
@@ -720,18 +723,27 @@ impl MirRelationExpr {
             } => {
                 FmtNode {
                     fmt_root: |f, ctx: &mut PlanRenderingContext<'_, MirRelationExpr>| {
-                        if aggregates.len() > 0 {
-                            write!(f, "{}Reduce", ctx.indent)?;
-                        } else {
+                        if aggregates.len() == 0 && !ctx.config.raw_syntax {
                             write!(f, "{}Distinct", ctx.indent)?;
-                        }
-                        if group_key.len() > 0 {
+
                             if let Some(cols) = input.column_names(ctx) {
                                 let group_key = HumanizedExpr::seq(group_key, Some(cols));
-                                write!(f, " group_by=[{}]", separated(", ", group_key))?;
+                                write!(f, " project=[{}]", separated(", ", group_key))?;
                             } else {
                                 let group_key = CompactScalarSeq(group_key);
-                                write!(f, " group_by=[{}]", group_key)?;
+                                write!(f, " project=[{}]", group_key)?;
+                            }
+                        } else {
+                            write!(f, "{}Reduce", ctx.indent)?;
+
+                            if group_key.len() > 0 {
+                                if let Some(cols) = input.column_names(ctx) {
+                                    let group_key = HumanizedExpr::seq(group_key, Some(cols));
+                                    write!(f, " group_by=[{}]", separated(", ", group_key))?;
+                                } else {
+                                    let group_key = CompactScalarSeq(group_key);
+                                    write!(f, " group_by=[{}]", group_key)?;
+                                }
                             }
                         }
                         if aggregates.len() > 0 {
@@ -1036,10 +1048,21 @@ impl<'a, T> HumanizedExpr<'a, T> {
 
 // A usize that directly represents a column reference
 impl<'a> fmt::Display for HumanizedExpr<'a, usize> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.cols {
-            Some(cols) => write!(f, "{}", cols[*self.expr]),
-            None => write!(f, "#{}", self.expr),
+            Some(cols) if !cols[*self.expr].is_empty() => {
+                // Write #c{name} if we have a name inferred for this column.
+                //
+                // Note: using unchecked here is okay since we're directly converting to a string
+                // afterwards.
+                let ident = Ident::new_unchecked(cols[*self.expr].clone()); // TODO: try to avoid the `.clone()` here.
+                write!(f, "#{}{{{}}}", self.expr, ident)
+            }
+            _ => {
+                // Write #c otherwise.
+                write!(f, "#{}", self.expr)
+            }
         }
     }
 }
@@ -1049,10 +1072,10 @@ impl<'a> fmt::Display for HumanizedExpr<'a, MirScalarExpr> {
         use MirScalarExpr::*;
 
         match self.expr {
-            Column(i) => match self.cols {
-                Some(cols) => write!(f, "{}", cols[*i]),
-                None => write!(f, "#{}", i),
-            },
+            Column(i) => {
+                // Delegate to the `HumanizedExpr<'a, usize>` implementation.
+                self.child(i).fmt(f)
+            }
             Literal(row, _) => match row {
                 Ok(row) => write!(f, "{}", row.unpack_first()),
                 Err(err) => write!(f, "error({})", err.to_string().quoted()),

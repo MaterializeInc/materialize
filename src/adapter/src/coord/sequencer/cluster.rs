@@ -9,6 +9,7 @@
 
 //! Coordinator functionality to sequence cluster-related plans
 
+use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -23,14 +24,15 @@ use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType, SessionCatalog};
 use mz_sql::names::{ObjectId, QualifiedItemName};
 use mz_sql::plan::{
-    AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterOptionParameter,
-    ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant, PlanClusterOption,
+    AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterClusterSwapPlan,
+    AlterOptionParameter, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    PlanClusterOption,
 };
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 
 use crate::catalog::{ClusterConfig, ClusterVariant, ClusterVariantManaged, Op};
-use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
+use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
 
@@ -169,7 +171,7 @@ impl Coordinator {
         disk: bool,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let location = mz_catalog::ReplicaLocation::Managed {
+        let location = mz_catalog::durable::ReplicaLocation::Managed {
             availability_zone: None,
             billed_as: None,
             disk,
@@ -273,7 +275,7 @@ impl Coordinator {
                     workers,
                     compute,
                 } => {
-                    let location = mz_catalog::ReplicaLocation::Unmanaged {
+                    let location = mz_catalog::durable::ReplicaLocation::Unmanaged {
                         storagectl_addrs,
                         storage_addrs,
                         computectl_addrs,
@@ -290,7 +292,7 @@ impl Coordinator {
                     internal,
                     size,
                 } => {
-                    let location = mz_catalog::ReplicaLocation::Managed {
+                    let location = mz_catalog::durable::ReplicaLocation::Managed {
                         availability_zone,
                         billed_as,
                         disk,
@@ -358,7 +360,6 @@ impl Coordinator {
                 mz_controller::clusters::ClusterConfig {
                     arranged_logs: cluster.log_indexes.clone(),
                 },
-                self.variable_length_row_encoding,
             )
             .expect("creating cluster must not fail");
 
@@ -398,7 +399,7 @@ impl Coordinator {
                 workers,
                 compute,
             } => {
-                let location = mz_catalog::ReplicaLocation::Unmanaged {
+                let location = mz_catalog::durable::ReplicaLocation::Unmanaged {
                     storagectl_addrs,
                     storage_addrs,
                     computectl_addrs,
@@ -422,7 +423,7 @@ impl Coordinator {
                     }
                     None => None,
                 };
-                let location = mz_catalog::ReplicaLocation::Managed {
+                let location = mz_catalog::durable::ReplicaLocation::Managed {
                     availability_zone,
                     billed_as,
                     disk,
@@ -1004,11 +1005,58 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_cluster_rename(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         AlterClusterRenamePlan { id, name, to_name }: AlterClusterRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let op = Op::RenameCluster { id, name, to_name };
-        match self.catalog_transact(Some(session), vec![op]).await {
+        let op = Op::RenameCluster {
+            id,
+            name,
+            to_name,
+            check_reserved_names: true,
+        };
+        match self
+            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .await
+        {
+            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(super) async fn sequence_alter_cluster_swap(
+        &mut self,
+        session: &mut Session,
+        AlterClusterSwapPlan {
+            id_a,
+            id_b,
+            name_a,
+            name_b,
+            name_temp,
+        }: AlterClusterSwapPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op_a = Op::RenameCluster {
+            id: id_a,
+            name: name_a.clone(),
+            to_name: name_temp.clone(),
+            check_reserved_names: false,
+        };
+        let op_b = Op::RenameCluster {
+            id: id_b,
+            name: name_b.clone(),
+            to_name: name_a,
+            check_reserved_names: false,
+        };
+        let op_temp = Op::RenameCluster {
+            id: id_a,
+            name: name_temp,
+            to_name: name_b,
+            check_reserved_names: false,
+        };
+
+        match self
+            .catalog_transact_with_ddl_transaction(session, vec![op_a, op_b, op_temp])
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
             Err(err) => Err(err),
         }

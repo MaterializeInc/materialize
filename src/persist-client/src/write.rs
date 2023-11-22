@@ -33,12 +33,14 @@ use crate::batch::{
     validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     ProtoBatch,
 };
+use crate::cfg::PersistFeatureFlag;
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HandleDebugState, HollowBatch, Upper};
+use crate::read::ReadHandle;
 use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
@@ -132,26 +134,32 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    // We don't actually do an async call in here at the moment, but we used to and may
-    // again later, so let's reserve the right for now.
-    #[allow(clippy::unused_async)]
-    pub(crate) async fn new(
+    pub(crate) fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
         machine: Machine<K, V, T, D>,
         gc: GarbageCollector<K, V, T, D>,
-        compact: Option<Compactor<K, V, T, D>>,
         blob: Arc<dyn Blob + Send + Sync>,
-        isolated_runtime: Arc<IsolatedRuntime>,
         writer_id: WriterId,
         purpose: &str,
         schemas: Schemas<K, V>,
-        upper: Antichain<T>,
     ) -> Self {
+        let isolated_runtime = Arc::clone(&machine.isolated_runtime);
+        let compact = cfg.compaction_enabled.then(|| {
+            Compactor::new(
+                cfg.clone(),
+                Arc::clone(&metrics),
+                Arc::clone(&isolated_runtime),
+                writer_id.clone(),
+                schemas.clone(),
+                gc.clone(),
+            )
+        });
         let debug_state = HandleDebugState {
             hostname: cfg.hostname.to_owned(),
             purpose: purpose.to_owned(),
         };
+        let upper = machine.applier.clone_upper();
         WriteHandle {
             cfg,
             metrics,
@@ -166,6 +174,21 @@ where
             upper,
             explicitly_expired: false,
         }
+    }
+
+    /// Creates a [WriteHandle] for the same shard from an existing
+    /// [ReadHandle].
+    pub fn from_read(read: &ReadHandle<K, V, T, D>, purpose: &str) -> Self {
+        Self::new(
+            read.cfg.clone(),
+            Arc::clone(&read.metrics),
+            read.machine.clone(),
+            read.gc.clone(),
+            Arc::clone(&read.blob),
+            WriterId::new(),
+            purpose,
+            read.schemas.clone(),
+        )
     }
 
     /// This handle's shard id.
@@ -192,8 +215,8 @@ where
         self.machine.applier.clone_upper()
     }
 
-    /// Fetches and returns a recent shard-global `upper`. Importantly, this operation is not
-    /// linearized with other write operations.
+    /// Fetches and returns a recent shard-global `upper`. Importantly, this operation is
+    /// linearized with write operations.
     ///
     /// This requires fetching the latest state from consensus and is therefore a potentially
     /// expensive operation.
@@ -513,6 +536,11 @@ where
     /// to append it to this shard.
     pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
         let ret = Batch {
+            batch_delete_enabled: self
+                .cfg
+                .dynamic
+                .enabled(PersistFeatureFlag::BATCH_DELETE_ENABLED),
+            metrics: Arc::clone(&self.metrics),
             shard_id: batch
                 .shard_id
                 .into_rust()
@@ -522,7 +550,7 @@ where
                 .batch
                 .into_rust_if_some("ProtoBatch::batch")
                 .expect("valid transmittable batch"),
-            _blob: Arc::clone(&self.blob),
+            blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
         };
         assert_eq!(ret.shard_id, self.machine.shard_id());
@@ -601,7 +629,7 @@ where
         let mut watch = self.machine.applier.watch();
         let batch = self
             .machine
-            .next_listen_batch(frontier, &mut watch, None)
+            .next_listen_batch(frontier, &mut watch, None, None)
             .await;
         if PartialOrder::less_than(&self.upper, batch.desc.upper()) {
             self.upper.clone_from(batch.desc.upper());
@@ -741,14 +769,17 @@ where
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+    use std::sync::mpsc;
 
+    use crate::cache::PersistClientCache;
     use differential_dataflow::consolidation::consolidate_updates;
     use futures_util::FutureExt;
     use mz_ore::collections::CollectionExt;
+    use mz_ore::task;
     use serde_json::json;
 
     use crate::tests::{all_ok, new_test_client};
-    use crate::ShardId;
+    use crate::{PersistLocation, ShardId};
 
     use super::*;
 
@@ -937,5 +968,58 @@ mod tests {
             Some(())
         );
         assert_eq!(write.upper(), &Antichain::from_elem(7));
+    }
+
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn fetch_recent_upper_linearized() {
+        type Timestamp = u64;
+        let max_upper = 1000;
+
+        let shard_id = ShardId::new();
+        let mut clients = PersistClientCache::new_no_metrics();
+        let upper_writer_client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
+        let (mut upper_writer, _) = upper_writer_client
+            .expect_open::<(), (), Timestamp, i64>(shard_id)
+            .await;
+        // Clear the state cache between each client to maximally disconnect
+        // them from each other.
+        clients.clear_state_cache();
+        let upper_reader_client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
+        let (mut upper_reader, _) = upper_reader_client
+            .expect_open::<(), (), Timestamp, i64>(shard_id)
+            .await;
+        let (tx, rx) = mpsc::channel();
+
+        let task = task::spawn(|| "upper-reader", async move {
+            let mut upper = Timestamp::MIN;
+
+            while upper < max_upper {
+                while let Ok(new_upper) = rx.try_recv() {
+                    upper = new_upper;
+                }
+
+                let recent_upper = upper_reader
+                    .fetch_recent_upper()
+                    .await
+                    .as_option()
+                    .cloned()
+                    .expect("u64 is totally ordered and the shard is not finalized");
+                assert!(
+                    recent_upper >= upper,
+                    "recent upper {recent_upper:?} is less than known upper {upper:?}"
+                );
+            }
+        });
+
+        for upper in Timestamp::MIN..max_upper {
+            let next_upper = upper + 1;
+            upper_writer
+                .expect_compare_and_append(&[], upper, next_upper)
+                .await;
+            tx.send(next_upper).expect("send failed");
+        }
+
+        task.await.expect("await failed");
     }
 }

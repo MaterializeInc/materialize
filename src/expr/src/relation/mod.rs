@@ -32,6 +32,7 @@ use mz_repr::explain::{
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use timely::container::columnation::{Columnation, CopyRegion};
 
 use crate::explain::HumanizedExpr;
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
@@ -104,9 +105,10 @@ pub enum MirRelationExpr {
         /// Schema of the collection.
         typ: RelationType,
         /// If this is a global Get, this will indicate whether we are going to read from Persist or
-        /// from an index. If it's an index, then how downstream dataflow operations will use this
-        /// index is also recorded. This is filled by `prune_and_annotate_dataflow_index_imports`.
-        /// Note that this is not used by the lowering to LIR, but is used only by EXPLAIN.
+        /// from an index, or from a different object in `objects_to_build`. If it's an index, then
+        /// how downstream dataflow operations will use this index is also recorded. This is filled
+        /// by `prune_and_annotate_dataflow_index_imports`. Note that this is not used by the
+        /// lowering to LIR, but is used only by EXPLAIN.
         #[mzreflect(ignore)]
         access_strategy: AccessStrategy,
     },
@@ -2237,7 +2239,18 @@ impl VisitChildren<Self> for MirRelationExpr {
 
 /// Specification for an ordering by a column.
 #[derive(
-    Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
 )]
 pub struct ColumnOrder {
     /// The column index.
@@ -2248,6 +2261,10 @@ pub struct ColumnOrder {
     /// Whether to sort nulls last.
     #[serde(default)]
     pub nulls_last: bool,
+}
+
+impl Columnation for ColumnOrder {
+    type InnerRegion = CopyRegion<Self>;
 }
 
 impl RustType<ProtoColumnOrder> for ColumnOrder {
@@ -2622,6 +2639,65 @@ impl AggregateExpr {
                 }
             }
 
+            // The input type for window aggs is a ((OriginalRow, InputValue), OrderByExprs...)
+            // See an example MIR in `window_func_applied_to`.
+            AggregateFunc::WindowAggregate {
+                wrapped_aggregate,
+                window_frame,
+                ..
+            } => {
+                // TODO: deduplicate code between the various window function cases.
+
+                let tuple = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Get the overall return type
+                let return_type = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+                let window_agg_return_type = return_type.unwrap_record_element_type()[0].clone();
+
+                // Extract the original row
+                let original_row = tuple
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the input value
+                let expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+
+                // If the window frame includes the current (single) row, evaluate the aggregate on
+                // that row. Otherwise, return the default value for the aggregate.
+                let value = if window_frame.includes_current_row() {
+                    AggregateExpr {
+                        func: (**wrapped_aggregate).clone(),
+                        expr,
+                        distinct: false, // We have just one input element; DISTINCT doesn't matter.
+                    }
+                    .on_unique(input_type)
+                } else {
+                    MirScalarExpr::literal_ok(wrapped_aggregate.default(), window_agg_return_type)
+                };
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from("?window_agg?"),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![value, original_row],
+                    }],
+                }
+            }
+
             // All other variants should return the argument to the aggregation.
             AggregateFunc::MaxNumeric
             | AggregateFunc::MaxInt16
@@ -2975,31 +3051,40 @@ impl RowSetFinishing {
 
         let limit = self.limit.unwrap_or(usize::MAX);
 
-        // Count how many rows we'd expand into, returning early from the whole function
-        // if we don't have enough memory to expand the result, or break early from the
-        // iteration once we pass our limit.
-        let mut num_rows = 0;
-        let mut num_bytes: usize = 0;
-        for (row, count) in &rows[offset_nth_row..] {
-            num_rows += count.get();
-            num_bytes = num_bytes.saturating_add(count.get().saturating_mul(row.byte_len()));
+        // The code below is logically equivalent to:
+        //
+        // let mut total = 0;
+        // for (_, count) in &rows[offset_nth_row..] {
+        //     total += count.get();
+        // }
+        // let return_size = std::cmp::min(total, limit);
+        //
+        // but it breaks early if the limit is reached, instead of scanning the entire code.
+        let return_row_count = rows[offset_nth_row..]
+            .iter()
+            .try_fold(0, |sum: usize, (_, count)| {
+                let new_sum = sum.saturating_add(count.get());
+                if new_sum > limit {
+                    None
+                } else {
+                    Some(new_sum)
+                }
+            })
+            .unwrap_or(limit);
 
-            // Check that result fits into max_result_size.
-            if num_bytes > max_result_size {
-                return Err(format!(
-                    "result exceeds max size of {}",
-                    ByteSize::b(u64::cast_from(max_result_size))
-                ));
-            }
-
-            // Stop iterating if we've passed limit.
-            if num_rows > limit {
-                break;
-            }
+        // Check that the bytes allocated in the Vec below will be less than the minimum possible
+        // byte limit (i.e., if zero rows spill to heap). We still have to check each row below
+        // because they could spill to heap and end up using more memory.
+        const MINIMUM_ROW_BYTES: usize = std::mem::size_of::<Row>();
+        let bytes_to_be_allocated = MINIMUM_ROW_BYTES.saturating_mul(return_row_count);
+        if bytes_to_be_allocated > max_result_size {
+            return Err(format!(
+                "result exceeds max size of {}",
+                ByteSize::b(u64::cast_from(max_result_size))
+            ));
         }
-        let return_size = std::cmp::min(num_rows, limit);
 
-        let mut ret = Vec::with_capacity(return_size);
+        let mut ret = Vec::with_capacity(return_row_count);
         let mut remaining = limit;
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
@@ -3346,6 +3431,9 @@ pub enum AccessStrategy {
     Persist,
     /// The Get will read from an index or indexes: (index id, how the index will be used).
     Index(Vec<(GlobalId, IndexUsageType)>),
+    /// The Get will read a collection that is computed by the same dataflow, but in a different
+    /// `BuildDesc` in `objects_to_build`.
+    SameDataflow,
 }
 
 #[cfg(test)]

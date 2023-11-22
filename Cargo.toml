@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "src/adapter",
+    "src/adapter-types",
     "src/alloc",
     "src/audit-log",
     "src/avro",
@@ -8,10 +9,10 @@ members = [
     "src/aws-s3-util",
     "src/aws-secrets-controller",
     "src/balancerd",
-    "src/build-id",
     "src/build-info",
     "src/ccsr",
     "src/catalog",
+    "src/catalog-debug",
     "src/cloud-api",
     "src/cluster",
     "src/clusterd",
@@ -27,6 +28,7 @@ members = [
     "src/expr-test-util",
     "src/frontegg-auth",
     "src/frontegg-client",
+    "src/frontegg-mock",
     "src/http-util",
     "src/interchange",
     "src/kafka-util",
@@ -51,12 +53,15 @@ members = [
     "src/pgrepr",
     "src/pgrepr-consts",
     "src/pgtest",
+    "src/pgtz",
     "src/pgwire",
     "src/pgwire-common",
     "src/pid-file",
     "src/postgres-client",
     "src/postgres-util",
+    "src/proc",
     "src/prof",
+    "src/prof-http",
     "src/proto",
     "src/repr",
     "src/repr-test-util",
@@ -65,6 +70,7 @@ members = [
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
+    "src/server-core",
     "src/service",
     "src/ssh-util",
     "src/sql",
@@ -168,10 +174,6 @@ postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array"
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 
-# Waiting for a new release of strip-ansi-escapes that avoids the indirect
-# dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
-vte = { git = "https://github.com/MaterializeInc/vte", rev = "45670c47cebd7af050def2f80a307bdeec7caba3" }
-
 # Waiting on https://github.com/hyperium/tonic/pull/1398.
 tonic-build = { git = "https://github.com/MaterializeInc/tonic", rev = "0d86e360ab45779770ca150c8487fe7940c299a9" }
 
@@ -181,6 +183,8 @@ tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opent
 
 # Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
 # it into a release.
+# Also bumps lru to 0.12.0
+# Needs a more complex update to 2.0.0, with a custom TLS connector.
 launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk" }
 
 # Waiting on https://github.com/AltSysrq/proptest/pull/264.
@@ -195,13 +199,6 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 # a release.
 openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 
-# Waiting for a new release of kube-client compatible with base64 0.21.0
-kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4" }
-kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4" }
-
-# Waiting on `lru` dep to update to `0.11.0`
-mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git" }
-
 # Removes dependencies required for WASM support that create duplicated deps.
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
@@ -209,3 +206,6 @@ reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.gi
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.
 columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
+
+[workspace.metadata.vet]
+store = { path = "misc/cargo-vet" }

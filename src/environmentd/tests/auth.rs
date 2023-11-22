@@ -78,30 +78,26 @@
 //! Integration tests for TLS encryption and authentication.
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
-use std::error::Error;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::iter;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::net::{IpAddr, Ipv4Addr, TcpStream};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use headers::{Authorization, Header, HeaderMapExt};
+use headers::Authorization;
 use hyper::client::HttpConnector;
 use hyper::http::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use hyper::http::uri::Scheme;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{body, Body, Request, Response, Server, StatusCode, Uri};
+use hyper::{body, Body, Request, Response, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
+use mz_environmentd::test_util::{self, make_header, make_pg_tls, Ca};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
-    ApiTokenArgs, ApiTokenResponse, Authentication as FronteggAuthentication,
-    AuthenticationConfig as FronteggConfig, Claims, RefreshToken, REFRESH_SUFFIX,
+    Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig, Claims,
 };
+use mz_frontegg_mock::FronteggMockServer;
 use mz_ore::assert_contains;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -109,167 +105,20 @@ use mz_ore::retry::Retry;
 use mz_ore::task::RuntimeExt;
 use mz_sql::names::PUBLIC_ROLE_NAME;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
-use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
-use openssl::hash::MessageDigest;
-use openssl::nid::Nid;
-use openssl::pkey::{PKey, Private};
-use openssl::rsa::Rsa;
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions, SslVerifyMode};
-use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
-use openssl::x509::{X509Name, X509NameBuilder, X509};
 use postgres::config::SslMode;
 use postgres::error::SqlState;
-use postgres_openssl::MakeTlsConnector;
 use serde::Deserialize;
 use serde_json::json;
-use tempfile::TempDir;
 use tokio::runtime::Runtime;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::Message;
 use uuid::Uuid;
 
-pub mod util;
-
 // How long, in seconds, a claim is valid for. Increasing this value will decrease some test flakes
 // without increasing test time.
 const EXPIRES_IN_SECS: u64 = 20;
-
-/// A certificate authority for use in tests.
-pub struct Ca {
-    dir: TempDir,
-    name: X509Name,
-    cert: X509,
-    pkey: PKey<Private>,
-}
-
-impl Ca {
-    fn make_ca(name: &str, parent: Option<&Ca>) -> Result<Ca, Box<dyn Error>> {
-        let dir = tempfile::tempdir()?;
-        let rsa = Rsa::generate(2048)?;
-        let pkey = PKey::from_rsa(rsa)?;
-        let name = {
-            let mut builder = X509NameBuilder::new()?;
-            builder.append_entry_by_nid(Nid::COMMONNAME, name)?;
-            builder.build()
-        };
-        let cert = {
-            let mut builder = X509::builder()?;
-            builder.set_version(2)?;
-            builder.set_pubkey(&pkey)?;
-            builder.set_issuer_name(parent.map(|ca| &ca.name).unwrap_or(&name))?;
-            builder.set_subject_name(&name)?;
-            builder.set_not_before(&*Asn1Time::days_from_now(0)?)?;
-            builder.set_not_after(&*Asn1Time::days_from_now(365)?)?;
-            builder.append_extension(BasicConstraints::new().critical().ca().build()?)?;
-            builder.sign(
-                parent.map(|ca| &ca.pkey).unwrap_or(&pkey),
-                MessageDigest::sha256(),
-            )?;
-            builder.build()
-        };
-        fs::write(dir.path().join("ca.crt"), cert.to_pem()?)?;
-        Ok(Ca {
-            dir,
-            name,
-            cert,
-            pkey,
-        })
-    }
-
-    /// Creates a new root certificate authority.
-    pub fn new_root(name: &str) -> Result<Ca, Box<dyn Error>> {
-        Ca::make_ca(name, None)
-    }
-
-    /// Returns the path to the CA's certificate.
-    pub fn ca_cert_path(&self) -> PathBuf {
-        self.dir.path().join("ca.crt")
-    }
-
-    /// Requests a new intermediate certificate authority.
-    pub fn request_ca(&self, name: &str) -> Result<Ca, Box<dyn Error>> {
-        Ca::make_ca(name, Some(self))
-    }
-
-    /// Generates a certificate with the specified Common Name (CN) that is
-    /// signed by the CA.
-    ///
-    /// Returns the paths to the certificate and key.
-    pub fn request_client_cert(&self, name: &str) -> Result<(PathBuf, PathBuf), Box<dyn Error>> {
-        self.request_cert(name, iter::empty())
-    }
-
-    /// Like `request_client_cert`, but permits specifying additional IP
-    /// addresses to attach as Subject Alternate Names.
-    pub fn request_cert<I>(&self, name: &str, ips: I) -> Result<(PathBuf, PathBuf), Box<dyn Error>>
-    where
-        I: IntoIterator<Item = IpAddr>,
-    {
-        let rsa = Rsa::generate(2048)?;
-        let pkey = PKey::from_rsa(rsa)?;
-        let subject_name = {
-            let mut builder = X509NameBuilder::new()?;
-            builder.append_entry_by_nid(Nid::COMMONNAME, name)?;
-            builder.build()
-        };
-        let cert = {
-            let mut builder = X509::builder()?;
-            builder.set_version(2)?;
-            builder.set_pubkey(&pkey)?;
-            builder.set_issuer_name(self.cert.subject_name())?;
-            builder.set_subject_name(&subject_name)?;
-            builder.set_not_before(&*Asn1Time::days_from_now(0)?)?;
-            builder.set_not_after(&*Asn1Time::days_from_now(365)?)?;
-            for ip in ips {
-                builder.append_extension(
-                    SubjectAlternativeName::new()
-                        .ip(&ip.to_string())
-                        .build(&builder.x509v3_context(None, None))?,
-                )?;
-            }
-            builder.sign(&self.pkey, MessageDigest::sha256())?;
-            builder.build()
-        };
-        let cert_path = self.dir.path().join(Path::new(name).with_extension("crt"));
-        let key_path = self.dir.path().join(Path::new(name).with_extension("key"));
-        fs::write(&cert_path, cert.to_pem()?)?;
-        fs::write(&key_path, pkey.private_key_to_pem_pkcs8()?)?;
-        Ok((cert_path, key_path))
-    }
-}
-
-fn make_pg_tls<F>(configure: F) -> MakeTlsConnector
-where
-    F: Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack>,
-{
-    let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
-    // Disable TLS v1.3 because `postgres` and `hyper` produce stabler error
-    // messages with TLS v1.2.
-    //
-    // Briefly, in TLS v1.3, failing to present a client certificate does not
-    // error during the TLS handshake, as it does in TLS v1.2, but on the first
-    // attempt to read from the stream. But both `postgres` and `hyper` write a
-    // bunch of data before attempting to read from the stream. With a failed
-    // TLS v1.3 connection, sometimes `postgres` and `hyper` succeed in writing
-    // out this data, and then return a nice error message on the call to read.
-    // But sometimes the connection is closed before they write out the data,
-    // and so they report "connection closed" before they ever call read, never
-    // noticing the underlying SSL error.
-    //
-    // It's unclear who's bug this is. Is it on `hyper`/`postgres` to call read
-    // if writing to the stream fails to see if a TLS error occured? Is it on
-    // OpenSSL to provide a better API [1]? Is it a protocol issue that ought to
-    // be corrected in TLS v1.4? We don't want to answer these questions, so we
-    // just avoid TLS v1.3 for now.
-    //
-    // [1]: https://github.com/openssl/openssl/issues/11118
-    let options = connector_builder.options() | SslOptions::NO_TLSV1_3;
-    connector_builder.set_options(options);
-    configure(&mut connector_builder).unwrap();
-    MakeTlsConnector::new(connector_builder.build())
-}
 
 fn make_http_tls<F>(configure: F) -> HttpsConnector<HttpConnector>
 where
@@ -356,7 +205,7 @@ fn assert_http_rejected() -> Assert<Box<dyn Fn(Option<StatusCode>, String)>> {
     }))
 }
 
-fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
+fn run_tests<'a>(header: &str, server: &test_util::Server, tests: &[TestCase<'a>]) {
     println!("==> {}", header);
     let runtime = Runtime::new().unwrap();
     for test in tests {
@@ -628,184 +477,6 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
     }
 }
 
-// Users is a mapping from (client, secret) -> email address.
-fn start_mzcloud(
-    encoding_key: EncodingKey,
-    tenant_id: Uuid,
-    users: BTreeMap<(String, String), String>,
-    roles: BTreeMap<String, Vec<String>>,
-    role_updates_rx: UnboundedReceiver<(String, Vec<String>)>,
-    now: NowFn,
-    expires_in_secs: i64,
-    latency_secs: Option<u64>,
-) -> Result<MzCloudServer, anyhow::Error> {
-    let refreshes = Arc::new(Mutex::new(0u64));
-    let enable_refresh = Arc::new(AtomicBool::new(true));
-    let auth_requests = Arc::new(Mutex::new(0u64));
-    #[derive(Clone)]
-    struct Context {
-        encoding_key: EncodingKey,
-        tenant_id: Uuid,
-        users: BTreeMap<(String, String), String>,
-        roles: BTreeMap<String, Vec<String>>,
-        role_updates_rx: Arc<Mutex<tokio::sync::mpsc::UnboundedReceiver<(String, Vec<String>)>>>,
-        now: NowFn,
-        expires_in_secs: i64,
-        latency_secs: Option<u64>,
-        // Uuid -> email
-        refresh_tokens: Arc<Mutex<BTreeMap<String, String>>>,
-        refreshes: Arc<Mutex<u64>>,
-        enable_refresh: Arc<AtomicBool>,
-        auth_requests: Arc<Mutex<u64>>,
-    }
-    let context = Context {
-        encoding_key,
-        tenant_id,
-        users,
-        roles,
-        role_updates_rx: Arc::new(Mutex::new(role_updates_rx)),
-        now,
-        expires_in_secs,
-        latency_secs,
-        refresh_tokens: Arc::new(Mutex::new(BTreeMap::new())),
-        refreshes: Arc::clone(&refreshes),
-        enable_refresh: Arc::clone(&enable_refresh),
-        auth_requests: Arc::clone(&auth_requests),
-    };
-    async fn handle(context: Context, req: Request<Body>) -> Result<Response<Body>, Infallible> {
-        // In some cases we want to add latency to test de-duplicating results.
-        if let Some(latency) = context.latency_secs {
-            tokio::time::sleep(Duration::from_secs(latency)).await;
-        }
-
-        let (parts, body) = req.into_parts();
-        let body = body::to_bytes(body).await.unwrap();
-        let email: String = if parts.uri.path().ends_with(REFRESH_SUFFIX) {
-            // Always count refresh attempts, even if enable_refresh is false.
-            *context.refreshes.lock().unwrap() += 1;
-            let args: RefreshToken = serde_json::from_slice(&body).unwrap();
-            match (
-                context
-                    .refresh_tokens
-                    .lock()
-                    .unwrap()
-                    .remove(args.refresh_token),
-                context.enable_refresh.load(Ordering::Relaxed),
-            ) {
-                (Some(email), true) => email.to_string(),
-                _ => {
-                    return Ok(Response::builder()
-                        .status(400)
-                        .body(Body::from("unknown refresh token"))
-                        .unwrap())
-                }
-            }
-        } else {
-            *context.auth_requests.lock().unwrap() += 1;
-            let args: ApiTokenArgs = serde_json::from_slice(&body).unwrap();
-            match context
-                .users
-                .get(&(args.client_id.to_string(), args.secret.to_string()))
-            {
-                Some(email) => email.to_string(),
-                None => {
-                    return Ok(Response::builder()
-                        .status(400)
-                        .body(Body::from("unknown user"))
-                        .unwrap())
-                }
-            }
-        };
-        let roles = context.roles.get(&email).cloned().unwrap_or_default();
-        let refresh_token = Uuid::new_v4().to_string();
-        context
-            .refresh_tokens
-            .lock()
-            .unwrap()
-            .insert(refresh_token.clone(), email.clone());
-        let access_token = jsonwebtoken::encode(
-            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
-            &Claims {
-                exp: context.now.as_secs() + context.expires_in_secs,
-                email,
-                sub: Uuid::new_v4(),
-                user_id: None,
-                tenant_id: context.tenant_id,
-                roles,
-                permissions: Vec::new(),
-            },
-            &context.encoding_key,
-        )
-        .unwrap();
-        let resp = ApiTokenResponse {
-            expires: "".to_string(),
-            expires_in: context.expires_in_secs,
-            access_token,
-            refresh_token,
-        };
-        Ok(Response::new(Body::from(
-            serde_json::to_vec(&resp).unwrap(),
-        )))
-    }
-
-    let runtime = Arc::new(Runtime::new()?);
-    let _guard = runtime.enter();
-    let service = make_service_fn(move |_conn| {
-        let mut context = context.clone();
-        let service = service_fn(move |req| {
-            while let Ok((email, roles)) = context.role_updates_rx.lock().unwrap().try_recv() {
-                context.roles.insert(email, roles);
-            }
-            handle(context.clone(), req)
-        });
-        async move { Ok::<_, Infallible>(service) }
-    });
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-    let server = Server::bind(&addr).serve(service);
-    let url = format!("http://{}/", server.local_addr());
-    let _handle = runtime.spawn_named(|| "mzcloud-mock-server", server);
-    Ok(MzCloudServer {
-        url,
-        refreshes,
-        enable_refresh,
-        auth_requests,
-        _runtime: runtime,
-    })
-}
-
-struct MzCloudServer {
-    url: String,
-    refreshes: Arc<Mutex<u64>>,
-    enable_refresh: Arc<AtomicBool>,
-    auth_requests: Arc<Mutex<u64>>,
-    _runtime: Arc<Runtime>,
-}
-
-fn make_header<H: Header>(h: H) -> HeaderMap {
-    let mut map = HeaderMap::new();
-    map.typed_insert(h);
-    map
-}
-
-fn wait_for_refresh(frontegg_server: &MzCloudServer, expires_in_secs: u64) {
-    let expected = *frontegg_server.refreshes.lock().unwrap() + 1;
-    Retry::default()
-        .factor(1.0)
-        .max_duration(Duration::from_secs(expires_in_secs + 20))
-        .retry(|_| {
-            let refreshes = *frontegg_server.refreshes.lock().unwrap();
-            if refreshes >= expected {
-                Ok(())
-            } else {
-                Err(format!(
-                    "expected refresh count {}, got {}",
-                    expected, refreshes
-                ))
-            }
-        })
-        .unwrap();
-}
-
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 fn test_auth_expiry() {
@@ -830,13 +501,12 @@ fn test_auth_expiry() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -856,11 +526,11 @@ fn test_auth_expiry() {
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzp_{client_id}{secret}");
 
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry);
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
 
     let mut pg_client = server
         .pg_config()
@@ -881,8 +551,8 @@ fn test_auth_expiry() {
     );
 
     // Wait for a couple refreshes to happen.
-    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
-    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
+    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
     assert_eq!(
         pg_client
             .query_one("SELECT current_user", &[])
@@ -895,7 +565,7 @@ fn test_auth_expiry() {
     frontegg_server
         .enable_refresh
         .store(false, Ordering::Relaxed);
-    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
     // Sleep until the expiry future should resolve.
     std::thread::sleep(Duration::from_secs(EXPIRES_IN_SECS + 1));
     assert!(pg_client.query_one("SELECT current_user", &[]).is_err());
@@ -974,13 +644,12 @@ fn test_auth_base_require_tls_frontegg() {
         &encoding_key,
     )
     .unwrap();
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         now.clone(),
         1_000,
         None,
@@ -1015,11 +684,11 @@ fn test_auth_base_require_tls_frontegg() {
 
     // Test connecting to a server that requires TLS and uses Materialize Cloud for
     // authentication.
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry);
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require, MzCloud",
         &server,
@@ -1389,7 +1058,7 @@ fn test_auth_base_disable_tls() {
     let no_headers = HeaderMap::new();
 
     // Test TLS modes with a server that does not support TLS.
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     run_tests(
         "TlsMode::Disable",
         &server,
@@ -1482,8 +1151,8 @@ fn test_auth_base_require_tls() {
     let no_headers = HeaderMap::new();
 
     // Test TLS modes with a server that requires TLS.
-    let config = util::Config::default().with_tls(server_cert, server_key);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().with_tls(server_cert, server_key);
+    let server = test_util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
         &server,
@@ -1585,8 +1254,8 @@ fn test_auth_intermediate_ca_no_intermediary() {
 
     // When the server presents only its own certificate, without the
     // intermediary, the client should fail to verify the chain.
-    let config = util::Config::default().with_tls(server_cert, server_key);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().with_tls(server_cert, server_key);
+    let server = test_util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
         &server,
@@ -1647,8 +1316,8 @@ fn test_auth_intermediate_ca() {
     // When the server is configured to present the entire certificate chain,
     // the client should be able to verify the chain even though it only knows
     // about the root CA.
-    let config = util::Config::default().with_tls(server_cert_chain, server_key);
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().with_tls(server_cert_chain, server_key);
+    let server = test_util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
         &server,
@@ -1714,13 +1383,12 @@ fn test_auth_admin_non_superuser() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1743,11 +1411,11 @@ fn test_auth_admin_non_superuser() {
     let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
     let frontegg_header_basic = make_header(frontegg_basic);
 
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry);
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
 
     run_tests(
         "Non-superuser",
@@ -1823,13 +1491,12 @@ fn test_auth_admin_superuser() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1852,11 +1519,11 @@ fn test_auth_admin_superuser() {
     let admin_frontegg_basic = Authorization::basic(admin_frontegg_user, admin_frontegg_password);
     let admin_frontegg_header_basic = make_header(admin_frontegg_basic);
 
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry);
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
 
     run_tests(
         "Superuser",
@@ -1932,13 +1599,12 @@ fn test_auth_admin_superuser_revoked() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    let (role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1959,11 +1625,11 @@ fn test_auth_admin_superuser_revoked() {
 
     let frontegg_password = &format!("{password_prefix}{client_id}{secret}");
 
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry);
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
 
     let mut pg_client = server
         .pg_config()
@@ -1983,10 +1649,11 @@ fn test_auth_admin_superuser_revoked() {
         "off"
     );
 
-    role_tx
+    frontegg_server
+        .role_updates_tx
         .send((frontegg_user.to_string(), vec![admin_role.to_string()]))
         .unwrap();
-    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
 
     assert_eq!(
         pg_client
@@ -1996,10 +1663,11 @@ fn test_auth_admin_superuser_revoked() {
         "on"
     );
 
-    role_tx
+    frontegg_server
+        .role_updates_tx
         .send((frontegg_user.to_string(), Vec::new()))
         .unwrap();
-    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
 
     assert_eq!(
         pg_client
@@ -2030,13 +1698,12 @@ fn test_auth_deduplication() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         Some(2),
@@ -2056,11 +1723,11 @@ fn test_auth_deduplication() {
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzp_{client_id}{secret}");
 
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry);
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
 
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 0);
 
@@ -2112,7 +1779,7 @@ fn test_auth_deduplication() {
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 1);
 
     // Wait for a refresh to occur.
-    wait_for_refresh(&frontegg_server, 10);
+    frontegg_server.wait_for_refresh(10);
     assert_eq!(*frontegg_server.refreshes.lock().unwrap(), 1);
 
     // Both clients should still be queryable.
@@ -2151,13 +1818,12 @@ fn test_refresh_task_metrics() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -2177,11 +1843,11 @@ fn test_refresh_task_metrics() {
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzp_{client_id}{secret}");
 
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry);
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
 
     let mut pg_client = server
         .pg_config()
@@ -2214,14 +1880,33 @@ fn test_refresh_task_metrics() {
 
     drop(pg_client);
 
-    // After dropping the client we should not have any refresh tasks running.
-    let metrics = server.metrics_registry.gather();
-    let mut metrics: Vec<_> = metrics
-        .into_iter()
-        .filter(|family| family.get_name() == "mz_auth_refresh_tasks_active")
-        .collect();
-    assert_eq!(metrics.len(), 1);
-    let metric = metrics.pop().unwrap();
-    let metric = &metric.get_metric()[0];
-    assert_eq!(metric.get_gauge().get_value(), 0.0);
+    // The refresh task asynchronously notices the client has been dropped, so it might take a
+    // moment, hence the retry.
+    let result = mz_ore::retry::Retry::default()
+        .max_duration(Duration::from_secs(5))
+        .retry(|_| {
+            // After dropping the client we should not have any refresh tasks running.
+            let metrics = server.metrics_registry.gather();
+            let mut metrics: Vec<_> = metrics
+                .into_iter()
+                .filter(|family| family.get_name() == "mz_auth_refresh_tasks_active")
+                .collect();
+
+            // If we're retrying, and the metric hasn't changed, then our set will be empty.
+            if metrics.len() != 1 {
+                return Err(-1.0);
+            }
+
+            let metric = metrics.pop().unwrap();
+            let metric = &metric.get_metric()[0];
+
+            let guage_value = metric.get_gauge().get_value();
+            if guage_value == 0.0 {
+                Ok(())
+            } else {
+                Err(guage_value)
+            }
+        });
+
+    assert_eq!(result, Ok(()));
 }

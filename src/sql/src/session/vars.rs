@@ -67,13 +67,14 @@ use std::any::Any;
 use std::borrow::Borrow;
 use std::clone::Clone;
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::ops::RangeBounds;
 use std::str::FromStr;
 use std::string::ToString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
@@ -83,16 +84,19 @@ use mz_persist_client::batch::UntrimmableColumns;
 use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::strconv;
 use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_sql_parser::ident;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
-use crate::session::user::{User, SYSTEM_USER};
-use crate::DEFAULT_SCHEMA;
+use crate::session::user::{User, SUPPORT_USER, SYSTEM_USER};
+use crate::{DEFAULT_SCHEMA, WEBHOOK_CONCURRENCY_LIMIT};
 
 /// The action to take during end_transaction.
 ///
@@ -325,7 +329,7 @@ const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
 
 // Schema can be used an alias for a search path with a single element.
 pub const SCHEMA_ALIAS: &UncasedStr = UncasedStr::new("schema");
-static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![Ident::new(DEFAULT_SCHEMA)]);
+static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![ident!(DEFAULT_SCHEMA)]);
 static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),
     value: &*DEFAULT_SEARCH_PATH,
@@ -646,6 +650,33 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
+const PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_txns_data_shard_retryer_initial_backoff"),
+    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.initial_backoff,
+    description:
+        "The initial backoff when polling for new batches from a txns data shard persist_source.",
+    internal: true,
+};
+
+/// Controls backoff multiplier of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
+const PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("persist_txns_data_shard_retryer_multiplier"),
+    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.multiplier,
+    description:
+        "The backoff multiplier when polling for new batches from a txns data shard persist_source.",
+    internal: true,
+};
+
+/// Controls backoff clamp of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
+const PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_txns_data_shard_retryer_clamp"),
+    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.clamp,
+    description:
+        "The backoff clamp duration when polling for new batches from a txns data shard persist_source.",
+    internal: true,
+};
+
 const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_fast_path_limit"),
     value: &0,
@@ -656,12 +687,32 @@ const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
+const TIMESTAMP_ORACLE_IMPL: ServerVar<TimestampOracleImpl> = ServerVar {
+    name: UncasedStr::new("timestamp_oracle"),
+    value: &TimestampOracleImpl::Catalog,
+    description: "Backing implementation of TimestampOracle.",
+    internal: true,
+};
+
 /// The default for the `DISK` option when creating managed clusters and cluster replicas.
 const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("disk_cluster_replicas_default"),
     value: &false,
     description: "Whether the disk option for managed clusters and cluster replicas should be enabled by default.",
     internal: true,
+};
+
+const UNSAFE_NEW_TRANSACTION_WALL_TIME: ServerVar<Option<CheckedTimestamp<DateTime<Utc>>>> = ServerVar {
+    name: UncasedStr::new("unsafe_new_transaction_wall_time"),
+    value: &None,
+    description:
+        "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. \
+        If not set, uses the system's clock.",
+    // This needs to be false because `internal: true` things are only modifiable by the mz_system
+    // and mz_support users, and we want sqllogictest to have access with its user. Because the name
+    // starts with "unsafe" it still won't be visible or changeable by users unless unsafe mode is
+    // enabled.
+    internal: false,
 };
 
 /// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
@@ -882,13 +933,6 @@ static DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<usize> = Lazy::new(|| {
     usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed))
 });
 
-const VARIABLE_LENGTH_ROW_ENCODING: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("variable_length_row_encoding"),
-    value: &false,
-    description: "Determines whether `repr::row::VARIABLE_LENGTH_ENCODING` is set. See that module for details.",
-    internal: true,
-};
-
 static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("webhooks_secrets_caching_ttl_secs"),
     value: &DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS,
@@ -997,18 +1041,17 @@ const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
-/// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
-    name: UncasedStr::new("dataflow_max_inflight_bytes"),
-    value: &usize::MAX,
+/// The maximum number of in-flight bytes emitted by persist_sources feeding compute dataflows.
+const COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
+    name: UncasedStr::new("compute_dataflow_max_inflight_bytes"),
+    value: &None,
     description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
-                  dataflows (Materialize).",
+                  compute dataflows (Materialize).",
     internal: true,
 };
 
 /// The maximum number of in-flight bytes emitted by persist_sources feeding _storage
-/// dataflows_. This is distinct from `DATAFLOW_MAX_INFLIGHT_BYTES`, as this will
-/// supports more granular control (within a single timestamp).
+/// dataflows_.
 /// Currently defaults to 256MiB = 268435456 bytes
 /// Note: Backpressure will only be turned on if disk is enabled based on
 /// `storage_dataflow_max_inflight_bytes_disk_only` flag
@@ -1084,6 +1127,22 @@ const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
                   will flush their records to single downstream worker to be batched up there... in \
                   the hopes of grouping our updates into fewer, larger batches.",
     internal: true
+};
+
+/// Controls [`mz_persist_client::cfg::PersistConfig::storage_source_decode_fuel`].
+const STORAGE_SOURCE_DECODE_FUEL: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("storage_source_decode_fuel"),
+    value: &PersistConfig::DEFAULT_STORAGE_SOURCE_DECODE_FUEL,
+    description: "The maximum amount of work to do in the persist_source mfp_and_decode \
+                  operator before yielding.",
+    internal: true,
+};
+
+const STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("storage_record_source_sink_namespaced_errors"),
+    value: &true,
+    description: "Whether or not to record namespaced errors in the status history tables",
+    internal: true,
 };
 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_audit_percent`].
@@ -1209,14 +1268,6 @@ static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> 
     internal: true,
 };
 
-pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_ld_rbac_checks"),
-    value: &true,
-    description:
-        "LD facing global boolean flag that allows turning RBAC off for everyone (Materialize).",
-    internal: true,
-};
-
 pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_rbac_checks"),
     value: &true,
@@ -1286,6 +1337,34 @@ const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
     description:
         "Feature flag indicating whether compute rendering should use Materialize's custom linear \
          join implementation rather than the one from Differential Dataflow. (Materialize).",
+    internal: true,
+};
+
+pub static DEFAULT_LINEAR_JOIN_YIELDING: Lazy<String> = Lazy::new(|| "work:1000000".into());
+static LINEAR_JOIN_YIELDING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("linear_join_yielding"),
+    value: &DEFAULT_LINEAR_JOIN_YIELDING,
+    description:
+        "The yielding behavior compute rendering should apply for linear join operators. Either \
+         'work:<amount>' or 'time:<milliseconds>' or 'work:<amount>,time:<milliseconds>'. Note \
+         that omitting one of 'work' or 'time' will entirely disable join yielding by time or \
+         work, respectively, rather than falling back to some default.",
+    internal: true,
+});
+
+pub const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("default_idle_arrangement_merge_effort"),
+    value: &1000,
+    description:
+        "The default value to use for the `IDLE ARRANGEMENT MERGE EFFORT` cluster/replica option.",
+    internal: true,
+};
+
+pub const DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("default_arrangement_exert_proportionality"),
+    value: &16,
+    description:
+        "The default value to use for the `ARRANGEMENT EXERT PROPORTIONALITY` cluster/replica option.",
     internal: true,
 };
 
@@ -1376,6 +1455,13 @@ pub const ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+pub const ENABLE_SPECIALIZED_ARRANGEMENTS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_specialized_arrangements"),
+    value: &false,
+    description: "type-specialization for arrangements in compute rendering",
+    internal: true,
+};
+
 pub const MIN_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("min_timestamp_interval"),
     value: &Duration::from_millis(1000),
@@ -1387,6 +1473,20 @@ pub const MAX_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("max_timestamp_interval"),
     value: &Duration::from_millis(1000),
     description: "Maximum timestamp interval",
+    internal: true,
+};
+
+pub const WEBHOOK_CONCURRENT_REQUEST_LIMIT: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("webhook_concurrent_request_limit"),
+    value: &WEBHOOK_CONCURRENCY_LIMIT,
+    description: "Maximum number of concurrent requests for appending to a webhook source.",
+    internal: true,
+};
+
+pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_columnation_lgalloc"),
+    value: &false,
+    description: "Enable allocating regions from lgalloc",
     internal: true,
 };
 
@@ -1505,9 +1605,9 @@ mod cluster_scheduling {
 /// - Belong to `SystemVars`, _not_ `SessionVars`
 /// - Default to false and must be explicitly enabled, or default to `true` and can be explicitly disabled.
 ///
-/// WARNING / CONTRACT: Feature flags must always *enable* behavior. In other words, setting a
-/// feature flag must make the system more permissive. For example, let's suppose we'd like to
-/// gate deprecated upsert syntax behind a feature flag. In this case, do not add a feature flag
+/// WARNING / CONTRACT: Syntax-related feature flags must always *enable* behavior. In other words,
+/// setting a feature flag must make the system more permissive. For example, let's suppose we'd like
+/// to gate deprecated upsert syntax behind a feature flag. In this case, do not add a feature flag
 /// like `disable_deprecated_upsert_syntax`, as `disable_deprecated_upsert_syntax = on` would
 /// _prevent_ the system from parsing the deprecated upsert syntax. Instead, use a feature flag
 /// like `enable_deprecated_upsert_syntax`.
@@ -1524,43 +1624,55 @@ mod cluster_scheduling {
 /// switched to `off`, we need to temporarily re-enable it during parsing and planning to be able
 /// to boot successfully.
 ///
-/// Ensuring that all feature flags *enable* behavior means that setting all feature flags to `on`
-/// during catalog boot has the desired effect.
-///
-/// The features enabled by a flag must not result in SQL plan differences that are not specified
-/// in the SQL itself. For example, a feature flag may enable new SQL syntax. Alternatively, a
-/// feature flag that enables a certain SQL-to-HIR optimization must only do so if the flag is
-/// enabled and the user specifies the optimization in some query hint or option. Otherwise, on
-/// restart, the plan may change because all feature flags are enabled then.
+/// Ensuring that all syntax-related feature flags *enable* behavior means that setting all such
+/// feature flags to `on` during catalog boot has the desired effect.
 macro_rules! feature_flags {
-    // Match `$name, $feature_desc`, default `$value` to false.
-    (@inner $name:expr, $feature_desc:literal) => {
-        feature_flags!(@inner $name, $feature_desc, false);
-    };
-    // Match `$name, $feature_desc, $value`, default `$internal` to true.
-    (@inner $name:expr, $feature_desc:literal, $value:expr) => {
-        feature_flags!(@inner $name, $feature_desc, $value, true);
-    };
     // Match `$name, $feature_desc, $value, $internal`.
-    (@inner $name:expr, $feature_desc:literal, $value:expr, $internal:expr) => {
+    (@inner
+        // The feature flag name.
+        name: $name:expr,
+        // The feature flag description.
+        desc: $desc:literal,
+        // The feature flag default value.
+        default: $value:expr,
+        // Should this feature be visible only internally.
+        internal: $internal:expr,
+    ) => {
         paste::paste!{
             // Note that the ServerVar is not directly exported; we expect these to be
             // accessible through their FeatureFlag variant.
             static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
                 name: UncasedStr::new(stringify!($name)),
                 value: &$value,
-                description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
+                description: concat!("Whether ", $desc, " is allowed (Materialize)."),
                 internal: $internal
             };
 
             pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
                 flag: &[<$name:upper _VAR>],
-                feature_desc: $feature_desc,
+                feature_desc: $desc,
             };
         }
     };
-    ($(($name:expr, $feature_desc:literal $(, $($extra:expr),+)?)),+ $(,)?) => {
-        $(feature_flags!(@inner $name, $feature_desc $(, $($extra),+)?);)+
+    ($({
+        // The feature flag name.
+        name: $name:expr,
+        // The feature flag description.
+        desc: $desc:literal,
+        // The feature flag default value.
+        default: $value:expr,
+        // Should this feature be visible only internally.
+        internal: $internal:expr,
+        // Should the feature be turned on during catalog rehydration when
+        // parsing a catalog item.
+        enable_for_item_parsing: $enable_for_item_parsing:expr,
+    },)+) => {
+        $(feature_flags! { @inner
+            name: $name,
+            desc: $desc,
+            default: $value,
+            internal: $internal,
+        })+
 
         paste::paste!{
             impl SystemVars {
@@ -1579,10 +1691,12 @@ macro_rules! feature_flags {
                     )+
                 }
 
-                pub fn enable_all_feature_flags(&mut self) {
+                pub fn enable_for_item_parsing(&mut self) {
                     $(
-                        self.set(stringify!($name), VarInput::Flat("on"))
-                            .expect("setting default value must work");
+                        if $enable_for_item_parsing {
+                            self.set(stringify!($name), VarInput::Flat("on"))
+                                .expect("setting default value must work");
+                        }
                     )+
                 }
 
@@ -1598,166 +1712,366 @@ macro_rules! feature_flags {
 
 feature_flags!(
     // Gates for other feature flags
-    (allow_real_time_recency, "real time recency"),
+    {
+        name: allow_real_time_recency,
+        desc: "real time recency",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
     // Actual feature flags
-    (
-        enable_binary_date_bin,
-        "the binary version of date_bin function"
-    ),
-    (
-        enable_create_sink_denylist_with_options,
-        "CREATE SINK with unsafe options"
-    ),
-    (
-        enable_create_source_denylist_with_options,
-        "CREATE SOURCE with unsafe options"
-    ),
-    (
-        enable_create_source_from_testscript,
-        "CREATE SOURCE ... FROM TEST SCRIPT"
-    ),
-    (enable_date_bin_hopping, "the date_bin_hopping function"),
-    (
-        enable_envelope_debezium_in_subscribe,
-        "`ENVELOPE DEBEZIUM (KEY (..))`"
-    ),
-    (enable_envelope_materialize, "ENVELOPE MATERIALIZE"),
-    (enable_index_options, "INDEX OPTIONS"),
-    (
-        enable_kafka_config_denylist_options,
-        "Kafka sources with non-allowlisted options"
-    ),
-    (enable_list_length_max, "the list_length_max function"),
-    (enable_list_n_layers, "the list_n_layers function"),
-    (enable_list_remove, "the list_remove function"),
-    (
-        enable_logical_compaction_window,
-        "LOGICAL COMPACTION WINDOW"
-    ),
-    (
-        enable_monotonic_oneshot_selects,
-        "monotonic evaluation of one-shot SELECT queries"
-    ),
-    (enable_primary_key_not_enforced, "PRIMARY KEY NOT ENFORCED"),
-    (enable_mfp_pushdown_explain, "`filter_pushdown` explain"),
-    (
-        enable_multi_worker_storage_persist_sink,
-        "multi-worker storage persist sink"
-    ),
-    (
-        enable_persist_streaming_snapshot_and_fetch,
-        "use the new streaming consolidate for snapshot_and_fetch"
-    ),
-    (
-        enable_persist_streaming_compaction,
-        "use the new streaming consolidate for compaction"
-    ),
-    (enable_raise_statement, "RAISE statement"),
-    (enable_repeat_row, "the repeat_row function"),
-    (
-        enable_table_check_constraint,
-        "CREATE TABLE with a check constraint"
-    ),
-    (enable_table_foreign_key, "CREATE TABLE with a foreign key"),
-    (
-        enable_table_keys,
-        "CREATE TABLE with a primary key or unique constraint"
-    ),
-    (
-        enable_unmanaged_cluster_replicas,
-        "unmanaged cluster replicas"
-    ),
-    (
-        enable_unstable_dependencies,
-        "depending on unstable objects"
-    ),
-    (
-        enable_disk_cluster_replicas,
-        "`WITH (DISK)` for cluster replicas"
-    ),
-    (
-        enable_within_timestamp_order_by_in_subscribe,
-        "`WITHIN TIMESTAMP ORDER BY ..`"
-    ),
-    (
-        enable_cardinality_estimates,
-        "join planning with cardinality estimates"
-    ),
-    (
-        enable_connection_validation_syntax,
-        "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax"
-    ),
-    (
-        enable_webhook_sources,
-        "creating or pushing data to webhook sources"
-    ),
-    (
-        enable_try_parse_monotonic_iso8601_timestamp,
-        "the try_parse_monotonic_iso8601_timestamp function"
-    ),
-    (enable_alter_set_cluster, "ALTER ... SET CLUSTER syntax"),
-    (
-        enable_dangerous_functions,
-        "executing potentially dangerous functions"
-    ),
-    (
-        enable_managed_cluster_availability_zones,
-        "MANAGED, AVAILABILITY ZONES syntax"
-    ),
-    (
-        statement_logging_use_reproducible_rng,
-        "statement logging with reproducible RNG"
-    ),
-    (
-        enable_notices_for_index_too_wide_for_literal_constraints,
-        "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
-        false
-    ),
-    (
-        enable_notices_for_index_empty_key,
-        "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
-        true
-    ),
-    (enable_explain_broken, "EXPLAIN ... BROKEN <query> syntax"),
-    (
-        enable_role_vars,
-        "setting default session variables for a role"
-    ),
-    (
-        enable_unified_clusters,
-        "unified compute and storage cluster"
-    ),
-    (
-        enable_jemalloc_profiling,
-        "jemalloc heap memory profiling",
-        false
-    ),
-    (
-        enable_comment,
-        "the COMMENT ON feature for objects",
-        false, // default false
-        false  // internal false
-    ),
-    (
-        enable_sink_doc_on_option,
-        "DOC ON option for sinks",
-        false, // default false
-        false  // internal false
-    ),
-    (
-        enable_unified_optimizer_api,
-        "use the new unified optimzier API in bootstrap() and coordinator methods",
-        true
-    ),
-    (
-        enable_assert_not_null,
-        "ASSERT NOT NULL for materialized views"
-    ),
-    (
-        enable_specialized_arrangements,
-        "type-specialization for arrangements in compute rendering",
-        false
-    )
+    {
+        name: enable_binary_date_bin,
+        desc: "the binary version of date_bin function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_create_sink_denylist_with_options,
+        desc: "CREATE SINK with unsafe options",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_create_source_denylist_with_options,
+        desc: "CREATE SOURCE with unsafe options",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_create_source_from_testscript,
+        desc: "CREATE SOURCE ... FROM TEST SCRIPT",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_date_bin_hopping,
+        desc: "the date_bin_hopping function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_envelope_debezium_in_subscribe,
+        desc: "`ENVELOPE DEBEZIUM (KEY (..))`",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_envelope_materialize,
+        desc: "ENVELOPE MATERIALIZE",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_index_options,
+        desc: "INDEX OPTIONS",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_kafka_config_denylist_options,
+        desc: "Kafka sources with non-allowlisted options",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_list_length_max,
+        desc: "the list_length_max function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_list_n_layers,
+        desc: "the list_n_layers function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_list_remove,
+        desc: "the list_remove function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_logical_compaction_window,
+        desc: "LOGICAL COMPACTION WINDOW",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_primary_key_not_enforced,
+        desc: "PRIMARY KEY NOT ENFORCED",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_mfp_pushdown_explain,
+        desc: "`filter_pushdown` explain",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_multi_worker_storage_persist_sink,
+        desc: "multi-worker storage persist sink",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_persist_streaming_snapshot_and_fetch,
+        desc: "use the new streaming consolidate for snapshot_and_fetch",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_persist_streaming_compaction,
+        desc: "use the new streaming consolidate for compaction",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_raise_statement,
+        desc: "RAISE statement",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_repeat_row,
+        desc: "the repeat_row function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_table_check_constraint,
+        desc: "CREATE TABLE with a check constraint",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_table_foreign_key,
+        desc: "CREATE TABLE with a foreign key",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_table_keys,
+        desc: "CREATE TABLE with a primary key or unique constraint",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_unmanaged_cluster_replicas,
+        desc: "unmanaged cluster replicas",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_unstable_dependencies,
+        desc: "depending on unstable objects",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_disk_cluster_replicas,
+        desc: "`WITH (DISK)` for cluster replicas",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_within_timestamp_order_by_in_subscribe,
+        desc: "`WITHIN TIMESTAMP ORDER BY ..`",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_cardinality_estimates,
+        desc: "join planning with cardinality estimates",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_connection_validation_syntax,
+        desc: "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_try_parse_monotonic_iso8601_timestamp,
+        desc: "the try_parse_monotonic_iso8601_timestamp function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_alter_set_cluster,
+        desc: "ALTER ... SET CLUSTER syntax",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_dangerous_functions,
+        desc: "executing potentially dangerous functions",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_managed_cluster_availability_zones,
+        desc: "MANAGED, AVAILABILITY ZONES syntax",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: statement_logging_use_reproducible_rng,
+        desc: "statement logging with reproducible RNG",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_notices_for_index_too_wide_for_literal_constraints,
+        desc: "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_notices_for_index_empty_key,
+        desc: "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_explain_broken,
+        desc: "EXPLAIN ... BROKEN <query> syntax",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_role_vars,
+        desc: "setting default session variables for a role",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_unified_clusters,
+        desc: "unified compute and storage cluster",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_jemalloc_profiling,
+        desc: "jemalloc heap memory profiling",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_comment,
+        desc: "the COMMENT ON feature for objects",
+        default: false,
+        internal: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_sink_doc_on_option,
+        desc: "DOC ON option for sinks",
+        default: false,
+        internal: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_assert_not_null,
+        desc: "ASSERT NOT NULL for materialized views",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_alter_swap,
+        desc: "the ALTER SWAP feature for objects",
+        default: false,
+        internal: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_new_outer_join_lowering,
+        desc: "new outer join lowering",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_default_kafka_ssh_tunnel,
+        desc: "the top-level SSH TUNNEL feature for kafka connections",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_time_at_time_zone,
+        desc: "use of AT TIME ZONE or timezone() with time type",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_persist_txn_tables,
+        desc: "\
+            Whether to use the new persist-txn tables implementation or the legacy \
+            one.
+
+            Only takes effect on restart. Any changes will also cause clusterd \
+            processes to restart.
+
+            This value is also configurable via a Launch Darkly parameter of the \
+            same name, but we keep the flag to make testing easier. If specified, \
+            the flag takes precedence over the Launch Darkly param.",
+        default: &false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_aws_connection,
+        desc: "CREATE CONNECTION ... TO AWS",
+        default: &true, // will set to false once we verify that nobody's using this
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Represents the input to a variable.
@@ -1860,6 +2174,7 @@ impl SessionVars {
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
             .with_var(&EMIT_INTROSPECTION_QUERY_NOTICE)
+            .with_var(&UNSAFE_NEW_TRANSACTION_WALL_TIME)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1946,13 +2261,14 @@ impl SessionVars {
             &STANDARD_CONFORMING_STRINGS,
             &TIMEZONE,
             &INTERVAL_STYLE,
-            // Including `cluster`, `cluster_replica`, and `database` in the notify set is a
-            // Materialize extension. Doing so allows users to more easily identify where their
-            // queries will be executing, which is important to know when you consider the size of
-            // a cluster, what indexes are present, etc.
+            // Including `cluster`, `cluster_replica`, `database`, and `search_path` in the notify
+            // set is a Materialize extension. Doing so allows users to more easily identify where
+            // their queries will be executing, which is important to know when you consider the
+            // size of a cluster, what indexes are present, etc.
             &*CLUSTER,
             &CLUSTER_REPLICA,
             &*DATABASE,
+            &*SEARCH_PATH,
         ]
         .into_iter()
         .map(|p| self.get(None, p.name()).expect("SystemVars known to exist"))
@@ -2281,6 +2597,10 @@ impl SessionVars {
     pub fn emit_introspection_query_notice(&self) -> bool {
         *self.expect_value(&EMIT_INTROSPECTION_QUERY_NOTICE)
     }
+
+    pub fn unsafe_new_transaction_wall_time(&self) -> Option<CheckedTimestamp<DateTime<Utc>>> {
+        *self.expect_value(&UNSAFE_NEW_TRANSACTION_WALL_TIME)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -2426,7 +2746,7 @@ impl SystemVars {
             .with_var(&PERSIST_READER_LEASE_DURATION)
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&CRDB_TCP_USER_TIMEOUT)
-            .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
+            .with_var(&COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
@@ -2434,9 +2754,14 @@ impl SystemVars {
             .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+            .with_var(&STORAGE_SOURCE_DECODE_FUEL)
+            .with_var(&STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF)
+            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER)
+            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
             .with_var(&PERSIST_FAST_PATH_LIMIT)
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
@@ -2448,7 +2773,6 @@ impl SystemVars {
             .with_var(&PERSIST_ROLLUP_THRESHOLD)
             .with_var(&METRICS_RETENTION)
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
-            .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&PG_SOURCE_CONNECT_TIMEOUT)
             .with_var(&PG_SOURCE_KEEPALIVES_IDLE)
@@ -2461,8 +2785,12 @@ impl SystemVars {
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
             .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
             .with_var(&ENABLE_MZ_JOIN_CORE)
+            .with_var(&LINEAR_JOIN_YIELDING)
+            .with_var(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
+            .with_var(&DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY)
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
+            .with_var(&ENABLE_SPECIALIZED_ARRANGEMENTS)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&MIN_TIMESTAMP_INTERVAL)
             .with_var(&MAX_TIMESTAMP_INTERVAL)
@@ -2470,7 +2798,6 @@ impl SystemVars {
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
-            .with_var(&VARIABLE_LENGTH_ROW_ENCODING)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -2495,7 +2822,10 @@ impl SystemVars {
             .with_var(&TRUNCATE_STATEMENT_LOG)
             .with_var(&STATEMENT_LOGGING_RETENTION)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
-            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT);
+            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+            .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
+            .with_var(&ENABLE_COLUMNATION_LGALLOC)
+            .with_var(&TIMESTAMP_ORACLE_IMPL);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -2716,7 +3046,6 @@ impl SystemVars {
     /// the affected SystemVars.
     fn refresh_internal_state(&mut self) {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
-        self.propagate_var_change(VARIABLE_LENGTH_ROW_ENCODING.name.as_str());
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
@@ -2923,6 +3252,21 @@ impl SystemVars {
         *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
     }
 
+    /// Returns the `persist_txns_data_shard_retryer_initial_backoff` configuration parameter.
+    pub fn persist_txns_data_shard_retryer_initial_backoff(&self) -> Duration {
+        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF)
+    }
+
+    /// Returns the `persist_txns_data_shard_retryer_multiplier` configuration parameter.
+    pub fn persist_txns_data_shard_retryer_multiplier(&self) -> u32 {
+        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER)
+    }
+
+    /// Returns the `persist_txns_data_shard_retryer_clamp` configuration parameter.
+    pub fn persist_txns_data_shard_retryer_clamp(&self) -> Duration {
+        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
+    }
+
     pub fn persist_fast_path_limit(&self) -> usize {
         *self.expect_value(&PERSIST_FAST_PATH_LIMIT)
     }
@@ -2986,9 +3330,9 @@ impl SystemVars {
         *self.expect_value(&CRDB_TCP_USER_TIMEOUT)
     }
 
-    /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
-    pub fn dataflow_max_inflight_bytes(&self) -> usize {
-        *self.expect_value(&DATAFLOW_MAX_INFLIGHT_BYTES)
+    /// Returns the `compute_dataflow_max_inflight_bytes` configuration parameter.
+    pub fn compute_dataflow_max_inflight_bytes(&self) -> Option<usize> {
+        *self.expect_value(&COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES)
     }
 
     /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
@@ -3024,6 +3368,15 @@ impl SystemVars {
     /// Returns the `storage_persist_sink_minimum_batch_updates` configuration parameter.
     pub fn storage_persist_sink_minimum_batch_updates(&self) -> usize {
         *self.expect_value(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+    }
+
+    pub fn storage_source_decode_fuel(&self) -> usize {
+        *self.expect_value(&STORAGE_SOURCE_DECODE_FUEL)
+    }
+
+    /// Returns the `storage_record_source_sink_namespaced_errors` configuration parameter.
+    pub fn storage_record_source_sink_namespaced_errors(&self) -> bool {
+        *self.expect_value(&STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS)
     }
 
     /// Returns the `persist_stats_audit_percent` configuration parameter.
@@ -3084,11 +3437,6 @@ impl SystemVars {
         *self.expect_value(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
     }
 
-    /// Returns the `enable_ld_rbac_checks` configuration parameter.
-    pub fn enable_ld_rbac_checks(&self) -> bool {
-        *self.expect_value(&ENABLE_LD_RBAC_CHECKS)
-    }
-
     /// Returns the `enable_rbac_checks` configuration parameter.
     pub fn enable_rbac_checks(&self) -> bool {
         *self.expect_value(&ENABLE_RBAC_CHECKS)
@@ -3112,6 +3460,21 @@ impl SystemVars {
         *self.expect_value(&ENABLE_MZ_JOIN_CORE)
     }
 
+    /// Returns the `linear_join_yielding` configuration parameter.
+    pub fn linear_join_yielding(&self) -> &String {
+        self.expect_value(&LINEAR_JOIN_YIELDING)
+    }
+
+    /// Returns the `default_idle_arrangement_merge_effort` configuration parameter.
+    pub fn default_idle_arrangement_merge_effort(&self) -> u32 {
+        *self.expect_value(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
+    }
+
+    /// Returns the `default_arrangement_exert_proportionality` configuration parameter.
+    pub fn default_arrangement_exert_proportionality(&self) -> u32 {
+        *self.expect_value(&DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY)
+    }
+
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
     pub fn enable_storage_shard_finalization(&self) -> bool {
         *self.expect_value(&ENABLE_STORAGE_SHARD_FINALIZATION)
@@ -3119,6 +3482,10 @@ impl SystemVars {
 
     pub fn enable_consolidate_after_union_negate(&self) -> bool {
         *self.expect_value(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
+    }
+
+    pub fn enable_specialized_arrangements(&self) -> bool {
+        *self.expect_value(&ENABLE_SPECIALIZED_ARRANGEMENTS)
     }
 
     /// Returns the `enable_default_connection_validation` configuration parameter.
@@ -3147,19 +3514,8 @@ impl SystemVars {
         *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
     }
 
-    pub fn coord_slow_message_reporting_threshold_ms(&self) -> Duration {
+    pub fn coord_slow_message_reporting_threshold(&self) -> Duration {
         *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
-    }
-
-    /// The dramatic name is to warn you not to call this unless you know what you're doing!
-    /// It should only be read during environmentd startup, to ensure that all replicas get the
-    /// same value.
-    ///
-    /// After startup, row decoding is controlled by the
-    /// `mz_repr::VARIABLE_LENGTH_ROW_ENCODING` global atomic variable.
-    #[allow(non_snake_case)]
-    pub fn variable_length_row_encoding_DANGEROUS(&self) -> bool {
-        *self.expect_value(&VARIABLE_LENGTH_ROW_ENCODING)
     }
 
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
@@ -3238,6 +3594,21 @@ impl SystemVars {
     /// Returns the `optimizer_oneshot_stats_timeout` configuration parameter.
     pub fn optimizer_oneshot_stats_timeout(&self) -> Duration {
         *self.expect_value(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+    }
+
+    /// Returns the `webhook_concurrent_request_limit` configuration parameter.
+    pub fn webhook_concurrent_request_limit(&self) -> usize {
+        *self.expect_value(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
+    }
+
+    /// Returns the `enable_columnation_lgalloc` configuration parameter.
+    pub fn enable_columnation_lgalloc(&self) -> bool {
+        *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
+    }
+
+    /// Returns the `timestamp_oracle` configuration parameter.
+    pub fn timestamp_oracle_impl(&self) -> TimestampOracleImpl {
+        *self.expect_value(&TIMESTAMP_ORACLE_IMPL)
     }
 }
 
@@ -3340,7 +3711,7 @@ where
     }
 
     fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
-        if self.internal && user != &*SYSTEM_USER {
+        if self.internal && user != &*SYSTEM_USER && user != &*SUPPORT_USER {
             Err(VarError::UnknownParameter(self.name().to_string()))
         } else if self.name().starts_with("unsafe")
             && match system_vars {
@@ -4014,6 +4385,23 @@ impl Value for f64 {
     }
 }
 
+impl Value for Option<CheckedTimestamp<DateTime<Utc>>> {
+    fn type_name() -> String {
+        "timestamptz".to_string()
+    }
+
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<Self, VarError> {
+        let s = extract_single_value(param, input)?;
+        strconv::parse_timestamptz(s)
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
+            .map(Some)
+    }
+
+    fn format(&self) -> String {
+        self.map(|t| t.to_string()).unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct NumericNonNegNonNan;
 
@@ -4322,7 +4710,16 @@ impl Value for Vec<Ident> {
             // element. This matches PostgreSQL.
             VarInput::SqlSet(values) => values,
         };
-        Ok(values.iter().map(Ident::new).collect())
+        let values = values
+            .iter()
+            .map(Ident::new)
+            .collect::<Result<_, _>>()
+            .map_err(|e| VarError::InvalidParameterValue {
+                parameter: param.into(),
+                values: values.to_vec(),
+                reason: e.to_string(),
+            })?;
+        Ok(values)
     }
 
     fn format(&self) -> String {
@@ -4675,6 +5072,12 @@ impl IsolationLevel {
     }
 }
 
+impl Display for IsolationLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl Value for IsolationLevel {
     fn type_name() -> String {
         "string".to_string()
@@ -4776,10 +5179,12 @@ pub fn is_tracing_var(name: &str) -> bool {
 /// Returns whether the named variable is a compute configuration parameter.
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
-        || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || name == LINEAR_JOIN_YIELDING.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || name == ENABLE_JEMALLOC_PROFILING.name()
         || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
+        || name == ENABLE_COLUMNATION_LGALLOC.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
 }
@@ -4797,6 +5202,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
         || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
         || name == STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO.name()
+        || name == STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)
@@ -4834,9 +5240,14 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == CRDB_TCP_USER_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
+        || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
+        || name == STORAGE_SOURCE_DECODE_FUEL.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
+        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF.name()
+        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER.name()
+        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP.name()
         || name == PERSIST_FAST_PATH_LIMIT.name()
         || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
@@ -4859,6 +5270,11 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
         || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT.name()
+}
+
+/// Returns whether the named variable is an HTTP server related config var.
+pub fn is_http_config_var(name: &str) -> bool {
+    name == WEBHOOK_CONCURRENT_REQUEST_LIMIT.name()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -4946,6 +5362,59 @@ impl Value for IntervalStyle {
 
     fn format(&self) -> String {
         self.as_str().to_string()
+    }
+}
+
+/// List of valid TimestampOracle implementations
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TimestampOracleImpl {
+    /// Timestamp oracle backed by Postgres/CRDB.
+    Postgres,
+    /// Legacy, in-memory oracle backed by Catalog/Stash.
+    Catalog,
+}
+
+impl TimestampOracleImpl {
+    fn as_str(&self) -> &'static str {
+        match self {
+            TimestampOracleImpl::Postgres => "postgres",
+            TimestampOracleImpl::Catalog => "catalog",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        vec![Self::Postgres.as_str(), Self::Catalog.as_str()]
+    }
+}
+
+impl Value for TimestampOracleImpl {
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let s = UncasedStr::new(s);
+
+        if s == TimestampOracleImpl::Postgres.as_str() {
+            Ok(TimestampOracleImpl::Postgres)
+        } else if s == TimestampOracleImpl::Catalog.as_str() {
+            Ok(TimestampOracleImpl::Catalog)
+        } else {
+            Err(VarError::ConstrainedParameter {
+                parameter: (&TIMESTAMP_ORACLE_IMPL).into(),
+                values: input.to_vec(),
+                valid_values: Some(TimestampOracleImpl::valid_values()),
+            })
+        }
+    }
+
+    fn format(&self) -> String {
+        self.as_str().into()
     }
 }
 

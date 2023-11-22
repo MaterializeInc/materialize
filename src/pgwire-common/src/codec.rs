@@ -35,7 +35,7 @@ pub const ACCEPT_SSL_ENCRYPTION: u8 = b'S';
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
 
 #[derive(Debug)]
-enum CodecError {
+pub enum CodecError {
     StringNoTerminator,
 }
 

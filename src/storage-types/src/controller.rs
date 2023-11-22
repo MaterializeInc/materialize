@@ -11,15 +11,23 @@ use std::error::Error;
 use std::fmt::{self, Debug};
 
 use itertools::Itertools;
+use mz_persist_client::stats::PartStats;
 use mz_persist_client::{PersistLocation, ShardId};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationDesc};
+use mz_persist_txn::{TxnsCodec, TxnsEntry};
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::columnar::Data;
+use mz_persist_types::dyn_struct::DynStruct;
+use mz_persist_types::stats::StructStats;
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_stash_types::StashError;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
 use crate::errors::DataflowError;
 use crate::instances::StorageInstanceId;
+use crate::sources::SourceData;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.controller.rs"));
 
@@ -36,6 +44,55 @@ pub struct CollectionMetadata {
     pub status_shard: Option<ShardId>,
     /// The `RelationDesc` that describes the contents of the `data_shard`.
     pub relation_desc: RelationDesc,
+    /// The shard id of the persist-txn shard, if `self.data_shard` is managed
+    /// by the persist-txn system, or None if it's not.
+    pub txns_shard: Option<ShardId>,
+}
+
+impl crate::AlterCompatible for CollectionMetadata {
+    fn alter_compatible(
+        &self,
+        id: mz_repr::GlobalId,
+        other: &Self,
+    ) -> Result<(), self::StorageError> {
+        if self == other {
+            return Ok(());
+        }
+
+        let CollectionMetadata {
+            // persist locations may change (though not as a result of ALTER);
+            // we allow this because if this changes unexpectedly, we will
+            // notice in other ways.
+            persist_location: _,
+            remap_shard,
+            data_shard,
+            status_shard,
+            relation_desc,
+            txns_shard,
+        } = self;
+
+        let compatibility_checks = [
+            (remap_shard == &other.remap_shard, "remap_shard"),
+            (data_shard == &other.data_shard, "data_shard"),
+            (status_shard == &other.status_shard, "status_shard"),
+            (relation_desc == &other.relation_desc, "relation_desc"),
+            (txns_shard == &other.txns_shard, "txns_shard"),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "CollectionMetadata incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlter { id });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
@@ -47,6 +104,7 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             remap_shard: self.remap_shard.map(|s| s.to_string()),
             status_shard: self.status_shard.map(|s| s.to_string()),
             relation_desc: Some(self.relation_desc.into_proto()),
+            txns_shard: self.txns_shard.map(|x| x.to_string()),
         }
     }
 
@@ -71,6 +129,10 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             relation_desc: value
                 .relation_desc
                 .into_rust_if_some("ProtoCollectionMetadata::relation_desc")?,
+            txns_shard: value
+                .txns_shard
+                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
+                .transpose()?,
         })
     }
 }
@@ -94,24 +156,6 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
                 .data_shard
                 .parse()
                 .map_err(TryFromProtoError::InvalidShardId)?,
-        })
-    }
-}
-
-impl RustType<mz_stash_types::objects::proto::DurableCollectionMetadata>
-    for DurableCollectionMetadata
-{
-    fn into_proto(&self) -> mz_stash_types::objects::proto::DurableCollectionMetadata {
-        mz_stash_types::objects::proto::DurableCollectionMetadata {
-            data_shard: self.data_shard.into_proto(),
-        }
-    }
-
-    fn from_proto(
-        proto: mz_stash_types::objects::proto::DurableCollectionMetadata,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok(DurableCollectionMetadata {
-            data_shard: proto.data_shard.into_rust()?,
         })
     }
 }
@@ -148,8 +192,8 @@ pub enum StorageError {
     },
     /// Dataflow was not able to process a request
     DataflowError(DataflowError),
-    /// Response to an invalid/unsupported `ALTER SOURCE` command.
-    InvalidAlterSource { id: GlobalId },
+    /// Response to an invalid/unsupported `ALTER..` command.
+    InvalidAlter { id: GlobalId },
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
@@ -176,7 +220,7 @@ impl Error for StorageError {
             Self::ExportInstanceMissing { .. } => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
-            Self::InvalidAlterSource { .. } => None,
+            Self::InvalidAlter { .. } => None,
             Self::InvalidUsage(_) => None,
             Self::ResourceExhausted(_) => None,
             Self::ShuttingDown(_) => None,
@@ -237,7 +281,7 @@ impl fmt::Display for StorageError {
             // N.B. For these errors, the underlying error is reported in `source()`, and it
             // is the responsibility of the caller to print the chain of errors, when desired.
             Self::DataflowError(_err) => write!(f, "dataflow failed to process request",),
-            Self::InvalidAlterSource { id } => {
+            Self::InvalidAlter { id } => {
                 write!(f, "{id} cannot be altered in the requested way")
             }
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
@@ -257,5 +301,67 @@ impl From<StashError> for StorageError {
 impl From<DataflowError> for StorageError {
     fn from(error: DataflowError) -> Self {
         Self::DataflowError(error)
+    }
+}
+
+#[derive(Debug)]
+pub struct TxnsCodecRow;
+
+impl TxnsCodecRow {
+    pub fn desc() -> RelationDesc {
+        RelationDesc::empty()
+            .with_column("shard_id", ScalarType::String.nullable(false))
+            .with_column("batch", ScalarType::Bytes.nullable(true))
+    }
+}
+
+impl TxnsCodec for TxnsCodecRow {
+    type Key = SourceData;
+    type Val = ();
+
+    fn schemas() -> (
+        <Self::Key as mz_persist_types::Codec>::Schema,
+        <Self::Val as mz_persist_types::Codec>::Schema,
+    ) {
+        (Self::desc(), UnitSchema)
+    }
+
+    fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
+        let row = match &e {
+            TxnsEntry::Register(data_id) => {
+                Row::pack([Datum::from(data_id.to_string().as_str()), Datum::Null])
+            }
+            TxnsEntry::Append(data_id, batch) => Row::pack([
+                Datum::from(data_id.to_string().as_str()),
+                Datum::from(batch.as_slice()),
+            ]),
+        };
+        (SourceData(Ok(row)), ())
+    }
+
+    fn decode(row: SourceData, _: ()) -> TxnsEntry {
+        let mut datums = row.0.as_ref().expect("valid entry").iter();
+        let data_id = datums.next().expect("valid entry").unwrap_str();
+        let data_id = data_id.parse::<ShardId>().expect("valid entry");
+        let batch = datums.next().expect("valid entry");
+        assert!(datums.next().is_none());
+        if batch.is_null() {
+            TxnsEntry::Register(data_id)
+        } else {
+            TxnsEntry::Append(data_id, batch.unwrap_bytes().to_vec())
+        }
+    }
+
+    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
+        fn col<'a, T: Data>(stats: &'a StructStats, col: &str) -> Option<&'a T::Stats> {
+            stats
+                .col::<T>(col)
+                .map_err(|err| error!("unexpected stats type for col {}: {}", col, err))
+                .ok()?
+        }
+        let stats = col::<Option<DynStruct>>(&stats.key, "ok")?;
+        let stats = col::<String>(&stats.some, "shard_id")?;
+        let data_id_str = data_id.to_string();
+        Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
     }
 }

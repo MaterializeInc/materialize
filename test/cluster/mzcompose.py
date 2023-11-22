@@ -46,8 +46,13 @@ SERVICES = [
     Clusterd(name="clusterd2"),
     Clusterd(name="clusterd3"),
     Clusterd(name="clusterd4"),
-    # We use mz_panic() in some test scenarios, so environmentd must stay up.
-    Materialized(propagate_crashes=False, external_cockroach=True),
+    Materialized(
+        # We use mz_panic() in some test scenarios, so environmentd must stay up.
+        propagate_crashes=False,
+        external_cockroach=True,
+        # Kills make the shadow catalog not work properly
+        catalog_store="stash",
+    ),
     Redpanda(),
     Toxiproxy(),
     Testdrive(
@@ -67,43 +72,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if shard_count:
         shard_count = int(shard_count)
 
-    for i, name in enumerate(
-        [
-            "test-smoke",
-            "test-github-12251",
-            "test-github-15531",
-            "test-github-15535",
-            "test-github-15799",
-            "test-github-15930",
-            "test-github-15496",
-            "test-github-17177",
-            "test-github-17510",
-            "test-github-17509",
-            "test-github-19610",
-            "test-single-time-monotonicity-enforcers",
-            "test-remote-storage",
-            "test-drop-default-cluster",
-            "test-upsert",
-            "test-resource-limits",
-            "test-invalid-compute-reuse",
-            "pg-snapshot-resumption",
-            "pg-snapshot-partial-failure",
-            "test-system-table-indexes",
-            "test-replica-targeted-subscribe-abort",
-            "test-replica-targeted-select-abort",
-            "test-compute-reconciliation-reuse",
-            "test-compute-reconciliation-no-errors",
-            "test-mz-subscriptions",
-            "test-mv-source-sink",
-            "test-query-without-default-cluster",
-            "test-clusterd-death-detection",
-            "test-replica-metrics",
-            "test-compute-controller-metrics",
-            "test-metrics-retention-across-restart",
-            "test-concurrent-connections",
-            "test-profile-fetch",
-        ]
-    ):
+    for i, name in enumerate(c.workflows):
+        # incident-70 requires more memory, runs in separate CI step
+        if name in ("default", "test-incident-70"):
+            continue
         if shard is None or shard_count is None or i % int(shard_count) == shard:
             with c.test_case(name):
                 c.workflow(name)
@@ -1147,6 +1119,95 @@ def workflow_test_github_19610(c: Composition) -> None:
         )
 
 
+def workflow_test_github_22778(c: Composition) -> None:
+    """
+    Regression test to ensure that a panic is not triggered if type capture in
+    environmentd falls out-of-sync with type usage for specialization in clusterd.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+        c.up("testdrive", persistent=True)
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_specialized_arrangements = false;",
+            port=6877,
+            user="mz_system",
+        )
+
+        # Set up scenario where empty-value specialization kicks in.
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
+            -- table for fast-path peeks
+            CREATE TABLE t (a int);
+            CREATE VIEW v AS SELECT a + 1 AS a FROM t;
+            CREATE INDEX i ON v (a);
+            """
+        )
+
+        # Change the flag and cycle clusterd.
+        c.sql(
+            "ALTER SYSTEM SET enable_specialized_arrangements = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.kill("clusterd1")
+        c.up("clusterd1")
+
+        # Verify that no arrangement specialization took place.
+        c.testdrive(
+            dedent(
+                """
+            > SET cluster = cluster1;
+
+            > SELECT name
+              FROM mz_internal.mz_arrangement_sizes
+                   JOIN mz_internal.mz_dataflow_operator_dataflows ON operator_id = id
+              WHERE name LIKE '%ArrangeBy%]';
+            ArrangeBy[[Column(0)]]
+            """
+            )
+        )
+
+        # Now, cycle environmentd.
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Verify that arrangement specialization now took place.
+        c.testdrive(
+            dedent(
+                """
+            > SET cluster = cluster1;
+
+            > SELECT name
+              FROM mz_internal.mz_arrangement_sizes
+                   JOIN mz_internal.mz_dataflow_operator_dataflows ON operator_id = id
+              WHERE name LIKE '%ArrangeBy%]';
+            "ArrangeBy[[Column(0)]] [val: empty]"
+            """
+            )
+        )
+
+
 def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
     """
     Test that a monotonic one-shot SELECT where a single-time monotonicity enforcer is present
@@ -1415,7 +1476,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         Testdrive(no_reset=True),
         Materialized(
             options=[
-                "--system-var-default=allowed_cluster_replica_sizes='1', '2', 'oops'"
+                "--system-parameter-default=allowed_cluster_replica_sizes='1', '2', 'oops'"
             ],
         ),
     ):
@@ -1426,9 +1487,9 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True),
         Materialized(
-            environment_extra=[
-                """ MZ_SYSTEM_PARAMETER_DEFAULT=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
-            ],
+            additional_system_parameter_defaults={
+                "allowed_cluster_replica_sizes": "'1', '2', 'oops'"
+            },
         ),
     ):
         c.up("materialized")
@@ -2275,6 +2336,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 
     maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
     assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
+    delayed_time = metrics.get_value("mz_dataflow_delayed_time_seconds_total")
+    assert delayed_time < 1, f"unexpected delayed time: {delayed_time}"
 
 
 def workflow_test_compute_controller_metrics(c: Composition) -> None:
@@ -2728,3 +2791,102 @@ def workflow_test_incident_70(c: Composition) -> None:
 
         for thread in threads:
             thread.join()
+
+
+def workflow_test_index_source_stuck(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Inspired by incident 78, test that selecting an index of a materialized
+    view still works when the source is stuck, for example because it's busy or
+    it has no replicas."""
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(),
+        Clusterd(name="clusterd1"),
+        Clusterd(name="clusterd2"),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+        c.up("clusterd2")
+        c.run("testdrive", "index-source-stuck/run.td")
+
+
+def workflow_test_github_cloud_7998(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Regression test for MaterializeInc/cloud#7998."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(name="clusterd1"),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+
+        c.run("testdrive", "github-cloud-7998/setup.td")
+
+        # Make the compute cluster unavailable.
+        c.kill("clusterd1")
+        c.run("testdrive", "github-cloud-7998/check.td")
+
+        # Trigger an environment bootstrap.
+        c.kill("materialized")
+        c.up("materialized")
+        c.run("testdrive", "github-cloud-7998/check.td")
+
+        # Run a second bootstrap check, just to be sure.
+        c.kill("materialized")
+        c.up("materialized")
+        c.run("testdrive", "github-cloud-7998/check.td")
+
+
+def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Regression test for #23246."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+
+        # Create an MV reading from an index. Make sure it doesn't produce its
+        # snapshot by installing it in a cluster without replicas.
+        c.sql(
+            """
+            CREATE CLUSTER test SIZE '1', REPLICATION FACTOR 0;
+            SET cluster = test;
+
+            CREATE TABLE t (a int);
+            INSERT INTO t VALUES (1);
+
+            CREATE DEFAULT INDEX ON t;
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            """
+        )
+
+        # Verify that the MV's upper is zero, which is what caused the bug.
+        # This ensures that the test doesn't break in the future because we
+        # start initializing frontiers differently.
+        c.testdrive(
+            input=dedent(
+                """
+                > SELECT write_frontier
+                  FROM mz_internal.mz_frontiers
+                  JOIN mz_materialized_views ON (object_id = id)
+                  WHERE name = 'mv'
+                0
+                """
+            )
+        )
+
+        # Trigger an environment bootstrap, and see if envd comes up without
+        # panicking.
+        c.kill("materialized")
+        c.up("materialized")

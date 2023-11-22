@@ -96,9 +96,9 @@ use std::time::{Duration, Instant};
 use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::{
     Hook, HookError, HookErrorCause, Manager, ManagerConfig, Object, Pool, PoolError,
-    RecyclingMethod,
+    RecyclingMethod, Runtime, Status,
 };
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::now::SYSTEM_TIME;
 use tracing::debug;
 
@@ -109,6 +109,8 @@ use crate::metrics::PostgresClientMetrics;
 pub trait PostgresClientKnobs: std::fmt::Debug + Send + Sync {
     /// Maximum number of connections allowed in a pool.
     fn connection_pool_max_size(&self) -> usize;
+    /// The maximum time to wait to obtain a connection, if any.
+    fn connection_pool_max_wait(&self) -> Option<Duration>;
     /// Minimum TTL of a connection. It is expected that connections are
     /// routinely culled to balance load to the backing store.
     fn connection_pool_ttl(&self) -> Duration;
@@ -179,7 +181,12 @@ impl PostgresClient {
         let last_ttl_connection = AtomicU64::new(0);
         let connections_created = config.metrics.connpool_connections_created.clone();
         let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
-        let pool = Pool::builder(manager)
+        let builder = Pool::builder(manager);
+        let builder = match config.knobs.connection_pool_max_wait() {
+            None => builder,
+            Some(wait) => builder.wait_timeout(Some(wait)).runtime(Runtime::Tokio1),
+        };
+        let pool = builder
             .max_size(config.knobs.connection_pool_max_size())
             .post_create(Hook::async_fn(move |client, _| {
                 connections_created.inc();
@@ -228,9 +235,19 @@ impl PostgresClient {
         })
     }
 
+    fn status_metrics(&self, status: Status) {
+        self.metrics
+            .connpool_available
+            .set(f64::cast_lossy(status.available));
+        self.metrics.connpool_size.set(u64::cast_from(status.size));
+        // Don't bother reporting the maximum size of the pool... we know that from config.
+    }
+
     /// Gets connection from the pool or waits for one to become available.
     pub async fn get_connection(&self) -> Result<Object, PoolError> {
         let start = Instant::now();
+        // note that getting the pool size here requires briefly locking the pool
+        self.status_metrics(self.pool.status());
         let res = self.pool.get().await;
         if let Err(PoolError::Backend(err)) = &res {
             debug!("error establishing connection: {}", err);
@@ -240,10 +257,7 @@ impl PostgresClient {
             .connpool_acquire_seconds
             .inc_by(start.elapsed().as_secs_f64());
         self.metrics.connpool_acquires.inc();
-        // note that getting the pool size here requires briefly locking the pool
-        self.metrics
-            .connpool_size
-            .set(u64::cast_from(self.pool.status().size));
+        self.status_metrics(self.pool.status());
         res
     }
 }

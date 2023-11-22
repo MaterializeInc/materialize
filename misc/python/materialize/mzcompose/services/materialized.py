@@ -8,6 +8,9 @@
 # by the Apache License, Version 2.0.
 
 
+from copy import copy
+
+from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
     DEFAULT_MZ_ENVIRONMENT_ID,
@@ -19,7 +22,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
     ServiceDependency,
 )
-from materialize.util import MzVersion
+from materialize.mzcompose.services.minio import MINIO_BLOB_URI
 
 
 class Materialized(Service):
@@ -49,6 +52,7 @@ class Materialized(Service):
         additional_system_parameter_defaults: dict[str, str] | None = None,
         soft_assertions: bool = True,
         sanity_restart: bool = True,
+        catalog_store: str | None = "shadow",
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -66,6 +70,7 @@ class Materialized(Service):
             "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
             "MZ_BOOTSTRAP_ROLE=materialize",
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
+            f"MZ_CATALOG_STORE={catalog_store}",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
             # then accidentally dependent on the state of the host machine.
@@ -79,7 +84,9 @@ class Materialized(Service):
         ]
 
         if system_parameter_defaults is None:
-            system_parameter_defaults = DEFAULT_SYSTEM_PARAMETERS
+            # Has to be copied so we later don't modify the
+            # DEFAULT_SYSTEM_PARAMETERS dictionary
+            system_parameter_defaults = copy(DEFAULT_SYSTEM_PARAMETERS)
 
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)
@@ -103,7 +110,7 @@ class Materialized(Service):
 
         if external_minio:
             depends_graph["minio"] = {"condition": "service_healthy"}
-            persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
+            persist_blob_url = MINIO_BLOB_URI
 
         if persist_blob_url:
             command.append(f"--persist-blob-url={persist_blob_url}")
@@ -141,6 +148,9 @@ class Materialized(Service):
                 "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
                 "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
             ]
+            environment += [
+                "MZ_TIMESTAMP_ORACLE_URL=postgres://root@cockroach:26257?options=--search_path=tsoracle"
+            ]
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
@@ -149,7 +159,15 @@ class Materialized(Service):
 
         command += options
 
-        config: ServiceConfig = {}
+        config: ServiceConfig = {
+            # Use the service name as the hostname so that it is stable across
+            # container recreation. (The default hostname is the container ID,
+            # which changes when the container is recreated.) This is important
+            # when using `external_cockroach=False`, as the consensus/blob URLs
+            # refer to the container's hostname, and we don't want those URLs to
+            # change when the container is recreated.
+            "hostname": name,
+        }
 
         if image:
             config["image"] = image
@@ -166,7 +184,8 @@ class Materialized(Service):
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
 
         if sanity_restart:
-            config.setdefault("labels", []).append("sanity_restart")
+            # Workaround for https://bytemeta.vip/repo/docker/compose/issues/11133
+            config["labels"] = {"sanity_restart": True}
 
         volumes = []
         if use_default_volumes:
@@ -177,7 +196,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_graph,
                 "command": command,
-                "ports": [6875, 6876, 6877, 6878, 26257],
+                "ports": [6875, 6876, 6877, 6878, 6880, 6881, 26257],
                 "environment": environment,
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],

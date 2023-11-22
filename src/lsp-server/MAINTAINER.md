@@ -13,10 +13,9 @@ cargo test -p mz-lsp-server
 
 1. Update the version in [src/lsp-server/Cargo.toml](/src/lsp-server/Cargo.toml).
 
-2. Update the `lsp-server` release notes in the docs with any changes since the last
-   version.
+2. Update the `lsp-server` release notes in the docs with any changes since the last version.
 
-3. Run `cargo run -p mz-lsp-server` once to update `Cargo.lcok`
+3. Run `cargo run -p mz-lsp-server` once to update `Cargo.lock`
 
 4. Open a PR with your change and get it merged:
 

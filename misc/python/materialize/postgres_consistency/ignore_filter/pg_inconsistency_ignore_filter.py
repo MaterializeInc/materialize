@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from collections.abc import Callable
+import re
 from functools import partial
 
 from materialize.output_consistency.enum.enum_constant import EnumConstant
@@ -21,13 +21,22 @@ from materialize.output_consistency.expression.expression_characteristics import
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
-from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
+from materialize.output_consistency.ignore_filter.expression_matchers import (
+    is_function_invoked_only_with_non_nested_parameters,
+    matches_fun_by_any_name,
+    matches_fun_by_name,
+    matches_op_by_pattern,
+    matches_x_or_y,
+)
+from materialize.output_consistency.ignore_filter.ignore_verdict import (
     IgnoreVerdict,
-    InconsistencyIgnoreFilter,
     NoIgnore,
+    YesIgnore,
+)
+from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
+    GenericInconsistencyIgnoreFilter,
     PostExecutionInconsistencyIgnoreFilterBase,
     PreExecutionInconsistencyIgnoreFilterBase,
-    YesIgnore,
 )
 from materialize.output_consistency.input_data.return_specs.date_time_return_spec import (
     DateTimeReturnTypeSpec,
@@ -51,14 +60,21 @@ from materialize.output_consistency.query.query_result import QueryFailure
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.validation.validation_message import ValidationError
 
+NAME_OF_NON_EXISTING_FUNCTION_PATTERN = re.compile(
+    r"function (\w)\(.*?\) does not exist"
+)
 
-class PgInconsistencyIgnoreFilter(InconsistencyIgnoreFilter):
+NON_EXISTING_MZ_FUNCTION_DEFINITIONS = ["min(time)", "max(time)"]
+
+
+class PgInconsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
     """Allows specifying and excluding expressions with known output inconsistencies"""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.pre_execution_filter = PgPreExecutionInconsistencyIgnoreFilter()
-        self.post_execution_filter = PgPostExecutionInconsistencyIgnoreFilter()
+    def __init__(self):
+        super().__init__(
+            PgPreExecutionInconsistencyIgnoreFilter(),
+            PgPostExecutionInconsistencyIgnoreFilter(),
+        )
 
 
 class PgPreExecutionInconsistencyIgnoreFilter(
@@ -124,7 +140,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 and return_type_spec.type_identifier == TIME_TYPE_IDENTIFIER
             ):
                 # MIN and MAX currently not supported on TIME type in mz
-                return YesIgnore("#21584: min/max on time")
+                return YesIgnore("#22024: min/max on time")
             if isinstance(return_type_spec, TextReturnTypeSpec):
                 return YesIgnore("#22002: min/max on text")
 
@@ -219,12 +235,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
     ) -> IgnoreVerdict:
         pg_error_msg = pg_outcome.error_message
 
-        if (
-            "No function matches the given name and argument types" in pg_error_msg
-            or "No operator matches the given name and argument types" in pg_error_msg
-        ):
+        if is_unknown_function_or_operation_invocation(pg_error_msg):
+            # this does not necessarily mean that the function exists in one database but not the other; it could also
+            # be a subsequent error when an expression (an argument) is evaluated to another type
             return YesIgnore(
-                "Not supported in Postgres: No function / operator matches the given name and argument types"
+                "Function or operation does not exist for the evaluated input"
             )
 
         if 'syntax error at or near "="' in pg_error_msg:
@@ -235,12 +250,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             # mz handles this better
             return YesIgnore("accepted")
 
-        if (
-            "value out of range: overflow" in pg_error_msg
-            or "value out of range: underflow" in pg_error_msg
-            or "timestamp out of range" in pg_error_msg
-        ):
+        if " out of range" in pg_error_msg:
             return YesIgnore("#22265")
+
+        if "value overflows numeric format" in pg_error_msg:
+            return YesIgnore("#21994")
 
         if _error_message_is_about_zero_or_value_ranges(pg_error_msg):
             return YesIgnore("Caused by a different precision")
@@ -252,15 +266,26 @@ class PgPostExecutionInconsistencyIgnoreFilter(
     ) -> IgnoreVerdict:
         mz_error_msg = mz_outcome.error_message
 
-        if (
-            "No function matches the given name and argument types" in mz_error_msg
-            or "No operator matches the given name and argument types" in mz_error_msg
-        ):
-            # this does not necessarily mean that the function exists in Postgres; it could also be that an expression
-            # (an argument) is evaluated to another type
-            return YesIgnore(
-                f"#22024: non-existing functions for given parameters in mz ({mz_error_msg})"
-            )
+        if is_unknown_function_or_operation_invocation(mz_error_msg):
+            function_name = extract_unknown_function_from_error_msg(mz_error_msg)
+
+            if (
+                function_name is not None
+                and is_function_invoked_only_with_non_nested_parameters(
+                    query_template, function_name
+                )
+            ):
+                # function does not exist
+                if is_function_known_not_to_exist_in_mz(mz_error_msg):
+                    return YesIgnore(
+                        f"#22024: non-existing function or operation: ({mz_error_msg})"
+                    )
+            else:
+                # this does not necessarily mean that the function exists in one database but not the other; it could
+                # also be a subsequent error when an expression (an argument) is evaluated to another type
+                return YesIgnore(
+                    "Function or operation does not exist for the evaluated input"
+                )
 
         def matches_round_function(expression: Expression) -> bool:
             return (
@@ -282,13 +307,13 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             or 'inf" real out of range' in mz_error_msg
             or 'inf" double precision out of range' in mz_error_msg
         ):
-            return YesIgnore("#21994: overflow in mz")
+            return YesIgnore("#21994: overflow")
 
         if (
             "value out of range: underflow" in mz_error_msg
             or '"-inf" real out of range' in mz_error_msg
         ):
-            return YesIgnore("#21995: underflow in mz")
+            return YesIgnore("#21995: underflow")
 
         if (
             "precision for type timestamp or timestamptz must be between 0 and 6"
@@ -305,6 +330,18 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if "timestamp out of range" in mz_error_msg:
             return YesIgnore("#22264")
 
+        if "invalid regular expression: regex parse error" in mz_error_msg:
+            return YesIgnore("#22956")
+
+        if "invalid regular expression flag" in mz_error_msg:
+            return YesIgnore("#22958")
+
+        if "unit 'invalid_value_123' not recognized" in mz_error_msg:
+            return YesIgnore("#22957")
+
+        if "invalid time zone" in mz_error_msg:
+            return YesIgnore("#22984")
+
         if _error_message_is_about_zero_or_value_ranges(mz_error_msg):
             return YesIgnore("Caused by a different precision")
 
@@ -317,18 +354,17 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
         def matches_math_aggregation_fun(expression: Expression) -> bool:
-            if isinstance(expression, ExpressionWithArgs):
-                if isinstance(expression.operation, DbFunction):
-                    return expression.operation.function_name_in_lower_case in {
-                        "sum",
-                        "avg",
-                        "var_pop",
-                        "var_samp",
-                        "stddev_pop",
-                        "stddev_samp",
-                    }
-
-            return False
+            return matches_fun_by_any_name(
+                expression,
+                {
+                    "sum",
+                    "avg",
+                    "var_pop",
+                    "var_samp",
+                    "stddev_pop",
+                    "stddev_samp",
+                },
+            )
 
         def matches_math_op_with_large_or_tiny_val(expression: Expression) -> bool:
             if isinstance(expression, ExpressionWithArgs):
@@ -349,10 +385,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         def matches_fun_with_problematic_floating_behavior(
             expression: Expression,
         ) -> bool:
-            if isinstance(expression, ExpressionWithArgs) and isinstance(
-                expression.operation, DbFunction
-            ):
-                return expression.operation.function_name_in_lower_case in [
+            return matches_fun_by_any_name(
+                expression,
+                {
                     "sin",
                     "cos",
                     "tan",
@@ -368,9 +403,10 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                     "log",
                     "log10",
                     "ln",
+                    "pow",
                     "radians",
-                ]
-            return False
+                },
+            )
 
         def matches_mod_with_decimal(expression: Expression) -> bool:
             if isinstance(expression, ExpressionWithArgs) and isinstance(
@@ -473,6 +509,7 @@ def _error_message_is_about_zero_or_value_ranges(message: str) -> bool:
         or "cannot take logarithm of a negative number" in message
         or "division by zero" in message
         or "is defined for numbers between -1 and 1 inclusive" in message
+        or "is defined for numbers greater than or equal to 1" in message
         or "cannot take square root of a negative number" in message
         or "negative substring length not allowed" in message
         or "input is out of range" in message
@@ -483,30 +520,28 @@ def _error_message_is_about_zero_or_value_ranges(message: str) -> bool:
     )
 
 
-def matches_x_or_y(
-    expression: Expression,
-    x: Callable[[Expression], bool],
-    y: Callable[[Expression], bool],
-) -> bool:
-    return x(expression) or y(expression)
+def is_unknown_function_or_operation_invocation(error_msg: str) -> bool:
+    return (
+        "No function matches the given name and argument types" in error_msg
+        or "No operator matches the given name and argument types" in error_msg
+        or ("WHERE clause error: " in error_msg and "does not exist" in error_msg)
+    )
 
 
-def matches_fun_by_name(
-    expression: Expression, function_name_in_lower_case: str
-) -> bool:
-    if isinstance(expression, ExpressionWithArgs) and isinstance(
-        expression.operation, DbFunction
-    ):
-        return (
-            expression.operation.function_name_in_lower_case
-            == function_name_in_lower_case
-        )
-    return False
+def extract_unknown_function_from_error_msg(error_msg: str) -> str | None:
+    match = NAME_OF_NON_EXISTING_FUNCTION_PATTERN.search(error_msg)
+
+    if match is not None:
+        function_name = match.group(1)
+        return function_name
+
+    # do not parse not existing operators
+    return None
 
 
-def matches_op_by_pattern(expression: Expression, pattern: str) -> bool:
-    if isinstance(expression, ExpressionWithArgs) and isinstance(
-        expression.operation, DbOperation
-    ):
-        return expression.operation.pattern == pattern
+def is_function_known_not_to_exist_in_mz(error_msg: str) -> bool:
+    for function_definition in NON_EXISTING_MZ_FUNCTION_DEFINITIONS:
+        if function_definition in error_msg:
+            return True
+
     return False

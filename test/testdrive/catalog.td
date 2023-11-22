@@ -286,7 +286,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE MATERIALIZED VIEW mv AS SELECT (1);
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE source_data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -505,6 +505,8 @@ name
 mz_objects
 mz_relations
 mz_storage_usage
+mz_timezone_abbreviations
+mz_timezone_names
 
 # Check default sources, tables, and views in mz_internal.
 
@@ -522,7 +524,10 @@ mz_arrangement_sharing_raw                   log   <null>   <null>
 mz_arrangement_heap_size_raw                 log   <null>   <null>
 mz_arrangement_heap_capacity_raw             log   <null>   <null>
 mz_arrangement_heap_allocations_raw          log   <null>   <null>
+mz_cluster_replica_frontiers                 source <null>  <null>
+mz_cluster_replica_heartbeats                source <null>  <null>
 mz_compute_delays_histogram_raw              log   <null>   <null>
+mz_compute_dependencies                      source <null>  <null>
 mz_compute_error_counts_raw                  log   <null>   <null>
 mz_compute_exports_per_worker                log   <null>   <null>
 mz_compute_frontiers_per_worker              log   <null>   <null>
@@ -555,12 +560,10 @@ name
 ----
 mz_aggregates
 mz_cluster_links
-mz_cluster_replica_heartbeats
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_comments
-mz_compute_dependencies
 mz_internal_cluster_replicas
 mz_kafka_sources
 mz_object_dependencies
@@ -575,6 +578,8 @@ mz_webhook_sources
 name
 -------------------------------------
 mz_active_peeks
+mz_activity_log
+mz_activity_log_redacted
 mz_arrangement_sharing
 mz_arrangement_sharing_per_worker
 mz_arrangement_sizes
@@ -608,6 +613,7 @@ mz_dataflows
 mz_dataflows_per_worker
 mz_expected_group_size_advice
 mz_global_frontiers
+mz_materialization_lag
 mz_message_counts
 mz_message_counts_per_worker
 mz_object_fully_qualified_names
@@ -615,6 +621,7 @@ mz_object_lifetimes
 mz_object_transitive_dependencies
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
+mz_prepared_statement_history_redacted
 mz_records_per_dataflow
 mz_records_per_dataflow_operator
 mz_records_per_dataflow_operator_per_worker
@@ -646,6 +653,7 @@ mz_show_schema_privileges
 mz_show_system_privileges
 mz_sink_statuses
 mz_source_statuses
+mz_statement_execution_history_redacted
 
 > SET database = materialize
 
@@ -660,11 +668,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-49
+47
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-111
+113
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

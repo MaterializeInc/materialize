@@ -136,6 +136,7 @@ Explained Query:
   Get::PassArrangements materialize.public.t
     raw=false
     arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -165,6 +166,7 @@ Explained Query:
     key=#0
     raw=false
     arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -195,6 +197,7 @@ materialize.public.ov_a_idx:
   ArrangeBy
     raw=true
     arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    types=[integer?, integer?]
     Get::PassArrangements materialize.public.ov
       raw=true
 
@@ -206,6 +209,7 @@ materialize.public.ov:
       Get::PassArrangements materialize.public.t
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -225,6 +229,7 @@ Explained Query:
       Get::PassArrangements materialize.public.t
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -241,12 +246,14 @@ Explained Query:
     ArrangeBy
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer?]
       Union consolidate_output=true
         Get::Arrangement materialize.public.t
           project=(#0)
           key=#0
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
         Negate
           Get::Collection materialize.public.mv
             raw=true
@@ -274,24 +281,28 @@ Explained Query:
         key=#0
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        types=[integer?]
       Get::Arrangement l0
         project=(#1)
         map=((#0 - 1))
         key=#0
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        types=[integer?]
   With
     cte l0 =
       Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
         ArrangeBy
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=() }
+          types=[integer?]
           Union consolidate_output=true
             Get::Arrangement materialize.public.t
               project=(#0)
               key=#0
               raw=false
               arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+              types=[integer?, integer?]
             Negate
               Get::Collection materialize.public.mv
                 raw=true
@@ -319,6 +330,7 @@ Explained Query:
       ArrangeBy
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        types=[integer]
         Union consolidate_output=true
           Join::Linear
             linear_stage[0]
@@ -330,9 +342,11 @@ Explained Query:
             Get::PassArrangements materialize.public.t
               raw=false
               arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+              types=[integer?, integer?]
             ArrangeBy
               raw=true
               arrangements[0]={ key=[#0], permutation=id, thinning=() }
+              types=[integer]
               Constant
                 - (5)
           Negate
@@ -361,6 +375,7 @@ Explained Query:
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -381,6 +396,7 @@ Explained Query:
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -409,6 +425,7 @@ Explained Query:
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -458,6 +475,7 @@ Explained Query:
           key=#0
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -482,6 +500,7 @@ materialize.public.hierarchical_group_by_mv:
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -507,6 +526,7 @@ Explained Query:
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -554,6 +574,7 @@ materialize.public.hierarchical_global_mv:
           key=#0
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -602,6 +623,7 @@ Explained Query:
           key=#0
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -631,6 +653,7 @@ Explained Query:
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -681,6 +704,7 @@ Explained Query:
           key=#0
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -714,6 +738,7 @@ materialize.public.collated_group_by_mv:
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -748,6 +773,7 @@ Explained Query:
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -804,6 +830,7 @@ materialize.public.collated_global_mv:
           key=#0
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -861,6 +888,7 @@ Explained Query:
           key=#0
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -878,6 +906,7 @@ materialize.public.t_a_idx:
   ArrangeBy
     raw=true
     arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    types=[integer?, integer?]
     Get::PassArrangements materialize.public.t
       raw=true
 
@@ -892,6 +921,7 @@ materialize.public.ov_a_idx:
   ArrangeBy
     raw=true
     arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+    types=[integer?, integer?]
     Get::PassArrangements materialize.public.ov
       raw=true
 
@@ -903,6 +933,7 @@ materialize.public.ov:
       Get::PassArrangements materialize.public.t
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -920,9 +951,11 @@ materialize.public.ov_b_idx:
     raw=false
     arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
     arrangements[1]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+    types=[integer?, integer?]
     Get::PassArrangements materialize.public.ov
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.ov_a_idx (*** full scan ***, index export)
@@ -957,14 +990,17 @@ Explained Query:
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer, integer]
       Get::Collection materialize.public.u
         raw=true
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer]
       Get::Collection materialize.public.v
         raw=true
 
@@ -1016,22 +1052,27 @@ Explained Query:
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#1, #0], permutation={#0: #1, #1: #0}, thinning=() }
+      types=[integer, integer]
       Get::Arrangement materialize.public.u
         filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
         key=#0
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      types=[integer, integer]
       Get::Arrangement materialize.public.v
         filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
         key=#0
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (differential join)
@@ -1094,12 +1135,15 @@ Explained Query:
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
     Get::PassArrangements materialize.public.u
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
     Get::PassArrangements materialize.public.v
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (delta join 1st input (full scan))
@@ -1217,6 +1261,7 @@ Explained Query:
       Get::PassArrangements materialize.public.t
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -1247,6 +1292,7 @@ Explained Query:
         Get::PassArrangements materialize.public.t
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)

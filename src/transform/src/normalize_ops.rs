@@ -20,8 +20,8 @@ pub struct NormalizeOps;
 
 impl crate::Transform for NormalizeOps {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "normalize_ops")
     )]

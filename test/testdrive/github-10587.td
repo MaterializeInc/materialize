@@ -76,7 +76,7 @@ $ kafka-ingest format=avro topic=multi-topic-9 schema=${schema} repeat=${count}
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE s0 FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-0-${testdrive.seed}')
