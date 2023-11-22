@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 mod metrics;
-mod state_update;
+pub(crate) mod state_update;
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -49,14 +49,14 @@ use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, U
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, Config, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
-use crate::durable::upgrade::CATALOG_VERSION;
+use crate::durable::upgrade::persist::upgrade;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
     OpenableDurableCatalogState, ReadOnlyDurableCatalogState, TimelineTimestamp, Transaction,
 };
 
 /// New-type used to represent timestamps in persist.
-type Timestamp = mz_repr::Timestamp;
+pub(crate) type Timestamp = mz_repr::Timestamp;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug)]
@@ -84,7 +84,7 @@ pub struct PersistHandle {
     /// Catalog shard ID.
     shard_id: ShardId,
     /// Cache of the most recent catalog snapshot.
-    snapshot_cache: Option<(Timestamp, Vec<StateUpdate>)>,
+    snapshot_cache: Option<(Timestamp, Vec<StateUpdate<StateUpdateKindBinary>>)>,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
@@ -176,7 +176,7 @@ impl PersistHandle {
                 .await?;
         }
 
-        let (is_initialized, upper) = self.is_initialized_inner().await;
+        let (is_initialized, mut upper) = self.is_initialized_inner().await;
         if !matches!(mode, Mode::Writable) && !is_initialized {
             return Err(CatalogError::Durable(DurableCatalogError::NotWritable(
                 format!("catalog tables do not exist; will not create in {mode:?} mode"),
@@ -184,19 +184,12 @@ impl PersistHandle {
         }
         soft_assert_ne!(upper, Timestamp::minimum());
 
-        let restart_as_of = self.as_of(upper);
-
         // Perform data migrations.
         if is_initialized && !read_only {
-            let user_version = self.get_user_version(restart_as_of).await;
-            let user_version =
-                user_version.ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))?;
-            if user_version != CATALOG_VERSION {
-                // TODO(jkosh44) Implement migrations.
-                panic!("the persist catalog does not know how to perform migrations yet");
-            }
+            upper = upgrade(&mut self, upper).await?;
         }
 
+        let restart_as_of = self.as_of(upper);
         debug!(
             ?is_initialized,
             ?upper,
@@ -252,13 +245,13 @@ impl PersistHandle {
     }
 
     /// Fetch the current upper of the catalog state.
-    async fn current_upper(&mut self) -> Timestamp {
+    pub(crate) async fn current_upper(&mut self) -> Timestamp {
         current_upper(&mut self.write_handle).await
     }
 
     /// Generates a timestamp for reading from the catalog that is as fresh as possible, given
     /// `upper`.
-    fn as_of(&self, upper: Timestamp) -> Timestamp {
+    pub(crate) fn as_of(&self, upper: Timestamp) -> Timestamp {
         as_of(&self.read_handle, upper)
     }
 
@@ -288,15 +281,15 @@ impl PersistHandle {
     ///
     /// The output is consolidated and sorted by timestamp in ascending order and the current upper.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn current_snapshot(&mut self) -> (&Vec<StateUpdate<StateUpdateKind>>, Timestamp) {
-        static EMPTY_SNAPSHOT: Vec<StateUpdate> = Vec::new();
+    async fn current_snapshot(&mut self) -> (Vec<StateUpdate<StateUpdateKind>>, Timestamp) {
+        const EMPTY_SNAPSHOT: Vec<StateUpdate> = Vec::new();
         let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
         if persist_shard_readable {
             let as_of = self.as_of(current_upper);
             let snapshot = self.snapshot(as_of).await;
             (snapshot, current_upper)
         } else {
-            (&EMPTY_SNAPSHOT, current_upper)
+            (EMPTY_SNAPSHOT, current_upper)
         }
     }
 
@@ -305,18 +298,12 @@ impl PersistHandle {
     ///
     /// The output is consolidated and sorted by timestamp in ascending order.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn snapshot<'a>(&'a mut self, as_of: Timestamp) -> &'a Vec<StateUpdate<StateUpdateKind>> {
-        match &self.snapshot_cache {
-            Some((cached_as_of, _)) if as_of == *cached_as_of => {}
-            _ => {
-                let snapshot: Vec<_> = snapshot(&mut self.read_handle, as_of, &self.metrics)
-                    .await
-                    .collect();
-                self.snapshot_cache = Some((as_of, snapshot));
-            }
-        }
-
-        &self.snapshot_cache.as_ref().expect("populated above").1
+    async fn snapshot<'a>(&mut self, as_of: Timestamp) -> Vec<StateUpdate<StateUpdateKind>> {
+        self.snapshot_binary(as_of)
+            .await
+            .into_iter()
+            .map(|update| update.clone().try_into().expect("kind decoding error"))
+            .collect()
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
@@ -327,8 +314,18 @@ impl PersistHandle {
     async fn snapshot_binary(
         &mut self,
         as_of: Timestamp,
-    ) -> impl Iterator<Item = StateUpdate<StateUpdateKindBinary>> + DoubleEndedIterator {
-        snapshot_binary(&mut self.read_handle, as_of).await
+    ) -> &Vec<StateUpdate<StateUpdateKindBinary>> {
+        match &self.snapshot_cache {
+            Some((cached_as_of, _)) if as_of == *cached_as_of => {}
+            _ => {
+                let snapshot: Vec<_> = snapshot_binary(&mut self.read_handle, as_of)
+                    .await
+                    .collect();
+                self.snapshot_cache = Some((as_of, snapshot));
+            }
+        }
+
+        &self.snapshot_cache.as_ref().expect("populated above").1
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
@@ -398,7 +395,7 @@ impl PersistHandle {
     /// Get all Configs.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
-    async fn get_configs(&mut self, as_of: Timestamp) -> impl Iterator<Item = Config> {
+    async fn get_configs(&mut self, as_of: Timestamp) -> impl Iterator<Item = Config> + '_ {
         self.snapshot_binary(as_of)
             .await
             .into_iter()
@@ -407,7 +404,7 @@ impl PersistHandle {
             // from binary.
             .filter_map(|update| {
                 soft_assert_eq!(update.diff, 1, "snapshot returns consolidated results");
-                let kind: Option<StateUpdateKind> = update.kind.try_into().ok();
+                let kind: Option<StateUpdateKind> = update.kind.clone().try_into().ok();
                 kind
             })
             .filter_map(|kind| match kind {
@@ -427,7 +424,7 @@ impl PersistHandle {
     ///
     /// The user version is used to determine if a migration is needed.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn get_user_version(&mut self, as_of: Timestamp) -> Option<u64> {
+    pub(crate) async fn get_user_version(&mut self, as_of: Timestamp) -> Option<u64> {
         self.get_config(USER_VERSION_KEY, as_of).await
     }
 
@@ -442,7 +439,7 @@ impl PersistHandle {
             // from binary.
             .filter_map(|update| {
                 soft_assert_eq!(update.diff, 1, "snapshot returns consolidated results");
-                let kind: Option<StateUpdateKind> = update.kind.try_into().ok();
+                let kind: Option<StateUpdateKind> = update.kind.clone().try_into().ok();
                 kind
             })
             .filter_map(|kind| match kind {
@@ -1128,11 +1125,7 @@ async fn snapshot_inner(
 ) -> impl Iterator<Item = StateUpdate<StateUpdateKind>> + DoubleEndedIterator {
     snapshot_binary(read_handle, as_of)
         .await
-        .map(|update| StateUpdate {
-            kind: update.kind.try_into().expect("kind decoding error"),
-            ts: update.ts,
-            diff: update.diff,
-        })
+        .map(|update| update.try_into().expect("kind decoding error"))
 }
 
 /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
@@ -1286,7 +1279,7 @@ impl PersistHandle {
     {
         let (snapshot, current_upper) = self.current_snapshot().await;
         let next_upper = current_upper.step_forward();
-        let trace = Trace::from_snapshot(snapshot.clone());
+        let trace = Trace::from_snapshot(snapshot);
         let collection_trace = T::collection_trace(trace);
         let prev_values: Vec<_> = collection_trace
             .values
@@ -1349,7 +1342,7 @@ impl PersistHandle {
     {
         let (snapshot, current_upper) = self.current_snapshot().await;
         let next_upper = current_upper.step_forward();
-        let trace = Trace::from_snapshot(snapshot.clone());
+        let trace = Trace::from_snapshot(snapshot);
         let collection_trace = T::collection_trace(trace);
         let retractions = collection_trace
             .values
