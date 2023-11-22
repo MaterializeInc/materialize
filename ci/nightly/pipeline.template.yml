@@ -584,7 +584,7 @@ steps:
         label: "Platform checks upgrade in Cloudtest/K8s"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
