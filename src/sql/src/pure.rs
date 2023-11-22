@@ -25,15 +25,7 @@ use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{
-    AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    CreateSinkConnection, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
-    CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
-    CsrSeedProtobufSchema, DbzMode, DeferredItemName, DocOnIdentifier, DocOnSchema, Envelope,
-    Ident, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
-    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement,
-    UnresolvedItemName,
-};
+use mz_sql_parser::ast::{AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn, CreateSinkConnection, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName, DocOnIdentifier, DocOnSchema, Envelope, Function, Ident, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, MaterializedViewOption, PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, Statement, UnresolvedItemName};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::{Connection, ConnectionContext};
 use mz_storage_types::errors::ContextCreationError;
@@ -46,6 +38,7 @@ use protobuf_native::MessageLite;
 use rdkafka::admin::AdminClient;
 use tracing::info;
 use uuid::Uuid;
+use mz_sql_parser::ast::visit::Visit;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
@@ -1387,4 +1380,42 @@ async fn compile_proto(
         schema,
         message_name,
     })
+}
+
+pub fn purify_create_materialized_view_options(options: Vec<MaterializedViewOption<Aug>>) -> Vec<MaterializedViewOption<Aug>> {
+    /////// todo
+
+    options
+}
+
+pub fn materialized_view_option_contains_temporal(mvo: &MaterializedViewOption<Aug>) -> bool {
+    match &mvo.value {
+        Some(WithOptionValue::Refresh(RefreshOptionValue::At(RefreshAtOptionValue{time}))) => {
+            let mut visitor = ExprContainsTemporalVisitor::new();
+            visitor.visit_expr(time);
+            visitor.contains_temporal
+        }
+        Some(WithOptionValue::Refresh(RefreshOptionValue::Every(RefreshEveryOptionValue{interval: _, starting_at: Some(starting_at)}))) => {
+            let mut visitor = ExprContainsTemporalVisitor::new();
+            visitor.visit_expr(starting_at);
+            visitor.contains_temporal
+        }
+        _ => false
+    }
+}
+
+struct ExprContainsTemporalVisitor {
+    pub contains_temporal: bool,
+}
+
+impl ExprContainsTemporalVisitor {
+    pub fn new() -> ExprContainsTemporalVisitor {
+        ExprContainsTemporalVisitor {contains_temporal: false}
+    }
+}
+
+impl<'a> Visit<'_, Aug> for ExprContainsTemporalVisitor {
+    fn visit_function(&mut self, func: &Function<Aug>) {
+        self.contains_temporal |= func.name.full_item_name().item == "mz_now";
+    }
 }

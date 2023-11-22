@@ -54,7 +54,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, AlterOptionParameter, ExplainSinkSchemaPlan,
     Explainee, Index, IndexOption, MaterializedView, MutationKind, Params, Plan,
-    PlannedAlterRoleOption, PlannedRoleVariable, RefreshSchedule, QueryWhen, SideEffectingFunc,
+    PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
     SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{

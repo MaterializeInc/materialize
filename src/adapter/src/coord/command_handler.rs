@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::now::NowFn;
@@ -25,7 +26,7 @@ use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributes;
-use mz_sql::names::{PartialItemName, ResolvedIds};
+use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
 };
@@ -39,6 +40,9 @@ use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use mz_sql::pure::materialized_view_option_contains_temporal;
+use mz_sql_parser::ast::CreateMaterializedViewStatement;
+use mz_storage_types::sources::Timeline;
 
 use crate::catalog::{CatalogItem, DataSourceDesc, Source};
 use crate::command::{
@@ -52,7 +56,7 @@ use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{AppendWebhookResponse, AppendWebhookValidator};
-use crate::{catalog, metrics, ExecuteContext, TimestampProvider};
+use crate::{catalog, metrics, ExecuteContext, TimestampProvider, TimelineContext};
 
 use super::ExecuteContextExtra;
 
@@ -696,6 +700,57 @@ impl Coordinator {
             Statement::CreateSubsource(_) => ctx.retire(Err(AdapterError::Unsupported(
                 "CREATE SUBSOURCE statements",
             ))),
+
+            Statement::CreateMaterializedView(CreateMaterializedViewStatement::<Aug>{
+                if_exists,
+                name,
+                columns,
+                in_cluster,
+                query,
+                with_options,
+            }) => {
+                // (This won't be the same timestamp as the system table inserts, unfortunately.)
+                let mz_now = if with_options.iter().any(|wo| materialized_view_option_contains_temporal(wo)) {
+                    let timeline_context = match self.validate_timeline_context(resolved_ids.0.clone()) {
+                        Ok(tc) => tc,
+                        Err(e) => return ctx.retire(Err(e.into())) /////// todo: provoke this in a test. See testdrive/timelines.td
+                    };
+                    let timeline = match timeline_context {
+                        TimelineContext::TimelineDependent(timeline) => {
+                            //// todo: is await ok here? What if it gets invalid by the time we get back control?
+                            timeline
+                        }
+                        TimelineContext::TimestampDependent
+                        | TimelineContext::TimestampIndependent => {
+                            // We default to EpochMilliseconds, similarly to `determine_timestamp_for`.
+                            // Note that we didn't accurately decide whether we are TimestampDependent
+                            // or TimestampIndependent, because for this we'd need to also check whether
+                            // `query.contains_temporal()`, similarly to how `peek_stage_validate` does.
+                            // However, this doesn't matter here, as we are just going to default to
+                            // EpochMilliseconds in both cases.
+                            ///////// todo: look up what code assumes EpochMilliseconds for when a mat view has mz_now in the WHERE
+                            Timeline::EpochMilliseconds
+                        }
+                    };
+                    self.oracle_read_ts(&timeline).await
+                } else {
+                    None
+                };
+
+                let purified_stmt = Statement::CreateMaterializedView(CreateMaterializedViewStatement::<Aug>{
+                    if_exists,
+                    name,
+                    columns,
+                    in_cluster,
+                    query,
+                    with_options: mz_sql::pure::purify_create_materialized_view_options(with_options),
+                });
+
+                match self.plan_statement(ctx.session(), purified_stmt, &params, &resolved_ids) {
+                    Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
+                    Err(e) => ctx.retire(Err(e)),
+                }
+            }
 
             // All other statements are handled immediately.
             _ => match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {

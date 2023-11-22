@@ -41,7 +41,7 @@ use mz_sql_parser::ast::{
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
     DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
     MaterializedViewOptionName, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, MaterializedViewOption, MaterializedViewOptionName, RefreshOptionValue
+    UnresolvedSchemaName, Value, RefreshOptionValue
 };
 use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
@@ -115,7 +115,7 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, RefreshSchedule, ReplicaConfig, Secret, Sink,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink,
     Source, SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
     WebhookHeaders, WebhookValidation,
 };
