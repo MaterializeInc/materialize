@@ -188,7 +188,7 @@ tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opent
 launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk" }
 
 # Waiting on https://github.com/AltSysrq/proptest/pull/264.
-proptest = { git = "https://github.com/MaterializeInc/proptest.git" }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", branch =  "cherry-pick-nonzero-arbitrary" }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
