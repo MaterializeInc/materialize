@@ -318,8 +318,8 @@ async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), Tran
     }
 }
 
-/// Fetches the minimum LSN for which all updates that happened beyond it exist in the slot.
-async fn fetch_slot_resume_upper(client: &Client, slot: &str) -> Result<MzOffset, TransientError> {
+/// Fetches the minimum LSN at which this slot can safely resume.
+async fn fetch_slot_resume_lsn(client: &Client, slot: &str) -> Result<MzOffset, TransientError> {
     loop {
         let query = format!(
             "SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{slot}'"
