@@ -19,7 +19,7 @@ use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{Collection, ExchangeData};
 use mz_compute_types::plan::reduce::{
     reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
@@ -466,8 +466,9 @@ where
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        Tr: Trace + TraceReader<Key = Row, Val = V, Time = G::Timestamp, R = Diff> + 'static,
+        Tr: Trace + TraceReader<Key = Row, Val = V, Time = G::Timestamp, Diff = Diff> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((Row, V), G::Timestamp, Diff)>,
         V: Columnation + Default + ExchangeData + IntoRowByTypes,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
@@ -677,8 +678,11 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
         V: MaybeValidatingRow<(), String>,
-        Tr: Trace + TraceReader<Key = (Row, Row), Val = V, Time = G::Timestamp, R = Diff> + 'static,
+        Tr: Trace
+            + TraceReader<Key = (Row, Row), Val = V, Time = G::Timestamp, Diff = Diff>
+            + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = (((Row, Row), V), G::Timestamp, Diff)>,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();

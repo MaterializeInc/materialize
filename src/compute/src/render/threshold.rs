@@ -13,7 +13,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::Data;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
@@ -39,10 +39,11 @@ fn threshold_arrangement<G, Tr, K, V, T, R, L>(
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
-    Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, R = Diff> + 'static,
+    Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, Diff = Diff> + 'static,
     Tr::Key: Columnation + Data,
     Tr::Val: Columnation + Data,
     Tr::Batch: Batch,
+    Tr::Batcher: Batcher<Item = ((K, V), G::Timestamp, Diff)>,
     T: Timestamp + Lattice,
     R: MzReduce<G, K, V, Diff>,
     L: Fn(&Diff) -> bool + 'static,

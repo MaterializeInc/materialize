@@ -843,7 +843,9 @@ where
     where
         K: PartialEq + IntoRowByTypes + 'static,
         V: IntoRowByTypes,
-        Tr: TraceReader<Key = K, Val = V, Time = S::Timestamp, R = mz_repr::Diff> + Clone + 'static,
+        Tr: TraceReader<Key = K, Val = V, Time = S::Timestamp, Diff = mz_repr::Diff>
+            + Clone
+            + 'static,
         I: IntoIterator,
         I::Item: Data,
         L: for<'a, 'b> FnMut(
@@ -1178,7 +1180,8 @@ where
 
 impl<C: Cursor> PendingWork<C>
 where
-    C::Key: PartialEq,
+    C::Key: PartialEq + Sized,
+    C::Val: Sized,
     C::Time: Timestamp,
 {
     /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
@@ -1208,7 +1211,7 @@ where
                 RefOrMut<'b, C::Key>,
                 RefOrMut<'b, C::Val>,
                 &'a C::Time,
-                &'a C::R,
+                &'a C::Diff,
             ) -> I
             + 'static,
     {

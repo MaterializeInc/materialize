@@ -82,8 +82,8 @@ impl LinearJoinSpec {
     where
         G: Scope,
         G::Timestamp: Lattice,
-        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, R = Diff> + Clone + 'static,
-        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
         L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
         I: IntoIterator,
         I::Item: Data,
@@ -410,8 +410,8 @@ where
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, R = Diff> + Clone + 'static,
-        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
         K: Data + IntoRowByTypes,
         V1: Data + IntoRowByTypes,
         V2: Data + IntoRowByTypes,

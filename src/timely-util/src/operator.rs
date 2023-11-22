@@ -16,7 +16,7 @@ use std::rc::Weak;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::trace::{Batch, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
@@ -232,8 +232,11 @@ where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice,
-        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
-        Tr::Batch: Batch;
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, Diff = R> + 'static,
+        Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp>,
+        Tr::Builder:
+            Builder<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -545,8 +548,11 @@ where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice + Ord,
-        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, Diff = R> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp>,
+        Tr::Builder:
+            Builder<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
     {
         if must_consolidate {
             // We employ AHash below instead of the default hasher in DD to obtain

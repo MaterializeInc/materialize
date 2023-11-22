@@ -107,7 +107,7 @@ use std::sync::Arc;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection, ExchangeData, Hashable};
 use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
@@ -601,11 +601,12 @@ where
         name: &str,
     ) -> Arranged<G, TraceAgent<Tr2>>
     where
-        Tr: TraceReader<Key = K, Val = V, Time = T, R = Diff>,
+        Tr: TraceReader<Key = K, Val = V, Time = T, Diff = Diff>,
         Tr::Key: Columnation + ExchangeData + Hashable,
         Tr::Val: Columnation + ExchangeData,
-        Tr2: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, R = Diff> + 'static,
+        Tr2: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, Diff = Diff> + 'static,
         Tr2::Batch: Batch,
+        Tr2::Batcher: Batcher<Item = ((K, V), G::Timestamp, Diff)>,
         Arranged<G, TraceAgent<Tr2>>: ArrangementSize,
     {
         oks.as_collection(|k, v| (k.clone(), v.clone()))

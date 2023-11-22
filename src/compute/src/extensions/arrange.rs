@@ -13,7 +13,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
 use mz_ore::num::Overflowing;
 use timely::container::columnation::Columnation;
@@ -50,14 +50,25 @@ where
         Self::Key: ExchangeData + Hashable,
         Self::Val: ExchangeData,
         Self::R: ExchangeData,
-        Tr: Trace
-            + TraceReader<
-                Key = Self::Key,
-                Val = Self::Val,
-                Time = <Self::Scope as ScopeParent>::Timestamp,
-                R = Self::R,
-            > + 'static,
+        Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+        >,
+        Tr::Builder: Builder<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+            Output = Tr::Batch,
+        >,
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
 
     /// Arranges a stream of `(Key, Val)` updates by `Key` into a trace of type `Tr`. Partitions
@@ -76,14 +87,25 @@ where
                 Self::R,
             ),
         >,
-        Tr: Trace
-            + TraceReader<
-                Key = Self::Key,
-                Val = Self::Val,
-                Time = <Self::Scope as ScopeParent>::Timestamp,
-                R = Self::R,
-            > + 'static,
+        Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+        >,
+        Tr::Builder: Builder<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+            Output = Tr::Batch,
+        >,
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
 }
 
@@ -105,8 +127,11 @@ where
         K: ExchangeData + Hashable,
         V: ExchangeData,
         R: ExchangeData,
-        Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((K, V), G::Timestamp, R), Time = G::Timestamp>,
+        Tr::Builder:
+            Builder<Item = ((K, V), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
@@ -117,8 +142,25 @@ where
     fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K, V), G::Timestamp, R)>,
-        Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+        >,
+        Tr::Builder: Builder<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+            Output = Tr::Batch,
+        >,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
@@ -154,8 +196,11 @@ where
     where
         K: ExchangeData + Hashable,
         R: ExchangeData,
-        Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp>,
+        Tr::Builder:
+            Builder<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0.map(|d| (d, ())).mz_arrange(name)
@@ -164,8 +209,11 @@ where
     fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K, ()), G::Timestamp, R)>,
-        Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp>,
+        Tr::Builder:
+            Builder<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0.map(|d| (d, ())).mz_arrange_core(pact, name)
