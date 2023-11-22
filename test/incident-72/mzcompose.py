@@ -38,6 +38,9 @@ REJECT_LEGACY_MZ = Materialized(
 
 
 def workflow_default(c: Composition) -> None:
+    """This test can no longer run as it requires the use of v0.68.0
+    Upgrades from v0.68.0 to HEAD are no longer supported.
+    """
     c.up("zookeeper", "kafka", "schema-registry")
 
     with c.override(PRE_INCIDENT_MZ):
