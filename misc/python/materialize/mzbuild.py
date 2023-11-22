@@ -249,9 +249,9 @@ class PSUploadSources(PreImage):
         p1 = subprocess.Popen(cmd1, stdout=subprocess.PIPE)
         p2 = subprocess.Popen(cmd2, stdin=p1.stdout, stdout=subprocess.PIPE)
 
-        # This causes p1 to receive SIGPIPE if p2 exits early,
-        # like in the shell
-        p1.stdout.close()
+        if p1.stdout is not None:
+            # This causes p1 to receive SIGPIPE if p2 exits early, like in the shell
+            p1.stdout.close()
 
         for p in [p1, p2]:
             if p.returncode:
