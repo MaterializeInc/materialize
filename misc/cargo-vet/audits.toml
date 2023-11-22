@@ -12,11 +12,6 @@ criteria = "safe-to-deploy"
 version = "0.26.0"
 
 [[audits.differential-dataflow]]
-who = "Moritz Hoffmann <mh@materialize.com>"
-criteria = "safe-to-deploy"
-version = "0.12.0@git:b55e5b6256ad94bb9047890704a1eaf912a0c2d1"
-
-[[audits.differential-dataflow]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.12.0 -> 0.12.0@git:d9896ce1f322fb89c3e6955441fb2d2c2e07bc1d"

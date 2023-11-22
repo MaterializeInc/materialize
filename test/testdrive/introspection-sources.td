@@ -264,8 +264,9 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > CREATE DEFAULT INDEX ii_arr ON vv_arr
 
-# It's hard to come up with precise bounds because we might de-duplicate some data in arrangements.
-> SELECT records >= 300, size >= 10000, capacity >= 10000 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
+# Under arrangement specialization of only empty values, a single-column relation
+# should demand 48 bytes per tuple instead of 96.
+> SELECT records >= 300, size >= 300*48, capacity >= 300*48 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
 true true true
 true true true
 
@@ -294,8 +295,7 @@ true true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)
 
-# Determining exact sizes is difficult because of deduplication in arrangements, so we just use safe values.
-> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 30000 AND size < 2*30000, capacity > 30000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 48*1000 AND size < 2*48*1000, capacity > 48*1000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 true true true true true
 
 > DROP INDEX ii_t4
@@ -364,8 +364,8 @@ true true true true
 
 > SELECT
     records > 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size > 0.7 * (172 + 72) * 1000 AND size < 1.1 * (180 + 72) * 1000,
-    capacity > 0.7 * (172 + 72) * 1000 AND capacity < 1.1 * (180 + 72) * 1000,
+    size > (172 + 72) * 1000 AND size < 1.1 * (180 + 72) * 1000,
+    capacity > (172 + 72) * 1000 AND capacity < 1.1 * (180 + 72) * 1000,
     allocations > 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c2%';
@@ -399,11 +399,11 @@ true true true true
 
 > SELECT
     records > (4 * 2 + 2 * 3) * 1000 AND records < 1.1 * (4 * 2 + 2 * 3) * 1000,
-    size > 0.7 * (3 * 72 * 2 + 62 * 3 + 106 * 2 + 68 * 3) * 1000
+    size > (3 * 72 * 2 + 62 * 3 + 106 * 2 + 68 * 3) * 1000
       AND size < 1.1 * (3 * 80 * 2 + 70 * 3 + 114 * 2 + 76 * 3) * 1000,
-    capacity > 0.7 * (3 * 72 * 2 + 62 * 3 + 106 * 2 + 68 * 3) * 1000
+    capacity > (3 * 72 * 2 + 62 * 3 + 106 * 2 + 68 * 3) * 1000
       AND capacity < 1.1 * (3 * 80 * 2 + 70 * 3 + 114 * 2 + 76 * 3) * 1000,
-    allocations > 0
+    allocations > (4 * 2 + 2 * 3) * 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%rec%';
 true true true true
@@ -437,8 +437,8 @@ true true true true
 
 > SELECT
     records >= 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size >= 0.7 * (124 + 72) * 1000 AND size < 1.1 * (124 + 72) * 1000,
-    capacity >= 0.7 * (124 + 72) * 1000 AND capacity < 1.1 * (124 + 72) * 1000,
+    size >= (124 + 72) * 1000 AND size < 1.1 * (124 + 72) * 1000,
+    capacity >= (124 + 72) * 1000 AND capacity < 1.1 * (124 + 72) * 1000,
     allocations > 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_minmax%';
@@ -446,9 +446,9 @@ true true true true
 
 > SELECT
     records >= 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size >= 0.7 * (104 + 72) * 1000 AND size < 2 * (104 + 72) * 1000,
-    capacity >= 0.7 * (104 + 72) * 1000 AND capacity < 2 * (104 + 72) * 1000,
-    allocations > 100
+    size >= (104 + 72) * 1000 AND size < 1.1 * (104 + 72) * 1000,
+    capacity >= (104 + 72) * 1000 AND capacity < 1.1 * (104 + 72) * 1000,
+    allocations > 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_top1%';
 true true true true

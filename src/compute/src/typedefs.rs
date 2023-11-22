@@ -12,8 +12,7 @@
 #![allow(missing_docs)]
 
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::ord::ColKeySpine;
-use differential_dataflow::trace::implementations::ord_neu::ColValSpine;
+use differential_dataflow::trace::implementations::ord::{ColKeySpine, ColValSpine};
 
 use mz_ore::num::Overflowing;
 use mz_repr::{Diff, Row, Timestamp};

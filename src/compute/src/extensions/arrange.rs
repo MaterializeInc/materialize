@@ -393,13 +393,13 @@ where
             };
 
             trace.map_batches(|batch| {
-                batch.storage.keys_offs.estimate_size(&mut heap_callback);
-                batch.storage.vals_offs.estimate_size(&mut heap_callback);
+                batch.layer.offs.estimate_size(&mut heap_callback);
+                batch.layer.vals.offs.estimate_size(&mut heap_callback);
+                batch.layer.vals.vals.vals.estimate_size(&mut heap_callback);
 
                 let mut region_callback = |siz, cap| heap_callback(siz, cap, usize::from(cap > 0));
-                batch.storage.keys.heap_size(&mut region_callback);
-                batch.storage.vals.heap_size(&mut region_callback);
-                batch.storage.updates.heap_size(&mut region_callback);
+                batch.layer.keys.heap_size(&mut region_callback);
+                batch.layer.vals.keys.heap_size(&mut region_callback);
             });
 
             (heap_size, heap_capacity, heap_allocations)
