@@ -23,8 +23,7 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt};
 use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
-    KafkaSinkConnectionRetention, KafkaSinkFormat,
+    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionRetention,
 };
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -202,7 +201,7 @@ where
 ///
 /// TODO(benesch): do we need to delete the Kafka topic if publishing the
 /// schema fails?
-async fn publish_kafka_schemas(
+pub async fn publish_kafka_schemas(
     ccsr: &mz_ccsr::Client,
     topic: &str,
     key_schema: Option<&str>,
@@ -242,9 +241,9 @@ async fn publish_kafka_schemas(
 ///   contains data for this sink, but the sink's data topic does not exist.
 pub async fn build_kafka(
     sink_id: mz_repr::GlobalId,
-    connection: &mut KafkaSinkConnection,
+    connection: &KafkaSinkConnection,
     connection_cx: &ConnectionContext,
-) -> Result<(), ContextCreationError> {
+) -> Result<Option<Timestamp>, ContextCreationError> {
     let client: AdminClient<_> = connection
         .connection
         .create_with_context(connection_cx, MzClientContext::default(), &BTreeMap::new())
@@ -270,7 +269,7 @@ pub async fn build_kafka(
 
     // If the consistency topic exists, check to see if it contains this sink's
     // data.
-    if let Some(progress_topic) = progress_topic {
+    let latest_ts = if let Some(progress_topic) = progress_topic {
         let progress_client: BaseConsumer<_> = connection
             .connection
             .create_with_context(
@@ -303,7 +302,11 @@ pub async fn build_kafka(
                 "sink progress data exists, but sink data topic is missing"
             ))?
         }
-    }
+
+        latest_ts
+    } else {
+        None
+    };
 
     // Create Kafka topic.
     ensure_kafka_topic(
@@ -316,32 +319,6 @@ pub async fn build_kafka(
     .await
     .check_ssh_status(client.inner().context())
     .add_context("error registering kafka topic for sink")?;
-
-    match &connection.format {
-        KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
-            key_schema,
-            value_schema,
-            csr_connection,
-        }) => {
-            let ccsr = csr_connection.connect(connection_cx).await?;
-            let (key_schema_id, value_schema_id) = publish_kafka_schemas(
-                &ccsr,
-                &connection.topic,
-                key_schema.as_deref(),
-                Some(mz_ccsr::SchemaType::Avro),
-                value_schema,
-                mz_ccsr::SchemaType::Avro,
-            )
-            .await
-            .context("error publishing kafka schemas for sink")?;
-
-            connection.format = KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::Published {
-                key_schema_id,
-                value_schema_id,
-            })
-        }
-        KafkaSinkFormat::Avro(_) | KafkaSinkFormat::Json => {}
-    }
 
     match &connection.consistency_config {
         KafkaConsistencyConfig::Progress { topic } => ensure_kafka_topic(
@@ -356,7 +333,7 @@ pub async fn build_kafka(
         .add_context("error registering kafka consistency topic for sink")?,
     };
 
-    Ok(())
+    Ok(latest_ts)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -375,7 +352,7 @@ pub struct ProgressRecord {
 
 /// Determines the latest progress record from the specified topic for the given
 /// key (e.g. akin to a sink's GlobalId).
-pub async fn determine_latest_progress_record(
+async fn determine_latest_progress_record(
     name: String,
     progress_topic: String,
     progress_key: String,
