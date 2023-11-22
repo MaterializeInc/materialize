@@ -1286,7 +1286,7 @@ impl Coordinator {
         for obj_id in &drop_ids {
             if !referenced_ids_hashset.contains(obj_id) {
                 let object_info = ErrorMessageObjectDescription::from_id(
-                    &obj_id,
+                    obj_id,
                     &self.catalog().for_session(session),
                 )
                 .to_string();
