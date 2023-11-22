@@ -195,7 +195,6 @@ struct HealthState {
     id: GlobalId,
     healths: PerWorkerHealthStatus,
     last_reported_status: Option<OverallStatus>,
-    last_status_occurred_at: Option<DateTime<Utc>>,
     halt_with: Option<(StatusNamespace, HealthStatusUpdate)>,
 }
 
@@ -207,7 +206,6 @@ impl HealthState {
                 errors_by_worker: vec![Default::default(); worker_count],
             },
             last_reported_status: None,
-            last_status_occurred_at: None,
             halt_with: None,
         }
     }
@@ -384,7 +382,6 @@ where
                         .await;
 
                     state.last_reported_status = Some(status);
-                    state.last_status_occurred_at = Some(timestamp);
                 }
             }
         }
@@ -442,7 +439,6 @@ where
                         id,
                         healths,
                         last_reported_status,
-                        last_status_occurred_at,
                         halt_with,
                     } = health_states
                         .get_mut(&output_index)
@@ -457,14 +453,7 @@ where
                             Some(&new_status)
                         );
 
-                        let mut timestamp = mz_ore::now::to_datetime(now());
-
-                        // Ensure that timestamps for updates are monotonically increasing
-                        if let Some(last_ts) = last_status_occurred_at {
-                            if *last_ts == timestamp {
-                                timestamp = timestamp + chrono::Duration::milliseconds(1);
-                            }
-                        }
+                        let timestamp = mz_ore::now::to_datetime(now());
                         health_operator_impl
                             .record_new_status(
                                 *id,
