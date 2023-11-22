@@ -86,7 +86,7 @@ impl<'a> CreateSqlRewriteSchema<'a> {
             }
             [database, schema, _item] => {
                 if database.as_str() == self.database && schema.as_str() == self.cur_schema {
-                    *schema = Ident::new(self.new_schema);
+                    *schema = Ident::new_unchecked(self.new_schema);
                 }
             }
             _ => (),
@@ -134,7 +134,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
     // TODO(sploiselle): Support renaming schemas and databases.
     match create_stmt {
         Statement::CreateIndex(CreateIndexStatement { name, .. }) => {
-            *name = Some(Ident::new(to_item_name));
+            *name = Some(Ident::new_unchecked(to_item_name));
         }
         Statement::CreateSink(CreateSinkStatement {
             name: Some(name), ..
@@ -154,7 +154,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
             // does not have a fixed index.
             // TODO: https://github.com/MaterializeInc/materialize/issues/5591
             let item_name_len = name.0.len() - 1;
-            name.0[item_name_len] = Ident::new(to_item_name);
+            name.0[item_name_len] = Ident::new_unchecked(to_item_name);
         }
         item => unreachable!("Internal error: only catalog items can be renamed {item:?}"),
     }
@@ -184,7 +184,7 @@ pub fn create_stmt_rename_refs(
             // does not have a fixed index.
             // TODO: https://github.com/MaterializeInc/materialize/issues/5591
             let item_name_len = item_name.0.len() - 1;
-            item_name.0[item_name_len] = Ident::new(to_item_name.clone());
+            item_name.0[item_name_len] = Ident::new_unchecked(to_item_name.clone());
         }
     };
 
@@ -219,8 +219,8 @@ pub fn create_stmt_rename_refs(
 
 /// Rewrites `query`'s references of `from` to `to` or errors if too ambiguous.
 fn rewrite_query(from: FullItemName, to: String, query: &mut Query<Raw>) -> Result<(), String> {
-    let from_ident = Ident::new(from.item.clone());
-    let to_ident = Ident::new(to);
+    let from_ident = Ident::new_unchecked(from.item.clone());
+    let to_ident = Ident::new_unchecked(to);
     let qual_depth =
         QueryIdentAgg::determine_qual_depth(&from_ident, Some(to_ident.clone()), query)?;
     CreateSqlRewriter::rewrite_query_with_qual_depth(from, to_ident.clone(), qual_depth, query);
@@ -401,12 +401,15 @@ impl CreateSqlRewriter {
         query: &mut Query<Raw>,
     ) {
         let from = match qual_depth {
-            1 => vec![Ident::new(from_name.item)],
-            2 => vec![Ident::new(from_name.schema), Ident::new(from_name.item)],
+            1 => vec![Ident::new_unchecked(from_name.item)],
+            2 => vec![
+                Ident::new_unchecked(from_name.schema),
+                Ident::new_unchecked(from_name.item),
+            ],
             3 => vec![
-                Ident::new(from_name.database.to_string()),
-                Ident::new(from_name.schema),
-                Ident::new(from_name.item),
+                Ident::new_unchecked(from_name.database.to_string()),
+                Ident::new_unchecked(from_name.schema),
+                Ident::new_unchecked(from_name.item),
             ],
             _ => unreachable!(),
         };

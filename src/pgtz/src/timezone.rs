@@ -23,8 +23,8 @@ use crate::abbrev::TIMEZONE_ABBREVS;
 
 include!(concat!(env!("OUT_DIR"), "/mz_pgtz.timezone.rs"));
 
-/// The SQL definition of the contents of the `pg_timezone_names` view.
-pub const PG_CATALOG_TIMEZONE_NAMES_SQL: &str =
+/// The SQL definition of the contents of the `mz_timezone_names` view.
+pub const MZ_CATALOG_TIMEZONE_NAMES_SQL: &str =
     include_str!(concat!(env!("OUT_DIR"), "/timezone.gen.sql"));
 
 /// Parsed timezone.

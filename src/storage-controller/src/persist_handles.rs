@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
+use std::fmt::Write;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
@@ -628,11 +629,13 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 .iter()
                 .map(|(x, _)| x.to_string())
                 .collect::<BTreeSet<_>>(),
-            updates
-                .iter()
-                .filter(|(_, v)| !v.is_empty())
-                .map(|(k, v)| format!("\n  {}: {:?}", k, v.first()))
-                .collect::<String>(),
+            updates.iter().filter(|(_, v)| !v.is_empty()).fold(
+                String::new(),
+                |mut output, (k, v)| {
+                    let _ = write!(output, "\n  {}: {:?}", k, v.first());
+                    output
+                }
+            )
         );
         // TODO: persist-txn doesn't take an advance_to yet, it uses
         // timestamp.step_forward. This is the same in all cases, so just assert that

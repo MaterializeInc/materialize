@@ -30,6 +30,7 @@ use mz_catalog::memory::objects::{
     CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
     Role, Schema, Secret, Sink, Source, Table, Type, View,
 };
+use mz_catalog::{LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID};
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
     ReplicaAllocation, ReplicaConfig, ReplicaLocation, UnmanagedReplicaLocation,
@@ -71,10 +72,7 @@ use mz_storage_types::connections::inline::{
 };
 use mz_transform::Optimizer;
 
-use crate::catalog::{
-    AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog,
-    LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID,
-};
+use crate::catalog::{AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog};
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
@@ -185,8 +183,12 @@ impl CatalogState {
             .database_by_name
             .get(session.vars().database())
             .map(|id| id.clone());
+        let state = match session.transaction().catalog_state() {
+            Some(txn_catalog_state) => Cow::Borrowed(txn_catalog_state),
+            None => Cow::Borrowed(self),
+        };
         ConnCatalog {
-            state: Cow::Borrowed(self),
+            state,
             unresolvable_ids: BTreeSet::new(),
             conn_id: session.conn_id().clone(),
             cluster: session.vars().cluster().into(),
@@ -459,23 +461,6 @@ impl CatalogState {
             }
         }
         dependents
-    }
-
-    pub fn uses_tables(&self, id: GlobalId) -> bool {
-        match self.get_entry(&id).item() {
-            CatalogItem::Table(_) => true,
-            item @ (CatalogItem::View(_) | CatalogItem::MaterializedView(_)) => {
-                item.uses().0.iter().any(|id| self.uses_tables(*id))
-            }
-            CatalogItem::Index(idx) => self.uses_tables(idx.on),
-            CatalogItem::Source(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
-        }
     }
 
     /// Indicates whether the indicated item is considered stable or not.
@@ -754,9 +739,6 @@ impl CatalogState {
         //    overridden.
         session_catalog.system_vars_mut().enable_for_item_parsing();
 
-        let enable_unified_optimizer_api =
-            session_catalog.system_vars().enable_unified_optimizer_api();
-
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let plan = mz_sql::plan::plan(
@@ -768,43 +750,25 @@ impl CatalogState {
         )?;
         Ok(match plan {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                if enable_unified_optimizer_api {
-                    // Collect optimizer parameters.
-                    let optimizer_config =
-                        optimize::OptimizerConfig::from(session_catalog.system_vars());
+                // Collect optimizer parameters.
+                let optimizer_config =
+                    optimize::OptimizerConfig::from(session_catalog.system_vars());
 
-                    // Build an optimizer for this VIEW.
-                    let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+                // Build an optimizer for this VIEW.
+                let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
-                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-                    let raw_expr = view.expr;
-                    let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+                let raw_expr = view.expr;
+                let optimized_expr = optimizer.optimize(raw_expr.clone())?;
 
-                    CatalogItem::View(View {
-                        create_sql: view.create_sql,
-                        raw_expr,
-                        desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
-                        optimized_expr,
-                        conn_id: None,
-                        resolved_ids,
-                    })
-                } else {
-                    let optimizer =
-                        Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-                    let raw_expr = view.expr;
-                    let decorrelated_expr =
-                        raw_expr.clone().lower(session_catalog.system_vars())?;
-                    let optimized_expr = optimizer.optimize(decorrelated_expr)?;
-                    let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
-                    CatalogItem::View(View {
-                        create_sql: view.create_sql,
-                        raw_expr,
-                        optimized_expr,
-                        desc,
-                        conn_id: None,
-                        resolved_ids,
-                    })
-                }
+                CatalogItem::View(View {
+                    create_sql: view.create_sql,
+                    raw_expr,
+                    desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
+                    optimized_expr,
+                    conn_id: None,
+                    resolved_ids,
+                })
             }
             _ => bail!("Expected valid CREATE VIEW statement"),
         })
@@ -842,9 +806,6 @@ impl CatalogState {
         // 2. After this step, feature flag configuration must not be
         //    overridden.
         session_catalog.system_vars_mut().enable_for_item_parsing();
-
-        let enable_unified_optimizer_api =
-            session_catalog.system_vars().enable_unified_optimizer_api();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
@@ -904,43 +865,25 @@ impl CatalogState {
                 is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                if enable_unified_optimizer_api {
-                    // Collect optimizer parameters.
-                    let optimizer_config =
-                        optimize::OptimizerConfig::from(session_catalog.system_vars());
+                // Collect optimizer parameters.
+                let optimizer_config =
+                    optimize::OptimizerConfig::from(session_catalog.system_vars());
 
-                    // Build an optimizer for this VIEW.
-                    let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+                // Build an optimizer for this VIEW.
+                let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
-                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-                    let raw_expr = view.expr;
-                    let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+                let raw_expr = view.expr;
+                let optimized_expr = optimizer.optimize(raw_expr.clone())?;
 
-                    CatalogItem::View(View {
-                        create_sql: view.create_sql,
-                        raw_expr,
-                        desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
-                        optimized_expr,
-                        conn_id: None,
-                        resolved_ids,
-                    })
-                } else {
-                    let optimizer =
-                        Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-                    let raw_expr = view.expr;
-                    let decorrelated_expr =
-                        raw_expr.clone().lower(session_catalog.system_vars())?;
-                    let optimized_expr = optimizer.optimize(decorrelated_expr)?;
-                    let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
-                    CatalogItem::View(View {
-                        create_sql: view.create_sql,
-                        raw_expr,
-                        optimized_expr,
-                        desc,
-                        conn_id: None,
-                        resolved_ids,
-                    })
-                }
+                CatalogItem::View(View {
+                    create_sql: view.create_sql,
+                    raw_expr,
+                    desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
+                    optimized_expr,
+                    conn_id: None,
+                    resolved_ids,
+                })
             }
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
@@ -1001,7 +944,7 @@ impl CatalogState {
                 details: CatalogTypeDetails {
                     array_id: None,
                     typ: typ.inner,
-                    typreceive_oid: None,
+                    pg_metadata: None,
                 },
                 resolved_ids,
             }),

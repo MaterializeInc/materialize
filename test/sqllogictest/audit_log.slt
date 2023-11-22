@@ -102,7 +102,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 11  create  cluster  {"id":"u1","name":"default"}  NULL
 12  grant  cluster  {"grantee_id":"p","grantor_id":"s1","object_id":"Cu1","privileges":"U"}  NULL
 13  grant  cluster  {"grantee_id":"u1","grantor_id":"s1","object_id":"Cu1","privileges":"UC"}  NULL
-14  create  cluster-replica  {"billed_as":null,"cluster_id":"u1","cluster_name":"default","disk":false,"internal":false,"logical_size":"1","replica_id":"u1","replica_name":"r1"}  NULL
+14  create  cluster-replica  {"billed_as":null,"cluster_id":"u1","cluster_name":"default","disk":false,"internal":false,"logical_size":"2","replica_id":"u1","replica_name":"r1"}  NULL
 15  grant  system  {"grantee_id":"s1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBN"}  NULL
 16  grant  system  {"grantee_id":"u1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBN"}  NULL
 17  create  database  {"id":"u2","name":"test"}  materialize
@@ -181,7 +181,7 @@ false
 query TTTTBBBT
 SELECT replica_id, cluster_name, replica_name, size, created_at IS NOT NULL, dropped_at IS NOT NULL, created_at < dropped_at, credits_per_hour FROM mz_internal.mz_cluster_replica_history ORDER BY created_at
 ----
-u1  default  r1  1  true  false  NULL  1
+u1  default  r1  2  true  false  NULL  1
 u2  foo  r  1  true  true  true  1
 u3  materialize_public_s  linked  1  true  true  true  1
 u4  materialize_public_s  linked  2  true  true  true  1

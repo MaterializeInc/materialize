@@ -38,7 +38,7 @@ bids                    subsource      <null>                       <null>
 organizations           subsource      <null>                       <null>
 users                   subsource      <null>                       <null>
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 # Validate that the ID column of the load generator data is usable as a key.
 > CREATE SINK accounts_sink FROM accounts
@@ -103,3 +103,8 @@ $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\
   FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
   FOR ALL TABLES;
 contains: FOR ALL TABLES is only valid for multi-output sources
+
+> DROP SOURCE auction_house CASCADE
+> DROP SOURCE another.auction_house CASCADE
+> DROP SOURCE counter CASCADE
+> DROP SOURCE counter3 CASCADE

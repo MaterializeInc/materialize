@@ -23,14 +23,15 @@ use mz_compute_types::plan::top_k::{
 };
 use mz_expr::EvalError;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{DatumVec, Diff, Row};
+use mz_repr::{DatumVec, Diff, Row, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::{HeapSize, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
@@ -40,7 +41,7 @@ use crate::typedefs::{RowKeySpine, RowSpine};
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
+    G::Timestamp: crate::render::RenderTimestamp + HeapSize,
 {
     pub(crate) fn render_topk(
         &mut self,
@@ -80,13 +81,13 @@ where
                     let mut datum_vec = mz_repr::DatumVec::new();
                     let collection = ok_input
                         .map(move |row| {
+                            let binding = SharedRow::get();
+                            let mut row_builder = binding.borrow_mut();
                             let group_row = {
                                 let datums = datum_vec.borrow_with(&row);
                                 let iterator = group_key.iter().map(|i| datums[*i]);
-                                let total_size = mz_repr::datums_size(iterator.clone());
-                                let mut group_row = Row::with_capacity(total_size);
-                                group_row.packer().extend(iterator);
-                                group_row
+                                row_builder.packer().extend(iterator);
+                                row_builder.clone()
                             };
                             (group_row, row)
                         })
@@ -193,14 +194,14 @@ where
         let mut datum_vec = mz_repr::DatumVec::new();
         let mut collection = collection.map({
             move |row| {
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let row_hash = row.hashed();
                 let group_row = {
                     let datums = datum_vec.borrow_with(&row);
                     let iterator = group_key.iter().map(|i| datums[*i]);
-                    let total_size = mz_repr::datums_size(iterator.clone());
-                    let mut group_row = Row::with_capacity(total_size);
-                    group_row.packer().extend(iterator);
-                    group_row
+                    row_builder.packer().extend(iterator);
+                    row_builder.clone()
                 };
                 ((group_row, row_hash), row)
             }
@@ -323,13 +324,13 @@ where
             .map({
                 let mut datum_vec = mz_repr::DatumVec::new();
                 move |row| {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
                     let group_key = {
                         let datums = datum_vec.borrow_with(&row);
                         let iterator = group_key.iter().map(|i| datums[*i]);
-                        let total_size = mz_repr::datums_size(iterator.clone());
-                        let mut group_key = Row::with_capacity(total_size);
-                        group_key.packer().extend(iterator);
-                        group_key
+                        row_builder.packer().extend(iterator);
+                        row_builder.clone()
                     };
                     (group_key, row)
                 }
@@ -381,7 +382,7 @@ fn build_topk_negated_stage<G, R>(
 ) -> Collection<G, ((Row, u64), R), Diff>
 where
     G: Scope,
-    G::Timestamp: Lattice,
+    G::Timestamp: Lattice + Columnation + HeapSize,
     R: MaybeValidatingRow<Row, Row>,
 {
     // We only want to arrange parts of the input that are not part of the actual output
@@ -645,6 +646,9 @@ pub mod monoids {
     use mz_expr::ColumnOrder;
     use mz_repr::{DatumVec, Diff, Row};
     use serde::{Deserialize, Serialize};
+    use timely::container::columnation::{Columnation, Region};
+
+    use crate::extensions::arrange::HeapSize;
 
     /// A monoid containing a row and an ordering.
     #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
@@ -694,6 +698,83 @@ pub mod monoids {
 
         fn is_zero(&self) -> bool {
             false
+        }
+    }
+
+    impl Columnation for Top1Monoid {
+        type InnerRegion = Top1MonoidRegion;
+    }
+
+    #[derive(Default)]
+    pub struct Top1MonoidRegion {
+        row_region: <Row as Columnation>::InnerRegion,
+        order_key_region: <Vec<ColumnOrder> as Columnation>::InnerRegion,
+    }
+
+    impl Region for Top1MonoidRegion {
+        type Item = Top1Monoid;
+
+        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+            let row = self.row_region.copy(&item.row);
+            let order_key = self.order_key_region.copy(&item.order_key);
+            Self::Item { row, order_key }
+        }
+
+        fn clear(&mut self) {
+            self.row_region.clear();
+            self.order_key_region.clear();
+        }
+
+        fn reserve_items<'a, I>(&mut self, items1: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            let items2 = items1.clone();
+            self.row_region
+                .reserve_items(items1.into_iter().map(|s| &s.row));
+            self.order_key_region
+                .reserve_items(items2.into_iter().map(|s| &s.order_key));
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions1: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            let regions2 = regions1.clone();
+            self.row_region
+                .reserve_regions(regions1.into_iter().map(|s| &s.row_region));
+            self.order_key_region
+                .reserve_regions(regions2.into_iter().map(|s| &s.order_key_region));
+        }
+
+        fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
+            self.row_region.heap_size(&mut callback);
+            self.order_key_region.heap_size(callback);
+        }
+    }
+
+    impl HeapSize for Top1Monoid {
+        #[inline]
+        fn estimate_size<C>(&self, mut callback: C)
+        where
+            C: FnMut(usize, usize, usize),
+        {
+            let row_size = self.row.heap_size();
+            let row_capacity = self.row.heap_capacity();
+            let row_allocation = usize::from(row_capacity > 0);
+
+            let size_of_column_order = std::mem::size_of::<ColumnOrder>();
+            let order_key_size = self.order_key.len() * size_of_column_order;
+            let order_key_capacity = self.order_key.capacity() * size_of_column_order;
+            let order_key_allocation = usize::from(order_key_capacity > 0);
+
+            callback(
+                row_size + order_key_size,
+                row_capacity + order_key_capacity,
+                row_allocation + order_key_allocation,
+            )
         }
     }
 

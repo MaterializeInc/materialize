@@ -10,14 +10,17 @@
 use std::rc::Rc;
 
 use differential_dataflow::difference::Semigroup;
+use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
+use mz_ore::num::Overflowing;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, ScopeParent};
+use timely::order::Product;
 use timely::progress::Timestamp;
 
 use crate::logging::compute::ComputeEvent;
@@ -169,21 +172,125 @@ where
     }
 }
 
+/// A type that can reflect on its size, capacity, and allocations,
+/// and inform a caller of those through a callback.
+pub trait HeapSize {
+    /// Estimates the heap size, capacity, and allocations of `self` and
+    /// informs these three quantities, respectively, by calling `callback`.
+    /// The estimates consider only heap allocations made by `self`, and
+    /// not the size of `Self` proper.
+    fn estimate_size<C>(&self, callback: C)
+    where
+        C: FnMut(usize, usize, usize);
+}
+
+impl<T: Copy> HeapSize for Vec<Overflowing<T>> {
+    /// Estimates the size of a vector in memory considering that the element type is
+    /// an `Overflowing` value without nested structure.
+    #[inline]
+    fn estimate_size<C>(&self, mut callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        let size_of_t = std::mem::size_of::<T>();
+        callback(
+            self.len() * size_of_t,
+            self.capacity() * size_of_t,
+            usize::from(self.capacity() > 0),
+        )
+    }
+}
+
+impl HeapSize for mz_repr::Timestamp {
+    #[inline]
+    fn estimate_size<C>(&self, _callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        // Nothing to do here, since there are no heap allocations made by `self`.
+    }
+}
+
+impl HeapSize for PointStamp<u64> {
+    #[inline]
+    fn estimate_size<C>(&self, mut callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        let ps_coord_size = std::mem::size_of::<u64>();
+        callback(
+            self.vector.len() * ps_coord_size,
+            self.vector.capacity() * ps_coord_size,
+            usize::from(self.vector.capacity() > 0),
+        )
+    }
+}
+
+impl<TOuter: HeapSize, TInner: HeapSize> HeapSize for Product<TOuter, TInner> {
+    #[inline]
+    fn estimate_size<C>(&self, mut callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        self.outer.estimate_size(&mut callback);
+        self.inner.estimate_size(&mut callback);
+    }
+}
+
+impl HeapSize for i64 {
+    #[inline]
+    fn estimate_size<C>(&self, _callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        // Nothing to do here, since there are no heap allocations made by `self`.
+    }
+}
+
+impl<T: HeapSize, R: HeapSize> HeapSize for Vec<(T, R)> {
+    #[inline]
+    fn estimate_size<C>(&self, mut callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        // To provide for cheap estimation, we sample one element from the vector
+        // and estimate the total vector size from this element's size. The trade-off
+        // between precision and overhead here should be acceptable under the assumption
+        // that most elements be uniformly sized.
+        // TODO(vmarcos): Evaluate if it is worth sampling more rows or even crawling entire
+        // vectors to obtain size estimates.
+        if !self.is_empty() {
+            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+            let mut callback_inner = |siz, cap, alc| {
+                size += siz;
+                capacity += cap;
+                allocations += alc;
+            };
+
+            // We heuristically sample the last element. This is because in a lexicographically
+            // sorted representation, this element will tend to be largest (and most recent).
+            let (time, diff) = self
+                .last()
+                .expect("a non-empty vector must have a last element");
+            time.estimate_size(&mut callback_inner);
+            diff.estimate_size(&mut callback_inner);
+
+            // We also account for the size of the tuples in the `Vec`, since
+            // these are also heap-allocated from `self`.
+            let size_of_tuple = std::mem::size_of::<(T, R)>();
+            callback(
+                self.len() * (size_of_tuple + size),
+                self.len() * (size_of_tuple + capacity),
+                self.len() * allocations + 1,
+            )
+        };
+    }
+}
+
 /// A type that can log its heap size.
 pub trait ArrangementSize {
     /// Install a logger to track the heap size of the target.
     fn log_arrangement_size(self) -> Self;
-}
-
-/// Helper to compute the size of a vector in memory.
-///
-/// The function only considers the immediate allocation of the vector, but is oblivious of any
-/// pointers to owned allocations. It only invokes the callback for allocations that exist, i.e.,
-/// calling [`vec_size`] on a vector with no capacity will not invoke `callback`.
-#[inline]
-fn vec_size<T>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
-    let size_of_t = std::mem::size_of::<T>();
-    callback(data.len() * size_of_t, data.capacity() * size_of_t);
 }
 
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
@@ -269,28 +376,33 @@ where
 impl<G, K, V, T, R> ArrangementSize for Arranged<G, TraceAgent<RowSpine<K, V, T, R>>>
 where
     G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord,
+    G::Timestamp: Lattice + Ord + Columnation,
     K: Data + Columnation,
     V: Data + Columnation,
-    T: Lattice + Timestamp,
-    R: Semigroup,
+    T: Lattice + Timestamp + HeapSize,
+    R: Semigroup + Columnation,
+    Vec<(T, R)>: HeapSize,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                allocations += usize::from(cap > 0);
-                size += siz;
-                capacity += cap
+            let (mut heap_size, mut heap_capacity, mut heap_allocations) = (0, 0, 0);
+            let mut heap_callback = |siz, cap, alc| {
+                heap_size += siz;
+                heap_capacity += cap;
+                heap_allocations += alc;
             };
+
             trace.map_batches(|batch| {
-                batch.layer.keys.heap_size(&mut callback);
-                batch.layer.vals.keys.heap_size(&mut callback);
-                vec_size(&batch.layer.offs, &mut callback);
-                vec_size(&batch.layer.vals.offs, &mut callback);
-                vec_size(&batch.layer.vals.vals.vals, &mut callback);
+                batch.layer.offs.estimate_size(&mut heap_callback);
+                batch.layer.vals.offs.estimate_size(&mut heap_callback);
+                batch.layer.vals.vals.vals.estimate_size(&mut heap_callback);
+
+                let mut region_callback = |siz, cap| heap_callback(siz, cap, usize::from(cap > 0));
+                batch.layer.keys.heap_size(&mut region_callback);
+                batch.layer.vals.keys.heap_size(&mut region_callback);
             });
-            (size, capacity, allocations)
+
+            (heap_size, heap_capacity, heap_allocations)
         })
     }
 }
@@ -300,23 +412,27 @@ where
     G: Scope<Timestamp = T>,
     G::Timestamp: Lattice + Ord,
     K: Data + Columnation,
-    T: Lattice + Timestamp,
-    R: Semigroup,
+    T: Lattice + Timestamp + Columnation + HeapSize,
+    R: Semigroup + Columnation,
+    Vec<(T, R)>: HeapSize,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                allocations += usize::from(cap > 0);
-                size += siz;
-                capacity += cap
+            let (mut heap_size, mut heap_capacity, mut heap_allocations) = (0, 0, 0);
+            let mut heap_callback = |siz, cap, alc| {
+                heap_size += siz;
+                heap_capacity += cap;
+                heap_allocations += alc;
             };
+
             trace.map_batches(|batch| {
-                batch.layer.keys.heap_size(&mut callback);
-                vec_size(&batch.layer.offs, &mut callback);
-                vec_size(&batch.layer.vals.vals, &mut callback);
+                batch.layer.offs.estimate_size(&mut heap_callback);
+                batch.layer.vals.vals.estimate_size(&mut heap_callback);
+
+                let mut region_callback = |siz, cap| heap_callback(siz, cap, usize::from(cap > 0));
+                batch.layer.keys.heap_size(&mut region_callback);
             });
-            (size, capacity, allocations)
+            (heap_size, heap_capacity, heap_allocations)
         })
     }
 }

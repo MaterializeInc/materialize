@@ -9,6 +9,7 @@
 
 from enum import Enum
 
+from materialize.mz_version import MzVersion
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
@@ -19,7 +20,6 @@ from materialize.output_consistency.operation.operation_args_validator import (
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
-from materialize.util import MzVersion
 
 EXPRESSION_PLACEHOLDER = "$"
 

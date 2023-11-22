@@ -108,6 +108,13 @@ same resource type.
 ## Ignoring a Check
 To ignore a `Check`, annotate it with `@disabled(ignore_reason="due to #...")`.
 
+## Externally-idempotent Checks
+
+If a check performs non-idempotent actions against third-party services, such as ingesting non-UPSERT data into a
+Kafka or Postgres source, it needs to be annotated with `@external_idempotence(False)`. This Check will not be run
+in Scenarios, such as some Backup+Restore scenarios, that may need to run a `manipulate()` phase twice.
+
+
 # Writing a Scenario
 
 A Scenario is a list of sequential Actions that the framework will perform one after another:

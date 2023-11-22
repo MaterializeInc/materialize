@@ -112,8 +112,8 @@ class SubscribeParallelKafka(SubscribeParallel):
              # Separate topic for each Mz instance
              $ kafka-create-topic topic=subscribe-kafka-{self._unique_topic_id}
 
-             > CREATE CONNECTION IF NOT EXISTS kafka_conn
-               TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+             >[version<7800]  CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+             >[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
              > DROP SOURCE IF EXISTS s1;
 

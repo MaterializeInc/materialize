@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE TABLE t (a text, b text)
 > CREATE MATERIALIZED VIEW simple_view AS SELECT * from t;

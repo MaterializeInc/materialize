@@ -54,18 +54,9 @@ use crate::{Diagnostics, PersistClient, ShardId};
 /// The `map_filter_project` argument, if supplied, may be partially applied,
 /// and any un-applied part of the argument will be left behind in the argument.
 ///
-/// Users of this function have the ability to apply flow control to the output
-/// to limit the in-flight data (measured in bytes) it can emit. The flow control
-/// input is a timely stream that communicates the frontier at which the data
-/// emitted from by this source have been dropped.
-///
-/// **Note:** Because this function is reading batches from `persist`, it is working
-/// at batch granularity. In practice, the source will be overshooting the target
-/// flow control upper by an amount that is related to the size of batches.
-///
-/// If no flow control is desired an empty stream whose frontier immediately advances
-/// to the empty antichain can be used. An easy easy of creating such stream is by
-/// using [`timely::dataflow::operators::generic::operator::empty`].
+/// The `desc_transformer` interposes an operator in the stream before the
+/// chosen data is fetched. This is currently used to provide flow control... see
+/// usages for details.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
@@ -582,10 +573,11 @@ where
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 for (_idx, part) in data.drain(..) {
-                    let (leased_part, fetched) = fetcher
-                        .fetch_leased_part(fetcher.leased_part_from_exchangeable(part))
-                        .await;
-                    let fetched = fetched.expect("shard_id should match across all workers");
+                    let leased_part = fetcher.leased_part_from_exchangeable(part);
+                    let fetched = fetcher
+                        .fetch_leased_part(&leased_part)
+                        .await
+                        .expect("shard_id should match across all workers");
                     {
                         // Do very fine-grained output activation/session
                         // creation to ensure that we don't hold activated

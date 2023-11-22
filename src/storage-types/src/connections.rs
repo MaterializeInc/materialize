@@ -266,14 +266,13 @@ pub struct KafkaTlsConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct SaslConfig {
-    pub sasl_mechanism: String,
+pub struct KafkaSaslConfig {
+    pub mechanism: String,
     pub username: StringOrSecret,
     pub password: GlobalId,
-    pub tls_root_cert: Option<StringOrSecret>,
 }
 
-impl Arbitrary for SaslConfig {
+impl Arbitrary for KafkaSaslConfig {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -282,35 +281,13 @@ impl Arbitrary for SaslConfig {
             any::<String>(),
             StringOrSecret::arbitrary(),
             GlobalId::arbitrary(),
-            proptest::option::of(any::<StringOrSecret>()),
         )
-            .prop_map(
-                |(sasl_mechanism, username, password, tls_root_cert)| SaslConfig {
-                    sasl_mechanism,
-                    username,
-                    password,
-                    tls_root_cert,
-                },
-            )
+            .prop_map(|(mechanism, username, password)| KafkaSaslConfig {
+                mechanism,
+                username,
+                password,
+            })
             .boxed()
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum KafkaSecurity {
-    Tls(KafkaTlsConfig),
-    Sasl(SaslConfig),
-}
-
-impl From<KafkaTlsConfig> for KafkaSecurity {
-    fn from(c: KafkaTlsConfig) -> Self {
-        KafkaSecurity::Tls(c)
-    }
-}
-
-impl From<SaslConfig> for KafkaSecurity {
-    fn from(c: SaslConfig) -> Self {
-        KafkaSecurity::Sasl(c)
     }
 }
 
@@ -361,8 +338,9 @@ pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
     /// in `brokers`.
     pub default_tunnel: Tunnel<C>,
     pub progress_topic: Option<String>,
-    pub security: Option<KafkaSecurity>,
     pub options: BTreeMap<String, StringOrSecret>,
+    pub tls: Option<KafkaTlsConfig>,
+    pub sasl: Option<KafkaSaslConfig>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
@@ -373,8 +351,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
             brokers,
             progress_topic,
             default_tunnel,
-            security,
             options,
+            tls,
+            sasl,
         } = self;
 
         let brokers = brokers
@@ -386,8 +365,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
             brokers,
             progress_topic,
             default_tunnel: default_tunnel.into_inline_connection(&r),
-            security,
             options,
+            tls,
+            sasl,
         }
     }
 }
@@ -411,39 +391,40 @@ impl KafkaConnection {
         T: FromClientConfigAndContext<TunnelingClientContext<C>>,
     {
         let mut options = self.options.clone();
+
+        // Ensure that Kafka topics are *not* automatically created when
+        // consuming, producing, or fetching metadata for a topic. This ensures
+        // that we don't accidentally create topics with the wrong number of
+        // partitions.
+        options.insert("allow.auto.create.topics".into(), "false".into());
+
         options.insert(
             "bootstrap.servers".into(),
             self.brokers.iter().map(|b| &b.address).join(",").into(),
         );
-        match self.security.clone() {
-            Some(KafkaSecurity::Tls(KafkaTlsConfig {
-                root_cert,
-                identity,
-            })) => {
-                options.insert("security.protocol".into(), "SSL".into());
-                if let Some(root_cert) = root_cert {
-                    options.insert("ssl.ca.pem".into(), root_cert);
-                }
-                if let Some(identity) = identity {
-                    options.insert("ssl.key.pem".into(), StringOrSecret::Secret(identity.key));
-                    options.insert("ssl.certificate.pem".into(), identity.cert);
-                }
+        let security_protocol = match (self.tls.is_some(), self.sasl.is_some()) {
+            (false, false) => "PLAINTEXT",
+            (true, false) => "SSL",
+            (false, true) => "SASL_PLAINTEXT",
+            (true, true) => "SASL_SSL",
+        };
+        options.insert("security.protocol".into(), security_protocol.into());
+        if let Some(tls) = &self.tls {
+            if let Some(root_cert) = &tls.root_cert {
+                options.insert("ssl.ca.pem".into(), root_cert.clone());
             }
-            Some(KafkaSecurity::Sasl(SaslConfig {
-                sasl_mechanism: mechanisms,
-                username,
-                password,
-                tls_root_cert: certificate_authority,
-            })) => {
-                options.insert("security.protocol".into(), "SASL_SSL".into());
-                options.insert("sasl.mechanisms".into(), StringOrSecret::String(mechanisms));
-                options.insert("sasl.username".into(), username);
-                options.insert("sasl.password".into(), StringOrSecret::Secret(password));
-                if let Some(certificate_authority) = certificate_authority {
-                    options.insert("ssl.ca.pem".into(), certificate_authority);
-                }
+            if let Some(identity) = &tls.identity {
+                options.insert("ssl.key.pem".into(), StringOrSecret::Secret(identity.key));
+                options.insert("ssl.certificate.pem".into(), identity.cert.clone());
             }
-            None => (),
+        }
+        if let Some(sasl) = &self.sasl {
+            options.insert("sasl.mechanisms".into(), (&sasl.mechanism).into());
+            options.insert("sasl.username".into(), sasl.username.clone());
+            options.insert(
+                "sasl.password".into(),
+                StringOrSecret::Secret(sasl.password),
+            );
         }
 
         let mut config = mz_kafka_util::client::create_new_client_config(
@@ -615,49 +596,24 @@ impl RustType<ProtoKafkaConnectionTlsConfig> for KafkaTlsConfig {
     }
 }
 
-impl RustType<ProtoKafkaConnectionSaslConfig> for SaslConfig {
+impl RustType<ProtoKafkaConnectionSaslConfig> for KafkaSaslConfig {
     fn into_proto(&self) -> ProtoKafkaConnectionSaslConfig {
         ProtoKafkaConnectionSaslConfig {
-            sasl_mechanism: self.sasl_mechanism.into_proto(),
+            mechanism: self.mechanism.into_proto(),
             username: Some(self.username.into_proto()),
             password: Some(self.password.into_proto()),
-            tls_root_cert: self.tls_root_cert.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoKafkaConnectionSaslConfig) -> Result<Self, TryFromProtoError> {
-        Ok(SaslConfig {
-            sasl_mechanism: proto.sasl_mechanism,
+        Ok(KafkaSaslConfig {
+            mechanism: proto.mechanism,
             username: proto
                 .username
                 .into_rust_if_some("ProtoKafkaConnectionSaslConfig::username")?,
             password: proto
                 .password
                 .into_rust_if_some("ProtoKafkaConnectionSaslConfig::password")?,
-            tls_root_cert: proto.tls_root_cert.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoKafkaConnectionSecurity> for KafkaSecurity {
-    fn into_proto(&self) -> ProtoKafkaConnectionSecurity {
-        use proto_kafka_connection_security::Kind;
-        ProtoKafkaConnectionSecurity {
-            kind: Some(match self {
-                KafkaSecurity::Tls(config) => Kind::Tls(config.into_proto()),
-                KafkaSecurity::Sasl(config) => Kind::Sasl(config.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaConnectionSecurity) -> Result<Self, TryFromProtoError> {
-        use proto_kafka_connection_security::Kind;
-        let kind = proto.kind.ok_or_else(|| {
-            TryFromProtoError::missing_field("ProtoKafkaConnectionSecurity::kind")
-        })?;
-        Ok(match kind {
-            Kind::Tls(s) => KafkaSecurity::Tls(KafkaTlsConfig::from_proto(s)?),
-            Kind::Sasl(s) => KafkaSecurity::Sasl(SaslConfig::from_proto(s)?),
         })
     }
 }
@@ -668,12 +624,13 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
             brokers: self.brokers.into_proto(),
             default_tunnel: Some(self.default_tunnel.into_proto()),
             progress_topic: self.progress_topic.into_proto(),
-            security: self.security.into_proto(),
             options: self
                 .options
                 .iter()
                 .map(|(k, v)| (k.clone(), v.into_proto()))
                 .collect(),
+            tls: self.tls.into_proto(),
+            sasl: self.sasl.into_proto(),
         }
     }
 
@@ -684,12 +641,13 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
                 .default_tunnel
                 .into_rust_if_some("ProtoKafkaConnection::default_tunnel")?,
             progress_topic: proto.progress_topic,
-            security: proto.security.into_rust()?,
             options: proto
                 .options
                 .into_iter()
                 .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
                 .collect::<Result<_, _>>()?,
+            tls: proto.tls.into_rust()?,
+            sasl: proto.sasl.into_rust()?,
         })
     }
 }

@@ -13,6 +13,7 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
@@ -27,7 +28,8 @@ REPEAT = 16 * 1024
 ITERATIONS = 128
 
 SERVICES = [
-    Materialized(),
+    Cockroach(setup_materialize=True),
+    Materialized(external_cockroach=True),
     Testdrive(no_reset=True, seed=1, default_timeout="3600s"),
     Redpanda(),
     Postgres(),
@@ -105,7 +107,7 @@ class KafkaScenario(Scenario):
           URL '${testdrive.schema-registry-url}';
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn
-          FOR KAFKA BROKER '${testdrive.kafka-addr}';
+          FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
         """
     )
 
@@ -343,6 +345,12 @@ SCENARIOS = [
             > CREATE TABLE t (a bigint, b bigint);
 
             > CREATE INDEX idx IN CLUSTER clusterd ON t (a);
+
+            # We do not want to get a 'canceling statement due to statement timeout' error
+            > SET statement_timeout = '300s'
+
+            # And we do not want the DMLs to be retried in any circumstance
+            $ set-max-tries max-tries=1
 
             > INSERT INTO t SELECT a, a FROM generate_series(1, 2000000) AS a;
             > UPDATE t SET b = b + 100000;

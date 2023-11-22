@@ -39,6 +39,7 @@ pub(super) struct SourceSpecificMetrics {
     pub(super) error_retractions: IntCounterVec,
     pub(super) persist_sink_processed_batches: IntCounterVec,
     pub(super) offset_commit_failures: IntCounterVec,
+    pub(super) inmemory_remap_bindings: UIntGaugeVec,
 }
 
 impl SourceSpecificMetrics {
@@ -92,6 +93,11 @@ impl SourceSpecificMetrics {
                 name: "mz_source_offset_commit_failures",
                 help: "A counter representing how many times we have failed to commit offsets for a source",
                 var_labels: ["source_id"],
+            )),
+            inmemory_remap_bindings: registry.register(metric!(
+                name: "mz_source_inmemory_remap_bindings",
+                help: "The number of in-memory remap bindings that reclocking a time needs to iterate over.",
+                var_labels: ["source_id", "worker_id"],
             )),
         }
     }

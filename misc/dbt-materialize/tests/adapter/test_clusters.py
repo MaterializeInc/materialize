@@ -17,14 +17,14 @@ import pytest
 from dbt.tests.util import check_relations_equal, run_dbt
 
 models__override_cluster_sql = """
-{{ config(cluster='not_default', materialized='materializedview') }}
+{{ config(cluster='not_default', materialized='materialized_view') }}
 select 1 as col_1
 """
 
 models__override_cluster_and_index_sql = """
 {{ config(
     cluster='not_default',
-    materialized='materializedview',
+    materialized='materialized_view',
     indexes=[{'columns': ['col_1'], 'name':'c_i_col_1_idx'}]
 ) }}
 select 1 as col_1
@@ -32,19 +32,19 @@ select 1 as col_1
 
 models__override_index_cluster_sql = """
 {{ config(
-    materialized='materializedview',
+    materialized='materialized_view',
     indexes=[{'columns': ['col_1'], 'cluster': 'not_default', 'name':'i_col_1_idx'}]
 ) }}
 select 1 as col_1
 """
 
 models__invalid_cluster_sql = """
-{{ config(cluster='not_exist', materialized='materializedview') }}
+{{ config(cluster='not_exist', materialized='materialized_view') }}
 select 1 as col_1
 """
 
 project_override_cluster_sql = """
-{{ config(materialized='materializedview') }}
+{{ config(materialized='materialized_view') }}
 select 1 as col_1
 """
 

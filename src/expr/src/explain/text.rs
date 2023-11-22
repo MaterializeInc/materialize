@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use mz_ore::soft_assert;
-use mz_ore::str::{bracketed, closure_to_display, separated, Indent, IndentLike, StrExt};
+use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{
     CompactScalarSeq, ExprHumanizer, HumanizedAttributes, IndexUsageType, Indices,
@@ -545,13 +545,8 @@ impl MirRelationExpr {
                     let equivalences = separated(
                         " AND ",
                         equivalences.iter().map(|equivalence| {
-                            let equivalences = equivalence.len();
                             let equivalence = HumanizedExpr::seq(equivalence, cols);
-                            if equivalences == 2 {
-                                bracketed("", "", separated(" = ", equivalence))
-                            } else {
-                                bracketed("eq(", ")", separated(", ", equivalence))
-                            }
+                            separated(" = ", equivalence)
                         }),
                     );
                     write!(f, "{}Join on=({})", ctx.indent, equivalences)?;
@@ -1058,7 +1053,10 @@ impl<'a> fmt::Display for HumanizedExpr<'a, usize> {
         match self.cols {
             Some(cols) if !cols[*self.expr].is_empty() => {
                 // Write #c{name} if we have a name inferred for this column.
-                let ident = Ident::new(cols[*self.expr].clone()); // TODO: try to avoid the `.clone()` here.
+                //
+                // Note: using unchecked here is okay since we're directly converting to a string
+                // afterwards.
+                let ident = Ident::new_unchecked(cols[*self.expr].clone()); // TODO: try to avoid the `.clone()` here.
                 write!(f, "#{}{{{}}}", self.expr, ident)
             }
             _ => {

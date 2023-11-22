@@ -14,7 +14,9 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.adapter.simple_seed.test_seed import SeedConfigBase
+from dbt.tests.adapter.simple_seed.test_seed import (
+    SeedConfigBase,
+)
 from dbt.tests.adapter.simple_seed.test_seed_type_override import (
     BaseSimpleSeedColumnOverride,
 )

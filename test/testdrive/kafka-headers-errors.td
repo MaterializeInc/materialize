@@ -17,7 +17,7 @@ $ set schema={}
 $ kafka-create-topic topic=headers_src
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE SOURCE headers_src
   FROM KAFKA CONNECTION kafka_conn (TOPIC

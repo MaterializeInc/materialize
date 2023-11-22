@@ -234,6 +234,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self._meets_minimum_version("0.63.0-dev"):
             args += ["--secrets-controller=kubernetes"]
 
+        if self._meets_minimum_version("0.78.0-dev"):
+            args += [
+                f"--timestamp-oracle-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=tsoracle"
+            ]
+
         return args
 
     def env_vars(self) -> list[V1EnvVar]:

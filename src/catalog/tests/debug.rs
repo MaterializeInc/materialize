@@ -76,6 +76,7 @@
 // END LINT CONFIG
 
 use mz_catalog::durable::debug::SettingCollection;
+use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
     persist_backed_catalog_state, test_bootstrap_args, test_stash_backed_catalog_state,
     CatalogError, DurableCatalogError, OpenableDurableCatalogState,
@@ -84,7 +85,6 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_persist_client::PersistClient;
 use mz_stash::DebugStashFactory;
-use mz_stash_types::objects::proto;
 use uuid::Uuid;
 
 #[mz_ore::test(tokio::test)]

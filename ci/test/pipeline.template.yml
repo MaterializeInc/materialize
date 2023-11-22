@@ -141,6 +141,17 @@ steps:
           queue: linux-x86_64
         coverage: skip
 
+      - id: vet-check
+        label: Cargo vet Check
+        command: bin/ci-builder run stable cargo vet check --locked
+        inputs:
+          - Cargo.lock
+          - misc/cargo-vet/config.toml
+        timeout_in_minutes: 5
+        agents:
+          queue: linux-x86_64
+        coverage: skip
+
       - id: lint-docs
         label: Lint docs
         command: bin/ci-builder run stable ci/test/lint-docs.sh
@@ -374,27 +385,15 @@ steps:
         agents:
           queue: linux-x86_64
 
-      - id: kafka-ssl
-        label: Kafka SSL smoke test
+      - id: kafka-auth
+        label: Kafka auth test
         depends_on: build-x86_64
         timeout_in_minutes: 30
-        inputs: [test/kafka-ssl/smoketest.td]
+        inputs: [test/kafka-auth/smoketest.td]
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
-              composition: kafka-ssl
-        agents:
-          queue: linux-x86_64
-
-      - id: kafka-sasl-plain
-        label: Kafka SASL PLAIN smoke test
-        depends_on: build-x86_64
-        timeout_in_minutes: 30
-        inputs: [test/kafka-sasl-plain/smoketest.td]
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: kafka-sasl-plain
+              composition: kafka-auth
         agents:
           queue: linux-x86_64
 
@@ -707,6 +706,18 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: python
+        agents:
+          queue: linux-x86_64
+
+      - id: lang-ruby
+        label: ":ruby: tests"
+        depends_on: build-x86_64
+        timeout_in_minutes: 10
+        inputs: [test/lang/ruby]
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: ruby
         agents:
           queue: linux-x86_64
 

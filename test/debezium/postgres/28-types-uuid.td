@@ -22,7 +22,7 @@ $ schema-registry-wait subject=postgres.public.uuid_type-value
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE uuid_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.uuid_type')

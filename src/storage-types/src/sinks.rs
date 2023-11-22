@@ -16,7 +16,6 @@ use mz_ore::cast::CastFrom;
 use mz_persist_client::ShardId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
-use mz_stash_types::objects::proto;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -46,7 +45,7 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
 }
 
 impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + PartialOrder>
-    StorageSinkDesc<S, T>
+    crate::AlterCompatible for StorageSinkDesc<S, T>
 {
     /// Determines if `self` is compatible with another `StorageSinkDesc`, in
     /// such a way that it is possible to turn `self` into `other` through a
@@ -55,7 +54,7 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
     /// Currently, the only "valid transformation" is the passage of time such
     /// that the sink's as ofs may differ. However, this will change once we
     /// support `ALTER CONNECTION` or `ALTER SINK`.
-    pub fn alter_compatible(
+    fn alter_compatible(
         &self,
         id: GlobalId,
         other: &StorageSinkDesc<S, T>,
@@ -86,15 +85,15 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             ),
         ];
 
-        for (compatible, desc) in compatibility_checks {
+        for (compatible, field) in compatibility_checks {
             if !compatible {
                 tracing::warn!(
-                    "StorageSinkDesc incompatible at {desc}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    "StorageSinkDesc incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );
 
-                return Err(StorageError::IncompatibleSinkDescriptions { id });
+                return Err(StorageError::InvalidAlter { id });
             }
         }
 
@@ -235,7 +234,7 @@ impl<T: PartialOrder + Clone> SinkAsOf<T> {
     /// Forwards the since frontier of this `SinkAsOf`. If it is already
     /// sufficiently far advanced the downgrade is a no-op.
     pub fn downgrade(&mut self, other_since: &Antichain<T>) {
-        if PartialOrder::less_equal(&self.frontier, other_since) {
+        if PartialOrder::less_than(&self.frontier, other_since) {
             // TODO(aljoscha): Should this be meet_assign?
             self.frontier.clone_from(other_since);
             // If we're using the since, never read the snapshot
@@ -274,23 +273,6 @@ impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
             frontier: proto
                 .frontier
                 .into_rust_if_some("ProtoSinkAsOf::frontier")?,
-            strict: proto.strict,
-        })
-    }
-}
-
-impl RustType<proto::SinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
-    fn into_proto(&self) -> proto::SinkAsOf {
-        proto::SinkAsOf {
-            frontier: Some(self.frontier.into_proto()),
-            strict: self.strict,
-        }
-    }
-
-    fn from_proto(proto: proto::SinkAsOf) -> Result<Self, TryFromProtoError> {
-        let frontier = proto.frontier.into_rust_if_some("SinkAsOf::frontier")?;
-        Ok(SinkAsOf {
-            frontier,
             strict: proto.strict,
         })
     }

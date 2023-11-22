@@ -67,7 +67,6 @@ class Worker:
 
         while time.time() < self.end_time:
             action = self.rng.choices(self.actions, self.weights)[0]
-            self.num_queries[type(action)] += 1
             try:
                 if self.exe.rollback_next:
                     try:
@@ -88,7 +87,8 @@ class Worker:
                         self.exe
                     )
                     self.exe.reconnect_next = False
-                action.run(self.exe)
+                if action.run(self.exe):
+                    self.num_queries[type(action)] += 1
             except QueryError as e:
                 for error in action.errors_to_ignore(self.exe):
                     if error in e.msg:
@@ -105,5 +105,5 @@ class Worker:
                         break
                 else:
                     thread_name = threading.current_thread().getName()
-                    print(f"[{thread_name}] Query failed: {e.query} {e.msg}")
+                    print(f"+++ [{thread_name}] Query failed: {e.query} {e.msg}")
                     raise

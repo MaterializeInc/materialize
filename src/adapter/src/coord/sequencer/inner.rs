@@ -87,13 +87,12 @@ use crate::catalog::{
 };
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
-use crate::coord::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::coord::dataflows::{
+    dataflow_import_id_bundle, prep_scalar_expr, EvalTime, ExprPrepStyle,
+};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PeekDataflowPlan, PeekPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
-use crate::coord::sequencer::old_optimizer_api::{
-    PeekStageDeprecated, PeekStageValidateDeprecated,
-};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
@@ -893,11 +892,6 @@ impl Coordinator {
 
         let mut ops = vec![];
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
         ops.extend(
             drop_ids
                 .iter()
@@ -907,59 +901,35 @@ impl Coordinator {
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
         let raw_expr = view.expr.clone();
-        if enable_unified_optimizer_api {
-            // Collect optimizer parameters.
-            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-            // Build an optimizer for this VIEW.
-            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+        // Collect optimizer parameters.
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-            let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+        // Build an optimizer for this VIEW.
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
-            let view = catalog::View {
-                create_sql: view.create_sql.clone(),
-                raw_expr,
-                desc: RelationDesc::new(optimized_expr.typ(), view.column_names.clone()),
-                optimized_expr,
-                conn_id: if view.temporary {
-                    Some(session.conn_id().clone())
-                } else {
-                    None
-                },
-                resolved_ids,
-            };
-            ops.push(catalog::Op::CreateItem {
-                id: view_id,
-                oid: view_oid,
-                name: name.clone(),
-                item: CatalogItem::View(view),
-                owner_id: *session.current_role_id(),
-            });
-        } else {
-            let decorrelated_expr = raw_expr.clone().lower(self.catalog().system_config())?;
-            let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
-            let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
-            let view = catalog::View {
-                create_sql: view.create_sql.clone(),
-                raw_expr,
-                optimized_expr,
-                desc,
-                conn_id: if view.temporary {
-                    Some(session.conn_id().clone())
-                } else {
-                    None
-                },
-                resolved_ids,
-            };
-            ops.push(catalog::Op::CreateItem {
-                id: view_id,
-                oid: view_oid,
-                name: name.clone(),
-                item: CatalogItem::View(view),
-                owner_id: *session.current_role_id(),
-            });
-        }
+        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+        let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+
+        let view = catalog::View {
+            create_sql: view.create_sql.clone(),
+            raw_expr,
+            desc: RelationDesc::new(optimized_expr.typ(), view.column_names.clone()),
+            optimized_expr,
+            conn_id: if view.temporary {
+                Some(session.conn_id().clone())
+            } else {
+                None
+            },
+            resolved_ids,
+        };
+        ops.push(catalog::Op::CreateItem {
+            id: view_id,
+            oid: view_oid,
+            name: name.clone(),
+            item: CatalogItem::View(view),
+            owner_id: *session.current_role_id(),
+        });
 
         Ok(ops)
     }
@@ -1038,9 +1008,6 @@ impl Coordinator {
         let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
-        // Timestamp selection
-        let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
-        let global_lir_plan = global_lir_plan.resolve(since.clone());
 
         let mut ops = Vec::new();
         ops.extend(
@@ -1080,6 +1047,14 @@ impl Coordinator {
                 // Emit notices.
                 self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
+                let output_desc = global_lir_plan.desc().clone();
+                let mut df_desc = global_lir_plan.unapply().0;
+
+                // Timestamp selection
+                let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
+                let since = self.least_valid_read(&id_bundle);
+                df_desc.set_as_of(since.clone());
+
                 // Announce the creation of the materialized view source.
                 self.controller
                     .storage
@@ -1088,7 +1063,7 @@ impl Coordinator {
                         vec![(
                             id,
                             CollectionDescription {
-                                desc: global_lir_plan.desc().clone(),
+                                desc: output_desc,
                                 data_source: DataSource::Other(DataSourceOther::Compute),
                                 since: Some(since),
                                 status_collection_id: None,
@@ -1104,8 +1079,7 @@ impl Coordinator {
                 )
                 .await;
 
-                let df_desc = global_lir_plan.unapply().0;
-                self.ship_dataflow_new(df_desc, cluster_id).await;
+                self.ship_dataflow(df_desc, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -1164,9 +1138,6 @@ impl Coordinator {
         let global_mir_plan = optimizer.optimize(index_plan)?;
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
-        // Timestamp selection
-        let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
-        let global_lir_plan = global_lir_plan.resolve(since);
 
         let index = catalog::Index {
             create_sql,
@@ -1206,9 +1177,14 @@ impl Coordinator {
                 // Emit notices.
                 self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
-                let df_desc = global_lir_plan.unapply().0;
+                let mut df_desc = global_lir_plan.unapply().0;
 
-                self.ship_dataflow_new(df_desc, cluster_id).await;
+                // Timestamp selection
+                let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
+                let since = self.least_valid_read(&id_bundle);
+                df_desc.set_as_of(since);
+
+                self.ship_dataflow(df_desc, cluster_id).await;
 
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
@@ -1239,7 +1215,7 @@ impl Coordinator {
             details: CatalogTypeDetails {
                 array_id: None,
                 typ: plan.typ.inner,
-                typreceive_oid: None,
+                pg_metadata: None,
             },
             resolved_ids,
         };
@@ -1999,7 +1975,7 @@ impl Coordinator {
         }
     }
 
-    pub(super) fn sequence_end_transaction(
+    pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
         mut action: EndTransactionAction,
@@ -2019,7 +1995,9 @@ impl Coordinator {
             }),
         };
 
-        let result = self.sequence_end_transaction_inner(ctx.session_mut(), action);
+        let result = self
+            .sequence_end_transaction_inner(ctx.session_mut(), action)
+            .await;
 
         let (response, action) = match result {
             Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
@@ -2077,7 +2055,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
-    fn sequence_end_transaction_inner(
+    async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
@@ -2092,20 +2070,36 @@ impl Coordinator {
 
         if let EndTransactionAction::Commit = action {
             if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
-                if let TransactionOps::Writes(writes) = &mut ops {
-                    for WriteOp { id, .. } in &mut writes.iter() {
-                        // Re-verify this id exists.
-                        let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
-                            AdapterError::Catalog(catalog::Error {
-                                kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
-                                    id.to_string(),
-                                )),
-                            })
-                        })?;
-                    }
+                match &mut ops {
+                    TransactionOps::Writes(writes) => {
+                        for WriteOp { id, .. } in &mut writes.iter() {
+                            // Re-verify this id exists.
+                            let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
+                                AdapterError::Catalog(catalog::Error {
+                                    kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
+                                        id.to_string(),
+                                    )),
+                                })
+                            })?;
+                        }
 
-                    // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
-                    writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
+                        // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
+                        writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
+                    }
+                    TransactionOps::DDL {
+                        ops,
+                        state: _,
+                        revision,
+                    } => {
+                        // Make sure our catalog hasn't changed.
+                        if *revision != self.catalog().transient_revision() {
+                            return Err(AdapterError::DDLTransactionRace);
+                        }
+                        // Commit all of our queued ops.
+                        self.catalog_transact(Some(session), std::mem::take(ops))
+                            .await?;
+                    }
+                    _ => (),
                 }
                 return Ok((Some(ops), write_lock_guard));
             }
@@ -2149,40 +2143,17 @@ impl Coordinator {
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
-        if enable_unified_optimizer_api {
-            self.sequence_peek_stage(
-                ctx,
-                PeekStage::Validate(PeekStageValidate {
-                    plan,
-                    target_cluster,
-                }),
-            )
-            .await;
-        } else {
-            // Allow while the introduction of the new optimizer API in
-            // #20569 is in progress.
-            #[allow(deprecated)]
-            self.sequence_peek_stage_deprecated(
-                ctx,
-                PeekStageDeprecated::Validate(PeekStageValidateDeprecated {
-                    plan,
-                    target_cluster,
-                }),
-            )
-            .await;
-        }
+        self.sequence_peek_stage(
+            ctx,
+            PeekStage::Validate(PeekStageValidate {
+                plan,
+                target_cluster,
+            }),
+        )
+        .await;
     }
 
     /// Processes as many peek stages as possible.
-    ///
-    /// WARNING! This should mirror the semantics of `sequence_peek_stage_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_peek_stage(
         &mut self,
@@ -2226,10 +2197,6 @@ impl Coordinator {
     }
 
     /// Do some simple validation. We must defer most of it until after any off-thread work.
-    ///
-    /// WARNING! This should mirror the semantics of `peek_stage_validate_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     fn peek_stage_validate(
         &mut self,
         session: &Session,
@@ -2326,9 +2293,6 @@ impl Coordinator {
         })
     }
 
-    /// WARNING! This should mirror the semantics of `peek_stage_optimize_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
@@ -2381,9 +2345,6 @@ impl Coordinator {
         );
     }
 
-    /// WARNING! This should mirror the semantics of `optimize_peek_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     fn optimize_peek(
         session: &Session,
         stats: Box<dyn StatisticsOracle>,
@@ -2418,9 +2379,6 @@ impl Coordinator {
         })
     }
 
-    /// WARNING! This should mirror the semantics of `peek_stage_timestamp_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
     fn peek_stage_timestamp(
         &mut self,
@@ -2488,9 +2446,6 @@ impl Coordinator {
         }
     }
 
-    /// WARNING! This should mirror the semantics of `peek_stage_finish_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_finish(
         &mut self,
@@ -2573,10 +2528,6 @@ impl Coordinator {
 
     /// Determines the query timestamp and acquires read holds on dependent sources
     /// if necessary.
-    ///
-    /// WARNING! This should mirror the semantics of `sequence_peek_timestamp_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     async fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,
@@ -2697,9 +2648,6 @@ impl Coordinator {
         Ok(determination)
     }
 
-    /// WARNING! This should mirror the semantics of `plan_peek_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     async fn plan_peek(
         &mut self,
         session: &mut Session,
@@ -2789,8 +2737,6 @@ impl Coordinator {
         }
     }
 
-    /// This should mirror the operational semantics of
-    /// `Coordinator::sequence_subscribe_deprecated`.
     pub(super) async fn sequence_subscribe(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -2937,7 +2883,7 @@ impl Coordinator {
 
         let (df_desc, _df_meta) = global_lir_plan.unapply();
 
-        self.ship_dataflow_new(df_desc, cluster_id).await;
+        self.ship_dataflow(df_desc, cluster_id).await;
 
         if let Some(target) = target_replica {
             self.controller
@@ -3159,11 +3105,6 @@ impl Coordinator {
         // we aren't storing this clone in a `Subscriber`, so we should be fine.
         let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
         let pipeline_result = match stmt {
             plan::ExplaineeStatement::Query {
                 raw_plan,
@@ -3171,39 +3112,20 @@ impl Coordinator {
                 desc,
                 broken,
             } => {
-                if enable_unified_optimizer_api {
-                    // Please see the doc comment on `explain_query_optimizer_pipeline` for more
-                    // information regarding its subtleties.
-                    self.explain_query_optimizer_pipeline(
-                        raw_plan,
-                        broken,
-                        target_cluster,
-                        ctx.session_mut(),
-                        row_set_finishing,
-                        desc,
-                        &config,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                } else {
-                    // Allow while the introduction of the new optimizer API in
-                    // #20569 is in progress.
-                    #[allow(deprecated)]
-                    // Please see the doc comment on `explain_query_optimizer_pipeline` for more
-                    // information regarding its subtleties.
-                    self.explain_query_optimizer_pipeline_deprecated(
-                        raw_plan,
-                        broken,
-                        target_cluster,
-                        ctx.session_mut(),
-                        &Some(row_set_finishing),
-                        &config,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                }
+                // Please see the doc comment on `explain_query_optimizer_pipeline` for more
+                // information regarding its subtleties.
+                self.explain_query_optimizer_pipeline(
+                    raw_plan,
+                    broken,
+                    target_cluster,
+                    ctx.session_mut(),
+                    row_set_finishing,
+                    desc,
+                    &config,
+                    root_dispatch,
+                )
+                .with_subscriber(&optimizer_trace)
+                .await
             }
             plan::ExplaineeStatement::CreateMaterializedView {
                 name,
@@ -3451,6 +3373,7 @@ impl Coordinator {
                     &source_ids,
                     None, // no real-time recency
                 )
+                .with_subscriber(root_dispatch.clone())
                 .await?
                 .timestamp_context;
 
@@ -3632,10 +3555,6 @@ impl Coordinator {
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
             let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
-            // Timestamp selection
-            let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
-            let global_lir_plan = global_lir_plan.resolve(since);
-
             let (df_desc, df_meta) = global_lir_plan.unapply();
 
             Ok::<_, AdapterError>((df_desc, df_meta, used_indexes))
@@ -3744,10 +3663,6 @@ impl Coordinator {
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
             let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
-            // Timestamp selection
-            let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
-            let global_lir_plan = global_lir_plan.resolve(since);
-
             let (df_desc, df_meta) = global_lir_plan.unapply();
 
             Ok::<_, AdapterError>((df_desc, df_meta, used_indexes))
@@ -3838,24 +3753,14 @@ impl Coordinator {
     > {
         let plan::ExplainTimestampPlan { format, raw_plan } = plan;
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
+        // Collect optimizer parameters.
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-        let optimized_plan = if enable_unified_optimizer_api {
-            // Collect optimizer parameters.
-            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+        // Build an optimizer for this VIEW.
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
-            // Build an optimizer for this VIEW.
-            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
-
-            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-            optimizer.optimize(raw_plan)?
-        } else {
-            let decorrelated_plan = raw_plan.lower(self.catalog().system_config())?;
-            self.view_optimizer.optimize(decorrelated_plan)?
-        };
+        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+        let optimized_plan = optimizer.optimize(raw_plan)?;
 
         let source_ids = optimized_plan.depends_on();
         let cluster = self
@@ -3980,17 +3885,12 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::InsertPlan,
     ) {
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
         let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
             let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
             OptimizedMirRelationExpr(expr)
-        } else if enable_unified_optimizer_api {
+        } else {
             // Collect optimizer parameters.
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
@@ -3999,9 +3899,6 @@ impl Coordinator {
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
             return_if_err!(optimizer.optimize(plan.values), ctx)
-        } else {
-            let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
-            return_if_err!(self.view_optimizer.optimize(expr), ctx)
         };
 
         match optimized_mir.into_inner() {
@@ -4400,7 +4297,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_item_rename(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: plan::AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::RenameItem {
@@ -4408,7 +4305,10 @@ impl Coordinator {
             current_full_name: plan.current_full_name,
             to_name: plan.to_name,
         };
-        match self.catalog_transact(Some(session), vec![op]).await {
+        match self
+            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
@@ -4416,7 +4316,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_schema_rename(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: plan::AlterSchemaRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let (database_spec, schema_spec) = plan.cur_schema_spec;
@@ -4426,7 +4326,10 @@ impl Coordinator {
             new_name: plan.new_schema_name,
             check_reserved_names: true,
         };
-        match self.catalog_transact(Some(session), vec![op]).await {
+        match self
+            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
             Err(err) => Err(err),
         }
@@ -4434,7 +4337,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_schema_swap(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: plan::AlterSchemaSwapPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::AlterSchemaSwapPlan {
@@ -4465,7 +4368,7 @@ impl Coordinator {
         };
 
         match self
-            .catalog_transact(Some(session), vec![op_a, op_b, op_c])
+            .catalog_transact_with_ddl_transaction(session, vec![op_a, op_b, op_c])
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),

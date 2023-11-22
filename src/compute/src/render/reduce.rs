@@ -26,18 +26,18 @@ use mz_compute_types::plan::reduce::{
 use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MirScalarExpr};
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::IntoRowByTypes;
-use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
+use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::Columnation;
+use timely::container::columnation::{Columnation, CopyRegion};
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 use tracing::warn;
 
-use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::arrange::{HeapSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
 use crate::render::context::{
     Arrangement, CollectionBundle, Context, KeyValArrangement, SpecializedArrangement,
@@ -50,8 +50,8 @@ use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
+    T: Timestamp + Lattice + Columnation,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
@@ -68,8 +68,6 @@ where
                 mut val_plan,
             } = key_val_plan;
             let key_arity = key_plan.projection.len();
-            let mut row_buf = Row::default();
-            let mut row_mfp = Row::default();
             let mut datums = DatumVec::new();
             let (key_val_input, err_input): (
                 timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
@@ -93,6 +91,8 @@ where
                     val_plan.permute(demand_map, demand_map_len);
                     let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
                     move |row_datums, time, diff| {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
                         let temp_storage = RowArena::new();
 
                         let mut row_iter = row_datums.drain(..);
@@ -106,7 +106,7 @@ where
                         let key = match key_plan.evaluate_into(
                             &mut datums_local,
                             &temp_storage,
-                            &mut row_mfp,
+                            &mut row_builder,
                         ) {
                             Err(e) => {
                                 return Some((
@@ -130,8 +130,8 @@ where
                             }
                             Ok(val) => val.expect("Row expected as no predicate was used"),
                         };
-                        row_buf.packer().extend(val);
-                        let row = row_buf.clone();
+                        row_builder.packer().extend(val);
+                        let row = row_builder.clone();
                         Some((Ok((key, row)), time.clone(), diff.clone()))
                     }
                 });
@@ -315,7 +315,6 @@ where
                 "ReduceCollation",
                 "ReduceCollation Errors",
                 {
-                    let mut row_buf = Row::default();
                     move |_key, input, output| {
                         // The inputs are pairs of a reduction type, and a row consisting of densely
                         // packed fused aggregate values.
@@ -345,7 +344,9 @@ where
                         }
 
                         // Merge results into the order they were asked for.
-                        let mut row_packer = row_buf.packer();
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
+                        let mut row_packer = row_builder.packer();
                         for typ in aggregate_types.iter() {
                             let datum = match typ {
                                 ReductionType::Accumulable => accumulable.next(),
@@ -364,7 +365,7 @@ where
                         if (accumulable.next(), hierarchical.next(), basic.next())
                             == (None, None, None)
                         {
-                            output.push((row_buf.clone(), 1));
+                            output.push((row_builder.clone(), 1));
                         }
                     }
                 },
@@ -537,14 +538,15 @@ where
         let output = differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
             .mz_arrange::<RowSpine<_, _, _, _>>("Arranged ReduceFuseBasic input")
             .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceFuseBasic", {
-                let mut row_buf = Row::default();
                 move |_key, input, output| {
-                    let mut row_packer = row_buf.packer();
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let mut row_packer = row_builder.packer();
                     for ((_, row), _) in input.iter() {
                         let datum = row.unpack_first();
                         row_packer.push(datum);
                     }
-                    output.push((row_buf.clone(), 1));
+                    output.push((row_builder.clone(), 1));
                 }
             });
         (
@@ -576,11 +578,12 @@ where
         } = aggr.clone();
 
         // Extract the value we were asked to aggregate over.
-        let mut row_buf = Row::default();
         let mut partial = input.map(move |(key, row)| {
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
             let value = row.iter().nth(index).unwrap();
-            row_buf.packer().push(value);
-            (key, row_buf.clone())
+            row_builder.packer().push(value);
+            (key, row_builder.clone())
         });
 
         let mut err_output = None;
@@ -606,7 +609,6 @@ where
 
         let arranged = partial.mz_arrange::<RowSpine<_, Row, _, _>>("Arranged ReduceInaccumulable");
         let oks = arranged.mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
-            let mut row_buf = Row::default();
             move |_key, source, target| {
                 // We respect the multiplicity here (unlike in hierarchical aggregation)
                 // because we don't know that the aggregation method is not sensitive
@@ -617,7 +619,9 @@ where
                     let count = usize::try_from(*w).unwrap_or(0);
                     std::iter::repeat(v.iter().next().unwrap()).take(count)
                 });
-                row_buf.packer().push(
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
+                row_builder.packer().push(
                     // Note that this is not necessarily a window aggregation, in which case
                     // `eval_fast_window_agg` delegates to the normal `eval`.
                     func.eval_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
@@ -625,7 +629,7 @@ where
                         &RowArena::new(),
                     ),
                 );
-                target.push((row_buf.clone(), 1));
+                target.push((row_builder.clone(), 1));
             }
         });
 
@@ -728,13 +732,14 @@ where
             let input = input.enter(inner);
 
             // Gather the relevant values into a vec of rows ordered by aggregation_index
-            let mut row_buf = Row::default();
             let input = input.map(move |(key, row)| {
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let mut values = Vec::with_capacity(skips.len());
                 let mut row_iter = row.iter();
                 for skip in skips.iter() {
-                    row_buf.packer().push(row_iter.nth(*skip).unwrap());
-                    values.push(row_buf.clone());
+                    row_builder.packer().push(row_iter.nth(*skip).unwrap());
+                    values.push(row_builder.clone());
                 }
 
                 (key, values)
@@ -821,16 +826,17 @@ where
             }
             arranged
                 .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
-                    let mut row_buf = Row::default();
                     move |_key, source: &[(&Vec<Row>, Diff)], target: &mut Vec<(Row, Diff)>| {
-                        let mut row_packer = row_buf.packer();
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
+                        let mut row_packer = row_builder.packer();
                         for (aggr_index, func) in aggr_funcs.iter().enumerate() {
                             let iter = source
                                 .iter()
                                 .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
                             row_packer.push(func.eval(iter, &RowArena::new()));
                         }
-                        target.push((row_buf.clone(), 1));
+                        target.push((row_builder.clone(), 1));
                     }
                 })
                 .leave_region()
@@ -884,12 +890,15 @@ where
                             return;
                         }
                     }
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
                     let mut output = Vec::with_capacity(aggrs.len());
                     for (aggr_index, func) in aggrs.iter().enumerate() {
                         let iter = source
                             .iter()
                             .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                        output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
+                        row_builder.packer().push(func.eval(iter, &RowArena::new()));
+                        output.push(row_builder.clone());
                     }
                     // We only want to arrange the parts of the input that are not part of the output.
                     // More specifically, we want to arrange it so that `input.concat(&output.negate())`
@@ -922,14 +931,15 @@ where
         S: Scope<Timestamp = G::Timestamp>,
     {
         // Gather the relevant values into a vec of rows ordered by aggregation_index
-        let mut row_buf = Row::default();
         let collection = collection
             .map(move |(key, row)| {
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let mut values = Vec::with_capacity(skips.len());
                 let mut row_iter = row.iter();
                 for skip in skips.iter() {
-                    row_buf.packer().push(row_iter.nth(*skip).unwrap());
-                    values.push(row_buf.clone());
+                    row_builder.packer().push(row_iter.nth(*skip).unwrap());
+                    values.push(row_builder.clone());
                 }
 
                 (key, values)
@@ -965,14 +975,15 @@ where
         let output = partial
             .mz_arrange::<RowKeySpine<_, _, Vec<ReductionMonoid>>>("ArrangeMonotonic [val: empty]")
             .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
-                let mut row_buf = Row::default();
                 move |_key, input, output| {
-                    let mut row_packer = row_buf.packer();
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let mut row_packer = row_builder.packer();
                     let accum = &input[0].1;
                     for monoid in accum.iter() {
                         row_packer.extend(monoid.finalize().iter());
                     }
-                    output.push((row_buf.clone(), 1));
+                    output.push((row_builder.clone(), 1));
                 }
             });
         (output, errs)
@@ -1058,12 +1069,13 @@ where
 
         // Next, collect all aggregations that require distinctness.
         for (accumulable_index, datum_index, aggr) in distinct_aggrs.into_iter() {
-            let mut row_buf = Row::default();
             let collection = collection
                 .map(move |(key, row)| {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
                     let value = row.iter().nth(datum_index).unwrap();
-                    row_buf.packer().push(value);
-                    (key, row_buf.clone())
+                    row_builder.packer().push(value);
+                    (key, row_builder.clone())
                 })
                 .map(|k| (k, ()))
                 .mz_arrange::<RowKeySpine<(Row, Row), _, _>>(
@@ -1102,15 +1114,16 @@ where
                 "ReduceAccumulable",
                 "AccumulableErrorCheck",
                 {
-                    let mut row_buf = Row::default();
                     move |_key, input, output| {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
                         let (ref accums, total) = input[0].1;
-                        let mut row_packer = row_buf.packer();
+                        let mut row_packer = row_builder.packer();
 
                         for (aggr, accum) in full_aggrs.iter().zip(accums) {
                             row_packer.push(finalize_accum(&aggr.func, accum, total));
                         }
-                        output.push((row_buf.clone(), 1));
+                        output.push((row_builder.clone(), 1));
                     }
                 },
                 move |key, input, output| {
@@ -1500,7 +1513,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
 /// point representation has less precision than a double. It is entirely possible
 /// that the values of the accumulator overflow, thus we have to use wrapping arithmetic
 /// to preserve group guarantees.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum Accum {
     /// Accumulates boolean values.
     Bool {
@@ -1742,6 +1755,25 @@ impl Multiply<Diff> for Accum {
     }
 }
 
+impl Columnation for Accum {
+    type InnerRegion = CopyRegion<Self>;
+}
+
+impl HeapSize for (Vec<Accum>, i64) {
+    #[inline]
+    fn estimate_size<C>(&self, mut callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        let size_of_accum = std::mem::size_of::<Accum>();
+        callback(
+            self.0.len() * size_of_accum,
+            self.0.capacity() * size_of_accum,
+            usize::from(self.0.capacity() > 0),
+        )
+    }
+}
+
 /// Monoids for in-place compaction of monotonic streams.
 mod monoids {
 
@@ -1765,12 +1797,24 @@ mod monoids {
     use mz_ore::soft_panic_or_log;
     use mz_repr::{Datum, Diff, Row};
     use serde::{Deserialize, Serialize};
+    use timely::container::columnation::{Columnation, Region};
+
+    use crate::extensions::arrange::HeapSize;
 
     /// A monoid containing a single-datum row.
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
     pub enum ReductionMonoid {
         Min(Row),
         Max(Row),
+    }
+
+    impl ReductionMonoid {
+        pub fn finalize(&self) -> &Row {
+            use ReductionMonoid::*;
+            match self {
+                Min(row) | Max(row) => row,
+            }
+        }
     }
 
     impl Multiply<Diff> for ReductionMonoid {
@@ -1826,7 +1870,6 @@ mod monoids {
                 }
             }
         }
-
         fn is_zero(&self) -> bool {
             // It totally looks like we could return true here for `Datum::Null`, but don't do this!
             // DD uses true results of this method to make stuff disappear. This makes sense when
@@ -1834,6 +1877,90 @@ mod monoids {
             // We don't want funny stuff, like disappearing, happening to reduction results even
             // when they are null. (This would confuse, e.g., `ReduceCollation` for null inputs.)
             false
+        }
+    }
+
+    impl Columnation for ReductionMonoid {
+        type InnerRegion = ReductionMonoidRegion;
+    }
+
+    /// Region for [`ReductionMonoid`]. This region is special in that it stores both enum variants
+    /// in the same backing region. Alternatively, it could store it in two regions, but we select
+    /// the former for simplicity reasons.
+    #[derive(Default)]
+    pub struct ReductionMonoidRegion {
+        inner: <Row as Columnation>::InnerRegion,
+    }
+
+    impl Region for ReductionMonoidRegion {
+        type Item = ReductionMonoid;
+
+        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+            use ReductionMonoid::*;
+            match item {
+                Min(row) => Min(self.inner.copy(row)),
+                Max(row) => Max(self.inner.copy(row)),
+            }
+        }
+
+        fn clear(&mut self) {
+            self.inner.clear();
+        }
+
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            self.inner
+                .reserve_items(items.map(ReductionMonoid::finalize));
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            self.inner.reserve_regions(regions.map(|r| &r.inner));
+        }
+
+        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.inner.heap_size(callback);
+        }
+    }
+
+    impl HeapSize for Vec<ReductionMonoid> {
+        #[inline]
+        fn estimate_size<C>(&self, mut callback: C)
+        where
+            C: FnMut(usize, usize, usize),
+        {
+            // We only expect as many elements in the `Vec` as there are hierarchical aggregates
+            // in one query. Thus, we deem it safe to crawl the vector to get a good estimate of
+            // the row sizes contained in the monoids.
+            let size_of_monoid = std::mem::size_of::<ReductionMonoid>();
+            let vec_size = self.len() * size_of_monoid;
+            let vec_capacity = self.capacity() * size_of_monoid;
+            let vec_allocation = usize::from(self.capacity() > 0);
+
+            let mut row_size = 0;
+            let mut row_capacity = 0;
+            let mut row_allocations = 0;
+            for monoid in self.iter() {
+                match monoid {
+                    ReductionMonoid::Min(row) | ReductionMonoid::Max(row) => {
+                        row_size += row.heap_size();
+                        let cap = row.heap_capacity();
+                        row_capacity += cap;
+                        row_allocations += usize::from(cap > 0);
+                    }
+                };
+            }
+            callback(
+                vec_size + row_size,
+                vec_capacity + row_capacity,
+                vec_allocation + row_allocations,
+            )
         }
     }
 
@@ -1896,15 +2023,6 @@ mod monoids {
             | AggregateFunc::FirstValue { .. }
             | AggregateFunc::LastValue { .. }
             | AggregateFunc::WindowAggregate { .. } => None,
-        }
-    }
-
-    impl ReductionMonoid {
-        pub fn finalize(&self) -> &Row {
-            use ReductionMonoid::*;
-            match &self {
-                Min(row) | Max(row) => row,
-            }
         }
     }
 }

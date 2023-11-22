@@ -324,7 +324,6 @@ where
         metrics: InstanceMetrics,
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        variable_length_row_encoding: bool,
     ) -> Self {
         let collections = arranged_logs
             .iter()
@@ -353,10 +352,7 @@ where
         };
 
         instance.send(ComputeCommand::CreateTimely {
-            config: TimelyConfig {
-                variable_length_row_encoding,
-                ..Default::default()
-            },
+            config: TimelyConfig::default(),
             epoch: ClusterStartupEpoch::new(envd_epoch, 0),
         });
 

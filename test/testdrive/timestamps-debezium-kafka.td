@@ -98,17 +98,17 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
 {"array":[{"data":{"a":10,"b":1},"time":1,"diff":1}]}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE data_foo
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
-  WITH (TIMELINE 'user')
+  WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')
 
 > CREATE SOURCE data_bar
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bar-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
-  WITH (TIMELINE 'user')
+  WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')
 
 > CREATE MATERIALIZED VIEW foo AS SELECT b, sum(a) FROM data_foo GROUP BY b
 

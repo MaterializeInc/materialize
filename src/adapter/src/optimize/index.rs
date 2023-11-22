@@ -8,30 +8,42 @@
 // by the Apache License, Version 2.0.
 
 //! Optimizer implementation for `CREATE INDEX` statements.
+//!
+//! Note that, in contrast to other optimization pipelines, timestamp selection is not part of
+//! index optimization. Instead users are expected to separately set the as-of on the optimized
+//! `DataflowDescription` received from `GlobalLirPlan::unapply`. Reasons for choosing to exclude
+//! timestamp selection from the index optimization pipeline are:
+//!
+//!  (a) Indexes don't support non-empty `until` frontiers, so they don't provide opportunity for
+//!      optimizations based on the selected timestamp.
+//!  (b) We want to generate dataflow plans early during environment bootstrapping, before we have
+//!      access to all information required for timestamp selection.
+//!
+//! None of this is set in stone though. If we find an opportunity for optimizing indexes based on
+//! their timestamps, we'll want to make timestamp selection part of the index optimization again
+//! and find a different approach to bootstrapping.
+//!
+//! See also MaterializeInc/materialize#22940.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
-use maplit::btreemap;
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
-use mz_compute_types::ComputeInstanceId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use timely::progress::Antichain;
 
 use crate::catalog::Catalog;
 use crate::coord::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
-    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig,
+    OptimizerError,
 };
-use crate::CollectionIdBundle;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
@@ -60,10 +72,6 @@ impl Optimizer {
             exported_index_id,
             config,
         }
-    }
-
-    pub fn cluster_id(&self) -> ComputeInstanceId {
-        self.compute_instance.instance_id()
     }
 }
 
@@ -112,13 +120,12 @@ impl GlobalMirPlan {
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
 #[derive(Clone)]
-pub struct GlobalLirPlan<T: Clone> {
+pub struct GlobalLirPlan {
     df_desc: LirDataflowDescription,
     df_meta: DataflowMetainfo,
-    phantom: PhantomData<T>,
 }
 
-impl<T: Clone> GlobalLirPlan<T> {
+impl GlobalLirPlan {
     pub fn df_desc(&self) -> &LirDataflowDescription {
         &self.df_desc
     }
@@ -126,30 +133,7 @@ impl<T: Clone> GlobalLirPlan<T> {
     pub fn df_meta(&self) -> &DataflowMetainfo {
         &self.df_meta
     }
-
-    /// Computes the [`CollectionIdBundle`] of the wrapped dataflow.
-    pub fn id_bundle(&self, compute_instance_id: ComputeInstanceId) -> CollectionIdBundle {
-        let storage_ids = self.df_desc.source_imports.keys().copied().collect();
-        let compute_ids = self.df_desc.index_imports.keys().copied().collect();
-        CollectionIdBundle {
-            storage_ids,
-            compute_ids: btreemap! {compute_instance_id => compute_ids},
-        }
-    }
 }
-
-/// Marker type for [`GlobalLirPlan`] structs representing an optimization
-/// result without a resolved timestamp.
-#[derive(Clone)]
-pub struct Unresolved;
-
-/// Marker type for [`GlobalLirPlan`] structs representing an optimization
-/// result with a resolved timestamp.
-///
-/// The actual timestamp value is set in the [`LirDataflowDescription`] of the
-/// surrounding [`GlobalLirPlan`] when we call `resolve()`.
-#[derive(Clone)]
-pub struct Resolved;
 
 impl Optimize<Index> for Optimizer {
     type To = GlobalMirPlan;
@@ -164,6 +148,24 @@ impl Optimize<Index> for Optimizer {
 
         let mut df_builder = DataflowBuilder::new(state, self.compute_instance.clone());
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
+
+        // In EXPLAIN mode we should configure the dataflow builder to
+        // not consider existing indexes that are identical to the one that
+        // we are currently trying to explain.
+        if self.config.mode == OptimizeMode::Explain {
+            let ignored_indexes = state
+                .get_indexes_on(index.on, self.compute_instance.instance_id())
+                .filter_map(|(idx_id, idx)| {
+                    // Ignore `idx` if it is idential to the `index` we are
+                    // currently trying to optimize.
+                    if idx.on == index.on && idx.keys == index.keys {
+                        Some(idx_id)
+                    } else {
+                        None
+                    }
+                });
+            df_builder.ignore_indexes(ignored_indexes);
+        }
 
         df_builder.import_into_dataflow(&index.on, &mut df_desc)?;
         df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
@@ -200,7 +202,7 @@ impl Optimize<Index> for Optimizer {
 }
 
 impl Optimize<GlobalMirPlan> for Optimizer {
-    type To = GlobalLirPlan<Unresolved>;
+    type To = GlobalLirPlan;
 
     fn optimize(&mut self, plan: GlobalMirPlan) -> Result<Self::To, OptimizerError> {
         let GlobalMirPlan {
@@ -224,35 +226,11 @@ impl Optimize<GlobalMirPlan> for Optimizer {
         .map_err(OptimizerError::Internal)?;
 
         // Return the plan at the end of this `optimize` step.
-        Ok(GlobalLirPlan {
-            df_desc,
-            df_meta,
-            phantom: PhantomData::<Unresolved>,
-        })
+        Ok(GlobalLirPlan { df_desc, df_meta })
     }
 }
 
-impl GlobalLirPlan<Unresolved> {
-    /// Produces the [`GlobalLirPlan`] with [`Resolved`] timestamp.
-    pub fn resolve(mut self, as_of: Antichain<Timestamp>) -> GlobalLirPlan<Resolved> {
-        // Set the `as_of` timestamp for the dataflow.
-        self.df_desc.set_as_of(as_of);
-
-        // The only dataflow exports are indexes, so the `df_desc.until` should
-        // be the empty frontier.
-        assert!(self.df_desc.sink_exports.is_empty());
-        // The `until` is set to the empty frontier in the `df_desc` constructor.
-        assert!(self.df_desc.until.is_empty());
-
-        GlobalLirPlan {
-            df_desc: self.df_desc,
-            df_meta: self.df_meta,
-            phantom: PhantomData::<Resolved>,
-        }
-    }
-}
-
-impl GlobalLirPlan<Resolved> {
+impl GlobalLirPlan {
     /// Unwraps the parts of the final result of the optimization pipeline.
     pub fn unapply(self) -> (LirDataflowDescription, DataflowMetainfo) {
         (self.df_desc, self.df_meta)

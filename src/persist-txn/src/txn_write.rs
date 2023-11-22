@@ -287,7 +287,7 @@ mod tests {
     use mz_persist_client::PersistClient;
 
     use crate::tests::writer;
-    use crate::txn_read::TxnsCache;
+    use crate::txn_cache::TxnsCache;
 
     use super::*;
 

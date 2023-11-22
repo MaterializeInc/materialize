@@ -27,14 +27,14 @@ class BackupAndRestoreAfterManipulate(Scenario):
 
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             Initialize(self),
             Manipulate(self, phase=1),
             Manipulate(self, phase=2),
             Backup(),
             KillMz(),
             Restore(),
-            StartMz(),
+            StartMz(self),
             Validate(self),
         ]
 
@@ -44,13 +44,66 @@ class BackupAndRestoreBeforeManipulate(Scenario):
 
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             Initialize(self),
             Manipulate(self, phase=1),
             Backup(),
             KillMz(),
             Restore(),
-            StartMz(),
+            StartMz(self),
             Manipulate(self, phase=2),
+            Validate(self),
+        ]
+
+
+class BackupAndRestoreToPreviousState(Scenario):
+    """Backup, run more workloads, and then Restore to a previous state."""
+
+    def requires_external_idempotence(self) -> bool:
+        # This scenario will run manipulate(#2) twice, so only compatible
+        # Checks are allowed to participate
+        return True
+
+    def actions(self) -> list[Action]:
+        return [
+            StartMz(self),
+            Initialize(self),
+            Manipulate(self, phase=1),
+            Backup(),
+            Manipulate(self, phase=2),  # Those updates will be lost here ..
+            KillMz(),
+            Restore(),
+            StartMz(self),
+            Manipulate(self, phase=2),  # ... and redone here
+            Validate(self),
+        ]
+
+
+class BackupAndRestoreMulti(Scenario):
+    """Repeated Backup and Restore operations."""
+
+    def actions(self) -> list[Action]:
+        return [
+            StartMz(self),
+            Initialize(self),
+            Backup(),
+            KillMz(),
+            Restore(),
+            StartMz(self),
+            Manipulate(self, phase=1),
+            Backup(),
+            KillMz(),
+            Restore(),
+            StartMz(self),
+            Manipulate(self, phase=2),
+            Backup(),
+            KillMz(),
+            Restore(),
+            StartMz(self),
+            Validate(self),
+            Backup(),
+            KillMz(),
+            Restore(),
+            StartMz(self),
             Validate(self),
         ]

@@ -10,12 +10,13 @@
 //! Logic related to opening a [`Catalog`].
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::str::FromStr;
-use std::sync::{atomic, Arc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures::future::{BoxFuture, FutureExt};
 use once_cell::sync::Lazy;
 use regex::Regex;
-use tracing::{info, warn};
+use tracing::{info, warn, Instrument};
 use uuid::Uuid;
 
 use mz_catalog::builtin::{
@@ -32,6 +33,7 @@ use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
     Role, Schema, Source, Table, Type,
 };
+use mz_catalog::{CREATE_SQL_TODO, SYSTEM_CONN_ID};
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
@@ -63,9 +65,9 @@ use mz_sql_parser::ast::Expr;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_types::sources::Timeline;
 
+use crate::catalog::config::StateConfig;
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
-    CREATE_SQL_TODO, SYSTEM_CONN_ID,
 };
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::timestamp_oracle;
@@ -177,372 +179,370 @@ impl CatalogItemRebuilder {
 }
 
 impl Catalog {
-    /// Opens or creates a catalog that stores data at `path`.
+    /// Initializes a CatalogState. Separate from [`Catalog::open`] to avoid depending on state
+    /// external to a [mz_catalog::durable::DurableCatalogState] (for example: no [mz_secrets::SecretsReader]).
     ///
-    /// Returns the catalog, metadata about builtin objects that have changed
-    /// schemas since last restart, a list of updates to builtin tables that
-    /// describe the initial state of the catalog, and the version of the
-    /// catalog before any migrations were performed.
-    #[tracing::instrument(name = "catalog::open", level = "info", skip_all)]
-    pub async fn open(
-        config: Config<'_>,
-    ) -> Result<
-        (
-            Catalog,
-            BuiltinMigrationMetadata,
-            Vec<BuiltinTableUpdate>,
-            String,
-        ),
-        AdapterError,
+    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
+    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
+    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    pub fn initialize_state<'a>(
+        config: StateConfig,
+        storage: &'a mut Box<dyn mz_catalog::durable::DurableCatalogState>,
+    ) -> BoxFuture<
+        'a,
+        Result<
+            (
+                CatalogState,
+                mz_repr::Timestamp,
+                BuiltinMigrationMetadata,
+                String,
+            ),
+            AdapterError,
+        >,
     > {
-        for builtin_role in BUILTIN_ROLES {
-            assert!(
+        async move {
+            for builtin_role in BUILTIN_ROLES {
+                assert!(
                 is_reserved_name(builtin_role.name),
                 "builtin role {builtin_role:?} must start with one of the following prefixes {}",
                 BUILTIN_PREFIXES.join(", ")
             );
-        }
-        for builtin_cluster in BUILTIN_CLUSTERS {
-            assert!(
+            }
+            for builtin_cluster in BUILTIN_CLUSTERS {
+                assert!(
                 is_reserved_name(builtin_cluster.name),
                 "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
                 BUILTIN_PREFIXES.join(", ")
             );
-        }
-
-        let mut state = CatalogState {
-            database_by_name: BTreeMap::new(),
-            database_by_id: BTreeMap::new(),
-            entry_by_id: BTreeMap::new(),
-            ambient_schemas_by_name: BTreeMap::new(),
-            ambient_schemas_by_id: BTreeMap::new(),
-            temporary_schemas: BTreeMap::new(),
-            clusters_by_id: BTreeMap::new(),
-            clusters_by_name: BTreeMap::new(),
-            clusters_by_linked_object_id: BTreeMap::new(),
-            roles_by_name: BTreeMap::new(),
-            roles_by_id: BTreeMap::new(),
-            config: mz_sql::catalog::CatalogConfig {
-                start_time: to_datetime((config.now)()),
-                start_instant: Instant::now(),
-                nonce: rand::random(),
-                environment_id: config.environment_id,
-                session_id: Uuid::new_v4(),
-                build_info: config.build_info,
-                timestamp_interval: Duration::from_secs(1),
-                now: config.now.clone(),
-            },
-            oid_counter: FIRST_USER_OID,
-            cluster_replica_sizes: config.cluster_replica_sizes,
-            default_storage_cluster_size: config.default_storage_cluster_size,
-            availability_zones: config.availability_zones,
-            system_configuration: {
-                let mut s =
-                    SystemVars::new(config.active_connection_count).set_unsafe(config.unsafe_mode);
-                if config.all_features {
-                    s.enable_all_feature_flags_by_default();
-                }
-                s
-            },
-            egress_ips: config.egress_ips,
-            aws_principal_context: config.aws_principal_context,
-            aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
-            http_host_name: config.http_host_name,
-            default_privileges: DefaultPrivileges::default(),
-            system_privileges: PrivilegeMap::default(),
-            comments: CommentsMap::default(),
-        };
-
-        let mut storage = config.storage;
-        let is_read_only = storage.is_read_only();
-        let mut txn = storage.transaction().await?;
-        // Choose a time at which to boot. This is the time at which we will run
-        // internal migrations.
-        //
-        // This time is usually the current system time, but with protection
-        // against backwards time jumps, even across restarts.
-        let boot_ts = {
-            let previous_ts = txn
-                .get_timestamp(&Timeline::EpochMilliseconds)
-                .expect("missing EpochMilliseconds timeline");
-            let boot_ts =
-                timestamp_oracle::catalog_oracle::monotonic_now(config.now.clone(), previous_ts);
-            if !is_read_only {
-                // IMPORTANT: we durably record the new timestamp before using it.
-                txn.set_timestamp(Timeline::EpochMilliseconds, boot_ts)?;
             }
 
-            boot_ts
-        };
-
-        state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
-
-        let databases = txn.get_databases();
-        for mz_catalog::durable::Database {
-            id,
-            name,
-            owner_id,
-            privileges,
-        } in databases
-        {
-            let oid = state.allocate_oid()?;
-            state.database_by_id.insert(
-                id.clone(),
-                Database {
-                    name: name.clone(),
-                    id,
-                    oid,
-                    schemas_by_id: BTreeMap::new(),
-                    schemas_by_name: BTreeMap::new(),
-                    owner_id,
-                    privileges: PrivilegeMap::from_mz_acl_items(privileges),
+            let mut state = CatalogState {
+                database_by_name: BTreeMap::new(),
+                database_by_id: BTreeMap::new(),
+                entry_by_id: BTreeMap::new(),
+                ambient_schemas_by_name: BTreeMap::new(),
+                ambient_schemas_by_id: BTreeMap::new(),
+                temporary_schemas: BTreeMap::new(),
+                clusters_by_id: BTreeMap::new(),
+                clusters_by_name: BTreeMap::new(),
+                clusters_by_linked_object_id: BTreeMap::new(),
+                roles_by_name: BTreeMap::new(),
+                roles_by_id: BTreeMap::new(),
+                config: mz_sql::catalog::CatalogConfig {
+                    start_time: to_datetime((config.now)()),
+                    start_instant: Instant::now(),
+                    nonce: rand::random(),
+                    environment_id: config.environment_id,
+                    session_id: Uuid::new_v4(),
+                    build_info: config.build_info,
+                    timestamp_interval: Duration::from_secs(1),
+                    now: config.now.clone(),
                 },
-            );
-            state.database_by_name.insert(name.clone(), id.clone());
-        }
-
-        let schemas = txn.get_schemas();
-        for mz_catalog::durable::Schema {
-            id,
-            name,
-            database_id,
-            owner_id,
-            privileges,
-        } in schemas
-        {
-            let oid = state.allocate_oid()?;
-            let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
-                Some(database_id) => {
-                    let db = state
-                        .database_by_id
-                        .get_mut(database_id)
-                        .expect("catalog out of sync");
-                    (
-                        &mut db.schemas_by_id,
-                        &mut db.schemas_by_name,
-                        ResolvedDatabaseSpecifier::Id(*database_id),
-                    )
-                }
-                None => (
-                    &mut state.ambient_schemas_by_id,
-                    &mut state.ambient_schemas_by_name,
-                    ResolvedDatabaseSpecifier::Ambient,
-                ),
+                oid_counter: FIRST_USER_OID,
+                cluster_replica_sizes: config.cluster_replica_sizes,
+                default_storage_cluster_size: config.default_storage_cluster_size,
+                availability_zones: config.availability_zones,
+                system_configuration: {
+                    let mut s = SystemVars::new(config.active_connection_count)
+                        .set_unsafe(config.unsafe_mode);
+                    if config.all_features {
+                        s.enable_all_feature_flags_by_default();
+                    }
+                    s
+                },
+                egress_ips: config.egress_ips,
+                aws_principal_context: config.aws_principal_context,
+                aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
+                http_host_name: config.http_host_name,
+                default_privileges: DefaultPrivileges::default(),
+                system_privileges: PrivilegeMap::default(),
+                comments: CommentsMap::default(),
             };
-            schemas_by_id.insert(
-                id.clone(),
-                Schema {
-                    name: QualifiedSchemaName {
-                        database: database_spec,
-                        schema: name.clone(),
-                    },
-                    id: SchemaSpecifier::Id(id.clone()),
-                    oid,
-                    items: BTreeMap::new(),
-                    functions: BTreeMap::new(),
-                    owner_id,
-                    privileges: PrivilegeMap::from_mz_acl_items(privileges),
-                },
-            );
-            schemas_by_name.insert(name.clone(), id);
-        }
 
-        let roles = txn.get_roles();
-        for mz_catalog::durable::Role {
-            id,
-            name,
-            attributes,
-            membership,
-            vars,
-        } in roles
-        {
-            let oid = state.allocate_oid()?;
-            state.roles_by_name.insert(name.clone(), id);
-            state.roles_by_id.insert(
+            let is_read_only = storage.is_read_only();
+            let mut txn = storage.transaction().await?;
+            // Choose a time at which to boot. This is the time at which we will run
+            // internal migrations.
+            //
+            // This time is usually the current system time, but with protection
+            // against backwards time jumps, even across restarts.
+            let boot_ts = {
+                let previous_ts = txn
+                    .get_timestamp(&Timeline::EpochMilliseconds)
+                    .expect("missing EpochMilliseconds timeline");
+                let boot_ts = timestamp_oracle::catalog_oracle::monotonic_now(
+                    config.now.clone(),
+                    previous_ts,
+                );
+                if !is_read_only {
+                    // IMPORTANT: we durably record the new timestamp before using it.
+                    txn.set_timestamp(Timeline::EpochMilliseconds, boot_ts)?;
+                }
+
+                boot_ts
+            };
+
+            state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
+
+            let databases = txn.get_databases();
+            for mz_catalog::durable::Database {
                 id,
-                Role {
-                    name,
-                    id,
-                    oid,
-                    attributes,
-                    membership,
-                    vars,
-                },
-            );
-        }
-
-        let default_privileges = txn.get_default_privileges();
-        for mz_catalog::durable::DefaultPrivilege { object, acl_item } in default_privileges {
-            state.default_privileges.grant(object, acl_item);
-        }
-
-        let system_privileges = txn.get_system_privileges();
-        state.system_privileges.grant_all(system_privileges);
-
-        Catalog::load_system_configuration(
-            &mut state,
-            &mut txn,
-            is_read_only,
-            config.system_parameter_defaults,
-            config.system_parameter_sync_config,
-        )
-        .await?;
-
-        // We need to set this variable ASAP, so that builtins get planned with the correct value
-        let variable_length_row_encoding = state
-            .system_config()
-            .variable_length_row_encoding_DANGEROUS();
-        mz_repr::VARIABLE_LENGTH_ROW_ENCODING
-            .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
-
-        // Now that LD is loaded, set the intended catalog timeout.
-        // TODO: Move this into the catalog constructor.
-        txn.set_connection_timeout(state.system_config().crdb_connect_timeout());
-
-        // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
-        if !is_read_only {
-            add_new_builtin_clusters_migration(&mut txn)?;
-            add_new_builtin_cluster_replicas_migration(
-                &mut txn,
-                config.builtin_cluster_replica_size,
-            )?;
-        }
-
-        let comments = txn.get_comments();
-        for mz_catalog::durable::Comment {
-            object_id,
-            sub_component,
-            comment,
-        } in comments
-        {
-            state
-                .comments
-                .update_comment(object_id, sub_component, Some(comment));
-        }
-
-        Catalog::load_builtin_types(&mut state, &mut txn)?;
-
-        let persisted_builtin_ids: BTreeMap<_, _> = txn
-            .get_system_items()
-            .map(|mapping| (mapping.description, mapping.unique_identifier))
-            .collect();
-        let AllocatedBuiltinSystemIds {
-            all_builtins,
-            new_builtins,
-            migrated_builtins,
-        } = Catalog::allocate_system_ids(
-            &mut txn,
-            BUILTINS::iter()
-                .filter(|builtin| !matches!(builtin, Builtin::Type(_)))
-                .collect(),
-            |builtin| {
-                persisted_builtin_ids
-                    .get(&SystemObjectDescription {
-                        schema_name: builtin.schema().to_string(),
-                        object_type: builtin.catalog_item_type(),
-                        object_name: builtin.name().to_string(),
-                    })
-                    .cloned()
-            },
-        )?;
-
-        let id_fingerprint_map: BTreeMap<GlobalId, String> = all_builtins
-            .iter()
-            .map(|(builtin, id)| (*id, builtin.fingerprint()))
-            .collect();
-        let (builtin_indexes, builtin_non_indexes): (Vec<_>, Vec<_>) = all_builtins
-            .into_iter()
-            .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
-
-        {
-            let span = tracing::span!(tracing::Level::DEBUG, "builtin_non_indexes");
-            let _enter = span.enter();
-            for (builtin, id) in builtin_non_indexes {
-                let schema_id = state.ambient_schemas_by_name[builtin.schema()];
-                let name = QualifiedItemName {
-                    qualifiers: ItemQualifiers {
-                        database_spec: ResolvedDatabaseSpecifier::Ambient,
-                        schema_spec: SchemaSpecifier::Id(schema_id),
+                name,
+                owner_id,
+                privileges,
+            } in databases
+            {
+                let oid = state.allocate_oid()?;
+                state.database_by_id.insert(
+                    id.clone(),
+                    Database {
+                        name: name.clone(),
+                        id,
+                        oid,
+                        schemas_by_id: BTreeMap::new(),
+                        schemas_by_name: BTreeMap::new(),
+                        owner_id,
+                        privileges: PrivilegeMap::from_mz_acl_items(privileges),
                     },
-                    item: builtin.name().into(),
+                );
+                state.database_by_name.insert(name.clone(), id.clone());
+            }
+
+            let schemas = txn.get_schemas();
+            for mz_catalog::durable::Schema {
+                id,
+                name,
+                database_id,
+                owner_id,
+                privileges,
+            } in schemas
+            {
+                let oid = state.allocate_oid()?;
+                let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
+                    Some(database_id) => {
+                        let db = state
+                            .database_by_id
+                            .get_mut(database_id)
+                            .expect("catalog out of sync");
+                        (
+                            &mut db.schemas_by_id,
+                            &mut db.schemas_by_name,
+                            ResolvedDatabaseSpecifier::Id(*database_id),
+                        )
+                    }
+                    None => (
+                        &mut state.ambient_schemas_by_id,
+                        &mut state.ambient_schemas_by_name,
+                        ResolvedDatabaseSpecifier::Ambient,
+                    ),
                 };
-                match builtin {
-                    Builtin::Log(log) => {
-                        let oid = state.allocate_oid()?;
-                        let mut acl_items = vec![rbac::owner_privilege(
-                            mz_sql::catalog::ObjectType::Source,
-                            MZ_SYSTEM_ROLE_ID,
-                        )];
-                        match log.sensitivity {
-                            DataSensitivity::Public => {
-                                acl_items.push(rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                ));
-                            }
-                            DataSensitivity::SuperuserAndSupport => {
-                                acl_items.push(rbac::support_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                ));
-                            }
-                            DataSensitivity::Superuser => {}
-                        }
-                        state.insert_item(
-                            id,
-                            oid,
-                            name.clone(),
-                            CatalogItem::Log(Log {
-                                variant: log.variant.clone(),
-                                has_storage_collection: false,
-                            }),
-                            MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(acl_items),
-                        );
-                    }
+                schemas_by_id.insert(
+                    id.clone(),
+                    Schema {
+                        name: QualifiedSchemaName {
+                            database: database_spec,
+                            schema: name.clone(),
+                        },
+                        id: SchemaSpecifier::Id(id.clone()),
+                        oid,
+                        items: BTreeMap::new(),
+                        functions: BTreeMap::new(),
+                        owner_id,
+                        privileges: PrivilegeMap::from_mz_acl_items(privileges),
+                    },
+                );
+                schemas_by_name.insert(name.clone(), id);
+            }
 
-                    Builtin::Table(table) => {
-                        let oid = state.allocate_oid()?;
-                        let mut acl_items = vec![rbac::owner_privilege(
-                            mz_sql::catalog::ObjectType::Table,
-                            MZ_SYSTEM_ROLE_ID,
-                        )];
-                        match table.sensitivity {
-                            DataSensitivity::Public => {
-                                acl_items.push(rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Table,
-                                ));
+            let roles = txn.get_roles();
+            for mz_catalog::durable::Role {
+                id,
+                name,
+                attributes,
+                membership,
+                vars,
+            } in roles
+            {
+                let oid = state.allocate_oid()?;
+                state.roles_by_name.insert(name.clone(), id);
+                state.roles_by_id.insert(
+                    id,
+                    Role {
+                        name,
+                        id,
+                        oid,
+                        attributes,
+                        membership,
+                        vars,
+                    },
+                );
+            }
+
+            let default_privileges = txn.get_default_privileges();
+            for mz_catalog::durable::DefaultPrivilege { object, acl_item } in default_privileges {
+                state.default_privileges.grant(object, acl_item);
+            }
+
+            let system_privileges = txn.get_system_privileges();
+            state.system_privileges.grant_all(system_privileges);
+
+            Catalog::load_system_configuration(
+                &mut state,
+                &mut txn,
+                is_read_only,
+                config.system_parameter_defaults,
+                config.system_parameter_sync_config,
+            )
+            .await?;
+
+            // Now that LD is loaded, set the intended catalog timeout.
+            // TODO: Move this into the catalog constructor.
+            txn.set_connection_timeout(state.system_config().crdb_connect_timeout());
+
+            // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
+            if !is_read_only {
+                add_new_builtin_clusters_migration(&mut txn)?;
+                add_new_builtin_cluster_replicas_migration(
+                    &mut txn,
+                    config.builtin_cluster_replica_size,
+                )?;
+            }
+
+            let comments = txn.get_comments();
+            for mz_catalog::durable::Comment {
+                object_id,
+                sub_component,
+                comment,
+            } in comments
+            {
+                state
+                    .comments
+                    .update_comment(object_id, sub_component, Some(comment));
+            }
+
+            Catalog::load_builtin_types(&mut state, &mut txn)?;
+
+            let persisted_builtin_ids: BTreeMap<_, _> = txn
+                .get_system_items()
+                .map(|mapping| (mapping.description, mapping.unique_identifier))
+                .collect();
+            let AllocatedBuiltinSystemIds {
+                all_builtins,
+                new_builtins,
+                migrated_builtins,
+            } = Catalog::allocate_system_ids(
+                &mut txn,
+                BUILTINS::iter()
+                    .filter(|builtin| !matches!(builtin, Builtin::Type(_)))
+                    .collect(),
+                |builtin| {
+                    persisted_builtin_ids
+                        .get(&SystemObjectDescription {
+                            schema_name: builtin.schema().to_string(),
+                            object_type: builtin.catalog_item_type(),
+                            object_name: builtin.name().to_string(),
+                        })
+                        .cloned()
+                },
+            )?;
+
+            let id_fingerprint_map: BTreeMap<GlobalId, String> = all_builtins
+                .iter()
+                .map(|(builtin, id)| (*id, builtin.fingerprint()))
+                .collect();
+            let (builtin_indexes, builtin_non_indexes): (Vec<_>, Vec<_>) = all_builtins
+                .into_iter()
+                .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
+
+            {
+                let span = tracing::span!(tracing::Level::DEBUG, "builtin_non_indexes");
+                let _enter = span.enter();
+                for (builtin, id) in builtin_non_indexes {
+                    let schema_id = state.ambient_schemas_by_name[builtin.schema()];
+                    let name = QualifiedItemName {
+                        qualifiers: ItemQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Id(schema_id),
+                        },
+                        item: builtin.name().into(),
+                    };
+                    match builtin {
+                        Builtin::Log(log) => {
+                            let oid = state.allocate_oid()?;
+                            let mut acl_items = vec![rbac::owner_privilege(
+                                mz_sql::catalog::ObjectType::Source,
+                                MZ_SYSTEM_ROLE_ID,
+                            )];
+                            match log.sensitivity {
+                                DataSensitivity::Public => {
+                                    acl_items.push(rbac::default_builtin_object_privilege(
+                                        mz_sql::catalog::ObjectType::Source,
+                                    ));
+                                }
+                                DataSensitivity::SuperuserAndSupport => {
+                                    acl_items.push(rbac::support_builtin_object_privilege(
+                                        mz_sql::catalog::ObjectType::Source,
+                                    ));
+                                }
+                                DataSensitivity::Superuser => {}
                             }
-                            DataSensitivity::SuperuserAndSupport => {
-                                acl_items.push(rbac::support_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Table,
-                                ));
-                            }
-                            DataSensitivity::Superuser => {}
+                            state.insert_item(
+                                id,
+                                oid,
+                                name.clone(),
+                                CatalogItem::Log(Log {
+                                    variant: log.variant.clone(),
+                                    has_storage_collection: false,
+                                }),
+                                MZ_SYSTEM_ROLE_ID,
+                                PrivilegeMap::from_mz_acl_items(acl_items),
+                            );
                         }
 
-                        state.insert_item(
-                            id,
-                            oid,
-                            name.clone(),
-                            CatalogItem::Table(Table {
-                                create_sql: CREATE_SQL_TODO.to_string(),
-                                desc: table.desc.clone(),
-                                defaults: vec![Expr::null(); table.desc.arity()],
-                                conn_id: None,
-                                resolved_ids: ResolvedIds(BTreeSet::new()),
-                                custom_logical_compaction_window: table
-                                    .is_retained_metrics_object
-                                    .then(|| state.system_config().metrics_retention()),
-                                is_retained_metrics_object: table.is_retained_metrics_object,
-                            }),
-                            MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(acl_items),
-                        );
-                    }
-                    Builtin::Index(_) => {
-                        unreachable!("handled later once clusters have been created")
-                    }
-                    Builtin::View(view) => {
-                        let item = state
+                        Builtin::Table(table) => {
+                            let oid = state.allocate_oid()?;
+                            let mut acl_items = vec![rbac::owner_privilege(
+                                mz_sql::catalog::ObjectType::Table,
+                                MZ_SYSTEM_ROLE_ID,
+                            )];
+                            match table.sensitivity {
+                                DataSensitivity::Public => {
+                                    acl_items.push(rbac::default_builtin_object_privilege(
+                                        mz_sql::catalog::ObjectType::Table,
+                                    ));
+                                }
+                                DataSensitivity::SuperuserAndSupport => {
+                                    acl_items.push(rbac::support_builtin_object_privilege(
+                                        mz_sql::catalog::ObjectType::Table,
+                                    ));
+                                }
+                                DataSensitivity::Superuser => {}
+                            }
+
+                            state.insert_item(
+                                id,
+                                oid,
+                                name.clone(),
+                                CatalogItem::Table(Table {
+                                    create_sql: CREATE_SQL_TODO.to_string(),
+                                    desc: table.desc.clone(),
+                                    defaults: vec![Expr::null(); table.desc.arity()],
+                                    conn_id: None,
+                                    resolved_ids: ResolvedIds(BTreeSet::new()),
+                                    custom_logical_compaction_window: table
+                                        .is_retained_metrics_object
+                                        .then(|| state.system_config().metrics_retention()),
+                                    is_retained_metrics_object: table.is_retained_metrics_object,
+                                }),
+                                MZ_SYSTEM_ROLE_ID,
+                                PrivilegeMap::from_mz_acl_items(acl_items),
+                            );
+                        }
+                        Builtin::Index(_) => {
+                            unreachable!("handled later once clusters have been created")
+                        }
+                        Builtin::View(view) => {
+                            let item = state
                             .parse_item(
                                 id,
                                 view.sql.into(),
@@ -560,203 +560,203 @@ impl Catalog {
                                     view.name, e
                                 )
                             });
-                        let oid = state.allocate_oid()?;
-                        let mut acl_items = vec![rbac::owner_privilege(
-                            mz_sql::catalog::ObjectType::View,
-                            MZ_SYSTEM_ROLE_ID,
-                        )];
-                        match view.sensitivity {
-                            DataSensitivity::Public => {
-                                acl_items.push(rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::View,
-                                ));
+                            let oid = state.allocate_oid()?;
+                            let mut acl_items = vec![rbac::owner_privilege(
+                                mz_sql::catalog::ObjectType::View,
+                                MZ_SYSTEM_ROLE_ID,
+                            )];
+                            match view.sensitivity {
+                                DataSensitivity::Public => {
+                                    acl_items.push(rbac::default_builtin_object_privilege(
+                                        mz_sql::catalog::ObjectType::View,
+                                    ));
+                                }
+                                DataSensitivity::SuperuserAndSupport => {
+                                    acl_items.push(rbac::support_builtin_object_privilege(
+                                        mz_sql::catalog::ObjectType::View,
+                                    ));
+                                }
+                                DataSensitivity::Superuser => {}
                             }
-                            DataSensitivity::SuperuserAndSupport => {
-                                acl_items.push(rbac::support_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::View,
-                                ));
-                            }
-                            DataSensitivity::Superuser => {}
+
+                            state.insert_item(
+                                id,
+                                oid,
+                                name,
+                                item,
+                                MZ_SYSTEM_ROLE_ID,
+                                PrivilegeMap::from_mz_acl_items(acl_items),
+                            );
                         }
 
-                        state.insert_item(
-                            id,
-                            oid,
-                            name,
-                            item,
-                            MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(acl_items),
-                        );
-                    }
+                        Builtin::Type(_) => unreachable!("loaded separately"),
 
-                    Builtin::Type(_) => unreachable!("loaded separately"),
-
-                    Builtin::Func(func) => {
-                        let oid = state.allocate_oid()?;
-                        state.insert_item(
-                            id,
-                            oid,
-                            name.clone(),
-                            CatalogItem::Func(Func { inner: func.inner }),
-                            MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::default(),
-                        );
-                    }
-
-                    Builtin::Source(coll) => {
-                        let introspection_type = match &coll.data_source {
-                            Some(i) => i.clone(),
-                            None => continue,
-                        };
-
-                        let oid = state.allocate_oid()?;
-                        let mut acl_items = vec![rbac::owner_privilege(
-                            mz_sql::catalog::ObjectType::Source,
-                            MZ_SYSTEM_ROLE_ID,
-                        )];
-                        match coll.sensitivity {
-                            DataSensitivity::Public => {
-                                acl_items.push(rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                ));
-                            }
-                            DataSensitivity::SuperuserAndSupport => {
-                                acl_items.push(rbac::support_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                ));
-                            }
-                            DataSensitivity::Superuser => {}
+                        Builtin::Func(func) => {
+                            let oid = state.allocate_oid()?;
+                            state.insert_item(
+                                id,
+                                oid,
+                                name.clone(),
+                                CatalogItem::Func(Func { inner: func.inner }),
+                                MZ_SYSTEM_ROLE_ID,
+                                PrivilegeMap::default(),
+                            );
                         }
 
-                        state.insert_item(
-                            id,
-                            oid,
-                            name.clone(),
-                            CatalogItem::Source(Source {
-                                create_sql: CREATE_SQL_TODO.to_string(),
-                                data_source: DataSourceDesc::Introspection(introspection_type),
-                                desc: coll.desc.clone(),
-                                timeline: Timeline::EpochMilliseconds,
-                                resolved_ids: ResolvedIds(BTreeSet::new()),
-                                custom_logical_compaction_window: coll
-                                    .is_retained_metrics_object
-                                    .then(|| state.system_config().metrics_retention()),
-                                is_retained_metrics_object: coll.is_retained_metrics_object,
-                            }),
-                            MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(acl_items),
-                        );
+                        Builtin::Source(coll) => {
+                            let introspection_type = match &coll.data_source {
+                                Some(i) => i.clone(),
+                                None => continue,
+                            };
+
+                            let oid = state.allocate_oid()?;
+                            let mut acl_items = vec![rbac::owner_privilege(
+                                mz_sql::catalog::ObjectType::Source,
+                                MZ_SYSTEM_ROLE_ID,
+                            )];
+                            match coll.sensitivity {
+                                DataSensitivity::Public => {
+                                    acl_items.push(rbac::default_builtin_object_privilege(
+                                        mz_sql::catalog::ObjectType::Source,
+                                    ));
+                                }
+                                DataSensitivity::SuperuserAndSupport => {
+                                    acl_items.push(rbac::support_builtin_object_privilege(
+                                        mz_sql::catalog::ObjectType::Source,
+                                    ));
+                                }
+                                DataSensitivity::Superuser => {}
+                            }
+
+                            state.insert_item(
+                                id,
+                                oid,
+                                name.clone(),
+                                CatalogItem::Source(Source {
+                                    create_sql: CREATE_SQL_TODO.to_string(),
+                                    data_source: DataSourceDesc::Introspection(introspection_type),
+                                    desc: coll.desc.clone(),
+                                    timeline: Timeline::EpochMilliseconds,
+                                    resolved_ids: ResolvedIds(BTreeSet::new()),
+                                    custom_logical_compaction_window: coll
+                                        .is_retained_metrics_object
+                                        .then(|| state.system_config().metrics_retention()),
+                                    is_retained_metrics_object: coll.is_retained_metrics_object,
+                                }),
+                                MZ_SYSTEM_ROLE_ID,
+                                PrivilegeMap::from_mz_acl_items(acl_items),
+                            );
+                        }
                     }
                 }
             }
-        }
 
-        let clusters = txn.get_clusters();
-        let mut cluster_azs = BTreeMap::new();
-        for mz_catalog::durable::Cluster {
-            id,
-            name,
-            linked_object_id,
-            owner_id,
-            privileges,
-            config,
-        } in clusters
-        {
-            let introspection_source_index_gids = txn.get_introspection_source_indexes(id);
-
-            let AllocatedBuiltinSystemIds {
-                all_builtins: all_indexes,
-                new_builtins: new_indexes,
-                ..
-            } = Catalog::allocate_system_ids(&mut txn, BUILTINS::logs().collect(), |log| {
-                introspection_source_index_gids
-                    .get(log.name)
-                    .cloned()
-                    // We migrate introspection sources later so we can hardcode the fingerprint as ""
-                    .map(|id| SystemObjectUniqueIdentifier {
-                        id,
-                        fingerprint: "".to_string(),
-                    })
-            })?;
-
-            let new_indexes = new_indexes
-                .iter()
-                .map(|(log, index_id)| IntrospectionSourceIndex {
-                    cluster_id: id,
-                    name: log.name.to_string(),
-                    index_id: *index_id,
-                })
-                .collect();
-            txn.set_introspection_source_indexes(new_indexes)?;
-
-            if let mz_catalog::durable::ClusterVariant::Managed(managed) = &config.variant {
-                cluster_azs.insert(id, managed.availability_zones.clone());
-            }
-
-            state.insert_cluster(
+            let clusters = txn.get_clusters();
+            let mut cluster_azs = BTreeMap::new();
+            for mz_catalog::durable::Cluster {
                 id,
                 name,
                 linked_object_id,
-                all_indexes,
                 owner_id,
-                PrivilegeMap::from_mz_acl_items(privileges),
-                config.into(),
-            );
-        }
+                privileges,
+                config,
+            } in clusters
+            {
+                let introspection_source_index_gids = txn.get_introspection_source_indexes(id);
 
-        let replicas = txn.get_cluster_replicas();
-        let mut allocated_replicas = Vec::new();
-        for mz_catalog::durable::ClusterReplica {
-            cluster_id,
-            replica_id,
-            name,
-            config,
-            owner_id,
-        } in replicas
-        {
-            let logging = ReplicaLogging {
-                log_logging: config.logging.log_logging,
-                interval: config.logging.interval,
-            };
-            let config = ReplicaConfig {
-                location: state.concretize_replica_location(
-                    config.location,
-                    &vec![],
-                    cluster_azs.get(&cluster_id).map(|zones| &**zones),
-                )?,
-                compute: ComputeReplicaConfig {
-                    logging,
-                    idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
-                },
-            };
+                let AllocatedBuiltinSystemIds {
+                    all_builtins: all_indexes,
+                    new_builtins: new_indexes,
+                    ..
+                } = Catalog::allocate_system_ids(&mut txn, BUILTINS::logs().collect(), |log| {
+                    introspection_source_index_gids
+                        .get(log.name)
+                        .cloned()
+                        // We migrate introspection sources later so we can hardcode the fingerprint as ""
+                        .map(|id| SystemObjectUniqueIdentifier {
+                            id,
+                            fingerprint: "".to_string(),
+                        })
+                })?;
 
-            allocated_replicas.push(mz_catalog::durable::ClusterReplica {
+                let new_indexes = new_indexes
+                    .iter()
+                    .map(|(log, index_id)| IntrospectionSourceIndex {
+                        cluster_id: id,
+                        name: log.name.to_string(),
+                        index_id: *index_id,
+                    })
+                    .collect();
+                txn.set_introspection_source_indexes(new_indexes)?;
+
+                if let mz_catalog::durable::ClusterVariant::Managed(managed) = &config.variant {
+                    cluster_azs.insert(id, managed.availability_zones.clone());
+                }
+
+                state.insert_cluster(
+                    id,
+                    name,
+                    linked_object_id,
+                    all_indexes,
+                    owner_id,
+                    PrivilegeMap::from_mz_acl_items(privileges),
+                    config.into(),
+                );
+            }
+
+            let replicas = txn.get_cluster_replicas();
+            let mut allocated_replicas = Vec::new();
+            for mz_catalog::durable::ClusterReplica {
                 cluster_id,
                 replica_id,
-                name: name.clone(),
-                config: config.clone().into(),
-                owner_id: owner_id.clone(),
-            });
+                name,
+                config,
+                owner_id,
+            } in replicas
+            {
+                let logging = ReplicaLogging {
+                    log_logging: config.logging.log_logging,
+                    interval: config.logging.interval,
+                };
+                let config = ReplicaConfig {
+                    location: state.concretize_replica_location(
+                        config.location,
+                        &vec![],
+                        cluster_azs.get(&cluster_id).map(|zones| &**zones),
+                    )?,
+                    compute: ComputeReplicaConfig {
+                        logging,
+                        idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
+                    },
+                };
 
-            state.insert_cluster_replica(cluster_id, name, replica_id, config, owner_id);
-        }
-        txn.set_replicas(allocated_replicas)?;
+                allocated_replicas.push(mz_catalog::durable::ClusterReplica {
+                    cluster_id,
+                    replica_id,
+                    name: name.clone(),
+                    config: config.clone().into(),
+                    owner_id: owner_id.clone(),
+                });
 
-        for (builtin, id) in builtin_indexes {
-            let schema_id = state.ambient_schemas_by_name[builtin.schema()];
-            let name = QualifiedItemName {
-                qualifiers: ItemQualifiers {
-                    database_spec: ResolvedDatabaseSpecifier::Ambient,
-                    schema_spec: SchemaSpecifier::Id(schema_id),
-                },
-                item: builtin.name().into(),
-            };
-            match builtin {
-                Builtin::Index(index) => {
-                    let mut item = state
+                state.insert_cluster_replica(cluster_id, name, replica_id, config, owner_id);
+            }
+            txn.set_replicas(allocated_replicas)?;
+
+            for (builtin, id) in builtin_indexes {
+                let schema_id = state.ambient_schemas_by_name[builtin.schema()];
+                let name = QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec: ResolvedDatabaseSpecifier::Ambient,
+                        schema_spec: SchemaSpecifier::Id(schema_id),
+                    },
+                    item: builtin.name().into(),
+                };
+                match builtin {
+                    Builtin::Index(index) => {
+                        let mut item = state
                         .parse_item(
                             id,
-                            index.sql.into(),
+                            index.create_sql(),
                             None,
                             index.is_retained_metrics_object,
                             if index.is_retained_metrics_object { Some(state.system_config().metrics_retention()) } else { None },
@@ -771,120 +771,151 @@ impl Catalog {
                                 index.name, e
                             )
                         });
-                    let CatalogItem::Index(_) = &mut item else {
-                        panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
-                    };
+                        let CatalogItem::Index(_) = &mut item else {
+                            panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
+                        };
 
-                    let oid = state.allocate_oid()?;
-                    state.insert_item(
-                        id,
-                        oid,
-                        name,
-                        item,
-                        MZ_SYSTEM_ROLE_ID,
-                        PrivilegeMap::default(),
-                    );
-                }
-                Builtin::Log(_)
-                | Builtin::Table(_)
-                | Builtin::View(_)
-                | Builtin::Type(_)
-                | Builtin::Func(_)
-                | Builtin::Source(_) => {
-                    unreachable!("handled above")
+                        let oid = state.allocate_oid()?;
+                        state.insert_item(
+                            id,
+                            oid,
+                            name,
+                            item,
+                            MZ_SYSTEM_ROLE_ID,
+                            PrivilegeMap::default(),
+                        );
+                    }
+                    Builtin::Log(_)
+                    | Builtin::Table(_)
+                    | Builtin::View(_)
+                    | Builtin::Type(_)
+                    | Builtin::Func(_)
+                    | Builtin::Source(_) => {
+                        unreachable!("handled above")
+                    }
                 }
             }
-        }
 
-        let new_system_id_mappings = new_builtins
-            .iter()
-            .map(|(builtin, id)| SystemObjectMapping {
-                description: SystemObjectDescription {
-                    schema_name: builtin.schema().to_string(),
-                    object_type: builtin.catalog_item_type(),
-                    object_name: builtin.name().to_string(),
+            let new_system_id_mappings = new_builtins
+                .iter()
+                .map(|(builtin, id)| SystemObjectMapping {
+                    description: SystemObjectDescription {
+                        schema_name: builtin.schema().to_string(),
+                        object_type: builtin.catalog_item_type(),
+                        object_name: builtin.name().to_string(),
+                    },
+                    unique_identifier: SystemObjectUniqueIdentifier {
+                        id: *id,
+                        fingerprint: builtin.fingerprint(),
+                    },
+                })
+                .collect();
+            txn.set_system_object_mappings(new_system_id_mappings)?;
+
+            let last_seen_version = txn
+                .get_catalog_content_version()
+                .unwrap_or_else(|| "new".to_string());
+
+            if !config.skip_migrations {
+                migrate::migrate(&state, &mut txn, config.now, config.connection_context)
+                    .await
+                    .map_err(|e| {
+                        Error::new(ErrorKind::FailedMigration {
+                            last_seen_version: last_seen_version.clone(),
+                            this_version: config.build_info.version,
+                            cause: e.to_string(),
+                        })
+                    })?;
+                txn.set_catalog_content_version(config.build_info.version.to_string())?;
+            }
+
+            let mut state = Catalog::load_catalog_items(&mut txn, &state)?;
+
+            let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
+                &state,
+                &mut txn,
+                migrated_builtins,
+                id_fingerprint_map,
+            )?;
+            Catalog::apply_in_memory_builtin_migration(
+                &mut state,
+                &mut builtin_migration_metadata,
+            )?;
+            Catalog::apply_persisted_builtin_migration(
+                &state,
+                &mut txn,
+                &mut builtin_migration_metadata,
+            )?;
+
+            txn.commit().await?;
+            Ok((
+                state,
+                boot_ts,
+                builtin_migration_metadata,
+                last_seen_version,
+            ))
+        }
+        .instrument(tracing::info_span!("catalog::initialize_state"))
+        .boxed()
+    }
+
+    /// Opens or creates a catalog that stores data at `path`.
+    ///
+    /// Returns the catalog, metadata about builtin objects that have changed
+    /// schemas since last restart, a list of updates to builtin tables that
+    /// describe the initial state of the catalog, and the version of the
+    /// catalog before any migrations were performed.
+    ///
+    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 17KB. This would
+    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
+    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    pub fn open(
+        config: Config<'_>,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            (
+                Catalog,
+                BuiltinMigrationMetadata,
+                Vec<BuiltinTableUpdate>,
+                String,
+            ),
+            AdapterError,
+        >,
+    > {
+        async move {
+            let mut storage = config.storage;
+            let (state, boot_ts, builtin_migration_metadata, last_seen_version) =
+                Self::initialize_state(config.state, &mut storage).await?;
+
+            let mut catalog = Catalog {
+                state,
+                plans: CatalogPlans {
+                    optimized_plan_by_id: Default::default(),
+                    physical_plan_by_id: Default::default(),
+                    dataflow_metainfos: BTreeMap::new(),
                 },
-                unique_identifier: SystemObjectUniqueIdentifier {
-                    id: *id,
-                    fingerprint: builtin.fingerprint(),
-                },
-            })
-            .collect();
-        txn.set_system_object_mappings(new_system_id_mappings)?;
+                transient_revision: 1,
+                storage: Arc::new(tokio::sync::Mutex::new(storage)),
+            };
 
-        let last_seen_version = txn
-            .get_catalog_content_version()
-            .unwrap_or_else(|| "new".to_string());
-
-        if !config.skip_migrations {
-            migrate::migrate(&mut state, &mut txn, config.now, config.connection_context)
-                .await
-                .map_err(|e| {
-                    Error::new(ErrorKind::FailedMigration {
-                        last_seen_version: last_seen_version.clone(),
-                        this_version: config.build_info.version,
-                        cause: e.to_string(),
-                    })
-                })?;
-            txn.set_catalog_content_version(config.build_info.version.to_string())?;
-        }
-
-        let mut state = Catalog::load_catalog_items(&mut txn, &state)?;
-
-        let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
-            &state,
-            &mut txn,
-            migrated_builtins,
-            id_fingerprint_map,
-        )?;
-        Catalog::apply_in_memory_builtin_migration(&mut state, &mut builtin_migration_metadata)?;
-        Catalog::apply_persisted_builtin_migration(
-            &state,
-            &mut txn,
-            &mut builtin_migration_metadata,
-        )?;
-
-        txn.commit().await?;
-        let mut catalog = Catalog {
-            state,
-            plans: CatalogPlans {
-                optimized_plan_by_id: Default::default(),
-                physical_plan_by_id: Default::default(),
-                dataflow_metainfos: BTreeMap::new(),
-            },
-            transient_revision: 1,
-            storage: Arc::new(tokio::sync::Mutex::new(storage)),
-        };
-
-        // Load public keys for SSH connections from the secrets store to the catalog
-        for (id, entry) in catalog.state.entry_by_id.iter_mut() {
-            if let CatalogItem::Connection(ref mut connection) = entry.item {
-                if let mz_storage_types::connections::Connection::Ssh(ref mut ssh) =
-                    connection.connection
-                {
-                    let secret = config.secrets_reader.read(*id).await?;
-                    let keyset = SshKeyPairSet::from_bytes(&secret)?;
-                    let public_key_pair = keyset.public_keys();
-                    ssh.public_keys = Some(public_key_pair);
+            // Load public keys for SSH connections from the secrets store to the catalog
+            for (id, entry) in catalog.state.entry_by_id.iter_mut() {
+                if let CatalogItem::Connection(ref mut connection) = entry.item {
+                    if let mz_storage_types::connections::Connection::Ssh(ref mut ssh) =
+                        connection.connection
+                    {
+                        let secret = config.secrets_reader.read(*id).await?;
+                        let keyset = SshKeyPairSet::from_bytes(&secret)?;
+                        let public_key_pair = keyset.public_keys();
+                        ssh.public_keys = Some(public_key_pair);
+                    }
                 }
             }
-        }
 
-        let mut builtin_table_updates = vec![];
-        for (schema_id, schema) in &catalog.state.ambient_schemas_by_id {
-            let db_spec = ResolvedDatabaseSpecifier::Ambient;
-            builtin_table_updates.push(catalog.state.pack_schema_update(&db_spec, schema_id, 1));
-            for (_item_name, item_id) in &schema.items {
-                builtin_table_updates.extend(catalog.state.pack_item_update(*item_id, 1));
-            }
-            for (_item_name, function_id) in &schema.functions {
-                builtin_table_updates.extend(catalog.state.pack_item_update(*function_id, 1));
-            }
-        }
-        for (_id, db) in &catalog.state.database_by_id {
-            builtin_table_updates.push(catalog.state.pack_database_update(db, 1));
-            let db_spec = ResolvedDatabaseSpecifier::Id(db.id.clone());
-            for (schema_id, schema) in &db.schemas_by_id {
+            let mut builtin_table_updates = vec![];
+            for (schema_id, schema) in &catalog.state.ambient_schemas_by_id {
+                let db_spec = ResolvedDatabaseSpecifier::Ambient;
                 builtin_table_updates
                     .push(catalog.state.pack_schema_update(&db_spec, schema_id, 1));
                 for (_item_name, item_id) in &schema.items {
@@ -894,116 +925,135 @@ impl Catalog {
                     builtin_table_updates.extend(catalog.state.pack_item_update(*function_id, 1));
                 }
             }
-        }
-        for (id, sub_component, comment) in catalog.state.comments.iter() {
-            builtin_table_updates.push(catalog.state.pack_comment_update(
-                id,
-                sub_component,
-                comment,
-                1,
-            ));
-        }
-        for (_id, role) in &catalog.state.roles_by_id {
-            if let Some(builtin_update) = catalog.state.pack_role_update(role.id, 1) {
-                builtin_table_updates.push(builtin_update);
+            for (_id, db) in &catalog.state.database_by_id {
+                builtin_table_updates.push(catalog.state.pack_database_update(db, 1));
+                let db_spec = ResolvedDatabaseSpecifier::Id(db.id.clone());
+                for (schema_id, schema) in &db.schemas_by_id {
+                    builtin_table_updates
+                        .push(catalog.state.pack_schema_update(&db_spec, schema_id, 1));
+                    for (_item_name, item_id) in &schema.items {
+                        builtin_table_updates.extend(catalog.state.pack_item_update(*item_id, 1));
+                    }
+                    for (_item_name, function_id) in &schema.functions {
+                        builtin_table_updates
+                            .extend(catalog.state.pack_item_update(*function_id, 1));
+                    }
+                }
             }
-            for group_id in role.membership.map.keys() {
+            for (id, sub_component, comment) in catalog.state.comments.iter() {
+                builtin_table_updates.push(catalog.state.pack_comment_update(
+                    id,
+                    sub_component,
+                    comment,
+                    1,
+                ));
+            }
+            for (_id, role) in &catalog.state.roles_by_id {
+                if let Some(builtin_update) = catalog.state.pack_role_update(role.id, 1) {
+                    builtin_table_updates.push(builtin_update);
+                }
+                for group_id in role.membership.map.keys() {
+                    builtin_table_updates.push(
+                        catalog
+                            .state
+                            .pack_role_members_update(*group_id, role.id, 1),
+                    )
+                }
+            }
+            for (default_privilege_object, default_privilege_acl_items) in
+                catalog.state.default_privileges.iter()
+            {
+                for default_privilege_acl_item in default_privilege_acl_items {
+                    builtin_table_updates.push(catalog.state.pack_default_privileges_update(
+                        default_privilege_object,
+                        &default_privilege_acl_item.grantee,
+                        &default_privilege_acl_item.acl_mode,
+                        1,
+                    ));
+                }
+            }
+            for system_privilege in catalog.state.system_privileges.all_values_owned() {
                 builtin_table_updates.push(
                     catalog
                         .state
-                        .pack_role_members_update(*group_id, role.id, 1),
-                )
+                        .pack_system_privileges_update(system_privilege, 1),
+                );
             }
-        }
-        for (default_privilege_object, default_privilege_acl_items) in
-            catalog.state.default_privileges.iter()
-        {
-            for default_privilege_acl_item in default_privilege_acl_items {
-                builtin_table_updates.push(catalog.state.pack_default_privileges_update(
-                    default_privilege_object,
-                    &default_privilege_acl_item.grantee,
-                    &default_privilege_acl_item.acl_mode,
-                    1,
-                ));
-            }
-        }
-        for system_privilege in catalog.state.system_privileges.all_values_owned() {
-            builtin_table_updates.push(
-                catalog
-                    .state
-                    .pack_system_privileges_update(system_privilege, 1),
-            );
-        }
-        for (id, cluster) in &catalog.state.clusters_by_id {
-            builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
-            if let Some(linked_object_id) = cluster.linked_object_id {
-                builtin_table_updates.push(catalog.state.pack_cluster_link_update(
-                    &cluster.name,
-                    linked_object_id,
-                    1,
-                ));
-            }
-            for (replica_name, replica_id) in cluster.replicas().map(|r| (&r.name, r.replica_id)) {
-                builtin_table_updates.extend(catalog.state.pack_cluster_replica_update(
-                    *id,
-                    replica_name,
-                    1,
-                ));
-                let replica = catalog.state.get_cluster_replica(*id, replica_id);
-                for process_id in 0..replica.config.location.num_processes() {
-                    let update = catalog.state.pack_cluster_replica_status_update(
-                        *id,
-                        replica_id,
-                        u64::cast_from(process_id),
+            for (id, cluster) in &catalog.state.clusters_by_id {
+                builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
+                if let Some(linked_object_id) = cluster.linked_object_id {
+                    builtin_table_updates.push(catalog.state.pack_cluster_link_update(
+                        &cluster.name,
+                        linked_object_id,
                         1,
-                    );
-                    builtin_table_updates.push(update);
+                    ));
                 }
-            }
-        }
-        // Operators aren't stored in the catalog, but we would like them in
-        // introspection views.
-        for (op, func) in OP_IMPLS.iter() {
-            match func {
-                mz_sql::func::Func::Scalar(impls) => {
-                    for imp in impls {
-                        builtin_table_updates.push(catalog.state.pack_op_update(
-                            op,
-                            imp.details(),
+                for (replica_name, replica_id) in
+                    cluster.replicas().map(|r| (&r.name, r.replica_id))
+                {
+                    builtin_table_updates.extend(catalog.state.pack_cluster_replica_update(
+                        *id,
+                        replica_name,
+                        1,
+                    ));
+                    let replica = catalog.state.get_cluster_replica(*id, replica_id);
+                    for process_id in 0..replica.config.location.num_processes() {
+                        let update = catalog.state.pack_cluster_replica_status_update(
+                            *id,
+                            replica_id,
+                            u64::cast_from(process_id),
                             1,
-                        ));
+                        );
+                        builtin_table_updates.push(update);
                     }
                 }
-                _ => unreachable!("all operators must be scalar functions"),
             }
-        }
-        let audit_logs = catalog.storage().await.get_audit_logs().await?;
-        for event in audit_logs {
-            builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
-        }
+            // Operators aren't stored in the catalog, but we would like them in
+            // introspection views.
+            for (op, func) in OP_IMPLS.iter() {
+                match func {
+                    mz_sql::func::Func::Scalar(impls) => {
+                        for imp in impls {
+                            builtin_table_updates.push(catalog.state.pack_op_update(
+                                op,
+                                imp.details(),
+                                1,
+                            ));
+                        }
+                    }
+                    _ => unreachable!("all operators must be scalar functions"),
+                }
+            }
+            let audit_logs = catalog.storage().await.get_audit_logs().await?;
+            for event in audit_logs {
+                builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
+            }
 
-        // To avoid reading over storage_usage events multiple times, do both
-        // the table updates and delete calculations in a single read over the
-        // data.
-        let storage_usage_events = catalog
-            .storage()
-            .await
-            .get_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
-            .await?;
-        for event in storage_usage_events {
-            builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
-        }
+            // To avoid reading over storage_usage events multiple times, do both
+            // the table updates and delete calculations in a single read over the
+            // data.
+            let storage_usage_events = catalog
+                .storage()
+                .await
+                .get_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
+                .await?;
+            for event in storage_usage_events {
+                builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
+            }
 
-        for ip in &catalog.state.egress_ips {
-            builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
-        }
+            for ip in &catalog.state.egress_ips {
+                builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
+            }
 
-        Ok((
-            catalog,
-            builtin_migration_metadata,
-            builtin_table_updates,
-            last_seen_version,
-        ))
+            Ok((
+                catalog,
+                builtin_migration_metadata,
+                builtin_table_updates,
+                last_seen_version,
+            ))
+        }
+        .instrument(tracing::info_span!("catalog::open"))
+        .boxed()
     }
 
     /// Loads the system configuration from the various locations in which its
@@ -1105,13 +1155,13 @@ impl Catalog {
                     .map(|param| {
                         let name = param.name;
                         let value = param.value;
-                        tracing::debug!(name, value, "sync parameter");
+                        tracing::info!(name, value, initial = true, "sync parameter");
                         (name, OwnedVarInput::Flat(value))
                     })
                     .chain(std::iter::once({
                         let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
                         let value = true.to_string();
-                        tracing::debug!(name, value, "sync parameter");
+                        tracing::info!(name, value, initial = true, "sync parameter");
                         (name, OwnedVarInput::Flat(value))
                     }))
                     .collect::<Vec<_>>();

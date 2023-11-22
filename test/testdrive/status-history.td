@@ -13,7 +13,7 @@ $ set-regex match="\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d(\.\d\d\d)?" replacement="<T
 $ kafka-create-topic topic=status-history
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -34,18 +34,18 @@ $ kafka-create-topic topic=status-history
 $ set-from-sql var=source_id
 SELECT id FROM mz_sources WHERE name = 'kafka_source'
 
-> select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
-"<TIMESTAMP> UTC" ${source_id} starting <null> <null>
+> SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${source_id}' ORDER BY occurred_at DESC LIMIT 2;
 "<TIMESTAMP> UTC" ${source_id} running <null> <null>
+"<TIMESTAMP> UTC" ${source_id} starting <null> <null>
 
-> select * from mz_internal.mz_source_statuses where id = '${source_id}';
+> SELECT * FROM mz_internal.mz_source_statuses WHERE id = '${source_id}';
 "${source_id}" kafka_source kafka "<TIMESTAMP> UTC" running <null> <null>
 
 $ set-from-sql var=sink_id
 SELECT id FROM mz_sinks WHERE name = 'kafka_sink'
 
 # Verify we get a starting -- it's possible we move to running by the time this query runs.
-> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at LIMIT 1;
+> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at ASC LIMIT 1;
 "<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
 
 $ kafka-ingest format=bytes topic=status-history
@@ -66,18 +66,18 @@ $ kafka-verify-data format=avro sink=materialize.public.kafka_sink sort-messages
 {"before": null, "after": {"row":{"text": "c"}}}
 {"before": null, "after": {"row":{"text": "d"}}}
 
-> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at;
-"<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
+> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at DESC LIMIT 2;
 "<TIMESTAMP> UTC" ${sink_id} running <null> <null>
+"<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
 
-> select * from mz_internal.mz_sink_statuses where id = '${sink_id}';
+> SELECT * FROM mz_internal.mz_sink_statuses WHERE id = '${sink_id}';
 "${sink_id}" kafka_sink kafka "<TIMESTAMP> UTC" running <null> <null>
 
-> select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
+> SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${source_id}' ORDER BY occurred_at DESC LIMIT 2;
 "<TIMESTAMP> UTC" ${source_id} starting <null> <null>
 "<TIMESTAMP> UTC" ${source_id} running <null> <null>
 
-> select * from mz_internal.mz_source_statuses where id = '${source_id}';
+> SELECT * FROM mz_internal.mz_source_statuses WHERE id = '${source_id}';
 "${source_id}" kafka_source kafka "<TIMESTAMP> UTC" running <null> <null>
 
 ## Confirm that the tables report statuses for multiple sources and sinks.
@@ -97,19 +97,19 @@ SELECT id FROM mz_sources WHERE name = 'kafka_source_2'
 $ set-from-sql var=sink_id_2
 SELECT id FROM mz_sinks WHERE name = 'kafka_sink_2'
 
-> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id_2}' ORDER BY occurred_at;
+> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id_2}' ORDER BY occurred_at DESC LIMIT 2;
 "<TIMESTAMP> UTC" ${sink_id_2} starting <null> <null>
 "<TIMESTAMP> UTC" ${sink_id_2} running <null> <null>
 
-> select * from mz_internal.mz_source_status_history where source_id = '${source_id_2}' order by occurred_at;
-"<TIMESTAMP> UTC" ${source_id_2} starting <null> <null>
+> SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${source_id_2}' ORDER BY occurred_at DESC LIMIT 2;
 "<TIMESTAMP> UTC" ${source_id_2} running <null> <null>
+"<TIMESTAMP> UTC" ${source_id_2} starting <null> <null>
 
-> select * from mz_internal.mz_sink_statuses where id in ('${sink_id}', '${sink_id_2}') order by id;
+> SELECT * FROM mz_internal.mz_sink_statuses WHERE id IN ('${sink_id}', '${sink_id_2}') ORDER BY id;
 "${sink_id}" kafka_sink kafka "<TIMESTAMP> UTC" running <null> <null>
 "${sink_id_2}" kafka_sink_2 kafka "<TIMESTAMP> UTC" running <null> <null>
 
-> select * from mz_internal.mz_source_statuses where id in ('${source_id}', '${source_id_2}') order by id;
+> SELECT * FROM mz_internal.mz_source_statuses WHERE id IN ('${source_id}', '${source_id_2}') ORDER BY id;
 "${source_id}" kafka_source kafka "<TIMESTAMP> UTC" running <null> <null>
 "${source_id_2}" kafka_source_2 kafka "<TIMESTAMP> UTC" running <null> <null>
 
@@ -117,14 +117,14 @@ SELECT id FROM mz_sinks WHERE name = 'kafka_sink_2'
 # ensure `dropped` also shows up
 > DROP SINK kafka_sink
 
-> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at;
-"<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
-"<TIMESTAMP> UTC" ${sink_id} running <null> <null>
+> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at DESC LIMIT 3;
 "<TIMESTAMP> UTC" ${sink_id} dropped <null> <null>
+"<TIMESTAMP> UTC" ${sink_id} running <null> <null>
+"<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
 
 > DROP SOURCE kafka_source
 
-> select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
-"<TIMESTAMP> UTC" ${source_id} starting <null> <null>
-"<TIMESTAMP> UTC" ${source_id} running <null> <null>
+> SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${source_id}' ORDER BY occurred_at DESC LIMIT 3;
 "<TIMESTAMP> UTC" ${source_id} dropped <null> <null>
+"<TIMESTAMP> UTC" ${source_id} running <null> <null>
+"<TIMESTAMP> UTC" ${source_id} starting <null> <null>

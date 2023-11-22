@@ -15,9 +15,9 @@ use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use mz_persist_types::Codec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Diff;
-use mz_stash_types::objects::proto;
 
 use crate::durable::impls::persist::Timestamp;
+use crate::durable::objects::serialization::proto;
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::Epoch;
 

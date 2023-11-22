@@ -173,7 +173,7 @@
 //!     the txns shard contains the set of txns that need to be applied (as well
 //!     as the set of registered data shards).
 //!
-//! [TxnsCache]: crate::txn_read::TxnsCache
+//! [TxnsCache]: crate::txn_cache::TxnsCache
 //!
 //! # Usage
 //!
@@ -284,6 +284,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error, instrument};
 
 pub mod operator;
+pub mod txn_cache;
 pub mod txn_read;
 pub mod txn_write;
 pub mod txns;

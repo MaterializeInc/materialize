@@ -286,7 +286,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE MATERIALIZED VIEW mv AS SELECT (1);
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE source_data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -505,6 +505,8 @@ name
 mz_objects
 mz_relations
 mz_storage_usage
+mz_timezone_abbreviations
+mz_timezone_names
 
 # Check default sources, tables, and views in mz_internal.
 

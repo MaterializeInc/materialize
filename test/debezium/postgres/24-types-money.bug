@@ -20,7 +20,7 @@ INSERT INTO money_type VALUES (NULL), (12.34);
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE money_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.money_type')

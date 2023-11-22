@@ -132,7 +132,7 @@ use timely::{Data, PartialOrder};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::arrange::{HeapSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
@@ -428,7 +428,7 @@ where
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: RenderTimestamp,
+    G::Timestamp: RenderTimestamp + HeapSize,
 {
     pub(crate) fn build_object(&mut self, object: BuildDesc<Plan>) {
         // First, transform the relation expression into a render plan.
@@ -734,7 +734,7 @@ where
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: RenderTimestamp,
+    G::Timestamp: RenderTimestamp + HeapSize,
 {
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
@@ -935,7 +935,7 @@ where
 }
 
 /// A timestamp type that can be used for operations within MZ's dataflow layer.
-pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> {
+pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> + Columnation {
     /// The system timestamp component of the timestamp.
     ///
     /// This is useful for manipulating the system time, as when delaying
@@ -970,7 +970,7 @@ impl RenderTimestamp for mz_repr::Timestamp {
     }
 }
 
-impl<T: Timestamp + Lattice> RenderTimestamp for Product<mz_repr::Timestamp, T> {
+impl<T: Timestamp + Lattice + Columnation> RenderTimestamp for Product<mz_repr::Timestamp, T> {
     fn system_time(&mut self) -> &mut mz_repr::Timestamp {
         &mut self.outer
     }

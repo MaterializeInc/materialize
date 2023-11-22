@@ -1480,11 +1480,11 @@ pub mod plan {
         /// The `row` is not cleared first, but emptied if the function
         /// returns `Ok(Some(row)).
         #[inline(always)]
-        pub fn evaluate_into<'a>(
+        pub fn evaluate_into<'a, 'row>(
             &'a self,
             datums: &mut Vec<Datum<'a>>,
             arena: &'a RowArena,
-            row_buf: &'a mut Row,
+            row_buf: &'row mut Row,
         ) -> Result<Option<Row>, EvalError> {
             let passed_predicates = self.evaluate_inner(datums, arena)?;
             if !passed_predicates {

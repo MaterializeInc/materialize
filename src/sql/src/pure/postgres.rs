@@ -172,7 +172,8 @@ pub(super) fn generate_text_columns(
         }
 
         // Rewrite fully qualified name.
-        fully_qualified_name.0.push(col.as_str().to_string().into());
+        let col_ident = Ident::new(col.as_str().to_string())?;
+        fully_qualified_name.0.push(col_ident);
         *name = fully_qualified_name;
 
         let new = text_cols_dict
@@ -223,7 +224,7 @@ where
         let mut columns = vec![];
         let text_cols_dict = text_cols_dict.remove(&table.oid);
         for c in table.columns.iter() {
-            let name = Ident::new(c.name.clone());
+            let name = Ident::new(c.name.clone())?;
             let ty = match &text_cols_dict {
                 Some(names) if names.contains(&c.name) => mz_pgrepr::Type::Text,
                 _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
@@ -263,7 +264,7 @@ where
             let mut key_columns = vec![];
 
             for col_num in key.cols {
-                key_columns.push(Ident::new(
+                let ident = Ident::new(
                     table
                         .columns
                         .iter()
@@ -271,11 +272,12 @@ where
                         .expect("key exists as column")
                         .name
                         .clone(),
-                ))
+                )?;
+                key_columns.push(ident);
             }
 
             let constraint = mz_sql_parser::ast::TableConstraint::Unique {
-                name: Some(Ident::new(key.name)),
+                name: Some(Ident::new(key.name)?),
                 columns: key_columns,
                 is_primary: key.is_primary,
                 nulls_not_distinct: key.nulls_not_distinct,

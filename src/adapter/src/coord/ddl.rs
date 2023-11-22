@@ -15,8 +15,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
+use maplit::{btreemap, btreeset};
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -38,22 +40,19 @@ use mz_storage_client::controller::{ExportDescription, ReadPolicy};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::sinks::SinkAsOf;
-use mz_storage_types::sources::{GenericSourceConnection, Timeline};
+use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
-use timely::progress::Antichain;
 use tracing::{event, warn, Level};
 
-use crate::catalog::{
-    CatalogItem, CatalogState, DataSourceDesc, Op, Sink, TransactionResult, SYSTEM_CONN_ID,
-};
+use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, Op, Sink, TransactionResult};
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
-use crate::session::Session;
+use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
-use crate::{catalog, flags, AdapterError, AdapterNotice};
+use crate::{catalog, flags, AdapterError, AdapterNotice, TimestampProvider};
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
@@ -84,6 +83,65 @@ impl Coordinator {
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
         self.catalog_transact_with(conn_id, ops, |_| Ok(())).await
+    }
+
+    /// Executes a Catalog transaction with handling if the provided `Session` is in a SQL
+    /// transaction that is executing DDL.
+    pub(crate) async fn catalog_transact_with_ddl_transaction(
+        &mut self,
+        session: &mut Session,
+        ops: Vec<catalog::Op>,
+    ) -> Result<(), AdapterError> {
+        let conn_id = session.conn_id().clone();
+        let Some(Transaction {
+            ops:
+                TransactionOps::DDL {
+                    ops: txn_ops,
+                    revision: txn_revision,
+                    state: _,
+                },
+            ..
+        }) = session.transaction().inner()
+        else {
+            return self.catalog_transact(Some(session), ops).await;
+        };
+
+        // Make sure our Catalog hasn't changed since openning the transaction.
+        if self.catalog().transient_revision() != *txn_revision {
+            return Err(AdapterError::DDLTransactionRace);
+        }
+
+        // Combine the existing ops with the new ops so we can replay them.
+        let mut all_ops = Vec::with_capacity(ops.len() + txn_ops.len());
+        all_ops.extend(txn_ops.iter().cloned());
+        all_ops.extend(ops.clone());
+
+        // Run our Catalog transaction, but abort before committing.
+        let result = self
+            .catalog_transact_with(Some(&conn_id), all_ops.clone(), |state| {
+                // Return an error so we don't commit the Catalog Transaction, but include our
+                // updated state.
+                Err(AdapterError::DDLTransactionDryRun {
+                    new_ops: all_ops,
+                    new_state: state.catalog.clone(),
+                })
+            })
+            .await;
+
+        match result {
+            // We purposefully fail with this error to prevent committing the transaction.
+            Err(AdapterError::DDLTransactionDryRun { new_ops, new_state }) => {
+                // Adds these ops to our transaction, bailing if the Catalog has changed since we
+                // ran the transaction.
+                session.transaction_mut().add_ops(TransactionOps::DDL {
+                    ops: new_ops,
+                    state: new_state,
+                    revision: self.catalog().transient_revision(),
+                })?;
+                Ok(())
+            }
+            other => other,
+        }
     }
 
     /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]
@@ -829,23 +887,19 @@ impl Coordinator {
                 .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
         );
 
-        // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
-        // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
-        // that only things going forward are exported.
-        let timeline = self
-            .get_timeline_context(sink.from)
-            .timeline()
-            .cloned()
-            .unwrap_or(Timeline::EpochMilliseconds);
-        let now = self
-            .ensure_timeline_state(&timeline)
-            .await
-            .oracle
-            .read_ts()
-            .await;
-        let frontier = Antichain::from_elem(now);
+        // The AsOf is used to determine at what time to snapshot reading from
+        // the persist collection.  This is primarily relevant when we do _not_
+        // want to include the snapshot in the sink.
+        //
+        // We choose the smallest as_of that is legal, according to the sinked
+        // collection's since.
+        let id_bundle = crate::CollectionIdBundle {
+            storage_ids: btreeset! {sink.from},
+            compute_ids: btreemap! {},
+        };
+        let min_as_of = self.least_valid_read(&id_bundle);
         let as_of = SinkAsOf {
-            frontier,
+            frontier: min_as_of,
             strict: !sink.with_snapshot,
         };
 
@@ -1048,10 +1102,36 @@ impl Coordinator {
                         }
                     }
                 },
+                Op::UpdateItem {
+                    name: _,
+                    id,
+                    to_item,
+                } => match to_item {
+                    CatalogItem::Source(source) => {
+                        let current_source = self
+                            .catalog()
+                            .get_entry(id)
+                            .source()
+                            .expect("source update is for source item");
+
+                        new_sources += source.user_controllable_persist_shard_count()
+                            - current_source.user_controllable_persist_shard_count();
+                    }
+                    CatalogItem::Connection(_)
+                    | CatalogItem::Table(_)
+                    | CatalogItem::Sink(_)
+                    | CatalogItem::MaterializedView(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Log(_)
+                    | CatalogItem::View(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_) => {}
+                },
                 Op::AlterRole { .. }
                 | Op::AlterSink { .. }
-                | Op::AlterSource { .. }
                 | Op::AlterSetCluster { .. }
+                | Op::AlterSource { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
@@ -1067,7 +1147,6 @@ impl Coordinator {
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
-                | Op::UpdateItem { .. }
                 | Op::UpdateRotatedKeys { .. }
                 | Op::Comment { .. } => {}
             }

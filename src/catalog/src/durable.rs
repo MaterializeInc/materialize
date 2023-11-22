@@ -52,6 +52,7 @@ mod impls;
 pub mod initialize;
 pub mod objects;
 mod transaction;
+mod upgrade;
 
 pub const DATABASE_ID_ALLOC_KEY: &str = "database";
 pub const SCHEMA_ID_ALLOC_KEY: &str = "schema";

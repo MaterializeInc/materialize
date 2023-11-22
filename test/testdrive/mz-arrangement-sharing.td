@@ -895,5 +895,6 @@ CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = tru
 "Arrange Timely(Operates)"
 "Arrange Timely(Parks)"
 
+# Reset default cluster into its previous state so that other tests can expect it to be unchanged
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 DROP CLUSTER REPLICA default.replica

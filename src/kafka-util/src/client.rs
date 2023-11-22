@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, Context};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -35,7 +35,7 @@ use tokio::runtime::Handle;
 use tracing::{debug, error, info, warn, Level};
 
 /// A reasonable default timeout when fetching metadata or partitions.
-pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A `ClientContext` implementation that uses `tracing` instead of `log`
 /// macros.
@@ -87,6 +87,9 @@ pub enum MzKafkaError {
     /// Missing CA certificate
     #[error("Invalid CA certificate")]
     InvalidCACertificate,
+    /// Broker might require SSL encryption
+    #[error("Disconnected during handshake; broker might require SSL encryption")]
+    SSLEncryptionMaybeRequired,
     /// Broker does not support SSL connections
     #[error("Broker does not support SSL connections")]
     SSLUnsupported,
@@ -139,6 +142,8 @@ impl FromStr for MzKafkaError {
             Ok(Self::InvalidCredentials)
         } else if s.contains("broker certificate could not be verified") {
             Ok(Self::InvalidCACertificate)
+        } else if s.contains("connecting to a SSL listener?") {
+            Ok(Self::SSLEncryptionMaybeRequired)
         } else if s.contains("client SSL authentication might be required") {
             Ok(Self::SSLAuthenticationRequired)
         } else if s.contains("connecting to a PLAINTEXT broker listener") {
@@ -189,11 +194,22 @@ impl FromStr for MzKafkaError {
 impl ClientContext for MzClientContext {
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
         use rdkafka::config::RDKafkaLogLevel::*;
+
+        // Sniff out log messages that indicate errors.
+        //
+        // We consider any event at error, critical, alert, or emergency level,
+        // for self explanatory reasons. We also consider any event with a
+        // facility of `FAIL`. librdkafka often uses info or warn level for
+        // these `FAIL` events, but as they always indicate a failure to connect
+        // to a broker we want to always treat them as errors.
+        if matches!(level, Emerg | Alert | Critical | Error) || fac == "FAIL" {
+            self.record_error(log_message);
+        }
+
         // Copied from https://docs.rs/rdkafka/0.28.0/src/rdkafka/client.rs.html#58-79
         // but using `tracing`
         match level {
             Emerg | Alert | Critical | Error => {
-                self.record_error(log_message);
                 // We downgrade error messages to `warn!` level to avoid
                 // sending the errors to Sentry. Most errors are customer
                 // configuration problems that are not appropriate to send to
@@ -540,37 +556,54 @@ where
 /// Id of a partition in a topic.
 pub type PartitionId = i32;
 
+/// The error returned by [`get_partitions`].
+#[derive(Debug, thiserror::Error)]
+pub enum GetPartitionsError {
+    /// The specified topic does not exist.
+    #[error("Topic does not exist")]
+    TopicDoesNotExist,
+    /// A Kafka error.
+    #[error(transparent)]
+    Kafka(#[from] KafkaError),
+    /// An unstructured error.
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 /// Retrieve number of partitions for a given `topic` using the given `client`
 pub fn get_partitions<C: ClientContext>(
     client: &Client<C>,
     topic: &str,
     timeout: Duration,
-) -> Result<Vec<PartitionId>, anyhow::Error> {
+) -> Result<Vec<PartitionId>, GetPartitionsError> {
     let meta = client.fetch_metadata(Some(topic), timeout)?;
     if meta.topics().len() != 1 {
-        bail!(
+        Err(anyhow!(
             "topic {} has {} metadata entries; expected 1",
             topic,
             meta.topics().len()
-        );
+        ))?;
     }
 
-    fn check_err(err: Option<RDKafkaRespErr>) -> anyhow::Result<()> {
-        if let Some(err) = err {
-            Err(RDKafkaErrorCode::from(err))?
+    fn check_err(err: Option<RDKafkaRespErr>) -> Result<(), GetPartitionsError> {
+        match err.map(RDKafkaErrorCode::from) {
+            Some(RDKafkaErrorCode::UnknownTopic | RDKafkaErrorCode::UnknownTopicOrPartition) => {
+                Err(GetPartitionsError::TopicDoesNotExist)
+            }
+            Some(code) => Err(anyhow!(code))?,
+            None => Ok(()),
         }
-        Ok(())
     }
 
     let meta_topic = meta.topics().into_element();
     check_err(meta_topic.error())?;
 
     if meta_topic.name() != topic {
-        bail!(
+        Err(anyhow!(
             "got results for wrong topic {} (expected {})",
             meta_topic.name(),
             topic
-        );
+        ))?;
     }
 
     let mut partition_ids = Vec::with_capacity(meta_topic.partitions().len());
@@ -581,7 +614,7 @@ pub fn get_partitions<C: ClientContext>(
     }
 
     if partition_ids.len() == 0 {
-        bail!("topic {} does not exist", topic);
+        Err(GetPartitionsError::TopicDoesNotExist)?;
     }
 
     Ok(partition_ids)

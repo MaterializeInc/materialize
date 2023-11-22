@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{atomic, Arc};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::Future;
@@ -38,6 +38,7 @@ pub use mz_catalog::memory::objects::{
     DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
     Table, Type, View,
 };
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
     ClusterEvent, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
@@ -74,7 +75,7 @@ use mz_sql::names::{
 use mz_sql::plan::{
     PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
-use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
+use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
     ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, ENABLE_PERSIST_TXN_TABLES,
 };
@@ -88,7 +89,7 @@ use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
+pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config, StateConfig};
 pub use crate::catalog::open::BuiltinMigrationMetadata;
 pub use crate::catalog::state::CatalogState;
 use crate::command::CatalogDump;
@@ -105,12 +106,6 @@ mod migrate;
 mod inner;
 mod open;
 mod state;
-
-pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);
-
-const CREATE_SQL_TODO: &str = "TODO";
-
-pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -407,7 +402,7 @@ impl Catalog {
             details: CatalogTypeDetails {
                 array_id: builtin.details.array_id,
                 typ,
-                typreceive_oid: builtin.details.typreceive_oid,
+                pg_metadata: builtin.details.pg_metadata.clone(),
             },
         }
     }
@@ -478,7 +473,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now, environment_id).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
     /// Opens a debug stash backed catalog at `url`, using `schema` as the connection's search_path.
@@ -505,7 +500,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now, environment_id).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
     /// Opens a read only debug stash backed catalog defined by `stash_config`.
@@ -522,10 +517,56 @@ impl Catalog {
         let storage = openable_storage
             .open_read_only(now(), &test_bootstrap_args())
             .await?;
-        Self::open_debug_stash_catalog(storage, now, environment_id).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
-    async fn open_debug_stash_catalog(
+    /// Opens a read only debug persist backed catalog defined by `persist_client` and
+    /// `organization_id`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_persist_catalog_config(
+        persist_client: PersistClient,
+        now: NowFn,
+        environment_id: EnvironmentId,
+    ) -> Result<Catalog, anyhow::Error> {
+        let openable_storage = Box::new(
+            mz_catalog::durable::persist_backed_catalog_state(
+                persist_client,
+                environment_id.organization_id(),
+            )
+            .await,
+        );
+        let storage = openable_storage
+            .open_read_only(now(), &test_bootstrap_args())
+            .await?;
+        Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
+    }
+
+    /// Opens a read only debug persist backed catalog defined by `stash_config`, `persist_client`
+    /// and `organization_id`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_shadow_catalog_config(
+        stash_config: StashConfig,
+        persist_client: PersistClient,
+        now: NowFn,
+        environment_id: EnvironmentId,
+    ) -> Result<Catalog, anyhow::Error> {
+        let openable_storage = Box::new(
+            mz_catalog::durable::shadow_catalog_state(
+                stash_config,
+                persist_client,
+                environment_id.organization_id(),
+            )
+            .await,
+        );
+        let storage = openable_storage
+            .open_read_only(now(), &test_bootstrap_args())
+            .await?;
+        Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
+    }
+
+    async fn open_debug_catalog_inner(
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
         environment_id: Option<EnvironmentId>,
@@ -533,41 +574,32 @@ impl Catalog {
         let metrics_registry = &MetricsRegistry::new();
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
-        let variable_length_row_encoding =
-            if mz_repr::VARIABLE_LENGTH_ROW_ENCODING.load(atomic::Ordering::SeqCst) {
-                "true"
-            } else {
-                "false"
-            };
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
-            unsafe_mode: true,
-            all_features: false,
-            build_info: &DUMMY_BUILD_INFO,
-            environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
-            now,
-            skip_migrations: true,
             metrics_registry,
-            cluster_replica_sizes: Default::default(),
-            default_storage_cluster_size: None,
-            builtin_cluster_replica_size: "1".into(),
-            system_parameter_defaults: [(
-                "variable_length_row_encoding".to_string(),
-                variable_length_row_encoding.to_string(),
-            )]
-            .into_iter()
-            .collect(),
-            availability_zones: vec![],
             secrets_reader,
-            egress_ips: vec![],
-            aws_principal_context: None,
-            aws_privatelink_availability_zones: None,
-            system_parameter_sync_config: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
-            http_host_name: None,
-            connection_context: None,
-            active_connection_count,
+            state: StateConfig {
+                unsafe_mode: true,
+                all_features: false,
+                build_info: &DUMMY_BUILD_INFO,
+                environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
+                now,
+                skip_migrations: true,
+                cluster_replica_sizes: Default::default(),
+                default_storage_cluster_size: None,
+                builtin_cluster_replica_size: "1".into(),
+                system_parameter_defaults: Default::default(),
+                availability_zones: vec![],
+                egress_ips: vec![],
+                aws_principal_context: None,
+                aws_privatelink_availability_zones: None,
+                system_parameter_sync_config: None,
+                http_host_name: None,
+                connection_context: None,
+                active_connection_count,
+            },
         })
         .await?;
         Ok(catalog)
@@ -1829,9 +1861,23 @@ impl Catalog {
                             item.typ().into(),
                         )
                         .map(|item| item.mz_acl_item(owner_id));
-                    let privileges: Vec<_> =
-                        merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
-                            .collect();
+                    // mz_support can read all progress sources.
+                    let progress_source_privilege = if item.is_progress_source() {
+                        Some(MzAclItem {
+                            grantee: MZ_SUPPORT_ROLE_ID,
+                            grantor: owner_id,
+                            acl_mode: AclMode::SELECT,
+                        })
+                    } else {
+                        None
+                    };
+                    let privileges: Vec<_> = merge_mz_acl_items(
+                        owner_privileges
+                            .into_iter()
+                            .chain(default_privileges)
+                            .chain(progress_source_privilege),
+                    )
+                    .collect();
 
                     if item.is_temporary() {
                         if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
@@ -3336,10 +3382,6 @@ impl Catalog {
             is_retained_metrics_object,
             custom_logical_compaction_window,
         )
-    }
-
-    pub fn uses_tables(&self, id: GlobalId) -> bool {
-        self.state.uses_tables(id)
     }
 
     /// Return the ids of all log sources the given object depends on.
@@ -4865,7 +4907,8 @@ mod tests {
                 ty: String,
                 elem: u32,
                 array: u32,
-                receive: Option<u32>,
+                input: u32,
+                receive: u32,
             }
 
             struct PgOper {
@@ -4902,7 +4945,7 @@ mod tests {
 
             let pg_type: BTreeMap<_, _> = client
                 .query(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, nullif(typreceive::oid, 0) as typreceive FROM pg_type",
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type",
                     &[],
                 )
                 .await
@@ -4915,6 +4958,7 @@ mod tests {
                         ty: row.get("typtype"),
                         elem: row.get("typelem"),
                         array: row.get("typarray"),
+                        input: row.get("typinput"),
                         receive: row.get("typreceive"),
                     };
                     (oid, pg_type)
@@ -5004,13 +5048,29 @@ mod tests {
                             ty.oid, pg_ty.name, ty.name,
                         );
 
+                        let (typinput_oid, typreceive_oid) = match &ty.details.pg_metadata {
+                            None => (0, 0),
+                            Some(pgmeta) => (pgmeta.typinput_oid, pgmeta.typreceive_oid),
+                        };
                         assert_eq!(
-                            ty.details.typreceive_oid, pg_ty.receive,
-                            "type {} has typreceive OID {:?} in mz but {:?} in pg",
-                            ty.name, ty.details.typreceive_oid, pg_ty.receive,
+                            typinput_oid, pg_ty.input,
+                            "type {} has typinput OID {:?} in mz but {:?} in pg",
+                            ty.name, typinput_oid, pg_ty.input,
                         );
-
-                        if let Some(typreceive_oid) = ty.details.typreceive_oid {
+                        assert_eq!(
+                            typreceive_oid, pg_ty.receive,
+                            "type {} has typreceive OID {:?} in mz but {:?} in pg",
+                            ty.name, typreceive_oid, pg_ty.receive,
+                        );
+                        if typinput_oid != 0 {
+                            assert!(
+                                func_oids.contains(&typinput_oid),
+                                "type {} has typinput OID {} that does not exist in pg_proc",
+                                ty.name,
+                                typinput_oid,
+                            );
+                        }
+                        if typreceive_oid != 0 {
                             assert!(
                                 func_oids.contains(&typreceive_oid),
                                 "type {} has typreceive OID {} that does not exist in pg_proc",

@@ -62,10 +62,10 @@ async fn request(
 
     let client_id = client_id.parse::<Uuid>();
     let secret = secret.parse::<Uuid>();
-    if client_id.is_ok() && secret.is_ok() {
+    if let (Ok(client_id), Ok(secret)) = (client_id, secret) {
         let app_password = AppPassword {
-            client_id: client_id.unwrap(),
-            secret_key: secret.unwrap(),
+            client_id,
+            secret_key: secret,
         };
         tx.send(Ok(app_password))
             .unwrap_or_else(|_| panic!("Error handling login details."));

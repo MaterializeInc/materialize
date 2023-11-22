@@ -34,15 +34,16 @@ from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.util import naughty_strings
 
-MAX_COLUMNS = 100
+MAX_COLUMNS = 10
 MAX_INCLUDE_HEADERS = 5
 MAX_ROWS = 100
-MAX_CLUSTERS = 10
-MAX_CLUSTER_REPLICAS = 4
+MAX_CLUSTERS = 5
+MAX_CLUSTER_REPLICAS = 2
 MAX_DBS = 10
 MAX_SCHEMAS = 20
-MAX_TABLES = 100
+MAX_TABLES = 40
 MAX_VIEWS = 100
+MAX_INDEXES = 100
 MAX_ROLES = 100
 MAX_WEBHOOK_SOURCES = 20
 MAX_KAFKA_SOURCES = 20
@@ -144,10 +145,12 @@ class Column:
 class DB:
     seed: str
     db_id: int
+    lock: threading.Lock
 
     def __init__(self, seed: str, db_id: int):
         self.seed = seed
         self.db_id = db_id
+        self.lock = threading.Lock()
 
     def name(self) -> str:
         return naughtify(f"db-pw-{self.seed}-{self.db_id}")
@@ -166,11 +169,13 @@ class Schema:
     schema_id: int
     rename: int
     db: DB
+    lock: threading.Lock
 
     def __init__(self, db: DB, schema_id: int):
         self.schema_id = schema_id
         self.db = db
         self.rename = 0
+        self.lock = threading.Lock()
 
     def name(self) -> str:
         if self.rename:
@@ -187,6 +192,10 @@ class Schema:
 
 class DBObject:
     columns: Sequence[Column]
+    lock: threading.Lock
+
+    def __init__(self):
+        self.lock = threading.Lock()
 
     def name(self) -> str:
         raise NotImplementedError
@@ -202,6 +211,7 @@ class Table(DBObject):
     schema: Schema
 
     def __init__(self, rng: random.Random, table_id: int, schema: Schema):
+        super().__init__()
         self.table_id = table_id
         self.schema = schema
         self.columns = [
@@ -223,8 +233,6 @@ class Table(DBObject):
         query = f"CREATE TABLE {self}("
         query += ",\n    ".join(column.create() for column in self.columns)
         query += ")"
-        exe.execute(query)
-        query = f"CREATE DEFAULT INDEX ON {self}"
         exe.execute(query)
 
 
@@ -248,6 +256,7 @@ class View(DBObject):
         base_object2: DBObject | None,
         schema: Schema,
     ):
+        super().__init__()
         self.rename = 0
         self.view_id = view_id
         self.base_object = base_object
@@ -330,8 +339,6 @@ class View(DBObject):
                 query += " ON TRUE"
 
         exe.execute(query)
-        query = f"CREATE DEFAULT INDEX ON {self}"
-        exe.execute(query)
 
 
 class WebhookColumn(Column):
@@ -361,6 +368,7 @@ class WebhookSource(DBObject):
     def __init__(
         self, source_id: int, cluster: "Cluster", schema: Schema, rng: random.Random
     ):
+        super().__init__()
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
@@ -457,6 +465,7 @@ class KafkaSource(DBObject):
         ports: dict[str, int],
         rng: random.Random,
     ):
+        super().__init__()
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
@@ -510,6 +519,7 @@ class KafkaSink(DBObject):
         base_object: DBObject,
         rng: random.Random,
     ):
+        super().__init__()
         self.sink_id = sink_id
         self.cluster = cluster
         self.schema = schema
@@ -579,6 +589,7 @@ class PostgresSource(DBObject):
         ports: dict[str, int],
         rng: random.Random,
     ):
+        super().__init__()
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
@@ -610,11 +621,28 @@ class PostgresSource(DBObject):
         self.executor.create()
 
 
+class Index:
+    _name: str
+    lock: threading.Lock
+
+    def __init__(self, name: str):
+        self._name = name
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return self._name
+
+    def __str__(self) -> str:
+        return identifier(self.name())
+
+
 class Role:
     role_id: int
+    lock: threading.Lock
 
     def __init__(self, role_id: int):
         self.role_id = role_id
+        self.lock = threading.Lock()
 
     def __str__(self) -> str:
         return f"role{self.role_id}"
@@ -628,12 +656,14 @@ class ClusterReplica:
     size: str
     cluster: "Cluster"
     rename: int
+    lock: threading.Lock
 
     def __init__(self, replica_id: int, size: str, cluster: "Cluster"):
         self.replica_id = replica_id
         self.size = size
         self.cluster = cluster
         self.rename = 0
+        self.lock = threading.Lock()
 
     def name(self) -> str:
         if self.rename:
@@ -658,6 +688,7 @@ class Cluster:
     replica_id: int
     introspection_interval: str
     rename: int
+    lock: threading.Lock
 
     def __init__(
         self,
@@ -676,6 +707,7 @@ class Cluster:
         self.replica_id = len(self.replicas)
         self.introspection_interval = introspection_interval
         self.rename = 0
+        self.lock = threading.Lock()
 
     def name(self) -> str:
         if self.rename:
@@ -716,7 +748,7 @@ class Database:
     role_id: int
     clusters: list[Cluster]
     cluster_id: int
-    indexes: set[str]
+    indexes: set[Index]
     webhook_sources: list[WebhookSource]
     webhook_source_id: int
     kafka_sources: list[KafkaSource]
@@ -780,7 +812,7 @@ class Database:
             Cluster(
                 i,
                 managed=rng.choice([True, False]),
-                size=rng.choice(["1", "2", "4"]),
+                size=rng.choice(["1", "2"]),
                 replication_factor=1,
                 introspection_interval=rng.choice(["0", "1s", "10s"]),
             )
@@ -807,16 +839,20 @@ class Database:
                 )
                 for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
             ]
-            self.postgres_sources = [
-                PostgresSource(
-                    i,
-                    rng.choice(self.clusters),
-                    rng.choice(self.schemas),
-                    ports,
-                    rng,
-                )
-                for i in range(rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES))
-            ]
+            # TODO: Reenable when #22770 is fixed
+            if self.scenario == Scenario.BackupRestore:
+                self.postgres_sources = []
+            else:
+                self.postgres_sources = [
+                    PostgresSource(
+                        i,
+                        rng.choice(self.clusters),
+                        rng.choice(self.schemas),
+                        ports,
+                        rng,
+                    )
+                    for i in range(rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES))
+                ]
             self.kafka_sinks = [
                 KafkaSink(
                     i,
@@ -871,7 +907,7 @@ class Database:
             exe.execute(f"DROP ROLE {identifier(row[0])}")
 
         exe.execute(
-            "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'kafka:9092'"
+            "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"
         )
         exe.execute(
             "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"

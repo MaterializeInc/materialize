@@ -134,7 +134,7 @@ fn test_persistence() {
         let mut client = server.connect(postgres::NoTls).unwrap();
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
+                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT)",
                 &*KAFKA_ADDRS,
             ))
             .unwrap();
@@ -783,7 +783,7 @@ fn test_source_sink_size_required() {
 
     client
         .batch_execute(&format!(
-            "CREATE CONNECTION conn TO KAFKA (BROKER '{}')",
+            "CREATE CONNECTION conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT)",
             &*KAFKA_ADDRS,
         ))
         .unwrap();

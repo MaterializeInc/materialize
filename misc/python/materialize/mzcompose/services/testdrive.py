@@ -36,7 +36,8 @@ class Testdrive(Service):
         default_timeout: str | None = None,
         seed: int | None = None,
         consistent_seed: bool = False,
-        validate_postgres_stash: str | None = None,
+        postgres_stash: str | None = None,
+        validate_catalog_store: str | None = None,
         entrypoint: list[str] | None = None,
         entrypoint_extra: list[str] = [],
         environment: list[str] | None = None,
@@ -83,7 +84,6 @@ class Testdrive(Service):
                 f"--schema-registry-url={schema_registry_url}",
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
-                "--variable-length-row-encoding",
             ]
 
         if aws_region:
@@ -92,10 +92,13 @@ class Testdrive(Service):
         if aws_endpoint and not aws_region:
             entrypoint.append(f"--aws-endpoint={aws_endpoint}")
 
-        if validate_postgres_stash:
+        if postgres_stash:
             entrypoint.append(
-                f"--validate-postgres-stash=postgres://root@{validate_postgres_stash}:26257?options=--search_path=adapter"
+                f"--postgres-stash=postgres://root@{postgres_stash}:26257?options=--search_path=adapter"
             )
+
+        if validate_catalog_store:
+            entrypoint.append(f"--validate-catalog-store={validate_catalog_store}")
 
         if no_reset:
             entrypoint.append("--no-reset")

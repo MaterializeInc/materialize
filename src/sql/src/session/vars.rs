@@ -88,6 +88,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv;
 use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_sql_parser::ident;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -328,7 +329,7 @@ const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
 
 // Schema can be used an alias for a search path with a single element.
 pub const SCHEMA_ALIAS: &UncasedStr = UncasedStr::new("schema");
-static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![Ident::new(DEFAULT_SCHEMA)]);
+static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![ident!(DEFAULT_SCHEMA)]);
 static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),
     value: &*DEFAULT_SEARCH_PATH,
@@ -686,6 +687,13 @@ const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
+const TIMESTAMP_ORACLE_IMPL: ServerVar<TimestampOracleImpl> = ServerVar {
+    name: UncasedStr::new("timestamp_oracle"),
+    value: &TimestampOracleImpl::Catalog,
+    description: "Backing implementation of TimestampOracle.",
+    internal: true,
+};
+
 /// The default for the `DISK` option when creating managed clusters and cluster replicas.
 const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("disk_cluster_replicas_default"),
@@ -924,13 +932,6 @@ static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| Server
 static DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<usize> = Lazy::new(|| {
     usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed))
 });
-
-const VARIABLE_LENGTH_ROW_ENCODING: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("variable_length_row_encoding"),
-    value: &false,
-    description: "Determines whether `repr::row::VARIABLE_LENGTH_ENCODING` is set. See that module for details.",
-    internal: true,
-};
 
 static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("webhooks_secrets_caching_ttl_secs"),
@@ -1995,7 +1996,7 @@ feature_flags!(
     {
         name: enable_jemalloc_profiling,
         desc: "jemalloc heap memory profiling",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2012,13 +2013,6 @@ feature_flags!(
         default: false,
         internal: false,
         enable_for_item_parsing: true,
-    },
-    {
-        name: enable_unified_optimizer_api,
-        desc: "use the new unified optimizer API in bootstrap() and coordinator methods",
-        default: true,
-        internal: true,
-        enable_for_item_parsing: false,
     },
     {
         name: enable_assert_not_null,
@@ -2068,6 +2062,13 @@ feature_flags!(
             same name, but we keep the flag to make testing easier. If specified, \
             the flag takes precedence over the Launch Darkly param.",
         default: &false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_aws_connection,
+        desc: "CREATE CONNECTION ... TO AWS",
+        default: &true, // will set to false once we verify that nobody's using this
         internal: true,
         enable_for_item_parsing: false,
     },
@@ -2797,7 +2798,6 @@ impl SystemVars {
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
-            .with_var(&VARIABLE_LENGTH_ROW_ENCODING)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -2824,7 +2824,8 @@ impl SystemVars {
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
-            .with_var(&ENABLE_COLUMNATION_LGALLOC);
+            .with_var(&ENABLE_COLUMNATION_LGALLOC)
+            .with_var(&TIMESTAMP_ORACLE_IMPL);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3045,7 +3046,6 @@ impl SystemVars {
     /// the affected SystemVars.
     fn refresh_internal_state(&mut self) {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
-        self.propagate_var_change(VARIABLE_LENGTH_ROW_ENCODING.name.as_str());
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
@@ -3518,17 +3518,6 @@ impl SystemVars {
         *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
     }
 
-    /// The dramatic name is to warn you not to call this unless you know what you're doing!
-    /// It should only be read during environmentd startup, to ensure that all replicas get the
-    /// same value.
-    ///
-    /// After startup, row decoding is controlled by the
-    /// `mz_repr::VARIABLE_LENGTH_ROW_ENCODING` global atomic variable.
-    #[allow(non_snake_case)]
-    pub fn variable_length_row_encoding_DANGEROUS(&self) -> bool {
-        *self.expect_value(&VARIABLE_LENGTH_ROW_ENCODING)
-    }
-
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
         *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
     }
@@ -3615,6 +3604,11 @@ impl SystemVars {
     /// Returns the `enable_columnation_lgalloc` configuration parameter.
     pub fn enable_columnation_lgalloc(&self) -> bool {
         *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
+    }
+
+    /// Returns the `timestamp_oracle` configuration parameter.
+    pub fn timestamp_oracle_impl(&self) -> TimestampOracleImpl {
+        *self.expect_value(&TIMESTAMP_ORACLE_IMPL)
     }
 }
 
@@ -4716,7 +4710,16 @@ impl Value for Vec<Ident> {
             // element. This matches PostgreSQL.
             VarInput::SqlSet(values) => values,
         };
-        Ok(values.iter().map(Ident::new).collect())
+        let values = values
+            .iter()
+            .map(Ident::new)
+            .collect::<Result<_, _>>()
+            .map_err(|e| VarError::InvalidParameterValue {
+                parameter: param.into(),
+                values: values.to_vec(),
+                reason: e.to_string(),
+            })?;
+        Ok(values)
     }
 
     fn format(&self) -> String {
@@ -5359,6 +5362,59 @@ impl Value for IntervalStyle {
 
     fn format(&self) -> String {
         self.as_str().to_string()
+    }
+}
+
+/// List of valid TimestampOracle implementations
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TimestampOracleImpl {
+    /// Timestamp oracle backed by Postgres/CRDB.
+    Postgres,
+    /// Legacy, in-memory oracle backed by Catalog/Stash.
+    Catalog,
+}
+
+impl TimestampOracleImpl {
+    fn as_str(&self) -> &'static str {
+        match self {
+            TimestampOracleImpl::Postgres => "postgres",
+            TimestampOracleImpl::Catalog => "catalog",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        vec![Self::Postgres.as_str(), Self::Catalog.as_str()]
+    }
+}
+
+impl Value for TimestampOracleImpl {
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let s = UncasedStr::new(s);
+
+        if s == TimestampOracleImpl::Postgres.as_str() {
+            Ok(TimestampOracleImpl::Postgres)
+        } else if s == TimestampOracleImpl::Catalog.as_str() {
+            Ok(TimestampOracleImpl::Catalog)
+        } else {
+            Err(VarError::ConstrainedParameter {
+                parameter: (&TIMESTAMP_ORACLE_IMPL).into(),
+                values: input.to_vec(),
+                valid_values: Some(TimestampOracleImpl::valid_values()),
+            })
+        }
+    }
+
+    fn format(&self) -> String {
+        self.as_str().into()
     }
 }
 

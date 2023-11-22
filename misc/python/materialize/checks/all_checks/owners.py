@@ -11,7 +11,7 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 
 class Owners(Check):
@@ -29,7 +29,7 @@ class Owners(Check):
             $ postgres-execute connection=postgres://{role}@materialized:6875/materialize
             CREATE DATABASE owner_db{i}
             CREATE SCHEMA owner_schema{i}
-            CREATE CONNECTION owner_kafka_conn{i} FOR KAFKA BROKER '${{testdrive.kafka-addr}}'
+            CREATE CONNECTION owner_kafka_conn{i} FOR KAFKA {self._kafka_broker()}
             CREATE CONNECTION owner_csr_conn{i} FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}'
             CREATE TYPE owner_type{i} AS LIST (ELEMENT TYPE = text)
             CREATE TABLE owner_t{i} (c1 int, c2 owner_type{i})

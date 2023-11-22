@@ -41,6 +41,7 @@ use mz_sql_parser::ast::{
     MaterializedViewOptionName, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
     UnresolvedSchemaName, Value,
 };
+use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
@@ -77,8 +78,7 @@ use crate::ast::{
     IndexOptionName, KafkaConfigOptionName, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
     ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
-    SourceIncludeMetadata, SourceIncludeMetadataType, Statement, TableConstraint,
-    UnresolvedDatabaseName, ViewDefinition,
+    SourceIncludeMetadata, Statement, TableConstraint, UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
@@ -586,7 +586,7 @@ pub fn plan_create_source(
     if !matches!(connection, CreateSourceConnection::Kafka { .. })
         && include_metadata
             .iter()
-            .any(|sic| sic.ty == SourceIncludeMetadataType::Headers)
+            .any(|sic| matches!(sic, SourceIncludeMetadata::Headers { .. }))
     {
         // TODO(guswynn): should this be `bail_unsupported!`?
         sql_bail!("INCLUDE HEADERS with non-Kafka sources not supported");
@@ -682,36 +682,47 @@ pub fn plan_create_source(
 
             let metadata_columns = include_metadata
                 .into_iter()
-                .flat_map(|item| match item.ty {
-                    SourceIncludeMetadataType::Timestamp => {
-                        let name = match item.alias.as_ref() {
+                .flat_map(|item| match item {
+                    SourceIncludeMetadata::Timestamp { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "timestamp".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Timestamp))
                     }
-                    SourceIncludeMetadataType::Partition => {
-                        let name = match item.alias.as_ref() {
+                    SourceIncludeMetadata::Partition { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "partition".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Partition))
                     }
-                    SourceIncludeMetadataType::Offset => {
-                        let name = match item.alias.as_ref() {
+                    SourceIncludeMetadata::Offset { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "offset".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Offset))
                     }
-                    SourceIncludeMetadataType::Headers => {
-                        let name = match item.alias.as_ref() {
+                    SourceIncludeMetadata::Headers { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "headers".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Headers))
                     }
-                    SourceIncludeMetadataType::Key => {
+                    SourceIncludeMetadata::Header {
+                        alias,
+                        key,
+                        use_bytes,
+                    } => Some((
+                        alias.to_string(),
+                        KafkaMetadataKind::Header {
+                            key: key.clone(),
+                            use_bytes: *use_bytes,
+                        },
+                    )),
+                    SourceIncludeMetadata::Key { .. } => {
                         // handled below
                         None
                     }
@@ -1100,7 +1111,15 @@ pub fn plan_create_source(
         mz_sql_parser::ast::Envelope::None => UnplannedSourceEnvelope::None(key_envelope),
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
             //TODO check that key envelope is not set
-            let (_before_idx, after_idx) = typecheck_debezium(&value_desc)?;
+            let after_idx = match typecheck_debezium(&value_desc) {
+                Ok((_before_idx, after_idx)) => Ok(after_idx),
+                Err(type_err) => match encoding.value_ref().inner {
+                    DataEncodingInner::Avro(_) => Err(type_err),
+                    _ => Err(sql_err!(
+                        "ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO"
+                    )),
+                },
+            }?;
 
             match mode {
                 DbzMode::Plain => UnplannedSourceEnvelope::Upsert {
@@ -1813,14 +1832,14 @@ fn get_key_envelope(
 ) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
         .iter()
-        .find(|i| i.ty == SourceIncludeMetadataType::Key);
+        .find(|i| matches!(i, SourceIncludeMetadata::Key { .. }));
     if matches!(envelope, Envelope::Debezium { .. }) && key_definition.is_some() {
         sql_bail!(
             "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys."
         );
     }
-    if let Some(kd) = key_definition {
-        match (&kd.alias, encoding) {
+    if let Some(SourceIncludeMetadata::Key { alias }) = key_definition {
+        match (alias, encoding) {
             (Some(name), SourceDataEncoding::KeyValue { .. }) => {
                 Ok(KeyEnvelope::Named(name.as_str().to_string()))
             }
@@ -2711,7 +2730,7 @@ pub fn plan_create_index(
                 .default_key()
                 .iter()
                 .map(|i| match on_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
+                    Some(n) => Expr::Identifier(vec![n.clone().into()]),
                     _ => Expr::Value(Value::Number((i + 1).to_string())),
                 })
                 .collect()
@@ -2747,7 +2766,7 @@ pub fn plan_create_index(
                 .join("_");
             write!(idx_name.item, "_{index_name_col_suffix}_idx")
                 .expect("write on strings cannot fail");
-            idx_name.item = normalize::ident(Ident::new(&idx_name.item))
+            idx_name.item = normalize::ident(Ident::new(&idx_name.item)?)
         }
 
         if !*if_not_exists {
@@ -2784,7 +2803,7 @@ pub fn plan_create_index(
     });
 
     // Normalize `stmt`.
-    *name = Some(Ident::new(index_name.item.clone()));
+    *name = Some(Ident::new(index_name.item.clone())?);
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
     if let ResolvedItemName::Item { print_id, .. } = &mut stmt.on_name {
@@ -3426,6 +3445,9 @@ pub fn plan_create_connection(
 
     let connection_options_extracted = connection::ConnectionOptionExtracted::try_from(values)?;
     let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
+    if let Connection::Aws(_) = &connection {
+        scx.require_feature_flag(&vars::ENABLE_AWS_CONNECTION)?;
+    }
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
     let options = CreateConnectionOptionExtracted::try_from(with_options)?;
@@ -4491,7 +4513,8 @@ where
     //
     // 'check' returns if the temp schema name would be valid.
     let check = |temp_suffix: &str| {
-        let temp_name = Ident::new(format!("mz_schema_swap_{temp_suffix}"));
+        let mut temp_name = ident!("mz_schema_swap_");
+        temp_name.append_lossy(temp_suffix);
         scx.resolve_schema_in_database(&db_spec, &temp_name)
             .is_err()
     };
@@ -4594,8 +4617,9 @@ where
     let cluster_b = scx.resolve_cluster(Some(&name_b))?;
 
     let check = |temp_suffix: &str| {
-        let name_temp = Ident::new(format!("mz_cluster_swap_{temp_suffix}"));
-        match scx.catalog.resolve_cluster(Some(name_temp.as_str())) {
+        let mut temp_name = ident!("mz_schema_swap_");
+        temp_name.append_lossy(temp_suffix);
+        match scx.catalog.resolve_cluster(Some(temp_name.as_str())) {
             // Temp name does not exist, so we can use it.
             Err(CatalogError::UnknownCluster(_)) => true,
             // Temp name already exists!
@@ -4629,7 +4653,7 @@ pub fn plan_alter_cluster_replica_rename(
                     cluster_id: cluster.id(),
                     replica_id: replica,
                     name: QualifiedReplica {
-                        cluster: cluster.name().into(),
+                        cluster: Ident::new(cluster.name())?,
                         replica: name.replica,
                     },
                     to_name: normalize::ident(to_item_name),

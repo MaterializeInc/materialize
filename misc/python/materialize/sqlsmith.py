@@ -82,7 +82,7 @@ known_errors = [
     "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
     "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/materialize/issues/18048
     "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/materialize/issues/14290
-    "string is not a valid identifier:",  # Expected in parse_ident
+    "string is not a valid identifier:",  # Expected in parse_ident & quote_ident
     "invalid datepart",
     "pg_cancel_backend in this position not yet supported",
     "unrecognized configuration parameter",
@@ -109,7 +109,7 @@ known_errors = [
     "regex parse error",
     "out of valid range",
     '" does not exist',  # role does not exist
-    "csv_extract number of columns too large",
+    "attempt to create relation with too many columns",
     "target replica failed or was dropped",  # expected on replica OoMs with #21587
     "cannot materialize call to",  # create materialized view on some internal views
     "arrays must not contain null values",  # aclexplode, mz_aclexplode
@@ -118,4 +118,5 @@ known_errors = [
     "window functions are not allowed in table function arguments",  # TODO: Remove when #20979 is implemented
     "window functions are not allowed in OR argument",  # wrong error message
     "window functions are not allowed in AND argument",  # wrong error message
+    "invalid IANA Time Zone Database identifier",
 ]

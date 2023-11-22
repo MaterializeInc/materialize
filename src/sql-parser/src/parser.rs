@@ -37,6 +37,7 @@ use IsLateral::*;
 use IsOptional::*;
 
 use crate::ast::*;
+use crate::ident;
 
 // NOTE(benesch): this recursion limit was chosen based on the maximum amount of
 // nesting I've ever seen in a production SQL query (i.e., about a dozen) times
@@ -265,7 +266,8 @@ impl From<LexerError> for ParserError {
 
 impl From<Keyword> for Ident {
     fn from(value: Keyword) -> Ident {
-        Ident::new(value.as_str().to_lowercase())
+        // Note: all keywords are known to be less than our max length.
+        Ident::new_unchecked(value.as_str().to_lowercase())
     }
 }
 
@@ -584,7 +586,7 @@ impl<'a> Parser<'a> {
                 ));
             }
             Token::Keyword(id) => self.parse_qualified_identifier(id.into()),
-            Token::Ident(id) => self.parse_qualified_identifier(Ident::new(id)),
+            Token::Ident(id) => self.parse_qualified_identifier(Ident::from(id)),
             Token::Op(op) if op == "-" => {
                 if let Some(Token::Number(n)) = self.peek_token() {
                     let n = match n.parse::<f64>() {
@@ -945,7 +947,7 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::LParen)?;
         let field = match self.next_token() {
             Some(Token::Keyword(kw)) => Ident::from(kw).into_string(),
-            Some(Token::Ident(id)) => Ident::new(id).into_string(),
+            Some(Token::Ident(id)) => Ident::from(id).into_string(),
             Some(Token::String(s)) => s,
             t => self.expected(self.peek_prev_pos(), "extract field token", t)?,
         };
@@ -953,7 +955,7 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: RawItemName::Name(UnresolvedItemName::unqualified("extract")),
+            name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("extract"))),
             args: FunctionArgs::args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
@@ -996,9 +998,9 @@ impl<'a> Parser<'a> {
     fn parse_trim_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let name = match self.parse_one_of_keywords(&[BOTH, LEADING, TRAILING]) {
-            None | Some(BOTH) => "btrim",
-            Some(LEADING) => "ltrim",
-            Some(TRAILING) => "rtrim",
+            None | Some(BOTH) => ident!("btrim"),
+            Some(LEADING) => ident!("ltrim"),
+            Some(TRAILING) => ident!("rtrim"),
             _ => unreachable!(),
         };
         let mut exprs = Vec::new();
@@ -1034,7 +1036,7 @@ impl<'a> Parser<'a> {
         let haystack = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: RawItemName::Name(UnresolvedItemName::unqualified("position")),
+            name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("position"))),
             args: FunctionArgs::args(vec![needle, haystack]),
             filter: None,
             over: None,
@@ -1265,7 +1267,9 @@ impl<'a> Parser<'a> {
                 AT => {
                     self.expect_keywords(&[TIME, ZONE])?;
                     Ok(Expr::Function(Function {
-                        name: RawItemName::Name(UnresolvedItemName::unqualified("timezone")),
+                        name: RawItemName::Name(UnresolvedItemName::unqualified(ident!(
+                            "timezone"
+                        ))),
                         args: FunctionArgs::args(vec![self.parse_subexpr(precedence)?, expr]),
                         filter: None,
                         over: None,
@@ -1288,7 +1292,7 @@ impl<'a> Parser<'a> {
             match self.next_token() {
                 Some(Token::Ident(id)) => Ok(Expr::FieldAccess {
                     expr: Box::new(expr),
-                    field: Ident::new(id),
+                    field: Ident::from(id),
                 }),
                 // Per PostgreSQL, even reserved keywords are ok after a field
                 // access operator.
@@ -1389,7 +1393,7 @@ impl<'a> Parser<'a> {
 
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: RawItemName::Name(UnresolvedItemName::unqualified("substring")),
+            name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("substring"))),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
@@ -1408,7 +1412,7 @@ impl<'a> Parser<'a> {
         let op = loop {
             match self.next_token() {
                 Some(Token::Keyword(kw)) => namespace.push(kw.into()),
-                Some(Token::Ident(id)) => namespace.push(Ident::new(id)),
+                Some(Token::Ident(id)) => namespace.push(Ident::from(id)),
                 Some(Token::Op(op)) => break op,
                 Some(Token::Star) => break "*".to_string(),
                 tok => self.expected(self.peek_prev_pos(), "operator", tok)?,
@@ -2437,6 +2441,7 @@ impl<'a> Parser<'a> {
             ROLE,
             SASL,
             SECRET,
+            SECURITY,
             SERVICE,
             SSH,
             SSL,
@@ -2488,6 +2493,10 @@ impl<'a> Parser<'a> {
             PROGRESS => {
                 self.expect_keyword(TOPIC)?;
                 ConnectionOptionName::ProgressTopic
+            }
+            SECURITY => {
+                self.expect_keyword(PROTOCOL)?;
+                ConnectionOptionName::SecurityProtocol
             }
             REGION => ConnectionOptionName::Region,
             ROLE => {
@@ -2909,8 +2918,10 @@ impl<'a> Parser<'a> {
         //
         // This is a bit gross, but we didn't have the foresight to make
         // `IN` and `FROM` reserved keywords for sink names.
-        if (name == Some(UnresolvedItemName::unqualified("in")) && self.peek_keyword(CLUSTER))
-            || (name == Some(UnresolvedItemName::unqualified("from")) && !self.peek_keyword(FROM))
+        if (name == Some(UnresolvedItemName::unqualified(ident!("in")))
+            && self.peek_keyword(CLUSTER))
+            || (name == Some(UnresolvedItemName::unqualified(ident!("from")))
+                && !self.peek_keyword(FROM))
         {
             name = None;
             self.prev_token();
@@ -3297,7 +3308,7 @@ impl<'a> Parser<'a> {
     fn parse_raw_ident(&mut self) -> Result<RawClusterName, ParserError> {
         if self.consume_token(&Token::LBracket) {
             let id = match self.next_token() {
-                Some(Token::Ident(id)) => id,
+                Some(Token::Ident(id)) => id.into_inner(),
                 Some(Token::Number(n)) => n,
                 _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
             };
@@ -3606,24 +3617,47 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_alias(&mut self) -> Result<Option<Ident>, ParserError> {
+        self.parse_keyword(AS)
+            .then(|| self.parse_identifier())
+            .transpose()
+    }
+
     fn parse_source_include_metadata(&mut self) -> Result<Vec<SourceIncludeMetadata>, ParserError> {
         if self.parse_keyword(INCLUDE) {
             self.parse_comma_separated(|parser| {
-                let ty = match parser
-                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS])?
+                let metadata = match parser
+                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS, HEADER])?
                 {
-                    KEY => SourceIncludeMetadataType::Key,
-                    TIMESTAMP => SourceIncludeMetadataType::Timestamp,
-                    PARTITION => SourceIncludeMetadataType::Partition,
-                    OFFSET => SourceIncludeMetadataType::Offset,
-                    HEADERS => SourceIncludeMetadataType::Headers,
+                    KEY => SourceIncludeMetadata::Key {
+                        alias: parser.parse_alias()?,
+                    },
+                    TIMESTAMP => SourceIncludeMetadata::Timestamp {
+                        alias: parser.parse_alias()?,
+                    },
+                    PARTITION => SourceIncludeMetadata::Partition {
+                        alias: parser.parse_alias()?,
+                    },
+                    OFFSET => SourceIncludeMetadata::Offset {
+                        alias: parser.parse_alias()?,
+                    },
+                    HEADERS => SourceIncludeMetadata::Headers {
+                        alias: parser.parse_alias()?,
+                    },
+                    HEADER => {
+                        let key: String = parser.parse_literal_string()?;
+                        parser.expect_keyword(AS)?;
+                        let alias = parser.parse_identifier()?;
+                        let use_bytes = parser.parse_keyword(BYTES);
+                        SourceIncludeMetadata::Header {
+                            alias,
+                            key,
+                            use_bytes,
+                        }
+                    }
                     _ => unreachable!("only explicitly allowed items can be parsed"),
                 };
-                let alias = parser
-                    .parse_keyword(AS)
-                    .then(|| parser.parse_identifier())
-                    .transpose()?;
-                Ok(SourceIncludeMetadata { ty, alias })
+                Ok(metadata)
             })
         } else {
             Ok(vec![])
@@ -4029,7 +4063,7 @@ impl<'a> Parser<'a> {
             if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
                 Ok(WithOptionValue::Secret(secret))
             } else {
-                Ok(WithOptionValue::Ident(Ident::new("secret")))
+                Ok(WithOptionValue::Ident(ident!("secret")))
             }
         } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
@@ -5146,8 +5180,8 @@ impl<'a> Parser<'a> {
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
     fn parse_data_type(&mut self) -> Result<RawDataType, ParserError> {
-        let other = |name: &str| RawDataType::Other {
-            name: RawItemName::Name(UnresolvedItemName::unqualified(name)),
+        let other = |ident| RawDataType::Other {
+            name: RawItemName::Name(UnresolvedItemName::unqualified(ident)),
             typ_mod: vec![],
         };
 
@@ -5156,9 +5190,9 @@ impl<'a> Parser<'a> {
                 // Text-like types
                 CHAR | CHARACTER => {
                     let name = if self.parse_keyword(VARYING) {
-                        "varchar"
+                        ident!("varchar")
                     } else {
-                        "bpchar"
+                        ident!("bpchar")
                     };
                     RawDataType::Other {
                         name: RawItemName::Name(UnresolvedItemName::unqualified(name)),
@@ -5166,25 +5200,25 @@ impl<'a> Parser<'a> {
                     }
                 }
                 BPCHAR => RawDataType::Other {
-                    name: RawItemName::Name(UnresolvedItemName::unqualified("bpchar")),
+                    name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("bpchar"))),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 VARCHAR => RawDataType::Other {
-                    name: RawItemName::Name(UnresolvedItemName::unqualified("varchar")),
+                    name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("varchar"))),
                     typ_mod: self.parse_typ_mod()?,
                 },
-                STRING => other("text"),
+                STRING => other(ident!("text")),
 
                 // Number-like types
-                BIGINT => other("int8"),
-                SMALLINT => other("int2"),
+                BIGINT => other(ident!("int8")),
+                SMALLINT => other(ident!("int2")),
                 DEC | DECIMAL => RawDataType::Other {
-                    name: RawItemName::Name(UnresolvedItemName::unqualified("numeric")),
+                    name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("numeric"))),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 DOUBLE => {
                     let _ = self.parse_keyword(PRECISION);
-                    other("float8")
+                    other(ident!("float8"))
                 }
                 FLOAT => match self.parse_optional_precision()?.unwrap_or(53) {
                     v if v == 0 || v > 53 => {
@@ -5193,22 +5227,22 @@ impl<'a> Parser<'a> {
                             "precision for type float must be within ([1-53])".into(),
                         ))
                     }
-                    v if v < 25 => other("float4"),
-                    _ => other("float8"),
+                    v if v < 25 => other(ident!("float4")),
+                    _ => other(ident!("float8")),
                 },
-                INT | INTEGER => other("int4"),
-                REAL => other("float4"),
+                INT | INTEGER => other(ident!("int4")),
+                REAL => other(ident!("float4")),
 
                 // Time-like types
                 TIME => {
                     if self.parse_keyword(WITH) {
                         self.expect_keywords(&[TIME, ZONE])?;
-                        other("timetz")
+                        other(ident!("timetz"))
                     } else {
                         if self.parse_keyword(WITHOUT) {
                             self.expect_keywords(&[TIME, ZONE])?;
                         }
-                        other("time")
+                        other(ident!("time"))
                     }
                 }
                 TIMESTAMP => {
@@ -5216,7 +5250,9 @@ impl<'a> Parser<'a> {
                     if self.parse_keyword(WITH) {
                         self.expect_keywords(&[TIME, ZONE])?;
                         RawDataType::Other {
-                            name: RawItemName::Name(UnresolvedItemName::unqualified("timestamptz")),
+                            name: RawItemName::Name(UnresolvedItemName::unqualified(ident!(
+                                "timestamptz"
+                            ))),
                             typ_mod,
                         }
                     } else {
@@ -5224,7 +5260,9 @@ impl<'a> Parser<'a> {
                             self.expect_keywords(&[TIME, ZONE])?;
                         }
                         RawDataType::Other {
-                            name: RawItemName::Name(UnresolvedItemName::unqualified("timestamp")),
+                            name: RawItemName::Name(UnresolvedItemName::unqualified(ident!(
+                                "timestamp"
+                            ))),
                             typ_mod,
                         }
                     }
@@ -5232,7 +5270,9 @@ impl<'a> Parser<'a> {
                 TIMESTAMPTZ => {
                     let typ_mod = self.parse_timestamp_precision()?;
                     RawDataType::Other {
-                        name: RawItemName::Name(UnresolvedItemName::unqualified("timestamptz")),
+                        name: RawItemName::Name(UnresolvedItemName::unqualified(ident!(
+                            "timestamptz"
+                        ))),
                         typ_mod,
                     }
                 }
@@ -5243,9 +5283,9 @@ impl<'a> Parser<'a> {
                 }
 
                 // Misc.
-                BOOLEAN => other("bool"),
-                BYTES => other("bytea"),
-                JSON => other("jsonb"),
+                BOOLEAN => other(ident!("bool")),
+                BYTES => other(ident!("bytea")),
+                JSON => other(ident!("jsonb")),
                 _ => {
                     self.prev_token();
                     RawDataType::Other {
@@ -5329,7 +5369,7 @@ impl<'a> Parser<'a> {
             // (For example, in `FROM t1 JOIN` the `JOIN` will always be parsed as a keyword,
             // not an alias.)
             Some(Token::Keyword(kw)) if after_as || !is_reserved(kw) => Ok(Some(kw.into())),
-            Some(Token::Ident(id)) => Ok(Some(Ident::new(id))),
+            Some(Token::Ident(id)) => Ok(Some(Ident::from(id))),
             not_an_ident => {
                 if after_as {
                     return self.expected(
@@ -5372,7 +5412,7 @@ impl<'a> Parser<'a> {
     fn parse_raw_name(&mut self) -> Result<RawItemName, ParserError> {
         if self.consume_token(&Token::LBracket) {
             let id = match self.next_token() {
-                Some(Token::Ident(id)) => id,
+                Some(Token::Ident(id)) => id.into_inner(),
                 _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
             };
             self.expect_keyword(AS)?;
@@ -5499,7 +5539,7 @@ impl<'a> Parser<'a> {
             }
             Some(Token::Ident(id)) => {
                 self.next_token();
-                Some(Ident::new(id))
+                Some(Ident::from(id))
             }
             _ => None,
         }
@@ -5513,7 +5553,7 @@ impl<'a> Parser<'a> {
                 while self.consume_token(&Token::Dot) {
                     match self.next_token() {
                         Some(Token::Keyword(kw)) => id_parts.push(kw.into()),
-                        Some(Token::Ident(id)) => id_parts.push(Ident::new(id)),
+                        Some(Token::Ident(id)) => id_parts.push(Ident::from(id)),
                         Some(Token::Star) => {
                             ends_with_wildcard = true;
                             break;
@@ -6023,18 +6063,18 @@ impl<'a> Parser<'a> {
             match variable.as_str().parse() {
                 Ok(TIME) => {
                     self.expect_keyword(ZONE).map_no_statement_parser_err()?;
-                    variable = Ident::new("timezone");
+                    variable = ident!("timezone");
                     normal = true;
                 }
                 Ok(NAMES) => {
-                    variable = Ident::new("client_encoding");
+                    variable = ident!("client_encoding");
                     normal = true;
                 }
                 _ => {}
             }
         }
         if variable.as_str().parse() == Ok(SCHEMA) {
-            variable = Ident::new("search_path");
+            variable = ident!("search_path");
             let to = self
                 .parse_set_schema_to()
                 .map_parser_err(StatementKind::SetVariable)?;
@@ -6109,7 +6149,7 @@ impl<'a> Parser<'a> {
     fn parse_reset(&mut self) -> Result<Statement<Raw>, ParserError> {
         let mut variable = self.parse_identifier()?;
         if variable.as_str().parse() == Ok(SCHEMA) {
-            variable = Ident::new("search_path");
+            variable = ident!("search_path");
         }
         Ok(Statement::ResetVariable(ResetVariableStatement {
             variable,
@@ -6224,7 +6264,7 @@ impl<'a> Parser<'a> {
             }))
         } else if self.parse_keyword(CLUSTER) {
             Ok(ShowStatement::ShowVariable(ShowVariableStatement {
-                variable: Ident::from("cluster"),
+                variable: ident!("cluster"),
             }))
         } else if self.parse_keyword(PRIVILEGES) {
             self.parse_show_privileges()
@@ -6276,9 +6316,9 @@ impl<'a> Parser<'a> {
             ))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
-                Ident::new("transaction_isolation")
+                ident!("transaction_isolation")
             } else if self.parse_keywords(&[TIME, ZONE]) {
-                Ident::new("timezone")
+                ident!("timezone")
             } else {
                 self.parse_identifier()?
             };

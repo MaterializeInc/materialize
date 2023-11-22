@@ -25,14 +25,15 @@ $ set schema={
 
 $ kafka-create-topic topic=headers_src
 
-$ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keyschema} schema=${schema} headers={"gus": "gusfive", "gus2": "gus3"}
+# [103, 117, 115, 51] = "gus3"
+$ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keyschema} schema=${schema} headers={"gus": "gusfive", "gus2": [103, 117, 115, 51]}
 {"key": "fish"} {"f1": "fishval", "f2": 1000}
 
 $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish2"} {"f1": "fishval", "f2": 1000}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE headers_src
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -163,3 +164,106 @@ $ kafka-ingest format=avro topic=headers_conflict key-format=avro key-schema=${k
 key     headers  gus
 ------------------------
 fish    value    gusfive
+
+
+# test extracting individual headers with INCLUDE HEADER
+$ kafka-create-topic topic=individual_headers
+
+$ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=${keyschema} schema=${schema} headers={"header1": "message_1_header_1"}
+{"key": "message_1"} {"f1": "fishval", "f2": 1000}
+
+$ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=${keyschema} schema=${schema} headers={"header1": "message_2_header_1", "header2": "message_2_header_2"}
+{"key": "message_2"} {"f1": "fishval", "f2": 1000}
+
+> CREATE SOURCE individual_headers
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-individual_headers-${testdrive.seed}')
+  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE HEADER 'header1' AS header1
+  ENVELOPE UPSERT
+
+> SELECT key, header1 from individual_headers
+key          header1
+-------------------------------
+message_1    message_1_header_1
+message_2    message_2_header_1
+
+
+# test exposing header as byte array
+> CREATE SOURCE individual_headers_bytes
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-individual_headers-${testdrive.seed}')
+  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE HEADER 'header1' AS header1 BYTES
+  ENVELOPE UPSERT
+
+> SELECT key, header1::text from individual_headers_bytes
+key          header1
+---------------------------------------------------
+message_1    \x6d6573736167655f315f6865616465725f31
+message_2    \x6d6573736167655f325f6865616465725f31
+
+
+# When there are multiple headers with identical keys, verify that the last header is exposed in the row
+$ kafka-create-topic topic=duplicate_individual_headers
+
+$ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro key-schema=${keyschema} schema=${schema} headers=[{"duplicates": "message_3_header_3_first"}, {"duplicates": "message_3_header_3_second"}, {"duplicates": "message_3_header_3_third"}]
+{"key": "message_3"} {"f1": "fishval", "f2": 1000}
+
+> CREATE SOURCE duplicate_individual_headers
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-duplicate_individual_headers-${testdrive.seed}')
+  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE HEADERS, HEADER 'duplicates' AS duplicates
+  ENVELOPE UPSERT
+
+> SELECT key, duplicates, headers::text from duplicate_individual_headers
+key          duplicates                 headers
+-------------------------------------------------
+message_3    message_3_header_3_third   "{\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f6669727374)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7365636f6e64)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7468697264)\"}"
+
+
+# Verify that the source is bricked when there are headers that cannot be parsed as utf-8
+$ kafka-create-topic topic=ill_formed_header
+
+$ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${keyschema} schema=${schema} headers={"header1": "message_1_header_1"}
+{"key": "message_1"} {"f1": "fishval", "f2": 1000}
+$ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${keyschema} schema=${schema} headers={"header1": "message_2_header_1"}
+{"key": "message_2"} {"f1": "fishval", "f2": 1000}
+
+> CREATE SOURCE ill_formed_header
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-ill_formed_header-${testdrive.seed}')
+  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE HEADERS, HEADER 'header1' AS header1
+  ENVELOPE UPSERT
+
+> SELECT key, header1 from ill_formed_header
+key          header1
+------------------------------------------
+message_1    message_1_header_1
+message_2    message_2_header_1
+
+$ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${keyschema} schema=${schema} headers={"header1": [195, 40]}
+{"key": "message_1"} {"f1": "fishval", "f2": 1000}
+
+! SELECT key, header1 from ill_formed_header
+contains:Found ill-formed byte sequence in header 'header1' that cannot be decoded as valid utf-8 (original bytes: [c3, 28])
+
+
+# Verify that the source is bricked when messages have missing headers
+
+> CREATE SOURCE missing_headers
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-individual_headers-${testdrive.seed}')
+  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE HEADER 'header2' AS header2
+  ENVELOPE UPSERT
+
+! SELECT key, header2 from missing_headers
+contains:A header with key 'header2' was not found in the message headers

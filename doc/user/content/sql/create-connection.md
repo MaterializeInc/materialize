@@ -32,79 +32,25 @@ connections to create [sources](/sql/create-source/kafka) and [sinks](/sql/creat
 
 #### Connection options {#kafka-options}
 
-Field                                   | Value            | Required | Description
-----------------------------------------|------------------|:--------:|-------------------------------
-`BROKER`                                | `text`           | ✓        | The Kafka bootstrap server. Exclusive with `BROKERS`.
-`BROKERS`                               | `text[]`         |          | A comma-separated list of Kafka bootstrap servers. Exclusive with `BROKER`.
-`PROGRESS TOPIC`                        | `text`           |          | The name of a topic that Kafka sinks can use to track internal consistency metadata. If this is not specified, a default topic name will be selected.
-`SSH TUNNEL`                            | object name      |          | The name of an [SSH tunnel connection](#ssh-tunnel) to route network traffic through by default.
+| <div style="min-width:240px">Field</div>  | Value            | Description
+|-------------------------------------------|------------------|------------------------------
+| `BROKER`                                  | `text`           | The Kafka bootstrap server.<br><br>Exactly one of `BROKER` or `BROKERS` must be specified.
+| `BROKERS`                                 | `text[]`         | A comma-separated list of Kafka bootstrap servers.<br><br>Exactly one of `BROKER` or `BROKERS` must be specified.
+| `SECURITY PROTOCOL`                       | `text`           | The security protocol to use: `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`.<br><br>Defaults to `SASL_SSL` if any `SASL ...` options are specified, otherwise defaults to `SSL`.
+| `SASL MECHANISMS`                         | `text`           | The SASL mechanism to use for authentication: `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`. Despite the name, this option only allows a single mechanism to be specified.<br><br>Required if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
+| `SASL USERNAME`                           | secret or `text` | Your SASL username.<br><br>Required and only valid when the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
+| `SASL PASSWORD`                           | secret           | Your SASL password.<br><br>Required and only valid when the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
+| `SSL CERTIFICATE AUTHORITY`               | secret or `text` | The certificate authority (CA) certificate in PEM format. Used to validate the brokers' TLS certificates. If unspecified, uses the system's default CA certificates.<br><br>Only valid when the security protocol is `SSL` or `SASL_SSL`.
+| `SSL CERTIFICATE`                         | secret or `text` | Your TLS certificate in PEM format for SSL client authentication. If unspecified, no client authentication is performed.<br><br>Only valid when the security protocol is `SSL` or `SASL_SSL`.
+| `SSL KEY`                                 | secret           | Your TLS certificate's key in PEM format.<br><br>Required and only valid when `SSL CERTIFICATE` is specified.
+| `SSH TUNNEL`                              | object name      | The name of an [SSH tunnel connection](#ssh-tunnel) to route network traffic through by default.
+| `PROGRESS TOPIC`                          | `text`           | The name of a topic that Kafka sinks can use to track internal consistency metadata. If this is not specified, a default topic name will be selected.
 
 #### `WITH` options {#kafka-with-options}
 
 Field         | Value     | Description
 --------------|-----------|-------------------------------------
-`VALIDATE`    | `boolean` | Default: `true`. Whether [connection validation](#connection-validation) should be performed on connection creation.
-
-#### Authentication {#kafka-auth}
-
-{{< tabs >}}
-{{< tab "SSL">}}
-
-To connect to a Kafka broker that requires [SSL authentication](https://docs.confluent.io/platform/current/kafka/authentication_ssl.html),
-use the following options:
-
-##### SSL options {#kafka-auth-ssl-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|------------------
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-`SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate in PEM format. Required for SSL client authentication.
-`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
-
-##### Example {#kafka-auth-ssl-example}
-
-```sql
-CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
-CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
-
-CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
-    SSL KEY = SECRET kafka_ssl_key,
-    SSL CERTIFICATE = SECRET kafka_ssl_crt
-);
-```
-
-{{< /tab >}}
-
-{{< tab "SASL">}}
-
-To connect to a Kafka broker that requires [SASL authentication](https://docs.confluent.io/platform/current/kafka/authentication_sasl/auth-sasl-overview.html),
-use the following options.
-
-##### SASL options {#kafka-auth-sasl-options}
-
-Field                                   | Value            | Required | Description
-----------------------------------------|------------------|:--------:|-------------------------------
-`SASL MECHANISMS`                       | `text`           | ✓        | The SASL mechanism to use for authentication. Supported: `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`.
-`SASL USERNAME`                         | secret or `text` | ✓        | Your SASL username, if any. Required if `SASL MECHANISMS` is `PLAIN`.
-`SASL PASSWORD`                         | secret           | ✓        | Your SASL password, if any. Required if `SASL MECHANISMS` is `PLAIN`.
-`SSL CERTIFICATE AUTHORITY`             | secret or `text` |          | The certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-
-##### Example {#kafka-auth-sasl-example}
-
-```sql
-CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
-
-CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
-    SASL MECHANISMS = 'SCRAM-SHA-256',
-    SASL USERNAME = 'foo',
-    SASL PASSWORD = SECRET kafka_password
-);
-```
-
-{{< /tab >}}
-{{< /tabs >}}
+`VALIDATE`    | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation.<br><br>Defaults to `true`.
 
 To connect to a Kafka cluster with multiple bootstrap servers, use the `BROKERS`
 option:
@@ -114,6 +60,102 @@ CREATE CONNECTION kafka_connection TO KAFKA (
     BROKERS ('broker1:9092', 'broker2:9092')
 );
 ```
+
+#### Security protocol examples {#kafka-auth}
+
+{{< tabs >}}
+{{< tab "PLAINTEXT">}}
+{{< warning >}}
+It is insecure to use the `PLAINTEXT` security protocol unless
+you are using a [network security connection](#network-security-connections)
+to tunnel into a private network, as shown below.
+{{< /warning >}}
+```sql
+CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
+    SECURITY PROTOCOL = 'PLAINTEXT',
+    SSH TUNNEL ssh_connection
+);
+```
+{{< /tab >}}
+
+{{< tab "SSL">}}
+With both TLS encryption and TLS client authentication:
+```sql
+CREATE SECRET kafka_ssl_cert AS '-----BEGIN CERTIFICATE----- ...';
+CREATE SECRET kafka_ssl_key AS '-----BEGIN PRIVATE KEY----- ...';
+CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
+
+CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
+    SECURITY PROTOCOL = 'SSL'
+    SSL CERTIFICATE = SECRET kafka_ssl_cert,
+    SSL KEY = SECRET kafka_ssl_key,
+    -- Specifying a certificate authority is only required if your cluster's
+    -- certificates are not issued by a CA trusted by the Mozilla root store.
+    SSL CERTIFICATE AUTHORITY = SECRET ca_cert
+);
+```
+
+With only TLS encryption:
+{{< warning >}}
+It is insecure to use TLS encryption with no authentication unless
+you are using a [network security connection](#network-security-connections)
+to tunnel into a private network as shown below.
+{{< /warning >}}
+```sql
+CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
+
+CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKER = 'rp-f00000bar.data.vectorized.cloud:30365',
+    SECURITY PROTOCOL = 'SSL',
+    SSH TUNNEL ssh_connection,
+    -- Specifying a certificate authority is only required if your cluster's
+    -- certificates are not issued by a CA trusted by the Mozilla root store.
+    SSL CERTIFICATE AUTHORITY = SECRET ca_cert
+);
+```
+{{< /tab >}}
+
+{{< tab "SASL_PLAINTEXT">}}
+{{< warning >}}
+It is insecure to use the `SASL_PLAINTEXT` security protocol unless
+you are using a [network security connection](#network-security-connections)
+to tunnel into a private network, as shown below.
+{{< /warning >}}
+
+```sql
+CREATE SECRET kafka_password AS '...';
+
+CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
+    SECURITY PROTOCOL = 'SASL_PLAINTEXT',
+    SASL MECHANISMS = 'SCRAM-SHA-256', -- or `PLAIN` or `SCRAM-SHA-512`
+    SASL USERNAME = 'foo',
+    SASL PASSWORD = SECRET kafka_password
+    SSH TUNNEL ssh_connection
+);
+```
+{{< /tab >}}
+
+{{< tab "SASL_SSL">}}
+```sql
+CREATE SECRET kafka_password AS '...';
+CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
+
+CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
+    SECURITY PROTOCOL = 'SASL_SSL',
+    SASL MECHANISMS = 'SCRAM-SHA-256', -- or `PLAIN` or `SCRAM-SHA-512`
+    SASL USERNAME = 'foo',
+    SASL PASSWORD = SECRET kafka_password,
+    -- Specifying a certificate authority is only required if your cluster's
+    -- certificates are not issued by a CA trusted by the Mozilla root store.
+    SSL CERTIFICATE AUTHORITY = SECRET ca_cert
+);
+```
+{{< /tab >}}
+{{< /tabs >}}
 
 #### Network security {#kafka-network-security}
 
@@ -234,7 +276,8 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-Using different SSH tunnels for each broker:
+Using different SSH tunnels for each broker, with a default for brokers that are
+not listed:
 
 ```sql
 CREATE CONNECTION ssh1 TO SSH TUNNEL (HOST 'ssh1', ...);
@@ -244,9 +287,8 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 BROKERS (
     'broker1:9092' USING SSH TUNNEL ssh1,
     'broker2:9092' USING SSH TUNNEL ssh2
-    -- Add all Kafka brokers here. Connections to advertised brokers that are
-    -- not listed here will not be tunneled.
     )
+    SSH TUNNEL ssh_1
 );
 ```
 
@@ -268,14 +310,14 @@ Registry] server. You can use Confluent Schema Registry connections in the
 
 #### Connection options {#csr-options}
 
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:| ------------
-`URL`                       | `text`           | ✓        | The schema registry URL.
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-`SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate in PEM format. Required for SSL client authentication.
-`SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
-`PASSWORD`                  | secret           |          | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
-`USERNAME`                  | secret or `text` |          | The username used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
+| <div style="min-width:220px">Field</div>    | Value            | Description
+| --------------------------------------------|------------------|------------
+| `URL`                                       | `text`           | The schema registry URL.<br><br>Required.
+| `USERNAME`                                  | secret or `text` | The username to use for basic HTTP authentication.
+| `PASSWORD`                                  | secret           | The password to use for basic HTTP authentication.<br><br>Required and only valid if `USERNAME` is specified.
+| `SSL CERTIFICATE`                           | secret or `text` | Your TLS certificate in PEM format for TLS client authentication. If unspecified, no TLS client authentication is performed.<br><br>Only respected if the URL uses the `https` protocol.
+| `SSL KEY`                                   | secret           | Your TLS certificate's key in PEM format.<br><br>Required and only valid if `SSL CERTIFICATE` is specified.
+| `SSL CERTIFICATE AUTHORITY`                 | secret or `text` | The certificate authority (CA) certificate in PEM format. Used to validate the server's TLS certificate. If unspecified, uses the system's default CA certificates.<br><br>Only respected if the URL uses the `https` protocol.
 
 #### `WITH` options {#csr-with-options}
 
@@ -285,17 +327,36 @@ Field         | Value     | Description
 
 #### Examples {#csr-example}
 
+Using username and password authentication with TLS encryption:
+
 ```sql
-CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
-CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
-CREATE SECRET csr_password AS '<CSR_PASSWORD>';
+CREATE SECRET csr_password AS '...';
+CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
+
+CREATE CONNECTION csr_basic TO CONFLUENT SCHEMA REGISTRY (
+    URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
+    USERNAME = 'foo',
+    PASSWORD = SECRET csr_password
+    -- Specifying a certificate authority is only required if your cluster's
+    -- certificates are not issued by a CA trusted by the Mozilla root store.
+    SSL CERTIFICATE AUTHORITY = SECRET ca_cert
+);
+```
+
+Using TLS for encryption and authentication:
+
+```sql
+CREATE SECRET csr_ssl_cert AS '-----BEGIN CERTIFICATE----- ...';
+CREATE SECRET csr_ssl_key AS '-----BEGIN PRIVATE KEY----- ...';
+CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
 
 CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
+    SSL CERTIFICATE = SECRET csr_ssl_cert,
     SSL KEY = SECRET csr_ssl_key,
-    SSL CERTIFICATE = SECRET csr_ssl_crt,
-    USERNAME = 'foo',
-    PASSWORD = SECRET csr_password
+    -- Specifying a certificate authority is only required if your cluster's
+    -- certificates are not issued by a CA trusted by the Mozilla root store.
+    SSL CERTIFICATE AUTHORITY = SECRET ca_cert
 );
 ```
 
@@ -346,7 +407,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     PORT <SSH_BASTION_PORT>
 );
 
-CREATE CONNECTION csr_privatelink TO CONFLUENT SCHEMA REGISTRY (
+CREATE CONNECTION csr_ssh TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://my-confluent-schema-registry:8081',
     SSH TUNNEL ssh_connection
 );

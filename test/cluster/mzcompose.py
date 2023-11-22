@@ -46,8 +46,13 @@ SERVICES = [
     Clusterd(name="clusterd2"),
     Clusterd(name="clusterd3"),
     Clusterd(name="clusterd4"),
-    # We use mz_panic() in some test scenarios, so environmentd must stay up.
-    Materialized(propagate_crashes=False, external_cockroach=True),
+    Materialized(
+        # We use mz_panic() in some test scenarios, so environmentd must stay up.
+        propagate_crashes=False,
+        external_cockroach=True,
+        # Kills make the shadow catalog not work properly
+        catalog_store="stash",
+    ),
     Redpanda(),
     Toxiproxy(),
     Testdrive(
@@ -2806,3 +2811,82 @@ def workflow_test_index_source_stuck(
         c.up("clusterd1")
         c.up("clusterd2")
         c.run("testdrive", "index-source-stuck/run.td")
+
+
+def workflow_test_github_cloud_7998(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Regression test for MaterializeInc/cloud#7998."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(name="clusterd1"),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+
+        c.run("testdrive", "github-cloud-7998/setup.td")
+
+        # Make the compute cluster unavailable.
+        c.kill("clusterd1")
+        c.run("testdrive", "github-cloud-7998/check.td")
+
+        # Trigger an environment bootstrap.
+        c.kill("materialized")
+        c.up("materialized")
+        c.run("testdrive", "github-cloud-7998/check.td")
+
+        # Run a second bootstrap check, just to be sure.
+        c.kill("materialized")
+        c.up("materialized")
+        c.run("testdrive", "github-cloud-7998/check.td")
+
+
+def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Regression test for #23246."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized")
+
+        # Create an MV reading from an index. Make sure it doesn't produce its
+        # snapshot by installing it in a cluster without replicas.
+        c.sql(
+            """
+            CREATE CLUSTER test SIZE '1', REPLICATION FACTOR 0;
+            SET cluster = test;
+
+            CREATE TABLE t (a int);
+            INSERT INTO t VALUES (1);
+
+            CREATE DEFAULT INDEX ON t;
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            """
+        )
+
+        # Verify that the MV's upper is zero, which is what caused the bug.
+        # This ensures that the test doesn't break in the future because we
+        # start initializing frontiers differently.
+        c.testdrive(
+            input=dedent(
+                """
+                > SELECT write_frontier
+                  FROM mz_internal.mz_frontiers
+                  JOIN mz_materialized_views ON (object_id = id)
+                  WHERE name = 'mv'
+                0
+                """
+            )
+        )
+
+        # Trigger an environment bootstrap, and see if envd comes up without
+        # panicking.
+        c.kill("materialized")
+        c.up("materialized")

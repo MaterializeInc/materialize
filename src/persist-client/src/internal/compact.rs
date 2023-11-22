@@ -40,6 +40,7 @@ use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::metrics::ShardMetrics;
+use crate::internal::paths::BlobKey;
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::Consolidator;
@@ -711,6 +712,9 @@ where
             metrics.compaction.not_all_prefetched.inc();
         }
 
+        // Reuse the allocations for individual keys and values
+        let mut key_vec = vec![];
+        let mut val_vec = vec![];
         loop {
             let fetch_start = Instant::now();
             let Some(updates) = consolidator.next().await? else {
@@ -718,9 +722,11 @@ where
             };
             timings.part_fetching += fetch_start.elapsed();
             for (k, v, t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
-                batch
-                    .add(&real_schemas, &k.to_vec(), &v.to_vec(), &t, &d)
-                    .await?;
+                key_vec.clear();
+                key_vec.extend_from_slice(k);
+                val_vec.clear();
+                val_vec.extend_from_slice(v);
+                batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
             }
             tokio::task::yield_now().await;
         }
@@ -995,7 +1001,7 @@ impl Timings {
 #[derive(Debug)]
 enum CompactionPart<'a, T> {
     Queued(&'a HollowBatchPart),
-    Prefetched(usize, JoinHandle<Result<EncodedPart<T>, anyhow::Error>>),
+    Prefetched(usize, JoinHandle<Result<EncodedPart<T>, BlobKey>>),
 }
 
 impl<'a, T: Timestamp + Lattice + Codec64> CompactionPart<'a, T> {
@@ -1013,8 +1019,8 @@ impl<'a, T: Timestamp + Lattice + Codec64> CompactionPart<'a, T> {
         metrics: &Metrics,
         shard_metrics: &ShardMetrics,
         part_desc: &Description<T>,
-    ) -> Result<EncodedPart<T>, anyhow::Error> {
-        match self {
+    ) -> anyhow::Result<EncodedPart<T>> {
+        let result = match self {
             CompactionPart::Prefetched(_, task) => {
                 if task.is_finished() {
                     metrics.compaction.parts_prefetched.inc();
@@ -1036,7 +1042,8 @@ impl<'a, T: Timestamp + Lattice + Codec64> CompactionPart<'a, T> {
                 )
                 .await
             }
-        }
+        };
+        result.map_err(|blob_key| anyhow!("failed to fetch part for shard: {blob_key}"))
     }
 }
 

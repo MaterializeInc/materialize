@@ -14,6 +14,8 @@ import time
 import uuid
 from textwrap import dedent
 
+from materialize import docker
+
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
@@ -26,7 +28,6 @@ from scenarios_scale import *  # noqa: F401 F403
 from scenarios_skew import *  # noqa: F401 F403
 from scenarios_subscribe import *  # noqa: F401 F403
 
-from materialize import benchmark_utils
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
 from materialize.feature_benchmark.benchmark import Benchmark, Report
 from materialize.feature_benchmark.comparator import (
@@ -54,6 +55,7 @@ from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import all_subclasses
 from materialize.version_list import VersionsFromDocs
 
 #
@@ -130,18 +132,17 @@ def run_one_scenario(
         )
 
         if tag == "common-ancestor":
-            tag = benchmark_utils.resolve_tag_of_common_ancestor()
+            tag = docker.resolve_ancestor_image_tag()
 
         entrypoint_host = "balancerd" if balancerd else "materialized"
 
         c.up("testdrive", persistent=True)
 
         additional_system_parameter_defaults = {}
-        # TODO(def-) Remove when v0.75 is released, workaround for https://github.com/MaterializeInc/materialize/pull/22472
-        if instance == "other" and tag == "latest":
-            additional_system_parameter_defaults[
-                "enable_specialized_arrangements"
-            ] = "false"
+
+        # TODO(def-,aljoscha) Switch this to "postgres" before #22029 is enabled in production
+        # Also verify that there is no regression when the "other" side uses catalog ts oracle and "this" uses postgres ts oracle
+        additional_system_parameter_defaults["timestamp_oracle"] = "catalog"
 
         if params is not None:
             for param in params.split(";"):
@@ -208,6 +209,7 @@ def create_mz_service(
         external_cockroach=True,
         external_minio=True,
         sanity_restart=False,
+        catalog_store="stash",
     )
 
 
@@ -355,19 +357,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Build the list of scenarios to run
     root_scenario = globals()[args.root_scenario]
-    initial_scenarios = {}
+    scenarios = []
 
     if root_scenario.__subclasses__():
-        for scenario in root_scenario.__subclasses__():
-            has_children = False
-            for s in scenario.__subclasses__():
-                has_children = True
-                initial_scenarios[s] = 1
-
-            if not has_children:
-                initial_scenarios[scenario] = 1
+        scenarios = [s for s in all_subclasses(root_scenario) if not s.__subclasses__()]
     else:
-        initial_scenarios[root_scenario] = 1
+        scenarios = [root_scenario]
 
     dependencies = ["postgres"]
 
@@ -378,31 +373,31 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(*dependencies)
 
-    scenarios = initial_scenarios.copy()
-
     for cycle in range(0, args.max_retries):
         print(
-            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
+            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios])}"
         )
 
         report = Report()
 
-        for scenario in list(scenarios.keys()):
+        scenarios_with_regressions = []
+        for scenario in scenarios:
             comparators = run_one_scenario(c, scenario, args)
             report.extend(comparators)
 
             # Do not retry the scenario if no regressions
-            if all([not c.is_regression() for c in comparators]):
-                del scenarios[scenario]
+            if any([c.is_regression() for c in comparators]):
+                scenarios_with_regressions.append(scenario)
 
             print(f"+++ Benchmark Report for cycle {cycle+1}:")
             report.dump()
 
-        if len(scenarios.keys()) == 0:
+        scenarios = scenarios_with_regressions
+        if not scenarios:
             break
 
-    if len(scenarios.keys()) > 0:
+    if scenarios:
         print(
-            f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
+            f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios])}"
         )
         sys.exit(1)

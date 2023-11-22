@@ -13,7 +13,7 @@ $ schema-registry-wait subject=sql-server.test.dbo.delete_table_pk-value
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE delete_table_pk
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.delete_table_pk')

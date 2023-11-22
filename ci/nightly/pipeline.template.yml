@@ -102,7 +102,7 @@ steps:
     steps:
       - id: redpanda-testdrive
         label: ":panda_face: :racing_car: testdrive"
-        timeout_in_minutes: 600
+        timeout_in_minutes: 180
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
@@ -114,7 +114,7 @@ steps:
 
       - id: redpanda-testdrive-aarch64
         label: ":panda_face: :racing_car: testdrive aarch64"
-        timeout_in_minutes: 600
+        timeout_in_minutes: 180
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
@@ -127,7 +127,7 @@ steps:
 
       - id: testdrive-partitions-5
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
-        timeout_in_minutes: 600
+        timeout_in_minutes: 180
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
@@ -139,7 +139,7 @@ steps:
 
       - id: testdrive-replicas-4
         label: ":racing_car: testdrive 4 replicas"
-        timeout_in_minutes: 600
+        timeout_in_minutes: 180
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
@@ -151,7 +151,7 @@ steps:
 
       - id: testdrive-size-1
         label: ":racing_car: testdrive with SIZE 1"
-        timeout_in_minutes: 600
+        timeout_in_minutes: 180
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
@@ -163,7 +163,7 @@ steps:
 
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"
-        timeout_in_minutes: 600
+        timeout_in_minutes: 180
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
@@ -398,6 +398,28 @@ steps:
               composition: platform-checks
               args: [--scenario=BackupAndRestoreAfterManipulate, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-backup-multi
+        label: "Checks + multiple backups/restores"
+        timeout_in_minutes: 60
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=BackupAndRestoreMulti, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-backup-rollback
+        label: "Checks + backup + rollback to previous"
+        timeout_in_minutes: 60
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=BackupAndRestoreToPreviousState, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica"
         skip: "Affected by #21317"
@@ -562,7 +584,7 @@ steps:
         label: "Platform checks upgrade in Cloudtest/K8s"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
@@ -654,7 +676,7 @@ steps:
     artifact_paths: junit_*.xml
     timeout_in_minutes: 3600
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: bounded-memory
@@ -921,15 +943,6 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster
           run: test-incident-70
-
-  - id: incident-72-remediation
-    label: "Remediation of incident 72"
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: incident-72
 
   - id: balancerd
     label: "Tests for balancerd"

@@ -69,7 +69,6 @@ where
         metrics: RehydratingStorageClientMetrics,
         envd_epoch: NonZeroI64,
         grpc_client_params: GrpcClientParameters,
-        variable_length_row_encoding: bool,
     ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
@@ -86,7 +85,6 @@ where
             config: Default::default(),
             metrics,
             grpc_client_params,
-            variable_length_row_encoding,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -165,8 +163,6 @@ struct RehydrationTask<T> {
     metrics: RehydratingStorageClientMetrics,
     /// gRPC client parameters.
     grpc_client_params: GrpcClientParameters,
-    /// Whether to enable variable-length row encoding.
-    variable_length_row_encoding: bool,
 }
 
 enum RehydrationTaskState<T: Timestamp + Lattice> {
@@ -266,7 +262,6 @@ where
                 // the compute and storage command streams are merged.
                 idle_arrangement_merge_effort: 1337,
                 arrangement_exert_proportionality: 1337,
-                variable_length_row_encoding: self.variable_length_row_encoding,
             };
             let dests = location
                 .ctl_addrs

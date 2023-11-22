@@ -93,7 +93,7 @@ class KafkaTransactionLogGreaterThan1:
             dedent(
                 """
                 > CREATE CONNECTION kafka_conn
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
                     URL '${testdrive.schema-registry-url}'
@@ -170,6 +170,7 @@ class KafkaDisruption:
                 > CREATE CONNECTION kafka_conn
                   TO KAFKA (
                     BROKER '${testdrive.kafka-addr}',
+                    SECURITY PROTOCOL PLAINTEXT,
                     PROGRESS TOPIC 'testdrive-progress-topic-${testdrive.seed}'
                   );
 
@@ -278,6 +279,7 @@ class KafkaSinkDisruption:
                 > CREATE CONNECTION kafka_conn
                   TO KAFKA (
                     BROKER '${testdrive.kafka-addr}',
+                    SECURITY PROTOCOL PLAINTEXT,
                     PROGRESS TOPIC 'testdrive-progress-topic-${testdrive.seed}'
                   );
 

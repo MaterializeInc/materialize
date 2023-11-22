@@ -141,7 +141,7 @@ use std::str::FromStr;
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::{Broadcast, ConnectLoop, Feedback};
+use timely::dataflow::operators::{Broadcast, CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::types::PgLsn;
@@ -231,8 +231,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let id = config.id;
             let worker_id = config.worker_id;
 
-            let [data_cap, rewind_cap, snapshot_cap]: &mut [_; 3] = caps.try_into().unwrap();
-            let data_cap = data_cap.as_mut().unwrap();
+            let [data_cap_set, rewind_cap_set, snapshot_cap_set]: &mut [_; 3] = caps.try_into().unwrap();
             trace!(
                 %id,
                 "timely-{worker_id} initializing table reader with {} tables to snapshot",
@@ -263,8 +262,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                 let snapshot_info = export_snapshot(&client).await?;
                 trace!(%id, "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
-                let cap = snapshot_cap.as_ref().unwrap();
-                snapshot_handle.give(cap, snapshot_info).await;
+                snapshot_handle.give(&snapshot_cap_set[0], snapshot_info).await;
 
                 client
             } else {
@@ -317,9 +315,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             for &oid in reader_snapshot_table_info.keys() {
                 trace!(%id, "timely-{worker_id} producing rewind request for {oid}");
                 let req = RewindRequest { oid, snapshot_lsn };
-                rewinds_handle.give(rewind_cap.as_ref().unwrap(), req).await;
+                rewinds_handle.give(&rewind_cap_set[0], req).await;
             }
-            *rewind_cap = None;
+            *rewind_cap_set = CapabilitySet::new();
 
             let upstream_info = mz_postgres_util::publication_info(
                 &context.ssh_tunnel_manager,
@@ -334,7 +332,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 let desc = match verify_schema(oid, expected_desc, &upstream_info) {
                     Ok(()) => expected_desc,
                     Err(err) => {
-                        raw_handle.give(data_cap, ((oid, Err(err)), MzOffset::minimum(), 1)).await;
+                        raw_handle.give(&data_cap_set[0], ((oid, Err(err)), MzOffset::minimum(), 1)).await;
                         continue;
                     }
                 };
@@ -344,13 +342,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 // emulate's PG's rules for name formatting.
                 let query = format!(
                     "COPY {}.{} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                    Ident::from(desc.namespace.clone()).to_ast_string(),
-                    Ident::from(desc.name.clone()).to_ast_string(),
+                    Ident::new_unchecked(desc.namespace.clone()).to_ast_string(),
+                    Ident::new_unchecked(desc.name.clone()).to_ast_string(),
                 );
                 let mut stream = pin!(client.copy_out_simple(&query).await?);
 
                 while let Some(bytes) = stream.try_next().await? {
-                    raw_handle.give(data_cap, ((oid, Ok(bytes)), MzOffset::minimum(), 1)).await;
+                    raw_handle.give(&data_cap_set[0], ((oid, Ok(bytes)), MzOffset::minimum(), 1)).await;
                 }
             }
             // Failure scenario after we have produced the snapshot, but before a successful COMMIT
@@ -360,14 +358,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // its client since this is what holds the exported transaction alive.
             if is_snapshot_leader {
                 trace!(%id, "timely-{worker_id} waiting for all workers to finish");
-                *snapshot_cap = None;
+                *snapshot_cap_set = CapabilitySet::new();
                 while snapshot_input.next().await.is_some() {}
                 trace!(%id, "timely-{worker_id} (leader) comitting COPY transaction");
                 client.simple_query("COMMIT").await?;
             } else {
                 trace!(%id, "timely-{worker_id} comitting COPY transaction");
                 client.simple_query("COMMIT").await?;
-                *snapshot_cap = None;
+                *snapshot_cap_set = CapabilitySet::new();
             }
             drop(client);
             Ok(())

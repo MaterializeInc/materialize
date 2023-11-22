@@ -132,6 +132,9 @@ Debezium is deployed as a set of Kafka Connect-compatible connectors, so you fir
 If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html), you **must** override the default value of `After-state only` to `false`.
 {{</ warning >}}
 
+{{< tabs >}}
+{{< tab "Debezium 1.5+">}}
+
 1. Create a connector configuration file and save it as `register-postgres.json`:
 
     ```json
@@ -158,6 +161,53 @@ If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://doc
 
     You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/1.6/connectors/postgresql.html#postgresql-connector-properties). By default, the connector writes events for each table to a Kafka topic named `serverName.schemaName.tableName`.
 
+
+{{< /tab >}}
+{{< tab "Debezium 2.0+">}}
+
+1. Beginning with Debezium 2.0.0, Confluent Schema Registry support is not included in the Debezium containers. To enable the Confluent Schema Registry for a Debezium container, install the following Confluent Avro converter JAR files into the Connect plugin directory:
+
+    * `kafka-connect-avro-converter`
+    * `kafka-connect-avro-data`
+    * `kafka-avro-serializer`
+    * `kafka-schema-serializer`
+    * `kafka-schema-registry-client`
+    * `common-config`
+    * `common-utils`
+
+    You can read more about this in the [Debezium documentation](https://debezium.io/documentation/reference/stable/configuration/avro.html#deploying-confluent-schema-registry-with-debezium-containers).
+
+1. Create a connector configuration file and save it as `register-postgres.json`:
+
+    ```json
+    {
+        "name": "your-connector",
+        "config": {
+            "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+            "tasks.max": "1",
+            "plugin.name":"pgoutput",
+            "database.hostname": "postgres",
+            "database.port": "5432",
+            "database.user": "postgres",
+            "database.password": "postgres",
+            "database.dbname" : "postgres",
+            "topic.prefix": "pg_repl",
+            "schema.include.list": "public",
+            "table.include.list": "public.table1",
+            "publication.autocreate.mode":"filtered",
+            "key.converter": "io.confluent.connect.avro.AvroConverter",
+            "value.converter": "io.confluent.connect.avro.AvroConverter",
+            "key.converter.schema.registry.url": "http://<scheme-registry>:8081",
+            "value.converter.schema.registry.url": "http://<scheme-registry>:8081",
+            "value.converter.schemas.enable": false
+        }
+    }
+    ```
+
+    You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/2.4/connectors/postgresql.html#postgresql-connector-properties). By default, the connector writes events for each table to a Kafka topic named `serverName.schemaName.tableName`.
+
+{{< /tab >}}
+{{< /tabs >}}
 
 1. Start the Debezium Postgres connector using the configuration file:
 

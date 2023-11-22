@@ -27,7 +27,7 @@ one
 # sinks sometimes require new values to actually fall over. In the future, when sinks
 # dynamically check the connection status, we can use a simple `SELECT 1` MV here.
 > CREATE CONNECTION kafka_conn_non_ssh
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE non_ssh IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn_non_ssh (
@@ -39,10 +39,10 @@ one
 
 
 > CREATE CONNECTION kafka_conn_using
-  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION kafka_conn_dynamic
-  TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL thancred);
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, SSH TUNNEL thancred);
 
 > CREATE SINK sink_fixed
   IN CLUSTER sc

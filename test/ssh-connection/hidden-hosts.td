@@ -21,7 +21,7 @@ $ kafka-ingest topic=thetopic format=bytes
 one
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER 'hidden-kafka:9092' USING SSH TUNNEL thancred);
+  TO KAFKA (BROKER 'hidden-kafka:9092' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
 
 > CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (

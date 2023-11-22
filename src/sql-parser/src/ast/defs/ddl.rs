@@ -442,39 +442,72 @@ impl AstDisplay for CsvColumns {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SourceIncludeMetadataType {
-    Key,
-    Timestamp,
-    Partition,
-    Offset,
-    Headers,
-}
-
-impl AstDisplay for SourceIncludeMetadataType {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            SourceIncludeMetadataType::Key => f.write_str("KEY"),
-            SourceIncludeMetadataType::Timestamp => f.write_str("TIMESTAMP"),
-            SourceIncludeMetadataType::Partition => f.write_str("PARTITION"),
-            SourceIncludeMetadataType::Offset => f.write_str("OFFSET"),
-            SourceIncludeMetadataType::Headers => f.write_str("HEADERS"),
-        }
-    }
-}
-impl_display!(SourceIncludeMetadataType);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SourceIncludeMetadata {
-    pub ty: SourceIncludeMetadataType,
-    pub alias: Option<Ident>,
+pub enum SourceIncludeMetadata {
+    Key {
+        alias: Option<Ident>,
+    },
+    Timestamp {
+        alias: Option<Ident>,
+    },
+    Partition {
+        alias: Option<Ident>,
+    },
+    Offset {
+        alias: Option<Ident>,
+    },
+    Headers {
+        alias: Option<Ident>,
+    },
+    Header {
+        key: String,
+        alias: Ident,
+        use_bytes: bool,
+    },
 }
 
 impl AstDisplay for SourceIncludeMetadata {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.ty);
-        if let Some(alias) = &self.alias {
-            f.write_str(" AS ");
-            f.write_node(alias);
+        let print_alias = |f: &mut AstFormatter<W>, alias: &Option<Ident>| {
+            if let Some(alias) = alias {
+                f.write_str(" AS ");
+                f.write_node(alias);
+            }
+        };
+
+        match self {
+            SourceIncludeMetadata::Key { alias } => {
+                f.write_str("KEY");
+                print_alias(f, alias);
+            }
+            SourceIncludeMetadata::Timestamp { alias } => {
+                f.write_str("TIMESTAMP");
+                print_alias(f, alias);
+            }
+            SourceIncludeMetadata::Partition { alias } => {
+                f.write_str("PARTITION");
+                print_alias(f, alias);
+            }
+            SourceIncludeMetadata::Offset { alias } => {
+                f.write_str("OFFSET");
+                print_alias(f, alias);
+            }
+            SourceIncludeMetadata::Headers { alias } => {
+                f.write_str("HEADERS");
+                print_alias(f, alias);
+            }
+            SourceIncludeMetadata::Header {
+                alias,
+                key,
+                use_bytes,
+            } => {
+                f.write_str("HEADER '");
+                f.write_str(&display::escape_single_quote_string(key));
+                f.write_str("'");
+                print_alias(f, &Some(alias.clone()));
+                if *use_bytes {
+                    f.write_str(" BYTES");
+                }
+            }
         }
     }
 }
@@ -652,6 +685,7 @@ pub enum ConnectionOptionName {
     SaslPassword,
     SaslUsername,
     SecretAccessKey,
+    SecurityProtocol,
     ServiceName,
     SshTunnel,
     SslCertificate,
@@ -682,6 +716,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
             ConnectionOptionName::SaslPassword => "SASL PASSWORD",
             ConnectionOptionName::SaslUsername => "SASL USERNAME",
+            ConnectionOptionName::SecurityProtocol => "SECURITY PROTOCOL",
             ConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
             ConnectionOptionName::ServiceName => "SERVICE NAME",
             ConnectionOptionName::SshTunnel => "SSH TUNNEL",

@@ -13,8 +13,11 @@ use futures::future::BoxFuture;
 use mz_catalog::durable::Transaction;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Raw;
+use mz_sql::catalog::SessionCatalog;
+use mz_sql::session::user::MZ_SUPPORT_ROLE_ID;
 use mz_storage_types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
@@ -49,7 +52,7 @@ where
 }
 
 pub(crate) async fn migrate(
-    state: &mut CatalogState,
+    state: &CatalogState,
     txn: &mut Transaction<'_>,
     now: NowFn,
     _connection_context: Option<ConnectionContext>,
@@ -74,13 +77,19 @@ pub(crate) async fn migrate(
     let state = Catalog::load_catalog_items(txn, state)?;
     let conn_cat = state.for_system_session();
     rewrite_items(txn, Some(&conn_cat), |_tx, cat, item| {
+        let catalog_version = catalog_version.clone();
         Box::pin(async move {
             let _conn_cat = cat.expect("must provide access to conn catalog");
             ast_rewrite_create_connection_options_0_77_0(item)?;
+            if catalog_version <= Version::new(0, 77, u64::MAX) {
+                ast_rewrite_create_connection_options_0_78_0(item)?;
+            }
             Ok(())
         })
     })
     .await?;
+
+    mz_support_read_progress_sources(txn, &conn_cat)?;
 
     info!(
         "migration from catalog version {:?} complete",
@@ -137,9 +146,97 @@ fn ast_rewrite_create_connection_options_0_77_0(
     Ok(())
 }
 
+/// Add `SECURITY PROTOCOL` to all existing Kafka connections, based on the
+fn ast_rewrite_create_connection_options_0_78_0(
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::visit_mut::VisitMut;
+    use mz_sql::ast::ConnectionOptionName::*;
+    use mz_sql::ast::{
+        ConnectionOption, CreateConnectionStatement, CreateConnectionType, Value, WithOptionValue,
+    };
+
+    struct CreateConnectionRewriter;
+    impl<'ast> VisitMut<'ast, Raw> for CreateConnectionRewriter {
+        fn visit_create_connection_statement_mut(
+            &mut self,
+            node: &'ast mut CreateConnectionStatement<Raw>,
+        ) {
+            if node.connection_type != CreateConnectionType::Kafka {
+                return;
+            }
+            let has_security_protocol = node
+                .values
+                .iter()
+                .any(|o| matches!(o.name, SecurityProtocol));
+            let is_ssl = node
+                .values
+                .iter()
+                .any(|o| matches!(o.name, SslCertificate | SslKey));
+            let is_sasl = node
+                .values
+                .iter()
+                .any(|o| matches!(o.name, SaslMechanisms | SaslUsername | SaslPassword));
+            if has_security_protocol {
+                panic!(
+                    "Kafka connection has security protocol pre-v0.78.0: {:#?}",
+                    node.values
+                );
+            }
+            let security_protocol = match (is_ssl, is_sasl) {
+                (false, false) => "PLAINTEXT",
+                (true, false) => "SSL",
+                (false, true) => "SASL_SSL", // Pre-v0.78, any SASL option always meant SASL_SSL.
+                (true, true) => panic!(
+                    "impossible Kafka connection with both SSL and SASL options: {:#?}",
+                    node.values
+                ),
+            };
+            node.values.push(ConnectionOption {
+                name: SecurityProtocol,
+                value: Some(WithOptionValue::Value(Value::String(
+                    security_protocol.into(),
+                ))),
+            });
+        }
+    }
+
+    CreateConnectionRewriter.visit_statement_mut(stmt);
+    Ok(())
+}
+
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog
 // ****************************************************************************
+
+/// Grant SELECT on all progress sources to the mz_support role.
+fn mz_support_read_progress_sources(
+    txn: &mut Transaction<'_>,
+    conn_catalog: &ConnCatalog,
+) -> Result<(), anyhow::Error> {
+    let mut updated_items = BTreeMap::new();
+    for mut item in txn.loaded_items() {
+        let catalog_item = conn_catalog.get_item(&item.id);
+        if catalog_item.is_progress_source() {
+            let privileges = catalog_item.privileges();
+            match privileges.get_acl_item(&MZ_SUPPORT_ROLE_ID, &catalog_item.owner_id()) {
+                Some(acl_item) if acl_item.acl_mode.contains(AclMode::SELECT) => {}
+                _ => {
+                    let mut new_privileges = privileges.clone();
+                    new_privileges.grant(MzAclItem {
+                        grantee: MZ_SUPPORT_ROLE_ID,
+                        grantor: catalog_item.owner_id(),
+                        acl_mode: AclMode::SELECT,
+                    });
+                    item.privileges = new_privileges.into_all_values().collect();
+                    updated_items.insert(item.id, item);
+                }
+            }
+        }
+    }
+    txn.update_items(updated_items)?;
+    Ok(())
+}
 
 fn _add_to_audit_log(
     tx: &mut Transaction,

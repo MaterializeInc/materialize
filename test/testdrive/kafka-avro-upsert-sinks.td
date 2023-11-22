@@ -41,7 +41,7 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
 {"key1": "fisch", "key2": 42} {"f1": "fish", "f2": 1000}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

@@ -691,6 +691,8 @@ where
                     }
                 },
                 _ = work_to_do.notified(), if timestamper.initialized() => {
+                    source_metrics.inmemory_remap_bindings.set(u64::cast_from(timestamper.size()));
+
                     // Drain all messages that can be reclocked from all the batches
                     let total_buffered: usize = untimestamped_batches.iter().map(|(_, b)| b.len()).sum();
                     let reclock_source_upper = timestamper.source_upper();

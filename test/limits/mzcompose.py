@@ -179,7 +179,7 @@ class KafkaTopics(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -233,7 +233,7 @@ class KafkaSourcesSameTopic(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -285,7 +285,7 @@ class KafkaPartitions(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -341,7 +341,7 @@ class KafkaRecordsEnvelopeNone(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -390,7 +390,7 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -442,7 +442,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -494,7 +494,7 @@ class KafkaSinks(Generator):
             print(
                 dedent(
                     f"""
-                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
                      > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
                      > CREATE SINK s{i} FROM v{i}
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-{i}')
@@ -530,7 +530,7 @@ class KafkaSinksSameSource(Generator):
         )
         print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
         print(
-            """> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');"""
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);"""
         )
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}');"""
@@ -540,7 +540,7 @@ class KafkaSinksSameSource(Generator):
             print(
                 dedent(
                     f"""
-                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
                      > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
                      > CREATE SINK s{i} FROM v1
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-same-source-{i}')
@@ -1239,8 +1239,14 @@ class FilterSubqueries(Generator):
 
             > INSERT INTO t1 VALUES (1);
 
-            #Increase SQL timeout to 10 minutes (~5 should be enough).
-            $ set-sql-timeout duration=600s
+            # Increase SQL timeout to 10 minutes (~5 should be enough).
+            #
+            # Update: Now 15 minutes, not 10. This query appears to scale
+            # super-linear with COUNT. Here are timings for the first few
+            # multiples of 10 on a fresh staging env.
+            #
+            # 10: 200ms, 20: 375ms, 30: 1.5s, 40: 5.5s, 50: 16s, 60: 45s
+            $ set-sql-timeout duration=900s
 
             > SELECT * FROM t1 AS a1 WHERE {
                 " AND ".join(
@@ -1627,7 +1633,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
                          > CREATE CONNECTION IF NOT EXISTS kafka_conn
-                           TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                           TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
                          > CREATE CONNECTION IF NOT EXISTS csr_conn
                            FOR CONFLUENT SCHEMA REGISTRY

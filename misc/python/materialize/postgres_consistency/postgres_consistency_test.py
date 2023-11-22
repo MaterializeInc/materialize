@@ -21,7 +21,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 from materialize.output_consistency.execution.sql_executor import create_sql_executor
 from materialize.output_consistency.execution.sql_executors import SqlExecutors
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
-    InconsistencyIgnoreFilter,
+    GenericInconsistencyIgnoreFilter,
 )
 from materialize.output_consistency.input_data.scenarios.evaluation_scenario import (
     EvaluationScenario,
@@ -68,13 +68,13 @@ class PostgresConsistencyTest(OutputConsistencyTest):
         )
 
     def create_result_comparator(
-        self, ignore_filter: InconsistencyIgnoreFilter
+        self, ignore_filter: GenericInconsistencyIgnoreFilter
     ) -> ResultComparator:
         return PostgresResultComparator(ignore_filter)
 
     def create_inconsistency_ignore_filter(
         self, sql_executors: SqlExecutors
-    ) -> InconsistencyIgnoreFilter:
+    ) -> GenericInconsistencyIgnoreFilter:
         return PgInconsistencyIgnoreFilter()
 
     def create_evaluation_strategies(self) -> list[EvaluationStrategy]:

@@ -10,7 +10,7 @@
 $ kafka-create-topic topic=autospill
 
 > CREATE CONNECTION conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+  FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT
 
 > CREATE SOURCE autospill
   FROM KAFKA CONNECTION conn (TOPIC

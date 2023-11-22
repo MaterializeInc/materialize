@@ -1043,7 +1043,10 @@ impl LazyUnaryFunc for QuoteIdent {
             return Ok(Datum::Null);
         }
         let v = d.unwrap_str();
-        let i = mz_sql_parser::ast::Ident::from(v);
+        let i = mz_sql_parser::ast::Ident::new(v).map_err(|err| EvalError::InvalidIdentifier {
+            ident: v.to_string(),
+            detail: Some(err.to_string()),
+        })?;
         let r = temp_storage.push_string(i.to_string());
 
         Ok(Datum::String(r))

@@ -10,8 +10,14 @@
 //! Functionality for manually modifying and displaying the catalog contents. This is helpful for
 //! fixing a corrupt catalog.
 
+use mz_repr::Diff;
+use mz_stash::{Stash, TypedCollection};
+use serde::{Deserialize, Serialize};
+use serde_plain::{derive_display_from_serialize, derive_fromstr_from_deserialize};
+
 use crate::durable;
 use crate::durable::impls::persist::{PersistHandle, StateUpdateKind};
+use crate::durable::objects::serialization::proto;
 use crate::durable::{
     CatalogError, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
     CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
@@ -20,11 +26,6 @@ use crate::durable::{
     SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION,
     SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION, TIMESTAMP_COLLECTION,
 };
-use mz_repr::Diff;
-use mz_stash::{Stash, TypedCollection};
-use mz_stash_types::objects::proto;
-use serde::{Deserialize, Serialize};
-use serde_plain::{derive_display_from_serialize, derive_fromstr_from_deserialize};
 
 /// The contents of the catalog are logically separated into separate [`Collection`]s, which
 /// describe the category of data that the content belongs to.

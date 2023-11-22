@@ -29,6 +29,19 @@ steps:
           composition: sqllogictest
           run: sqllogictest
 
+  - id: sqllogictest-1-replica
+    label: ":bulb: SQL logic tests 1 replica %n"
+    timeout_in_minutes: 180
+    parallelism: 10
+    artifact_paths: junit_*.xml
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqllogictest
+          run: sqllogictest
+          args: [--replicas=1]
+
   - wait: ~
     continue_on_failure: true
 

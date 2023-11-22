@@ -66,7 +66,7 @@ impl StorageControllerMetrics {
         }
     }
 
-    pub fn set_startup_prepared_statements_kept(&mut self, n: u64) {
+    pub fn set_startup_prepared_statements_kept(&self, n: u64) {
         let n: i64 = n.try_into().expect("realistic number");
         self.startup_prepared_statements_kept.set(n);
     }

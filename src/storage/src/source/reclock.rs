@@ -390,6 +390,11 @@ where
             inner: Rc::clone(&self.inner),
         }
     }
+
+    /// The number of remap bindings in the trace
+    pub fn size(&self) -> usize {
+        self.inner.borrow().remap_trace.len()
+    }
 }
 
 impl<FromTime: Timestamp, IntoTime: Timestamp + Lattice + Display> Drop

@@ -23,7 +23,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::AvailableCollections;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
-use mz_repr::{ColumnType, DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena};
+use mz_repr::{ColumnType, DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -38,9 +38,10 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::arrangement::manager::SpecializedTraceHandle;
-use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::arrange::{HeapSize, KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinSpec;
+use crate::render::RenderTimestamp;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 
 // Local type definition to avoid the horror in signatures.
@@ -73,8 +74,8 @@ pub(crate) type ErrArrangementImport<S, T> = Arranged<
 /// of regions or iteration.
 pub struct Context<S: Scope, T = mz_repr::Timestamp>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// The scope within which all managed collections exist.
     ///
@@ -103,7 +104,7 @@ where
 
 impl<S: Scope> Context<S>
 where
-    S::Timestamp: Lattice + Refines<mz_repr::Timestamp>,
+    S::Timestamp: Lattice + Refines<mz_repr::Timestamp> + Columnation + HeapSize,
 {
     /// Creates a new empty Context.
     pub fn for_dataflow_in<Plan>(
@@ -133,8 +134,8 @@ where
 
 impl<S: Scope, T> Context<S, T>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// Insert a collection bundle by an identifier.
     ///
@@ -229,7 +230,7 @@ impl ShutdownToken {
 #[derive(Clone)]
 pub enum SpecializedArrangement<S: Scope>
 where
-    <S as ScopeParent>::Timestamp: Lattice,
+    <S as ScopeParent>::Timestamp: Lattice + Columnation,
 {
     RowUnit(KeyValArrangement<S, Row, ()>),
     RowRow(KeyValArrangement<S, Row, Row>),
@@ -237,7 +238,7 @@ where
 
 impl<S: Scope> SpecializedArrangement<S>
 where
-    <S as ScopeParent>::Timestamp: Lattice,
+    <S as ScopeParent>::Timestamp: Lattice + Columnation,
 {
     /// The scope of the underlying arrangement's stream.
     pub fn scope(&self) -> S {
@@ -292,7 +293,7 @@ where
         refuel: usize,
     ) -> timely::dataflow::Stream<S, I::Item>
     where
-        T: Timestamp + Lattice,
+        T: Timestamp + Lattice + Columnation,
         <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
         I: IntoIterator,
         I::Item: Data,
@@ -328,7 +329,7 @@ where
 
 impl<'a, S: Scope> SpecializedArrangement<Child<'a, S, S::Timestamp>>
 where
-    <S as ScopeParent>::Timestamp: Lattice,
+    <S as ScopeParent>::Timestamp: Lattice + Columnation,
 {
     /// Extracts the underlying arrangement flavor from a region.
     pub fn leave_region(&self) -> SpecializedArrangement<S> {
@@ -365,7 +366,7 @@ where
 #[derive(Clone)]
 pub enum SpecializedArrangementImport<S: Scope, T = mz_repr::Timestamp>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Columnation,
     <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
 {
     RowUnit(KeyValArrangementImport<S, Row, (), T>),
@@ -374,8 +375,8 @@ where
 
 impl<S: Scope, T> SpecializedArrangementImport<S, T>
 where
-    T: Timestamp + Lattice,
-    <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    <S as ScopeParent>::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// The scope of the underlying trace's stream.
     pub fn scope(&self) -> S {
@@ -466,7 +467,7 @@ where
 
 impl<'a, S: Scope, T> SpecializedArrangementImport<Child<'a, S, S::Timestamp>, T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Columnation,
     <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
 {
     /// Extracts the underlying arrangement flavor from a region.
@@ -486,8 +487,8 @@ where
 #[derive(Clone)]
 pub enum ArrangementFlavor<S: Scope, T = mz_repr::Timestamp>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// A dataflow-local arrangement.
     Local(SpecializedArrangement<S>, ErrArrangement<S>),
@@ -504,8 +505,8 @@ where
 
 impl<S: Scope, T> ArrangementFlavor<S, T>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// Presents `self` as a stream of updates.
     ///
@@ -513,10 +514,11 @@ where
     /// If you have logic that could be applied to each record, consider using the
     /// `flat_map` methods which allows this and can reduce the work done.
     pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
-        let mut row_buf = Row::default();
         match &self {
             ArrangementFlavor::Local(oks, errs) => (
                 oks.as_collection(move |borrow| {
+                    let binding = SharedRow::get();
+                    let mut row_buf = binding.borrow_mut();
                     row_buf.packer().extend(&**borrow);
                     row_buf.clone()
                 }),
@@ -524,6 +526,8 @@ where
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
                 oks.as_collection(move |borrow| {
+                    let binding = SharedRow::get();
+                    let mut row_buf = binding.borrow_mut();
                     row_buf.packer().extend(&**borrow);
                     row_buf.clone()
                 }),
@@ -578,8 +582,8 @@ where
 }
 impl<S: Scope, T> ArrangementFlavor<S, T>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> S {
@@ -606,8 +610,8 @@ where
 }
 impl<'a, S: Scope, T> ArrangementFlavor<Child<'a, S, S::Timestamp>, T>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// Extracts the arrangement flavor from a region.
     pub fn leave_region(&self) -> ArrangementFlavor<S, T> {
@@ -629,8 +633,8 @@ where
 #[derive(Clone)]
 pub struct CollectionBundle<S: Scope, T = mz_repr::Timestamp>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     pub collection: Option<(Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
@@ -638,8 +642,8 @@ where
 
 impl<S: Scope, T: Lattice> CollectionBundle<S, T>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
@@ -711,8 +715,8 @@ where
 
 impl<'a, S: Scope, T> CollectionBundle<Child<'a, S, S::Timestamp>, T>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// Extracts the collection bundle from a region.
     pub fn leave_region(&self) -> CollectionBundle<S, T> {
@@ -730,10 +734,10 @@ where
     }
 }
 
-impl<S: Scope, T: Lattice> CollectionBundle<S, T>
+impl<S: Scope, T> CollectionBundle<S, T>
 where
-    T: Timestamp + Lattice,
-    S::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice + Columnation,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// Asserts that the arrangement for a specific key
     /// (or the raw collection for no key) exists,
@@ -895,7 +899,7 @@ where
 
 impl<S, T> CollectionBundle<S, T>
 where
-    T: timely::progress::Timestamp + Lattice,
+    T: timely::progress::Timestamp + Lattice + Columnation,
     S: Scope,
     S::Timestamp:
         Refines<T> + Lattice + timely::progress::Timestamp + crate::render::RenderTimestamp,
@@ -936,13 +940,12 @@ where
             return self.as_specific_collection(key.as_deref());
         }
         let (stream, errors) = self.flat_map(key_val, || {
-            let mut row_builder = Row::default();
             let mut datum_vec = DatumVec::new();
             // Wrap in an `Rc` so that lifetimes work out.
             let until = std::rc::Rc::new(until);
             move |row_datums, time, diff| {
-                use crate::render::RenderTimestamp;
-
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let until = std::rc::Rc::clone(&until);
                 let temp_storage = RowArena::new();
                 let row_iter = row_datums.iter();
@@ -984,6 +987,18 @@ where
         let errs = errs.as_collection();
         (oks, errors.concat(&errs))
     }
+}
+
+impl<S, T> CollectionBundle<S, T>
+where
+    T: timely::progress::Timestamp + Lattice + Columnation,
+    S: Scope,
+    S::Timestamp: Refines<T>
+        + Lattice
+        + timely::progress::Timestamp
+        + crate::render::RenderTimestamp
+        + HeapSize,
+{
     pub fn ensure_collections(
         mut self,
         collections: AvailableCollections,

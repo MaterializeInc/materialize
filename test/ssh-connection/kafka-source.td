@@ -30,10 +30,10 @@ one
 # Test the various types of tunnels
 
 > CREATE CONNECTION kafka_conn_using
-  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION kafka_conn_dynamic
-  TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL thancred);
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, SSH TUNNEL thancred);
 
 # Create source with a faster metadata refresh interval so
 # errors are detected every second instead of every minute.

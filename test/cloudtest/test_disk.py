@@ -29,7 +29,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
                     SIZE '1', DISK = true
                 ))
 
-            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
+            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE SOURCE source1
               IN CLUSTER disk_cluster1
@@ -75,6 +75,6 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
         "--",
         "bash",
         "-c",
-        "ls /scratch",
+        "ls /scratch/storage/upsert",
     )
     assert source_global_id in on_disk_sources

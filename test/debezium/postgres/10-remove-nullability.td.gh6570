@@ -20,7 +20,7 @@ INSERT INTO alter_remove_nullability VALUES (123),(234);
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE alter_remove_nullability
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_remove_nullability')

@@ -45,6 +45,8 @@ REFERENCE_RE = re.compile(
     | @pytest.mark.skip
     # Used in output-consistency framework
     | YesIgnore
+    # Used in proto files
+    //\ buf\ breaking:\ ignore
     )
     """,
     re.VERBOSE | re.IGNORECASE,

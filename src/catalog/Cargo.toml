@@ -36,6 +36,7 @@ mz-stash = { path = "../stash" }
 mz-stash-types = { path = "../stash-types" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
+paste = "1.0.11"
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 prost = { version = "0.11.9" }
@@ -43,6 +44,7 @@ postgres-openssl = { version = "0.5.0" }
 serde = "1.0.152"
 serde_json = "1.0.89"
 serde_plain = "1.0.1"
+static_assertions = "1.1"
 sha2 = "0.10.6"
 timely = { version = "0.12.0", default-features = false }
 tracing = "0.1.37"
@@ -54,8 +56,17 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 insta = "1.32"
 mz-postgres-util = { path = "../postgres-util" }
 rand = "0.8.5"
+similar-asserts = "1.4"
 tokio = { version = "1.32.0" }
 tokio-postgres = { version = "0.7.8" }
+
+[build-dependencies]
+anyhow = "1.0.66"
+md-5 = "0.10.5"
+protobuf-src = "1.1.0"
+prost-build = "0.11.9"
+serde = "1.0.152"
+serde_json = "1.0.89"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

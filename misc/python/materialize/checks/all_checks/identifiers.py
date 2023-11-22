@@ -16,7 +16,8 @@ from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
-from materialize.util import MzVersion, naughty_strings
+from materialize.mz_version import MzVersion
+from materialize.util import naughty_strings
 
 
 def dq(ident: str) -> str:
@@ -104,7 +105,7 @@ class Identifiers(Check):
             $ kafka-ingest format=avro key-format=avro topic=sink-source-ident key-schema=${{keyschema}} schema=${{schema}} repeat=1000
             {{"key1": "U2${{kafka-ingest.iteration}}"}} {{"f1": "A${{kafka-ingest.iteration}}"}}
 
-            > CREATE CONNECTION IF NOT EXISTS {dq(self.ident["kafka_conn"])} FOR KAFKA BROKER '${{testdrive.kafka-addr}}';
+            > CREATE CONNECTION IF NOT EXISTS {dq(self.ident["kafka_conn"])} FOR KAFKA {self._kafka_broker()};
             > CREATE CONNECTION IF NOT EXISTS {dq(self.ident["csr_conn"])} FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
             > CREATE SOURCE {dq(self.ident["source"])}
               IN CLUSTER identifiers

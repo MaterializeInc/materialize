@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from random import Random
 
-from materialize import buildkite, git
+from materialize import docker
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
@@ -53,7 +53,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     name_mz_this, name_mz_other = "mz_this", "mz_other"
     port_mz_internal, port_mz_this, port_mz_other = 6875, 6875, 16875
-    tag_mz_other = resolve_other_mz_image_tag()
+    tag_mz_other = docker.resolve_ancestor_image_tag()
 
     print(f"Using {tag_mz_other} as tag for other mz version")
 
@@ -83,14 +83,3 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         test_summary = test.run_output_consistency_tests(connection, args)
 
         assert test_summary.all_passed(), "At least one test failed"
-
-
-def resolve_other_mz_image_tag() -> str:
-    if buildkite.is_on_default_branch():
-        latest_version = git.get_latest_version()
-        print(f"Using latest version ({latest_version}) for other mz")
-        return f"v{latest_version}"
-    else:
-        common_ancestor_commit = buildkite.get_merge_base()
-        print(f"Using merge base ({common_ancestor_commit}) for other mz")
-        return f"devel-{common_ancestor_commit}"

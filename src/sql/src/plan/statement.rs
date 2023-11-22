@@ -544,12 +544,12 @@ impl<'a> StatementContext<'a> {
         let database_spec = match full_name.database {
             RawDatabaseSpecifier::Ambient => ResolvedDatabaseSpecifier::Ambient,
             RawDatabaseSpecifier::Name(name) => ResolvedDatabaseSpecifier::Id(
-                self.resolve_database(&UnresolvedDatabaseName(Ident::new(name)))?
+                self.resolve_database(&UnresolvedDatabaseName(Ident::new(name)?))?
                     .id(),
             ),
         };
         let schema_spec = self
-            .resolve_schema_in_database(&database_spec, &Ident::new(full_name.schema))?
+            .resolve_schema_in_database(&database_spec, &Ident::new(full_name.schema)?)?
             .id()
             .clone();
         Ok(QualifiedItemName {
@@ -875,7 +875,7 @@ impl<'a> StatementContext<'a> {
         let mut columns = vec![];
         let mut null_cols = BTreeSet::new();
         for (column_name, column_type) in desc.iter() {
-            let name = Ident::new(column_name.as_str().to_owned());
+            let name = Ident::new(column_name.as_str().to_owned())?;
 
             let ty = mz_pgrepr::Type::from(&column_type.scalar_type);
             let data_type = self.resolve_type(ty)?;
@@ -936,6 +936,8 @@ impl<'a> StatementContext<'a> {
     /// if objects do not exist) so should never be used to handle user input.
     pub fn dangerous_resolve_name(&self, name: Vec<&str>) -> ResolvedItemName {
         tracing::trace!("dangerous_resolve_name {:?}", name);
+        // Note: Using unchecked here is okay because this function is already dangerous.
+        let name: Vec<_> = name.into_iter().map(Ident::new_unchecked).collect();
         let name = UnresolvedItemName::qualified(&name);
         let entry = match self.resolve_item(RawItemName::Name(name.clone())) {
             Ok(entry) => entry,

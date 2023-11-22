@@ -429,8 +429,7 @@ where
 
     let (_, transient_errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
-            let [cap]: &mut [_; 1] = caps.try_into().unwrap();
-            *cap = None;
+            let [cap_set]: &mut [_; 1] = caps.try_into().unwrap();
 
             let mut key_decoder = match key_encoding {
                 Some(encoding) => Some(
@@ -458,56 +457,61 @@ where
             let mut output_container = Vec::new();
 
             while let Some(event) = input.next().await {
-                let AsyncEvent::Data(cap, data) = event else {
-                    continue;
-                };
+                match event {
+                    AsyncEvent::Data(cap, data) => {
+                        let mut n_errors = 0;
+                        let mut n_successes = 0;
+                        for (output, ts, diff) in data.iter() {
+                            let SourceOutput {
+                                key,
+                                value,
+                                metadata,
+                                position_for_upsert: position,
+                            } = output;
 
-                let mut n_errors = 0;
-                let mut n_successes = 0;
-                for (output, ts, diff) in data.iter() {
-                    let SourceOutput {
-                        key,
-                        value,
-                        metadata,
-                        position_for_upsert: position,
-                    } = output;
+                            let key = match key_decoder.as_mut().zip(key.as_ref()) {
+                                Some((decoder, buf)) => {
+                                    decode_delimited(decoder, buf).await?.transpose()
+                                }
+                                None => None,
+                            };
 
-                    let key = match key_decoder.as_mut().zip(key.as_ref()) {
-                        Some((decoder, buf)) => decode_delimited(decoder, buf).await?.transpose(),
-                        None => None,
-                    };
+                            let value = match value.as_ref() {
+                                Some(buf) => {
+                                    decode_delimited(&mut value_decoder, buf).await?.transpose()
+                                }
+                                None => None,
+                            };
 
-                    let value = match value.as_ref() {
-                        Some(buf) => decode_delimited(&mut value_decoder, buf).await?.transpose(),
-                        None => None,
-                    };
+                            if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
+                                n_errors += 1;
+                            } else if matches!(&value, Some(Ok(_))) {
+                                n_successes += 1;
+                            }
 
-                    if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
-                        n_errors += 1;
-                    } else if matches!(&value, Some(Ok(_))) {
-                        n_successes += 1;
+                            let result = DecodeResult {
+                                key,
+                                value,
+                                position_for_upsert: *position,
+                                metadata: metadata.clone(),
+                            };
+                            output_container.push((result, ts.clone(), *diff));
+                        }
+
+                        // Matching historical practice, we only log metrics on the value decoder.
+                        if n_errors > 0 {
+                            value_decoder.log_errors(n_errors);
+                        }
+                        if n_successes > 0 {
+                            value_decoder.log_successes(n_successes);
+                        }
+
+                        output_handle
+                            .give_container(&cap, &mut output_container)
+                            .await;
                     }
-
-                    let result = DecodeResult {
-                        key,
-                        value,
-                        position_for_upsert: *position,
-                        metadata: metadata.clone(),
-                    };
-                    output_container.push((result, ts.clone(), *diff));
+                    AsyncEvent::Progress(frontier) => cap_set.downgrade(frontier.iter()),
                 }
-
-                // Matching historical practice, we only log metrics on the value decoder.
-                if n_errors > 0 {
-                    value_decoder.log_errors(n_errors);
-                }
-                if n_successes > 0 {
-                    value_decoder.log_successes(n_successes);
-                }
-
-                output_handle
-                    .give_container(&cap, &mut output_container)
-                    .await;
             }
 
             Ok(())

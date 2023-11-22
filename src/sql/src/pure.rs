@@ -30,7 +30,7 @@ use mz_sql_parser::ast::{
     CreateSinkConnection, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
     CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
     CsrSeedProtobufSchema, DbzMode, DeferredItemName, DocOnIdentifier, DocOnSchema, Envelope,
-    KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
+    Ident, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
     PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement,
     UnresolvedItemName,
 };
@@ -602,9 +602,9 @@ async fn purify_create_source(
                 ReferencedSubsources::All => {
                     for table in &publication_tables {
                         let upstream_name = UnresolvedItemName::qualified(&[
-                            &connection.database,
-                            &table.namespace,
-                            &table.name,
+                            Ident::new(&connection.database)?,
+                            Ident::new(&table.namespace)?,
+                            Ident::new(&table.name)?,
                         ]);
                         let subsource_name = subsource_name_gen(source_name, &table.name)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
@@ -641,11 +641,12 @@ async fn purify_create_source(
                         }
 
                         let upstream_name = UnresolvedItemName::qualified(&[
-                            &connection.database,
-                            &table.namespace,
-                            &table.name,
+                            Ident::new(&connection.database)?,
+                            Ident::new(&table.namespace)?,
+                            Ident::new(&table.name)?,
                         ]);
-                        let subsource_name = UnresolvedItemName::unqualified(&table.name);
+                        let subsource_name = Ident::new(&table.name)?;
+                        let subsource_name = UnresolvedItemName::unqualified(subsource_name);
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
@@ -815,19 +816,26 @@ async fn purify_create_source(
         },
         None => {
             let (item, prefix) = source_name.0.split_last().unwrap();
-            let mut suggested_name = prefix.to_vec();
-            suggested_name.push(format!("{}_progress", item).into());
+            let item_name = Ident::try_generate_name(item.to_string(), "_progress", |candidate| {
+                let mut suggested_name = prefix.to_vec();
+                suggested_name.push(candidate.clone());
 
-            let partial = normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
-            let qualified = scx.allocate_qualified_name(partial)?;
-            let found_name = scx.catalog.find_available_name(qualified);
-            let full_name = scx.catalog.resolve_full_name(&found_name);
+                let partial = normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
+                let qualified = scx.allocate_qualified_name(partial)?;
+                Ok::<_, PlanError>(!scx.item_exists(&qualified))
+            })?;
+
+            let mut full_name = prefix.to_vec();
+            full_name.push(item_name);
+            let full_name = normalize::unresolved_item_name(UnresolvedItemName(full_name))?;
+            let qualified_name = scx.allocate_qualified_name(full_name)?;
+            let full_name = scx.catalog.resolve_full_name(&qualified_name);
 
             (
                 UnresolvedItemName::from(full_name.clone()),
                 crate::names::ResolvedItemName::Item {
                     id: transient_id,
-                    qualifiers: found_name.qualifiers,
+                    qualifiers: qualified_name.qualifiers,
                     full_name,
                     print_id: true,
                 },
@@ -983,9 +991,9 @@ async fn purify_alter_source(
         let table_desc = &pg_source_connection.publication_details.tables[native_idx];
         current_subsources.insert(
             UnresolvedItemName(vec![
-                pg_connection.database.clone().into(),
-                table_desc.namespace.clone().into(),
-                table_desc.name.clone().into(),
+                Ident::new(pg_connection.database.clone())?,
+                Ident::new(table_desc.namespace.clone())?,
+                Ident::new(table_desc.name.clone())?,
             ]),
             native_idx,
         );
@@ -1048,9 +1056,9 @@ async fn purify_alter_source(
     for (i, table) in publication_tables.iter().enumerate() {
         new_name_to_output_map.insert(
             UnresolvedItemName(vec![
-                pg_connection.database.clone().into(),
-                table.namespace.clone().into(),
-                table.name.clone().into(),
+                Ident::new(pg_connection.database.clone())?,
+                Ident::new(table.namespace.clone())?,
+                Ident::new(table.name.clone())?,
             ]),
             i,
         );

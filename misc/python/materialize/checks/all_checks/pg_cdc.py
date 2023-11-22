@@ -12,8 +12,8 @@ from textwrap import dedent
 from typing import Any
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, disabled
-from materialize.util import MzVersion
+from materialize.checks.checks import Check, disabled, externally_idempotent
+from materialize.mz_version import MzVersion
 
 
 class PgCdcBase:
@@ -215,17 +215,20 @@ class PgCdcBase:
         )
 
 
+@externally_idempotent(False)
 class PgCdc(PgCdcBase, Check):
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         super().__init__(wait=True, base_version=base_version, rng=rng)
 
 
 @disabled("requires #18940 to be fixed")
+@externally_idempotent(False)
 class PgCdcNoWait(PgCdcBase, Check):
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         super().__init__(wait=False, base_version=base_version, rng=rng)
 
 
+@externally_idempotent(False)
 class PgCdcMzNow(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(

@@ -1,5 +1,41 @@
 # dbt-materialize Changelog
 
+## 1.7.0 - 2023-11-20
+
+* Support specifying the materialization type used to store test failures via
+  the new [`store_failures_as` configuration](https://docs.getdbt.com/reference/resource-configs/store_failures_as).
+  Accepted values: `materialized_view` (default), `view`, `ephemeral`.
+
+  * **Project level**
+  ```yaml
+  tests:
+    my_project:
+      +store_failures_as: view
+  ```
+
+  * **Model level**
+  ```yaml
+  models:
+    - name: my_model
+      columns:
+        - name: id
+          tests:
+            - not_null:
+                config:
+                  store_failures_as: view
+            - unique:
+                config:
+                  store_failures_as: ephemeral
+  ```
+
+  If both [`store_failures`](https://docs.getdbt.com/reference/resource-configs/store_failures)
+  and `store_failures_as` are specified, `store_failures_as` takes precedence.
+
+* Mark `dbt source freshness` as not supported. Materialize supports the
+  functionality required to enable column- and metadata-based source freshness
+  checks, but the value of this feature in a real-time data warehouse is
+  limited.
+
 ## 1.6.1 - 2023-11-03
 
 * Support the [`ASSERT NOT NULL` option](https://materialize.com/docs/sql/create-materialized-view/#non-null-assertions)

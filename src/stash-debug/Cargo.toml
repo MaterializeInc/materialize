@@ -1,7 +1,7 @@
 [package]
 name = "mz-stash-debug"
 description = "Durable metadata storage."
-version = "0.78.0-dev"
+version = "0.79.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -15,7 +15,6 @@ mz-catalog = { path = "../catalog" }
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore" }
 mz-tls-util = { path = "../tls-util" }
-mz-secrets = { path = "../secrets" }
 mz-sql = { path = "../sql" }
 mz-stash = { path = "../stash" }
 mz-storage-controller = { path = "../storage-controller" }

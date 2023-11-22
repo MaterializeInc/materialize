@@ -16,7 +16,7 @@
 //! Future and stream utilities.
 //!
 //! This module provides future and stream combinators that are missing from
-//! the [`futures`](futures) crate.
+//! the [`futures`] crate.
 
 use std::any::Any;
 use std::error::Error;

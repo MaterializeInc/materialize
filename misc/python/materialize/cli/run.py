@@ -172,7 +172,7 @@ def main() -> int:
             scratch = MZ_ROOT / "scratch"
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
-            for schema in ["consensus", "adapter", "storage"]:
+            for schema in ["consensus", "adapter", "tsoracle", "storage"]:
                 if args.reset:
                     _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
                 _run_sql(args.postgres, f"CREATE SCHEMA IF NOT EXISTS {schema}")
@@ -220,6 +220,7 @@ def main() -> int:
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",
+                f"--timestamp-oracle-url={args.postgres}?options=--search_path=tsoracle",
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
                 f"--environment-id={environment_id}",
                 "--bootstrap-role=materialize",
@@ -247,19 +248,6 @@ def main() -> int:
     else:
         raise UIError(f"unknown program {args.program}")
 
-    # NB[btv] - Hack to ensure that test results are sorted the same
-    # way as in CI.
-    #
-    # For most system parameters, we don't need to do this, as we can just
-    # use `ALTER SYSTEM` to set them to whatever we want within the SLT (or other)
-    # test itself. However, that doesn't work for `variable_length_row_encoding`,
-    # as it's only read once on startup and doesn't take effect until restart.
-    if os.environ.get("MZ_SYSTEM_PARAMETER_DEFAULT"):
-        os.environ[
-            "MZ_SYSTEM_PARAMETER_DEFAULT"
-        ] += ";variable_length_row_encoding=true"
-    else:
-        os.environ["MZ_SYSTEM_PARAMETER_DEFAULT"] = "variable_length_row_encoding=true"
     print(f"$ {' '.join(command)}")
     # We go through a dance here familiar to shell authors where both
     # the parent and child try to put the child into its own process

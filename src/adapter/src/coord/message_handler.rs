@@ -13,6 +13,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
+use futures::future::LocalBoxFuture;
+use futures::FutureExt;
 use mz_adapter_types::connection::ConnectionId;
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
@@ -30,7 +32,6 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::Command;
 use crate::coord::appends::Deferred;
-use crate::coord::sequencer::old_optimizer_api::{PeekStageDeprecated, PeekStageFinishDeprecated};
 use crate::coord::{
     Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
@@ -40,84 +41,100 @@ use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
-    pub(crate) async fn handle_message(&mut self, msg: Message) {
-        match msg {
-            Message::Command(cmd) => self.message_command(cmd).await,
-            Message::ControllerReady => {
-                if let Some(m) = self
-                    .controller
-                    .process()
-                    .await
-                    .expect("`process` never returns an error")
-                {
-                    self.message_controller(m).await
+    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
+    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
+    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    pub(crate) fn handle_message<'a>(&'a mut self, msg: Message) -> LocalBoxFuture<'a, ()> {
+        async move {
+            match msg {
+                Message::Command(cmd) => self.message_command(cmd).await,
+                Message::ControllerReady => {
+                    if let Some(m) = self
+                        .controller
+                        .process()
+                        .await
+                        .expect("`process` never returns an error")
+                    {
+                        self.message_controller(m).await
+                    }
+                }
+                Message::PurifiedStatementReady(ready) => {
+                    self.message_purified_statement_ready(ready).await
+                }
+                Message::CreateConnectionValidationReady(ready) => {
+                    self.message_create_connection_validation_ready(ready).await
+                }
+                Message::WriteLockGrant(write_lock_guard) => {
+                    self.message_write_lock_grant(write_lock_guard).await;
+                }
+                Message::GroupCommitInitiate(span, permit) => {
+                    // Add an OpenTelemetry link to our current span.
+                    tracing::Span::current().add_link(span.context().span().span_context().clone());
+                    self.try_group_commit(permit).instrument(span).await
+                }
+                Message::GroupCommitApply(
+                    timestamp,
+                    responses,
+                    write_lock_guard,
+                    notifies,
+                    permit,
+                ) => {
+                    self.group_commit_apply(
+                        timestamp,
+                        responses,
+                        write_lock_guard,
+                        notifies,
+                        permit,
+                    )
+                    .await;
+                }
+                Message::AdvanceTimelines => {
+                    self.advance_timelines().await;
+                }
+                Message::ClusterEvent(event) => self.message_cluster_event(event).await,
+                // Processing this message DOES NOT send a response to the client;
+                // in any situation where you use it, you must also have a code
+                // path that responds to the client (e.g. reporting an error).
+                Message::RemovePendingPeeks { conn_id } => {
+                    self.cancel_pending_peeks(&conn_id);
+                }
+                Message::LinearizeReads(pending_read_txns) => {
+                    self.message_linearize_reads(pending_read_txns).await;
+                }
+                Message::StorageUsageFetch => {
+                    self.storage_usage_fetch().await;
+                }
+                Message::StorageUsageUpdate(sizes) => {
+                    self.storage_usage_update(sizes).await;
+                }
+                Message::RealTimeRecencyTimestamp {
+                    conn_id,
+                    real_time_recency_ts,
+                    validity,
+                } => {
+                    self.message_real_time_recency_timestamp(
+                        conn_id,
+                        real_time_recency_ts,
+                        validity,
+                    )
+                    .await;
+                }
+                Message::RetireExecute { data, reason } => {
+                    self.retire_execution(reason, data);
+                }
+                Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
+                    self.sequence_execute_single_statement_transaction(ctx, stmt, params)
+                        .await;
+                }
+                Message::PeekStageReady { ctx, stage } => {
+                    self.sequence_peek_stage(ctx, stage).await;
+                }
+                Message::DrainStatementLog => {
+                    self.drain_statement_log().await;
                 }
             }
-            Message::PurifiedStatementReady(ready) => {
-                self.message_purified_statement_ready(ready).await
-            }
-            Message::CreateConnectionValidationReady(ready) => {
-                self.message_create_connection_validation_ready(ready).await
-            }
-            Message::WriteLockGrant(write_lock_guard) => {
-                self.message_write_lock_grant(write_lock_guard).await;
-            }
-            Message::GroupCommitInitiate(span, permit) => {
-                // Add an OpenTelemetry link to our current span.
-                tracing::Span::current().add_link(span.context().span().span_context().clone());
-                self.try_group_commit(permit).instrument(span).await
-            }
-            Message::GroupCommitApply(timestamp, responses, write_lock_guard, notifies, permit) => {
-                self.group_commit_apply(timestamp, responses, write_lock_guard, notifies, permit)
-                    .await;
-            }
-            Message::AdvanceTimelines => {
-                self.advance_timelines().await;
-            }
-            Message::ClusterEvent(event) => self.message_cluster_event(event).await,
-            // Processing this message DOES NOT send a response to the client;
-            // in any situation where you use it, you must also have a code
-            // path that responds to the client (e.g. reporting an error).
-            Message::RemovePendingPeeks { conn_id } => {
-                self.cancel_pending_peeks(&conn_id);
-            }
-            Message::LinearizeReads(pending_read_txns) => {
-                self.message_linearize_reads(pending_read_txns).await;
-            }
-            Message::StorageUsageFetch => {
-                self.storage_usage_fetch().await;
-            }
-            Message::StorageUsageUpdate(sizes) => {
-                self.storage_usage_update(sizes).await;
-            }
-            Message::RealTimeRecencyTimestamp {
-                conn_id,
-                real_time_recency_ts,
-                validity,
-            } => {
-                self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, validity)
-                    .await;
-            }
-            Message::RetireExecute { data, reason } => {
-                self.retire_execution(reason, data);
-            }
-            Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
-                self.sequence_execute_single_statement_transaction(ctx, stmt, params)
-                    .await;
-            }
-            Message::PeekStageReady { ctx, stage } => {
-                self.sequence_peek_stage(ctx, stage).await;
-            }
-            Message::PeekStageDeprecatedReady { ctx, stage } => {
-                // Allow while the introduction of the new optimizer API in
-                // #20569 is in progress.
-                #[allow(deprecated)]
-                self.sequence_peek_stage_deprecated(ctx, stage).await;
-            }
-            Message::DrainStatementLog => {
-                self.drain_statement_log().await;
-            }
         }
+        .boxed_local()
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -685,49 +702,6 @@ impl Coordinator {
                         real_time_recency_ts: Some(real_time_recency_ts),
                         optimizer,
                         global_mir_plan,
-                    }),
-                )
-                .await;
-            }
-            RealTimeRecencyContext::PeekDeprecated {
-                ctx,
-                finishing,
-                copy_to,
-                dataflow,
-                cluster_id,
-                when,
-                target_replica,
-                view_id,
-                index_id,
-                timeline_context,
-                source_ids,
-                in_immediate_multi_stmt_txn: _,
-                key,
-                typ,
-                dataflow_metainfo,
-            } => {
-                // Allow while the introduction of the new optimizer API in
-                // #20569 is in progress.
-                #[allow(deprecated)]
-                self.sequence_peek_stage_deprecated(
-                    ctx,
-                    PeekStageDeprecated::Finish(PeekStageFinishDeprecated {
-                        validity,
-                        finishing,
-                        copy_to,
-                        dataflow,
-                        cluster_id,
-                        id_bundle: None,
-                        when,
-                        target_replica,
-                        view_id,
-                        index_id,
-                        timeline_context,
-                        source_ids,
-                        real_time_recency_ts: Some(real_time_recency_ts),
-                        key,
-                        typ,
-                        dataflow_metainfo,
                     }),
                 )
                 .await;

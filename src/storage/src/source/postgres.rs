@@ -305,7 +305,8 @@ impl From<DefiniteError> for SourceReaderError {
 
 /// Ensures the replication slot of this connection is created.
 async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), TransientError> {
-    let slot = Ident::from(slot).to_ast_string();
+    // Note: Using unchecked here is okay because we're using it in a SQL query.
+    let slot = Ident::new_unchecked(slot).to_ast_string();
     let query = format!("CREATE_REPLICATION_SLOT {slot} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT");
     match simple_query_opt(client, &query).await {
         Ok(_) => Ok(()),
@@ -317,8 +318,8 @@ async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), Tran
     }
 }
 
-/// Fetches the minimum LSN at which this slot can safely resume.
-async fn fetch_slot_resume_lsn(client: &Client, slot: &str) -> Result<MzOffset, TransientError> {
+/// Fetches the minimum LSN for which all updates that happened beyond it exist in the slot.
+async fn fetch_slot_resume_upper(client: &Client, slot: &str) -> Result<MzOffset, TransientError> {
     loop {
         let query = format!(
             "SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{slot}'"

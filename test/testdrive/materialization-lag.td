@@ -42,7 +42,7 @@
   AS SELECT * FROM src_plus_tbl
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 > CREATE CONNECTION csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}')
 > CREATE SINK snk

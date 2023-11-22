@@ -461,10 +461,6 @@ impl PersistClient {
     }
 
     /// Creates and returns a [BatchFetcher] for the given shard id.
-    ///
-    /// The `_schema` parameter is currently unused, but should be an object
-    /// that represents the schema of the data in the shard. This will be required
-    /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
     pub async fn create_batch_fetcher<K, V, T, D>(
         &self,
@@ -1174,12 +1170,16 @@ mod tests {
             let shard_id1 = "s11111111-1111-1111-1111-111111111111"
                 .parse::<ShardId>()
                 .expect("invalid shard id");
-            let (_, read1) = client
-                .expect_open::<String, String, u64, i64>(shard_id1)
+            let fetcher1 = client
+                .create_batch_fetcher::<String, String, u64, i64>(
+                    shard_id1,
+                    Default::default(),
+                    Default::default(),
+                    Diagnostics::for_tests(),
+                )
                 .await;
-            let fetcher1 = read1.clone("").await.batch_fetcher().await;
             for batch in snap {
-                let (batch, res) = fetcher1.fetch_leased_part(batch).await;
+                let res = fetcher1.fetch_leased_part(&batch).await;
                 read0.process_returned_leased_part(batch);
                 assert_eq!(
                     res.unwrap_err(),

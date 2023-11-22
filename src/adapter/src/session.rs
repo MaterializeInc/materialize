@@ -46,6 +46,7 @@ use tokio::sync::watch;
 use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
 
+use crate::catalog::CatalogState;
 use crate::client::RecordFirstRowStream;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
@@ -236,7 +237,8 @@ impl<T: TimestampManipulation> Session<T> {
                 }
                 TransactionOps::None
                 | TransactionOps::Writes(_)
-                | TransactionOps::SingleStatement { .. } => false,
+                | TransactionOps::SingleStatement { .. }
+                | TransactionOps::DDL { .. } => false,
             };
 
             if read_write_prohibited && access == Some(TransactionAccessMode::ReadWrite) {
@@ -993,6 +995,17 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
+    /// Snapshot of the catalog that reflects DDL operations run in this transaction.
+    pub fn catalog_state(&self) -> Option<&CatalogState> {
+        match self.inner() {
+            Some(Transaction {
+                ops: TransactionOps::DDL { state, .. },
+                ..
+            }) => Some(state),
+            _ => None,
+        }
+    }
+
     /// Reports whether any operations have been executed as part of this transaction
     pub fn contains_ops(&self) -> bool {
         match self.inner() {
@@ -1091,6 +1104,26 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                     TransactionOps::SingleStatement { .. } => {
                         return Err(AdapterError::SingleStatementTransaction)
                     }
+                    TransactionOps::DDL {
+                        ops: og_ops,
+                        revision: og_revision,
+                        state: og_state,
+                    } => match add_ops {
+                        TransactionOps::DDL {
+                            ops: new_ops,
+                            revision: new_revision,
+                            state: new_state,
+                        } => {
+                            if *og_revision != new_revision {
+                                return Err(AdapterError::DDLTransactionRace);
+                            }
+                            if !new_ops.is_empty() {
+                                *og_ops = new_ops;
+                                *og_state = new_state;
+                            }
+                        }
+                        _ => return Err(AdapterError::DDLOnlyTransaction),
+                    },
                 }
             }
             TransactionStatus::Default | TransactionStatus::Failed(_) => {
@@ -1149,7 +1182,8 @@ impl<T> Transaction<T> {
             | TransactionOps::None
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_)
-            | TransactionOps::SingleStatement { .. } => None,
+            | TransactionOps::SingleStatement { .. }
+            | TransactionOps::DDL { .. } => None,
         }
     }
 
@@ -1160,7 +1194,8 @@ impl<T> Transaction<T> {
             TransactionOps::None
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_)
-            | TransactionOps::SingleStatement { .. } => None,
+            | TransactionOps::SingleStatement { .. }
+            | TransactionOps::DDL { .. } => None,
         }
     }
 
@@ -1242,6 +1277,15 @@ pub enum TransactionOps<T> {
         /// The statement params.
         params: mz_sql::plan::Params,
     },
+    /// This transaction has run some _simple_ DDL and must do nothing else.
+    DDL {
+        /// Catalog operations that have already run, and must run before each subsequent op.
+        ops: Vec<crate::catalog::Op>,
+        /// In-memory state that reflects the previously applied ops.
+        state: CatalogState,
+        /// Transient revision of the `Catalog` when this transaction started.
+        revision: u64,
+    },
 }
 
 impl<T> TransactionOps<T> {
@@ -1251,7 +1295,8 @@ impl<T> TransactionOps<T> {
             TransactionOps::None
             | TransactionOps::Subscribe
             | TransactionOps::Writes(_)
-            | TransactionOps::SingleStatement { .. } => None,
+            | TransactionOps::SingleStatement { .. }
+            | TransactionOps::DDL { .. } => None,
         }
     }
 }

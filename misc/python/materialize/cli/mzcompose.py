@@ -34,12 +34,12 @@ from typing import IO, Any
 
 import junit_xml
 from humanize import naturalsize
+from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
 from materialize.mzcompose.composition import Composition, UnknownCompositionError
 from materialize.ui import UIError
 
-MIN_COMPOSE_VERSION = (2, 6, 0)
 RECOMMENDED_MIN_MEM = 8 * 1024**3  # 8GiB
 RECOMMENDED_MIN_CPUS = 2
 
@@ -82,6 +82,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
         metavar="PROJECT_NAME",
         help="Use a different project name than the directory name",
     )
+    parser.add_argument("--ignore-docker-version", action="store_true")
     mzbuild.Repository.install_arguments(parser)
 
     # Docker Compose arguments that we explicitly ban. Since we don't support
@@ -142,6 +143,30 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
 
 def load_composition(args: argparse.Namespace) -> Composition:
     """Loads the composition specified by the command-line arguments."""
+    if not args.ignore_docker_version:
+        docker_local_version = Version.parse(
+            spawn.capture(["docker", "--version"])
+            .removeprefix("Docker version ")
+            .split(", ")[0]
+        )
+        docker_ci_version = Version.parse("24.0.5")
+        if docker_local_version < docker_ci_version:
+            raise UIError(
+                f"Your Docker version is {docker_local_version} while the version used in CI is {docker_ci_version}, please upgrade your local Docker version to prevent unexpected breakages.",
+                hint="If you believe this is a mistake, contact the QA team. While not recommended, --ignore-docker-version can be used to ignore this version check.",
+            )
+
+        compose_local_version = Version.parse(
+            spawn.capture(["docker", "compose", "version", "--short"])
+        )
+        compose_ci_version = Version.parse("2.15.1")
+        if compose_local_version < compose_ci_version:
+            raise UIError(
+                f"Your Docker Compose version is {compose_local_version} while the version used in CI is {compose_ci_version}, please upgrade your local Docker Compose version to prevent unexpected breakages.",
+                hint="If you believe this is a mistake, contact the QA team. While not recommended, --ignore-docker-version can be used to ignore this version check.",
+            )
+            sys.exit(1)
+
     repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
     try:
         return Composition(
@@ -407,24 +432,6 @@ class DockerComposeCommand(Command):
                 output += self.help_epilog
             print(output, file=sys.stderr)
             return
-
-        # Make sure Docker Compose is new enough.
-        output = (
-            self.capture(
-                ["docker", "compose", "version", "--short"], stderr=subprocess.STDOUT
-            )
-            .strip()
-            .strip("v")
-            .split("+")[0]
-            # remove suffix like "-desktop.1"
-            .split("-")[0]
-        )
-        version = tuple(int(i) for i in output.split("."))
-        if version < MIN_COMPOSE_VERSION:
-            raise UIError(
-                f"unsupported docker compose version v{output}",
-                hint=f"minimum version allowed: v{'.'.join(str(p) for p in MIN_COMPOSE_VERSION)}",
-            )
 
         composition = load_composition(args)
         ui.header("Collecting mzbuild images")

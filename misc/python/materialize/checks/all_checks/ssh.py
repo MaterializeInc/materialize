@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 
 
@@ -17,6 +17,7 @@ def schemas() -> str:
     return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
+@externally_idempotent(False)
 class SshPg(Check):
     """
     Testing Postgres CDC source with SSH tunnel
@@ -123,6 +124,7 @@ class SshPg(Check):
         )
 
 
+@externally_idempotent(False)
 class SshKafka(Check):
     """
     Testing Kafka source with SSH tunnel
@@ -138,8 +140,10 @@ class SshKafka(Check):
                 $ kafka-ingest topic=ssh1 format=bytes
                 one
 
-                > CREATE CONNECTION kafka_conn_ssh1
+                >[version<7800] CREATE CONNECTION kafka_conn_ssh1
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                >[version>=7800] CREATE CONNECTION kafka_conn_ssh1
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh1
                   FROM KAFKA CONNECTION kafka_conn_ssh1 (TOPIC 'testdrive-ssh1-${testdrive.seed}')
@@ -154,8 +158,10 @@ class SshKafka(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
-                > CREATE CONNECTION kafka_conn_ssh2
+                >[version<7800] CREATE CONNECTION kafka_conn_ssh2
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                >[version>=7800] CREATE CONNECTION kafka_conn_ssh2
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh2
                   FROM KAFKA CONNECTION kafka_conn_ssh2 (TOPIC 'testdrive-ssh2-${testdrive.seed}')
@@ -169,8 +175,10 @@ class SshKafka(Check):
                 two
                 """,
                 """
-                > CREATE CONNECTION kafka_conn_ssh3
+                >[version<7800] CREATE CONNECTION kafka_conn_ssh3
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                >[version>=7800] CREATE CONNECTION kafka_conn_ssh3
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh3
                   FROM KAFKA CONNECTION kafka_conn_ssh3 (TOPIC 'testdrive-ssh3-${testdrive.seed}')

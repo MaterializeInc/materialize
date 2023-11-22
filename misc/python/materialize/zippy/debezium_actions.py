@@ -12,6 +12,7 @@ import random
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.debezium_capabilities import (
     DebeziumRunning,
     DebeziumSourceExists,
@@ -53,7 +54,13 @@ class CreateDebeziumSource(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MzIsRunning, StoragedRunning, KafkaRunning, PostgresTableExists}
+        return {
+            BalancerdIsRunning,
+            MzIsRunning,
+            StoragedRunning,
+            KafkaRunning,
+            PostgresTableExists,
+        }
 
     def __init__(self, capabilities: Capabilities) -> None:
         # To avoid conflicts, we make sure the postgres table and the debezium source have matching names
@@ -118,7 +125,7 @@ class CreateDebeziumSource(Action):
 
                     $ schema-registry-wait subject=postgres.public.{self.postgres_table.name}-value
 
-                    > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                    > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
                     > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
