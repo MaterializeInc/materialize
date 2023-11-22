@@ -693,7 +693,7 @@ mod tests {
     /// bug that looks like an incorrect usage).
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
-    #[should_panic(expected = "assertion failed")]
+    #[should_panic(expected = "left: [(\"foo\", 2, 1)]\n right: [(\"foo\", 2, 2)]")]
     async fn incorrect_usage_register_write_same_time() {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
