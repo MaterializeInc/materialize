@@ -25,7 +25,7 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
     RowSetFinishing,
 };
-use mz_ore::collections::CollectionExt;
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert, task};
@@ -1254,9 +1254,26 @@ impl Coordinator {
         plan::DropObjectsPlan {
             drop_ids,
             object_type,
-            referenced_ids: _,
+            referenced_ids,
         }: plan::DropObjectsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let referenced_ids_hashset = referenced_ids.iter().collect::<HashSet<_>>();
+        let mut objects = Vec::new();
+        for obj_id in &drop_ids {
+            if !referenced_ids_hashset.contains(obj_id) {
+                let object_info = ErrorMessageObjectDescription::from_id(
+                    obj_id,
+                    &self.catalog().for_session(session),
+                )
+                .to_string();
+                objects.push(object_info);
+            }
+        }
+
+        if !objects.is_empty() {
+            session.add_notice(AdapterNotice::CascadeDroppedObject { objects });
+        }
+
         let DropOps {
             ops,
             dropped_active_db,
@@ -1304,7 +1321,7 @@ impl Coordinator {
                 if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
                     let grantor_name = catalog.get_role(&privilege.grantor).name();
                     let object_description =
-                        ErrorMessageObjectDescription::from_id(object_id, catalog);
+                        ErrorMessageObjectDescription::from_sys_id(object_id, catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
@@ -1315,7 +1332,7 @@ impl Coordinator {
                 if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
                     let grantee_name = catalog.get_role(&privilege.grantee).name();
                     let object_description =
-                        ErrorMessageObjectDescription::from_id(object_id, catalog);
+                        ErrorMessageObjectDescription::from_sys_id(object_id, catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
@@ -1331,7 +1348,7 @@ impl Coordinator {
         for entry in self.catalog.entries() {
             let id = SystemObjectId::Object(entry.id().into());
             if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
-                let object_description = ErrorMessageObjectDescription::from_id(&id, &catalog);
+                let object_description = ErrorMessageObjectDescription::from_sys_id(&id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
@@ -1349,7 +1366,7 @@ impl Coordinator {
             let database_id = SystemObjectId::Object(database.id().into());
             if let Some(role_name) = dropped_roles.get(&database.owner_id) {
                 let object_description =
-                    ErrorMessageObjectDescription::from_id(&database_id, &catalog);
+                    ErrorMessageObjectDescription::from_sys_id(&database_id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
@@ -1368,7 +1385,7 @@ impl Coordinator {
                 );
                 if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
                     let object_description =
-                        ErrorMessageObjectDescription::from_id(&schema_id, &catalog);
+                        ErrorMessageObjectDescription::from_sys_id(&schema_id, &catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
@@ -1387,7 +1404,7 @@ impl Coordinator {
             let cluster_id = SystemObjectId::Object(cluster.id().into());
             if let Some(role_name) = dropped_roles.get(&cluster.owner_id) {
                 let object_description =
-                    ErrorMessageObjectDescription::from_id(&cluster_id, &catalog);
+                    ErrorMessageObjectDescription::from_sys_id(&cluster_id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
@@ -1405,7 +1422,7 @@ impl Coordinator {
                     let replica_id =
                         SystemObjectId::Object((replica.cluster_id(), replica.replica_id()).into());
                     let object_description =
-                        ErrorMessageObjectDescription::from_id(&replica_id, &catalog);
+                        ErrorMessageObjectDescription::from_sys_id(&replica_id, &catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
@@ -1479,7 +1496,7 @@ impl Coordinator {
                 .collect();
             for invalid_revoke in invalid_revokes {
                 let object_description =
-                    ErrorMessageObjectDescription::from_id(&invalid_revoke, &session_catalog);
+                    ErrorMessageObjectDescription::from_sys_id(&invalid_revoke, &session_catalog);
                 session.add_notice(AdapterNotice::CannotRevoke { object_description });
             }
         }
@@ -5242,7 +5259,7 @@ impl Coordinator {
                 let non_applicable_privileges = acl_mode.difference(applicable_privileges);
                 if !non_applicable_privileges.is_empty() {
                     let object_description =
-                        ErrorMessageObjectDescription::from_id(&target_id, &catalog);
+                        ErrorMessageObjectDescription::from_sys_id(&target_id, &catalog);
                     warnings.push(AdapterNotice::NonApplicablePrivilegeTypes {
                         non_applicable_privileges,
                         object_description,

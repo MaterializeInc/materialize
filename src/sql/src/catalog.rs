@@ -1407,38 +1407,42 @@ pub enum ErrorMessageObjectDescription {
 }
 
 impl ErrorMessageObjectDescription {
-    /// Generate a new [`ErrorMessageObjectDescription`] from a [`SystemObjectId`].
+    /// Generate a new [`ErrorMessageObjectDescription`] from an [`ObjectId`].
     pub fn from_id(
+        object_id: &ObjectId,
+        catalog: &dyn SessionCatalog,
+    ) -> ErrorMessageObjectDescription {
+        let object_name = match object_id {
+            ObjectId::Cluster(cluster_id) => catalog.get_cluster(*cluster_id).name().to_string(),
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => catalog
+                .get_cluster_replica(*cluster_id, *replica_id)
+                .name()
+                .to_string(),
+            ObjectId::Database(database_id) => catalog.get_database(database_id).name().to_string(),
+            ObjectId::Schema((database_spec, schema_spec)) => {
+                let name = catalog.get_schema(database_spec, schema_spec).name();
+                catalog.resolve_full_schema_name(name).to_string()
+            }
+            ObjectId::Role(role_id) => catalog.get_role(role_id).name().to_string(),
+            ObjectId::Item(id) => {
+                let name = catalog.get_item(id).name();
+                catalog.resolve_full_name(name).to_string()
+            }
+        };
+        ErrorMessageObjectDescription::Object {
+            object_type: catalog.get_object_type(object_id),
+            object_name: Some(object_name),
+        }
+    }
+
+    /// Generate a new [`ErrorMessageObjectDescription`] from a [`SystemObjectId`].
+    pub fn from_sys_id(
         object_id: &SystemObjectId,
         catalog: &dyn SessionCatalog,
     ) -> ErrorMessageObjectDescription {
         match object_id {
             SystemObjectId::Object(object_id) => {
-                let object_name = match object_id {
-                    ObjectId::Cluster(cluster_id) => {
-                        catalog.get_cluster(*cluster_id).name().to_string()
-                    }
-                    ObjectId::ClusterReplica((cluster_id, replica_id)) => catalog
-                        .get_cluster_replica(*cluster_id, *replica_id)
-                        .name()
-                        .to_string(),
-                    ObjectId::Database(database_id) => {
-                        catalog.get_database(database_id).name().to_string()
-                    }
-                    ObjectId::Schema((database_spec, schema_spec)) => {
-                        let name = catalog.get_schema(database_spec, schema_spec).name();
-                        catalog.resolve_full_schema_name(name).to_string()
-                    }
-                    ObjectId::Role(role_id) => catalog.get_role(role_id).name().to_string(),
-                    ObjectId::Item(id) => {
-                        let name = catalog.get_item(id).name();
-                        catalog.resolve_full_name(name).to_string()
-                    }
-                };
-                ErrorMessageObjectDescription::Object {
-                    object_type: catalog.get_object_type(object_id),
-                    object_name: Some(object_name),
-                }
+                ErrorMessageObjectDescription::from_id(object_id, catalog)
             }
             SystemObjectId::System => ErrorMessageObjectDescription::System,
         }
