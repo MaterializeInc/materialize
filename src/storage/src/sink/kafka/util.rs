@@ -283,6 +283,9 @@ pub async fn publish_schemas(
 
 /// Ensures that the Kafka sink's data and consistency collateral exist.
 ///
+/// Out of convenience, we also return the most recent timestamp persisted to
+/// the consistency collateral because we use it in this function.
+///
 /// # Errors
 /// - If the [`KafkaSinkConnection`]'s consistency collateral exists and
 ///   contains data for this sink, but the sink's data topic does not exist.
@@ -290,66 +293,70 @@ pub async fn build_kafka(
     sink_id: mz_repr::GlobalId,
     connection: &KafkaSinkConnection,
     connection_cx: &ConnectionContext,
-) -> Result<(), ContextCreationError> {
+) -> Result<Option<Timestamp>, ContextCreationError> {
     let client: AdminClient<_> = connection
         .connection
         .create_with_context(connection_cx, MzClientContext::default(), &BTreeMap::new())
         .await
         .add_context("creating admin client failed")?;
 
-    // Check for existence of progress topic; if it exists and contains data for
-    // this sink, we expect the data topic to exist, as well. Note that we don't
-    // expect the converse to be true because we don't want to prevent users
-    // from creating topics before setting up their sinks.
-    let meta = client
-        .inner()
-        .fetch_metadata(None, Duration::from_secs(10))
-        .check_ssh_status(client.inner().context())
-        .add_context("fetching metadata")?;
-
-    // Check if the broker's metadata already contains the progress topic.
-    let progress_topic = match &connection.consistency_config {
+    let latest_ts = match &connection.consistency_config {
         KafkaConsistencyConfig::Progress { topic } => {
-            meta.topics().iter().find(|t| t.name() == topic)
+            ensure_kafka_topic(
+                &client,
+                topic,
+                1,
+                connection.replication_factor,
+                KafkaSinkConnectionRetention::default(),
+            )
+            .await
+            .check_ssh_status(client.inner().context())
+            .add_context("error registering kafka consistency topic for sink")?;
+
+            let progress_client: BaseConsumer<_> = connection
+                .connection
+                .create_with_context(
+                    connection_cx,
+                    MzClientContext::default(),
+                    &btreemap! {
+                        "group.id" => SinkGroupId::new(sink_id),
+                        "isolation.level" => "read_committed".into(),
+                        "enable.auto.commit" => "false".into(),
+                        "auto.offset.reset" => "earliest".into(),
+                        "enable.partition.eof" => "true".into(),
+                    },
+                )
+                .await?;
+
+            let progress_client = Arc::new(progress_client);
+            let latest_ts = determine_latest_progress_record(
+                format!("build_kafka_{}", sink_id),
+                topic.to_string(),
+                ProgressKey::new(sink_id),
+                Arc::clone(&progress_client),
+            )
+            .await
+            .check_ssh_status(progress_client.client().context())?;
+
+            // Check for existence of progress topic; if it exists and contains data for
+            // this sink, we expect the data topic to exist, as well. Note that we don't
+            // expect the converse to be true because we don't want to prevent users
+            // from creating topics before setting up their sinks.
+            let meta = client
+                .inner()
+                .fetch_metadata(None, Duration::from_secs(10))
+                .check_ssh_status(client.inner().context())
+                .add_context("fetching metadata")?;
+
+            if latest_ts.is_some() && !meta.topics().iter().any(|t| t.name() == connection.topic) {
+                Err(anyhow::anyhow!(
+                    "sink progress data exists, but sink data topic is missing"
+                ))?;
+            }
+
+            latest_ts
         }
     };
-
-    // If the consistency topic exists, check to see if it contains this sink's
-    // data.
-    if let Some(progress_topic) = progress_topic {
-        let progress_client: BaseConsumer<_> = connection
-            .connection
-            .create_with_context(
-                connection_cx,
-                MzClientContext::default(),
-                &btreemap! {
-                    "group.id" => SinkGroupId::new(sink_id),
-                    "isolation.level" => "read_committed".into(),
-                    "enable.auto.commit" => "false".into(),
-                    "auto.offset.reset" => "earliest".into(),
-                    "enable.partition.eof" => "true".into(),
-                },
-            )
-            .await?;
-
-        let progress_client = Arc::new(progress_client);
-        let latest_ts = determine_latest_progress_record(
-            format!("build_kafka_{}", sink_id),
-            progress_topic.name().to_string(),
-            ProgressKey::new(sink_id),
-            Arc::clone(&progress_client),
-        )
-        .await
-        .check_ssh_status(progress_client.client().context())?;
-
-        // If we have progress data, we should have the topic listed in the
-        // broker's metadata. If we don't, error.
-        if latest_ts.is_some() && !meta.topics().iter().any(|t| t.name() == connection.topic) {
-            Err(anyhow::anyhow!(
-                "sink progress data exists, but sink data topic is missing"
-            ))?
-        }
-    }
 
     // Create Kafka topic.
     ensure_kafka_topic(
@@ -363,20 +370,7 @@ pub async fn build_kafka(
     .check_ssh_status(client.inner().context())
     .add_context("error registering kafka topic for sink")?;
 
-    match &connection.consistency_config {
-        KafkaConsistencyConfig::Progress { topic } => ensure_kafka_topic(
-            &client,
-            topic,
-            1,
-            connection.replication_factor,
-            KafkaSinkConnectionRetention::default(),
-        )
-        .await
-        .check_ssh_status(client.inner().context())
-        .add_context("error registering kafka consistency topic for sink")?,
-    };
-
-    Ok(())
+    Ok(latest_ts)
 }
 
 #[derive(Serialize, Deserialize)]

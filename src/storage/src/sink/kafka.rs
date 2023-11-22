@@ -718,7 +718,11 @@ where
             handle: Mutex::new(health_output),
         };
 
-        let _ = halt_on_err(
+        // Note that where this lies in the rendering cycle means that we might
+        // create the collateral topics each time the sink is rendered, e.g. if
+        // the broker's admin deleted the progress and data topics. For more
+        // details, see `mz_storage_client::sink::build_kafka`.
+        let latest_ts = halt_on_err(
             &healthchecker,
             util::build_kafka(id, &connection, &connection_context).await,
             None,
@@ -745,17 +749,6 @@ where
         )
         .await;
 
-        let latest_ts = util::determine_latest_progress_record(
-            s.name.clone(),
-            s.progress_topic.clone(),
-            s.progress_key.clone(),
-            s.progress_client
-                .take()
-                .expect("Claiming just-created progress client"),
-        )
-        .await;
-
-        let latest_ts = s.halt_on_err(latest_ts).await;
         info!(
             "{}: initial as_of: {:?}, latest progress record: {:?}",
             s.name, as_of.frontier, latest_ts
@@ -1014,11 +1007,6 @@ where
 
         // Ensure that Kafka collateral exists. While this looks somewhat
         // innocuous, this step is why this must be an async operator.
-        //
-        // Also note that where this lies in the rendering cycle means that we
-        // might create the collateral topics each time the sink is rendered,
-        // e.g. if the broker's admin deleted the progress and data topics. For
-        // more details, see `mz_storage_client::sink::build_kafka`.
         let healthchecker = HealthOutputHandle {
             health_cap,
             handle: Mutex::new(health_output),
