@@ -69,6 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::Neg;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -109,7 +110,7 @@ use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
-use mz_sql::session::vars::ConnectionCounter;
+use mz_sql::session::vars::{self, ConnectionCounter};
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
@@ -139,6 +140,9 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
+use crate::coord::timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
+};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -488,6 +492,7 @@ impl PlanValidity {
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    pub timestamp_oracle_url: Option<String>,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,
@@ -1008,6 +1013,9 @@ pub struct Coordinator {
     /// Coordinator metrics.
     metrics: Metrics,
 
+    /// For registering new metrics.
+    timestamp_oracle_metrics: Arc<timestamp_oracle::metrics::Metrics>,
+
     /// Tracing handle.
     tracing_handle: TracingHandle,
 
@@ -1016,6 +1024,14 @@ pub struct Coordinator {
 
     /// Limit for how many conncurrent webhook requests we allow.
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
+
+    /// Implementation of
+    /// [`TimestampOracle`](crate::coord::timestamp_oracle::TimestampOracle) to
+    /// use.
+    timestamp_oracle_impl: vars::TimestampOracleImpl,
+
+    /// Postgres connection URL for the Postgres/CRDB-backed timestamp oracle.
+    timestamp_oracle_url: Option<String>,
 }
 
 impl Coordinator {
@@ -2137,6 +2153,7 @@ pub fn serve(
     Config {
         dataflow_client,
         storage,
+        timestamp_oracle_url,
         unsafe_mode,
         all_features,
         build_info,
@@ -2231,13 +2248,27 @@ pub fn serve(
         let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
         let handle = TokioHandle::current();
 
-        let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
         let metrics = Metrics::register_into(&metrics_registry);
         let metrics_clone = metrics.clone();
+        let timestamp_oracle_metrics =
+            Arc::new(timestamp_oracle::metrics::Metrics::new(&metrics_registry));
         let segment_client_clone = segment_client.clone();
         let span = tracing::Span::current();
         let coord_now = now.clone();
         let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
+
+        // We get the timestamp oracle impl once on startup, to ensure that it
+        // doesn't change in between when the system var changes: all oracles must
+        // use the same impl!
+        let timestamp_oracle_impl = catalog.system_config().timestamp_oracle_impl();
+
+        let initial_timestamps = get_initial_oracle_timestamps(
+            &catalog,
+            &timestamp_oracle_url,
+            &timestamp_oracle_metrics,
+        )
+        .await?;
+
         let thread = thread::Builder::new()
             // The Coordinator thread tends to keep a lot of data on its stack. To
             // prevent a stack overflow we allocate a stack three times as big as the default
@@ -2256,7 +2287,10 @@ pub fn serve(
                         &timeline,
                         initial_timestamp,
                         coord_now.clone(),
+                        timestamp_oracle_impl,
                         persistence,
+                        timestamp_oracle_url.clone(),
+                        &timestamp_oracle_metrics,
                         &mut timestamp_oracles,
                     ));
                 }
@@ -2294,9 +2328,12 @@ pub fn serve(
                     storage_usage_collection_interval,
                     segment_client,
                     metrics,
+                    timestamp_oracle_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(),
                     webhook_concurrency_limit,
+                    timestamp_oracle_impl,
+                    timestamp_oracle_url,
                 };
                 let bootstrap = handle.block_on(async {
                     coord
@@ -2352,4 +2389,77 @@ pub fn serve(
         }
     }
     .boxed()
+}
+
+// While we have two implementations of TimestampOracle (catalog-backed and
+// postgres/crdb-backed), we determine the highest timestamp for each timeline
+// on bootstrap, to initialize the currently-configured oracle. This mostly
+// works, but there can be linearizability violations, because there is no
+// central moment where do distributed coordination for both oracle types.
+// Working around this seems prohibitively hard, maybe even impossible so we
+// have to live with this window of potential violations during the upgrade
+// window (which is the only point where we should switch oracle
+// implementations).
+//
+// NOTE: We can remove all this code, including the pre-existing code below that
+// initializes oracles on bootstrap, once we have fully migrated to the new
+// postgres/crdb-backed oracle.
+async fn get_initial_oracle_timestamps(
+    catalog: &Catalog,
+    pg_timestamp_oracle_url: &Option<String>,
+    timestamp_oracle_metrics: &Arc<timestamp_oracle::metrics::Metrics>,
+) -> Result<BTreeMap<Timeline, Timestamp>, AdapterError> {
+    let catalog_oracle_timestamps = catalog.get_all_persisted_timestamps().await?;
+    let debug_msg = || {
+        catalog_oracle_timestamps
+            .iter()
+            .map(|(timeline, ts)| format!("{:?} -> {}", timeline, ts))
+            .join(", ")
+    };
+    info!(
+        "current timestamps from the catalog-backed timestamp oracle: {}",
+        debug_msg()
+    );
+
+    let mut initial_timestamps = catalog_oracle_timestamps;
+    if let Some(timestamp_oracle_url) = pg_timestamp_oracle_url {
+        let oracle_config = PostgresTimestampOracleConfig::new(
+            timestamp_oracle_url,
+            Arc::clone(timestamp_oracle_metrics),
+        );
+        let postgres_oracle_timestamps =
+            PostgresTimestampOracle::<NowFn>::get_all_timelines(oracle_config).await?;
+
+        let debug_msg = || {
+            postgres_oracle_timestamps
+                .iter()
+                .map(|(timeline, ts)| format!("{:?} -> {}", timeline, ts))
+                .join(", ")
+        };
+        info!(
+            "current timestamps from the postgres-backed timestamp oracle: {}",
+            debug_msg()
+        );
+
+        for (timeline, ts) in postgres_oracle_timestamps {
+            let entry = initial_timestamps
+                .entry(Timeline::from_str(&timeline).expect("could not parse timeline"));
+
+            entry
+                .and_modify(|current_ts| *current_ts = std::cmp::max(*current_ts, ts))
+                .or_insert(ts);
+        }
+    } else {
+        info!("no postgres url for postgres-backed timestamp oracle configured!");
+    };
+
+    let debug_msg = || {
+        initial_timestamps
+            .iter()
+            .map(|(timeline, ts)| format!("{:?}: {}", timeline, ts))
+            .join(", ")
+    };
+    info!("initial oracle timestamps: {}", debug_msg());
+
+    Ok(initial_timestamps)
 }

@@ -687,6 +687,13 @@ const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
+const TIMESTAMP_ORACLE_IMPL: ServerVar<TimestampOracleImpl> = ServerVar {
+    name: UncasedStr::new("timestamp_oracle"),
+    value: &TimestampOracleImpl::Catalog,
+    description: "Backing implementation of TimestampOracle.",
+    internal: true,
+};
+
 /// The default for the `DISK` option when creating managed clusters and cluster replicas.
 const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("disk_cluster_replicas_default"),
@@ -2817,7 +2824,8 @@ impl SystemVars {
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
-            .with_var(&ENABLE_COLUMNATION_LGALLOC);
+            .with_var(&ENABLE_COLUMNATION_LGALLOC)
+            .with_var(&TIMESTAMP_ORACLE_IMPL);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3596,6 +3604,11 @@ impl SystemVars {
     /// Returns the `enable_columnation_lgalloc` configuration parameter.
     pub fn enable_columnation_lgalloc(&self) -> bool {
         *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
+    }
+
+    /// Returns the `timestamp_oracle` configuration parameter.
+    pub fn timestamp_oracle_impl(&self) -> TimestampOracleImpl {
+        *self.expect_value(&TIMESTAMP_ORACLE_IMPL)
     }
 }
 
@@ -5349,6 +5362,59 @@ impl Value for IntervalStyle {
 
     fn format(&self) -> String {
         self.as_str().to_string()
+    }
+}
+
+/// List of valid TimestampOracle implementations
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TimestampOracleImpl {
+    /// Timestamp oracle backed by Postgres/CRDB.
+    Postgres,
+    /// Legacy, in-memory oracle backed by Catalog/Stash.
+    Catalog,
+}
+
+impl TimestampOracleImpl {
+    fn as_str(&self) -> &'static str {
+        match self {
+            TimestampOracleImpl::Postgres => "postgres",
+            TimestampOracleImpl::Catalog => "catalog",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        vec![Self::Postgres.as_str(), Self::Catalog.as_str()]
+    }
+}
+
+impl Value for TimestampOracleImpl {
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let s = UncasedStr::new(s);
+
+        if s == TimestampOracleImpl::Postgres.as_str() {
+            Ok(TimestampOracleImpl::Postgres)
+        } else if s == TimestampOracleImpl::Catalog.as_str() {
+            Ok(TimestampOracleImpl::Catalog)
+        } else {
+            Err(VarError::ConstrainedParameter {
+                parameter: (&TIMESTAMP_ORACLE_IMPL).into(),
+                values: input.to_vec(),
+                valid_values: Some(TimestampOracleImpl::valid_values()),
+            })
+        }
+    }
+
+    fn format(&self) -> String {
+        self.as_str().into()
     }
 }
 

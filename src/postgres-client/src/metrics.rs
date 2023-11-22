@@ -42,7 +42,7 @@ impl PostgresClientMetrics {
                 help: "time spent acquiring connections from pool",
             )),
             connpool_available: registry.register(metric!(
-                name: "mz_persist_postgres_connpool_available",
+                name: format!("{}_postgres_connpool_available", prefix),
                 help: "available connections in the pool",
             )),
             connpool_connections_created: registry.register(metric!(

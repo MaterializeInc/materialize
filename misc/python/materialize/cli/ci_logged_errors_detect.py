@@ -64,6 +64,8 @@ IGNORE_RE = re.compile(
     r"""
     # Expected in restart test
     ( restart-materialized-1\ \ \|\ thread\ 'coordinator'\ panicked\ at\ 'can't\ persist\ timestamp
+    # Expected in restart test
+    | restart-materialized-1\ *|\ thread\ 'coordinator'\ panicked\ at\ 'external\ operation\ .*\ failed\ unrecoverably.*
     # Expected in cluster test
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
     # Emitted by tests employing explicit mz_panic()

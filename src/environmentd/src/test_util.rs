@@ -333,7 +333,7 @@ impl Listeners {
             Some(data_directory) => (data_directory, None),
         };
         let scratch_dir = tempfile::tempdir()?;
-        let (consensus_uri, adapter_stash_url, storage_stash_url) = {
+        let (consensus_uri, adapter_stash_url, storage_stash_url, timestamp_oracle_url) = {
             let seed = config.seed;
             let cockroach_url = env::var("COCKROACH_URL")
                 .map_err(|_| anyhow!("COCKROACH_URL environment variable is not set"))?;
@@ -341,12 +341,14 @@ impl Listeners {
             conn.batch_execute(&format!(
                 "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
                  CREATE SCHEMA IF NOT EXISTS adapter_{seed};
-                 CREATE SCHEMA IF NOT EXISTS storage_{seed};",
+                 CREATE SCHEMA IF NOT EXISTS storage_{seed};
+                 CREATE SCHEMA IF NOT EXISTS tsoracle_{seed};",
             ))?;
             (
                 format!("{cockroach_url}?options=--search_path=consensus_{seed}"),
                 format!("{cockroach_url}?options=--search_path=adapter_{seed}"),
                 format!("{cockroach_url}?options=--search_path=storage_{seed}"),
+                format!("{cockroach_url}?options=--search_path=tsoracle_{seed}"),
             )
         };
         let metrics_registry = config.metrics_registry.unwrap_or_else(MetricsRegistry::new);
@@ -450,6 +452,7 @@ impl Listeners {
             self.inner
                 .serve(crate::Config {
                     catalog_config,
+                    timestamp_oracle_url: Some(timestamp_oracle_url),
                     controller: ControllerConfig {
                         build_info: &crate::BUILD_INFO,
                         orchestrator,

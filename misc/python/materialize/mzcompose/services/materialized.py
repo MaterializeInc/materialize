@@ -148,6 +148,9 @@ class Materialized(Service):
                 "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
                 "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
             ]
+            environment += [
+                "MZ_TIMESTAMP_ORACLE_URL=postgres://root@cockroach:26257?options=--search_path=tsoracle"
+            ]
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",

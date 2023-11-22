@@ -40,6 +40,7 @@ cockroach sql --insecure -e "SET CLUSTER SETTING sql.stats.forecasts.enabled = f
 cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS consensus"
 cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS storage"
 cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS adapter"
+cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS tsoracle"
 
 if [[ ! -f /mzdata/environment-id ]]; then
   echo "docker-container-$(cat /proc/sys/kernel/random/uuid)-0" > /mzdata/environment-id
@@ -60,6 +61,7 @@ export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@$(
 export MZ_PERSIST_BLOB_URL=${MZ_PERSIST_BLOB_URL:-file:///mzdata/persist/blob}
 export MZ_STORAGE_STASH_URL=${MZ_STORAGE_STASH_URL:-postgresql://root@$(hostname):26257?options=--search_path=storage}
 export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://root@$(hostname):26257?options=--search_path=adapter}
+export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://root@$(hostname):26257?options=--search_path=tsoracle}
 export MZ_ORCHESTRATOR=${MZ_ORCHESTRATOR:-process}
 export MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY:-/mzdata/secrets}
 export MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY:-/scratch}
