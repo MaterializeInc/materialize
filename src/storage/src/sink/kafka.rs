@@ -35,7 +35,7 @@ use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_client::sink::ProgressRecord;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::errors::{ContextCreationError, DataflowError};
+use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkAsOf,
     SinkEnvelope, StorageSinkDesc,
@@ -438,6 +438,29 @@ impl KafkaSinkState {
                     ContextCreationError::Other(anyhow::anyhow!("synthetic error"))
                 ));
 
+                // Create a producer with the old transactional id to fence out writers from older
+                // versions, if any. This section should be removed after it has been running in
+                // production for a week or two.
+                let fence_producer: ThreadedProducer<_> = connection
+                    .connection
+                    .create_with_context(
+                        connection_context,
+                        MzClientContext::default(),
+                        &btreemap! {
+                            "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
+                        },
+                    )
+                    .await?;
+                let fence_producer = Arc::new(fence_producer);
+
+                task::spawn_blocking(|| format!("init_transactions:{sink_name}"), {
+                    let fence_producer = Arc::clone(&fence_producer);
+                    move || fence_producer.init_transactions(Duration::from_secs(5))
+                })
+                .unwrap_or_else(|_| Err(KafkaError::Canceled))
+                .await
+                .check_ssh_status(fence_producer.context())?;
+
                 connection
                     .connection
                     .create_with_context(
@@ -468,7 +491,7 @@ impl KafkaSinkState {
                             // different settings for this value to see if it makes a
                             // big difference.
                             "queue.buffering.max.ms" => format!("{}", 10),
-                            "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
+                            "transactional.id" => format!("mz-producer-{sink_id}-0"),
                         },
                     )
                     .await
@@ -750,26 +773,24 @@ async fn halt_on_err<T>(
     match result {
         Ok(t) => t,
         Err(error) => {
-            let hint: Option<String> = if let ContextCreationError::Other(error) = &error {
-                error
-                    .downcast_ref::<RDKafkaError>()
-                    .and_then(|kafka_error| {
-                        if kafka_error.is_retriable()
-                            && kafka_error.code() == RDKafkaErrorCode::OperationTimedOut
-                        {
-                            Some(
-                                "If you're running a single Kafka broker, ensure \
-                                    that the configs transaction.state.log.replication.factor, \
-                                    transaction.state.log.min.isr, and \
-                                    offsets.topic.replication.factor are set to 1 on the broker"
-                                    .to_string(),
-                            )
-                        } else {
-                            None
-                        }
-                    })
-            } else {
-                None
+            let kafka_error = match error {
+                ContextCreationError::KafkaError(KafkaError::Transaction(ref e)) => Some(e),
+                ContextCreationError::Other(ref err) => err.downcast_ref::<RDKafkaError>(),
+                ContextCreationError::KafkaError(_) | ContextCreationError::Ssh(_) => None,
+            };
+            let hint = match kafka_error {
+                Some(e) => {
+                    if e.is_retriable() && e.code() == RDKafkaErrorCode::OperationTimedOut {
+                        let hint =
+                            "If you're running a single Kafka broker, ensure that the configs \
+                        transaction.state.log.replication.factor, transaction.state.log.min.isr, \
+                        and offsets.topic.replication.factor are set to 1 on the broker";
+                        Some(hint.to_owned())
+                    } else {
+                        None
+                    }
+                }
+                None => None,
             };
 
             // Update the ssh status. This could be overridden below, but this ensures the
