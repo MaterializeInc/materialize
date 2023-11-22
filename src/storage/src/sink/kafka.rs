@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use maplit::btreemap;
@@ -37,13 +37,12 @@ use mz_storage_client::sink::ProgressRecord;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::{ContextCreationError, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat,
-    MetadataFilled, SinkAsOf, SinkEnvelope, StorageSinkDesc,
+    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkAsOf,
+    SinkEnvelope, StorageSinkDesc,
 };
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
-use rdkafka::consumer::BaseConsumer;
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaError, RDKafkaErrorCode};
 use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
 use rdkafka::producer::{BaseRecord, DeliveryResult, Producer, ProducerContext, ThreadedProducer};
@@ -385,7 +384,6 @@ struct KafkaSinkState {
 
     progress_topic: String,
     progress_key: String,
-    progress_client: Option<Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>>,
 
     healthchecker: HealthOutputHandle,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
@@ -408,7 +406,7 @@ impl KafkaSinkState {
     // Until `try` blocks, we need this for using `fail_point!` correctly.
     async fn new(
         sink_id: GlobalId,
-        connection: KafkaSinkConnection,
+        connection: &KafkaSinkConnection,
         sink_name: String,
         worker_id: String,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
@@ -486,39 +484,18 @@ impl KafkaSinkState {
             timeout: Duration::from_secs(5),
         };
 
-        let progress_client = halt_on_err(
-            &healthchecker,
-            connection
-                .connection
-                .create_with_context(
-                    connection_context,
-                    MzClientContext::default(),
-                    &btreemap! {
-                        "group.id" => mz_storage_client::sink::SinkGroupId::new(sink_id),
-                        "isolation.level" => "read_committed".into(),
-                        "enable.auto.commit" => "false".into(),
-                        "auto.offset.reset" => "earliest".into(),
-                        "enable.partition.eof" => "true".into(),
-                    },
-                )
-                .await,
-            None,
-        )
-        .await;
-
         KafkaSinkState {
             name: sink_name,
-            topic: connection.topic,
+            topic: connection.topic.clone(),
             metrics,
             producer,
             pending_rows: BTreeMap::new(),
             ready_rows: VecDeque::new(),
             retry_manager,
-            progress_topic: match connection.consistency_config {
-                KafkaConsistencyConfig::Progress { topic } => topic,
+            progress_topic: match &connection.consistency_config {
+                KafkaConsistencyConfig::Progress { topic } => topic.clone(),
             },
             progress_key: mz_storage_client::sink::ProgressKey::new(sink_id),
-            progress_client: Some(Arc::new(progress_client)),
             healthchecker,
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
@@ -937,7 +914,7 @@ where
 
         let mut s = KafkaSinkState::new(
             id,
-            connection,
+            &connection,
             name,
             worker_id.to_string(),
             write_frontier,
@@ -958,17 +935,13 @@ where
         )
         .await;
 
-        let latest_ts = mz_storage_client::sink::determine_latest_progress_record(
-            s.name.clone(),
-            s.progress_topic.clone(),
-            s.progress_key.clone(),
-            s.progress_client
-                .take()
-                .expect("Claiming just-created progress client"),
+        let latest_ts = halt_on_err(
+            &s.healthchecker,
+            mz_storage_client::sink::build_kafka(id, &connection, &connection_context).await,
+            None,
         )
         .await;
 
-        let latest_ts = s.halt_on_err(latest_ts).await;
         info!(
             "{}: initial as_of: {:?}, latest progress record: {:?}",
             s.name, as_of.frontier, latest_ts
@@ -1188,8 +1161,8 @@ fn encode_stream<G>(
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     name_prefix: &str,
-    mut connection: KafkaSinkConnection,
-    connection_context: ConnectionContext,
+    connection: KafkaSinkConnection,
+    connection_cx: ConnectionContext,
     envelope: SinkEnvelope,
 ) -> (
     Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>,
@@ -1226,25 +1199,10 @@ where
             return;
         }
 
-        // Ensure that Kafka collateral exists. While this looks somewhat
-        // innocuous, this step is why this must be an async operator.
-        //
-        // Also note that where this lies in the rendering cycle means that we
-        // might create the collateral topics each time the sink is rendered,
-        // e.g. if the broker's admin deleted the progress and data topics. For
-        // more details, see `mz_storage_client::sink::build_kafka`.
         let healthchecker = HealthOutputHandle {
             health_cap,
             handle: Mutex::new(health_output),
         };
-
-        let _ = halt_on_err(
-            &healthchecker,
-            mz_storage_client::sink::build_kafka(sink_id, &mut connection, &connection_context)
-                .await,
-            None,
-        )
-        .await;
 
         let key_desc = connection
             .key_desc_and_indices
@@ -1253,10 +1211,39 @@ where
         let value_desc = connection.value_desc.clone();
 
         let encoder: Box<dyn Encode> = match connection.format {
-            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::Published {
-                key_schema_id,
-                value_schema_id,
-            }) => {
+            KafkaSinkFormat::Avro {
+                key_schema,
+                value_schema,
+                csr_connection,
+            } => {
+                // Ensure that schemas are registered with the schema registry.
+                // While this looks somewhat innocuous, this step is why this
+                // must be an async operator.
+                //
+                // Also note that where this lies in the rendering cycle means
+                // that we will publish the schemas each time the sink is
+                // rendered.
+                let (key_schema_id, value_schema_id) = halt_on_err(
+                    &healthchecker,
+                    async {
+                        let ccsr = csr_connection.connect(&connection_cx).await?;
+                        let ids = mz_storage_client::sink::publish_kafka_schemas(
+                            &ccsr,
+                            &connection.topic,
+                            key_schema.as_deref(),
+                            Some(mz_ccsr::SchemaType::Avro),
+                            &value_schema,
+                            mz_ccsr::SchemaType::Avro,
+                        )
+                        .await
+                        .context("error publishing kafka schemas for sink")?;
+                        Ok(ids)
+                    }
+                    .await,
+                    None,
+                )
+                .await;
+
                 let options = AvroSchemaOptions {
                     is_debezium: matches!(envelope, SinkEnvelope::Debezium),
                     ..Default::default()
@@ -1269,9 +1256,6 @@ where
                     key_schema_id,
                     value_schema_id,
                 ))
-            }
-            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe { .. }) => {
-                unreachable!("must have communicated with CSR")
             }
             KafkaSinkFormat::Json => Box::new(JsonEncoder::new(
                 key_desc,
