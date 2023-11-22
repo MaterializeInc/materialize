@@ -13,7 +13,7 @@ use std::fmt::{self, Error, Write};
 
 use itertools::zip_eq;
 
-use mz_expr::explain::{display_singleton_row, HumanizedExpr};
+use mz_expr::explain::{display_singleton_row, HumanizedNotice, HumanizerMode};
 use mz_expr::MirScalarExpr;
 use mz_ore::str::separated;
 use mz_repr::explain::ExprHumanizer;
@@ -149,7 +149,7 @@ impl<'a> fmt::Display for HumanizedNoticeMsg<'a> {
                     .humanize_id_unqualified(*index_on_id)
                     .unwrap_or_else(|| index_on_id.to_string());
 
-                let index_key = separated(", ", HumanizedExpr::seq(index_key, col_names));
+                let index_key = separated(", ", HumanizedNotice::seq(index_key, col_names));
 
                 write!(f, "Index {index_name} on {index_on_id_name}({index_key}) is too wide to use for literal equalities `")?;
                 {
@@ -158,14 +158,14 @@ impl<'a> fmt::Display for HumanizedNoticeMsg<'a> {
                             write!(
                                 f,
                                 "{} = {}",
-                                HumanizedExpr::new(&usable_subset[0], col_names),
+                                HumanizedNotice::new(&usable_subset[0], col_names),
                                 display_singleton_row(literal_values[0].clone())
                             )?;
                         } else {
                             write!(
                                 f,
                                 "{} IN ({})",
-                                HumanizedExpr::new(&usable_subset[0], col_names),
+                                HumanizedNotice::new(&usable_subset[0], col_names),
                                 separated(
                                     ", ",
                                     literal_values
@@ -196,7 +196,7 @@ impl<'a> fmt::Display for HumanizedNoticeMsg<'a> {
                             write!(
                                 f,
                                 "({}) IN ({})",
-                                separated(", ", HumanizedExpr::seq(usable_subset, col_names)),
+                                separated(", ", HumanizedNotice::seq(usable_subset, col_names)),
                                 separated(", ", literal_values)
                             )?;
                         }
@@ -240,7 +240,7 @@ impl<'a> fmt::Display for HumanizedNoticeHint<'a> {
                         ", ",
                         recommended_key
                             .iter()
-                            .map(|expr| HumanizedExpr::new(expr, col_names)),
+                            .map(|expr| HumanizedNotice::new(expr, col_names)),
                     )
                 };
 

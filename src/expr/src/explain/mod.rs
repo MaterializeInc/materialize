@@ -29,7 +29,9 @@ use crate::{
     AccessStrategy, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
 
-pub use crate::explain::text::{display_singleton_row, HumanizedExpr};
+pub use crate::explain::text::{
+    display_singleton_row, HumanizedExplain, HumanizedExpr, HumanizedNotice, HumanizerMode,
+};
 
 mod json;
 mod text;
@@ -69,16 +71,22 @@ pub struct PushdownInfo<'a> {
 
 impl<'a, C: AsMut<Indent>> DisplayText<C> for PushdownInfo<'a> {
     fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
-        HumanizedExpr::new(self, None).fmt_text(f, ctx)
+        HumanizedExplain::new(self, None).fmt_text(f, ctx)
     }
 }
 
-impl<'a, C: AsMut<Indent>> DisplayText<C> for HumanizedExpr<'a, PushdownInfo<'a>> {
+impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, PushdownInfo<'a>, M>
+where
+    C: AsMut<Indent>,
+    M: HumanizerMode,
+{
     fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
         let PushdownInfo { pushdown } = self.expr;
 
         if !pushdown.is_empty() {
-            let pushdown = pushdown.iter().map(|e| HumanizedExpr::new(*e, self.cols));
+            let pushdown = pushdown
+                .iter()
+                .map(|e| HumanizedExplain::new(*e, self.cols));
             let pushdown = separated(" AND ", pushdown);
             writeln!(f, "{}pushdown=({})", ctx.as_mut(), pushdown)?;
         }
@@ -127,13 +135,14 @@ where
     C: AsMut<Indent> + AsRef<&'h dyn ExprHumanizer>,
 {
     fn fmt_text(&self, f: &mut std::fmt::Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
-        HumanizedExpr::new(self, None).fmt_text(f, ctx)
+        HumanizedExplain::new(self, None).fmt_text(f, ctx)
     }
 }
 
-impl<'a, 'h, C> DisplayText<C> for HumanizedExpr<'a, ExplainSource<'a>>
+impl<'a, 'h, C, M> DisplayText<C> for HumanizedExpr<'a, ExplainSource<'a>, M>
 where
     C: AsMut<Indent> + AsRef<&'h dyn ExprHumanizer>,
+    M: HumanizerMode,
 {
     fn fmt_text(&self, f: &mut std::fmt::Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
         let id = ctx

@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::marker::PhantomData;
 
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
@@ -44,7 +45,7 @@ where
             if ctx.config.humanized_exprs {
                 let attrs = ctx.annotations.get(&self.plan.plan);
                 let cols = attrs.map(|attrs| attrs.column_names.clone()).flatten();
-                HumanizedExpr::new(finishing, cols.as_ref()).fmt_text(f, &mut ctx)?;
+                HumanizedExplain::new(finishing, cols.as_ref()).fmt_text(f, &mut ctx)?;
             } else {
                 finishing.fmt_text(f, &mut ctx)?;
             }
@@ -103,7 +104,7 @@ where
                         if ctx.config.humanized_exprs {
                             let attrs = ctx.annotations.get(plan.plan);
                             let cols = attrs.map(|attrs| attrs.column_names.clone()).flatten();
-                            HumanizedExpr::new(finishing, cols.as_ref()).fmt_text(f, ctx)?;
+                            HumanizedExplain::new(finishing, cols.as_ref()).fmt_text(f, ctx)?;
                         } else {
                             finishing.fmt_text(f, ctx)?;
                         };
@@ -132,7 +133,7 @@ where
                         cols.extend(anonymous.take(src.op.expressions.len()))
                     };
                     // Render source with humanized expressions.
-                    HumanizedExpr::new(src, cols.as_ref()).fmt_text(f, &mut ctx)?;
+                    HumanizedExplain::new(src, cols.as_ref()).fmt_text(f, &mut ctx)?;
                 } else {
                     // Render source without humanized expresions.
                     src.fmt_text(f, &mut ctx)?;
@@ -167,19 +168,20 @@ where
     C: AsMut<Indent>,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        HumanizedExpr::new(self, None).fmt_text(f, ctx)
+        HumanizedExplain::new(self, None).fmt_text(f, ctx)
     }
 }
 
-impl<'a, C> DisplayText<C> for HumanizedExpr<'a, RowSetFinishing>
+impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, RowSetFinishing, M>
 where
     C: AsMut<Indent>,
+    M: HumanizerMode,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         write!(f, "{}Finish", ctx.as_mut())?;
         // order by
         if !self.expr.order_by.is_empty() {
-            let order_by = HumanizedExpr::seq(&self.expr.order_by, self.cols);
+            let order_by = HumanizedExplain::seq(&self.expr.order_by, self.cols);
             write!(f, " order_by=[{}]", separated(", ", order_by))?;
         }
         // limit
@@ -204,13 +206,14 @@ where
     C: AsMut<Indent>,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        HumanizedExpr::new(self, None).fmt_text(f, ctx)
+        HumanizedExplain::new(self, None).fmt_text(f, ctx)
     }
 }
 
-impl<'a, C> DisplayText<C> for HumanizedExpr<'a, MapFilterProject>
+impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, MapFilterProject, M>
 where
     C: AsMut<Indent>,
+    M: HumanizerMode,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         let (scalars, predicates, outputs, input_arity) = (
@@ -233,7 +236,7 @@ where
         }
         // render `map` field iff scalars are present
         if !scalars.is_empty() {
-            let scalars = HumanizedExpr::seq(scalars, self.cols);
+            let scalars = HumanizedExplain::seq(scalars, self.cols);
             let scalars = separated(", ", scalars);
             writeln!(f, "{}map=({})", ctx.as_mut(), scalars)?;
         }
@@ -485,7 +488,8 @@ impl MirRelationExpr {
                 FmtNode {
                     fmt_root: |f, ctx: &mut PlanRenderingContext<'_, MirRelationExpr>| {
                         if let Some(cols) = self.column_names(ctx) {
-                            let scalars = separated(", ", HumanizedExpr::seq(scalars, Some(cols)));
+                            let scalars =
+                                separated(", ", HumanizedExplain::seq(scalars, Some(cols)));
                             write!(f, "{}Map ({})", ctx.indent, scalars)?;
                         } else {
                             let scalars = CompactScalarSeq(scalars);
@@ -501,7 +505,7 @@ impl MirRelationExpr {
                 FmtNode {
                     fmt_root: |f, ctx: &mut PlanRenderingContext<'_, MirRelationExpr>| {
                         if let Some(cols) = input.column_names(ctx) {
-                            let exprs = separated(", ", HumanizedExpr::seq(exprs, Some(cols)));
+                            let exprs = separated(", ", HumanizedExplain::seq(exprs, Some(cols)));
                             write!(f, "{}FlatMap {}({})", ctx.indent, func, exprs)?;
                         } else {
                             let exprs = CompactScalarSeq(exprs);
@@ -520,7 +524,7 @@ impl MirRelationExpr {
                             write!(f, "{}Filter", ctx.indent)?;
                         } else {
                             let cols = input.column_names(ctx);
-                            let predicates = HumanizedExpr::seq(predicates, cols);
+                            let predicates = HumanizedExplain::seq(predicates, cols);
                             let predicates = separated(" AND ", predicates);
                             write!(f, "{}Filter {}", ctx.indent, predicates)?;
                         }
@@ -545,7 +549,7 @@ impl MirRelationExpr {
                     let equivalences = separated(
                         " AND ",
                         equivalences.iter().map(|equivalence| {
-                            let equivalence = HumanizedExpr::seq(equivalence, cols);
+                            let equivalence = HumanizedExplain::seq(equivalence, cols);
                             separated(" = ", equivalence)
                         }),
                     );
@@ -727,7 +731,7 @@ impl MirRelationExpr {
                             write!(f, "{}Distinct", ctx.indent)?;
 
                             if let Some(cols) = input.column_names(ctx) {
-                                let group_key = HumanizedExpr::seq(group_key, Some(cols));
+                                let group_key = HumanizedExplain::seq(group_key, Some(cols));
                                 write!(f, " project=[{}]", separated(", ", group_key))?;
                             } else {
                                 let group_key = CompactScalarSeq(group_key);
@@ -738,7 +742,7 @@ impl MirRelationExpr {
 
                             if group_key.len() > 0 {
                                 if let Some(cols) = input.column_names(ctx) {
-                                    let group_key = HumanizedExpr::seq(group_key, Some(cols));
+                                    let group_key = HumanizedExplain::seq(group_key, Some(cols));
                                     write!(f, " group_by=[{}]", separated(", ", group_key))?;
                                 } else {
                                     let group_key = CompactScalarSeq(group_key);
@@ -748,7 +752,7 @@ impl MirRelationExpr {
                         }
                         if aggregates.len() > 0 {
                             let cols = input.column_names(ctx);
-                            let aggregates = HumanizedExpr::seq(aggregates, cols);
+                            let aggregates = HumanizedExplain::seq(aggregates, cols);
                             write!(f, " aggregates=[{}]", separated(", ", aggregates))?;
                         }
                         if *monotonic {
@@ -778,7 +782,7 @@ impl MirRelationExpr {
                         let cols = input.column_names(ctx);
                         if group_key.len() > 0 {
                             if cols.is_some() {
-                                let group_by = HumanizedExpr::seq(group_key, cols);
+                                let group_by = HumanizedExplain::seq(group_key, cols);
                                 write!(f, " group_by=[{}]", separated(", ", group_by))?;
                             } else {
                                 let group_by = Indices(group_key);
@@ -786,7 +790,7 @@ impl MirRelationExpr {
                             }
                         }
                         if order_key.len() > 0 {
-                            let order_by = HumanizedExpr::seq(order_key, cols);
+                            let order_by = HumanizedExplain::seq(order_key, cols);
                             write!(f, " order_by=[{}]", separated(", ", order_by))?;
                         }
                         if let Some(limit) = limit {
@@ -846,7 +850,7 @@ impl MirRelationExpr {
 
                         if let Some(cols) = input.column_names(ctx) {
                             let keys = keys.iter().map(|key| {
-                                let key = HumanizedExpr::seq(key, Some(cols));
+                                let key = HumanizedExplain::seq(key, Some(cols));
                                 separated(", ", key)
                             });
                             let keys = separated("], [", keys);
@@ -1011,7 +1015,7 @@ where
 
 impl MirScalarExpr {
     pub fn format(&self, f: &mut fmt::Formatter<'_>, cols: Option<&Vec<String>>) -> fmt::Result {
-        fmt::Display::fmt(&HumanizedExpr::new(self, cols), f)
+        fmt::Display::fmt(&HumanizedExplain::new(self, cols), f)
     }
 }
 
@@ -1022,53 +1026,112 @@ impl fmt::Display for MirScalarExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct HumanizedExpr<'a, T> {
+pub struct HumanizedExpr<'a, T, Mode = HumanizedExplain> {
     pub(crate) expr: &'a T,
     pub(crate) cols: Option<&'a Vec<String>>,
+    pub(crate) mode: PhantomData<Mode>,
 }
 
-impl<'a, T> HumanizedExpr<'a, T> {
-    pub fn new(expr: &'a T, cols: Option<&'a Vec<String>>) -> Self {
-        Self { expr, cols }
-    }
-
-    pub fn seq<'i>(
-        exprs: &'i [T],
-        cols: Option<&'i Vec<String>>,
-    ) -> impl Iterator<Item = HumanizedExpr<'i, T>> + Clone {
-        exprs.iter().map(move |expr| HumanizedExpr::new(expr, cols))
-    }
-
-    pub(crate) fn child<U>(&self, expr: &'a U) -> HumanizedExpr<'a, U> {
+impl<'a, T, M> HumanizedExpr<'a, T, M> {
+    pub(crate) fn child<U>(&self, expr: &'a U) -> HumanizedExpr<'a, U, M> {
         HumanizedExpr {
             expr,
             cols: self.cols,
+            mode: PhantomData::<M>,
         }
     }
 }
 
+/// A trait that abstracts the various ways in which we humanize expressions.
+pub trait HumanizerMode: Sized {
+    fn humanize_ident(col: usize, ident: Ident, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+
+    fn new<'a, T>(expr: &'a T, cols: Option<&'a Vec<String>>) -> HumanizedExpr<'a, T, Self> {
+        HumanizedExpr {
+            expr,
+            cols,
+            mode: PhantomData::<Self>,
+        }
+    }
+}
+
+/// A [`HumanizerMode`] that is ambigous but allows us to print valid SQL
+/// stataments, so it should be used in optimizer notices.
+#[allow(missing_debug_implementations)]
+pub struct HumanizedNotice;
+
+impl HumanizedNotice {
+    // TODO: move to `HumanizerMode` once we start using a Rust version with the
+    // corresponding Rust stabilization issue:
+    //
+    // https://github.com/rust-lang/rust/pull/115822
+    pub fn seq<'i, T>(
+        exprs: &'i [T],
+        cols: Option<&'i Vec<String>>,
+    ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
+        exprs.iter().map(move |expr| Self::new(expr, cols))
+    }
+}
+
+impl HumanizerMode for HumanizedNotice {
+    /// Write `ident`.
+    fn humanize_ident(_col: usize, ident: Ident, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{ident}")
+    }
+}
+
+/// A [`HumanizerMode`] that is unambiguous and should be used in `EXPLAIN` output.
+#[allow(missing_debug_implementations)]
+pub struct HumanizedExplain;
+
+impl HumanizedExplain {
+    // TODO: move to `HumanizerMode` once we start using a Rust version with the
+    // corresponding Rust stabilization issue:
+    //
+    // https://github.com/rust-lang/rust/pull/115822
+    pub fn seq<'i, T>(
+        exprs: &'i [T],
+        cols: Option<&'i Vec<String>>,
+    ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
+        exprs.iter().map(move |expr| Self::new(expr, cols))
+    }
+}
+
+impl HumanizerMode for HumanizedExplain {
+    /// Write `#c{ident}`.
+    fn humanize_ident(col: usize, ident: Ident, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{col}{{{ident}}}")
+    }
+}
+
 // A usize that directly represents a column reference
-impl<'a> fmt::Display for HumanizedExpr<'a, usize> {
+impl<'a, M> fmt::Display for HumanizedExpr<'a, usize, M>
+where
+    M: HumanizerMode,
+{
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.cols {
+            // We have a name inferred for the column indexed by `self.expr`. Write `ident`.
             Some(cols) if !cols[*self.expr].is_empty() => {
-                // Write #c{name} if we have a name inferred for this column.
-                //
-                // Note: using unchecked here is okay since we're directly converting to a string
-                // afterwards.
+                // Note: using unchecked here is okay since we're directly
+                // converting to a string afterwards.
                 let ident = Ident::new_unchecked(cols[*self.expr].clone()); // TODO: try to avoid the `.clone()` here.
-                write!(f, "#{}{{{}}}", self.expr, ident)
+                M::humanize_ident(*self.expr, ident, f)
             }
+            // We don't have name inferred for this column.
             _ => {
-                // Write #c otherwise.
+                // Write `#c`.
                 write!(f, "#{}", self.expr)
             }
         }
     }
 }
 
-impl<'a> fmt::Display for HumanizedExpr<'a, MirScalarExpr> {
+impl<'a, M> fmt::Display for HumanizedExpr<'a, MirScalarExpr, M>
+where
+    M: HumanizerMode,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use MirScalarExpr::*;
 
@@ -1147,11 +1210,14 @@ impl<'a> fmt::Display for HumanizedExpr<'a, MirScalarExpr> {
 
 impl fmt::Display for AggregateExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        HumanizedExpr::new(self, None).fmt(f)
+        HumanizedExplain::new(self, None).fmt(f)
     }
 }
 
-impl<'a> fmt::Display for HumanizedExpr<'a, AggregateExpr> {
+impl<'a, M> fmt::Display for HumanizedExpr<'a, AggregateExpr, M>
+where
+    M: HumanizerMode,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.expr.is_count_asterisk() {
             return write!(f, "count(*)");
