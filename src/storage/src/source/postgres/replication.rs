@@ -86,6 +86,7 @@ use postgres_protocol::message::backend::{
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::{Scope, Stream};
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
@@ -198,6 +199,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 return Ok(());
             }
 
+            // This is an ugly hack that we need to do until because the `build_fallible`
+            // constructor (which we use here) is unsafe in the presence of retained input
+            // capabiltities (which we also use for the rewind requests). The mutable antichain is
+            // initialized with one copy of the minimum capability which represents the initial
+            // capability of this operator.
+            let mut fake_capability = MzOffset::minimum();
+            let mut fake_progress = MutableAntichain::new_bottom(MzOffset::minimum());
+
             // Calculate the minimum frontier that is required from the slot which is the
             // combination of the resume upper of each subsource and the requirements of each
             // rewind request.
@@ -214,6 +223,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next_mut().await {
                 if let AsyncEvent::Data(_cap, data) = event {
+                    // We can't retain this capability due to build_fallible so simulate holding it
+                    // by accounting for it in the progress mutable antichain
+                    let created = data.len().try_into().unwrap();
+                    fake_progress.update_iter([(MzOffset::minimum(), created)]);
                     for req in data.drain(..) {
                         resume_upper.insert(req.snapshot_lsn + 1);
                         rewinds.insert(req.oid, req);
@@ -247,11 +260,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let mut container = Vec::new();
             let max_capacity = timely::container::buffer::default_capacity::<((u32, Result<Vec<Option<Bytes>>, DefiniteError>), MzOffset, Diff)>();
 
-            let mut cur_upper = MzOffset::minimum();
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
-                let mut new_upper = cur_upper;
+                let mut new_upper = fake_capability;
                 match event {
                     Ok(XLogData(data)) => match data.data() {
                         Begin(begin) => {
@@ -286,14 +298,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             new_upper = commit_lsn + 1;
                             if container.len() > max_capacity {
                                 data_output.give_container(&data_cap_set[0], &mut container).await;
-                                cur_upper = new_upper;
-                                // As long as there are pending rewinds we want to keep the
-                                // capability at minimum, because that is the timestamp rewinds are
-                                // produced at.
-                                if rewinds.is_empty() {
-                                    upper_cap_set.downgrade(&[new_upper]);
-                                    data_cap_set.downgrade(&[new_upper]);
-                                }
+                                fake_progress.update_iter([(fake_capability, -1), (new_upper, 1)]);
+                                fake_capability = new_upper;
+                                upper_cap_set.downgrade(&*fake_progress.frontier());
+                                data_cap_set.downgrade(&*fake_progress.frontier());
                             }
                         },
                         _ => return Err(TransientError::BareTransactionEvent),
@@ -309,15 +317,20 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 let will_yield = stream.as_mut().peek().now_or_never().is_none();
                 if will_yield {
                     data_output.give_container(&data_cap_set[0], &mut container).await;
-                    cur_upper = new_upper;
+                    // Count how many rewind request are dropped, and simulate the corresponding
+                    // capability drops
+                    let old_len = rewinds.len();
                     rewinds.retain(|_, req| new_upper <= req.snapshot_lsn);
-                    // As long as there are pending rewinds we want to keep the
-                    // capability at minimum, because that is the timestamp rewinds are
-                    // produced at.
-                    if rewinds.is_empty() {
-                        upper_cap_set.downgrade(&[new_upper]);
-                        data_cap_set.downgrade(&[new_upper]);
-                    }
+                    let dropped = i64::try_from(old_len - rewinds.len()).unwrap();
+
+                    fake_progress.update_iter([
+                        (MzOffset::minimum(), -dropped),
+                        (fake_capability, -1),
+                        (new_upper, 1)
+                    ]);
+                    fake_capability = new_upper;
+                    upper_cap_set.downgrade(&*fake_progress.frontier());
+                    data_cap_set.downgrade(&*fake_progress.frontier());
                 }
             }
             // We never expect the replication stream to gracefully end
