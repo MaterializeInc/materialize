@@ -54,7 +54,7 @@ def main() -> None:
     deploy_util.deploy_tarball(target, mz)
 
     print("--- Publishing Debian package")
-    filename = f"mz_{VERSION}_{repo.rd.arch.go_str()}.deb"
+    filename = f"mz_{VERSION.str_without_prefix()}_{repo.rd.arch.go_str()}.deb"
     print(f"Publishing {filename}")
     spawn.runv(
         [
@@ -62,7 +62,7 @@ def main() -> None:
             "--no-build",
             "--no-strip",
             "--deb-version",
-            str(VERSION),
+            VERSION.str_without_prefix(),
             '--deb-revision=""',
             "-p",
             "mz",

@@ -86,9 +86,9 @@ def deploy_tarball(platform: str, mz: Path) -> None:
     size = humanize.naturalsize(os.lstat(tar_path).st_size)
     print(f"Tarball size: {size}")
 
-    upload_tarball(tar_path, platform, f"v{VERSION}")
+    upload_tarball(tar_path, platform, f"v{VERSION.str_without_prefix()}")
     if is_latest_version():
-        upload_latest_redirect(platform, f"v{VERSION}")
+        upload_latest_redirect(platform, f"v{VERSION.str_without_prefix()}")
 
 
 def is_latest_version() -> bool:

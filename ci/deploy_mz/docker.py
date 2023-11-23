@@ -25,7 +25,7 @@ def main() -> None:
     print("--- Tagging Docker images")
     deps = [[repo.resolve_dependencies([repo.images["mz"]])["mz"]] for repo in repos]
 
-    mzbuild.publish_multiarch_images(f"v{VERSION}", deps)
+    mzbuild.publish_multiarch_images(f"v{VERSION.str_without_prefix()}", deps)
     if deploy_util.is_latest_version():
         mzbuild.publish_multiarch_images("latest", deps)
 
