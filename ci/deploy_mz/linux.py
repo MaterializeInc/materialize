@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 from materialize import mzbuild, spawn
-from materialize.mz_version import MzAptVersion
+from materialize.mz_version import MzCliVersion
 
 from . import deploy_util
 from .deploy_util import APT_BUCKET, VERSION
@@ -23,7 +23,7 @@ def main() -> None:
 
     print("--- Checking version")
     assert (
-        MzAptVersion.parse_mz_without_prefix(
+        MzCliVersion.parse_mz_without_prefix(
             repo.rd.cargo_workspace.crates["mz"].version_string
         )
         == VERSION

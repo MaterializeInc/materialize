@@ -17,12 +17,12 @@ import boto3
 import humanize
 
 from materialize import git
-from materialize.mz_version import MzAptVersion
+from materialize.mz_version import MzCliVersion
 
 APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"
 TAG = os.environ["BUILDKITE_TAG"]
-VERSION = MzAptVersion.parse_mz(TAG)
+VERSION = MzCliVersion.parse_mz(TAG)
 
 
 def _tardir(name: str) -> tarfile.TarInfo:
@@ -94,7 +94,7 @@ def deploy_tarball(platform: str, mz: Path) -> None:
 def is_latest_version() -> bool:
     latest_version = max(
         t
-        for t in git.get_version_tags(version_type=MzAptVersion)
+        for t in git.get_version_tags(version_type=MzCliVersion)
         if t.prerelease is None
     )
     return VERSION == latest_version

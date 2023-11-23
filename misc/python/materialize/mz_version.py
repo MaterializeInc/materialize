@@ -109,7 +109,7 @@ class MzVersion(TypedVersionBase):
             raise ValueError("No mz-environmentd version found in cargo metadata")
 
 
-class MzAptVersion(TypedVersionBase):
+class MzCliVersion(TypedVersionBase):
     """Version of Materialize APT"""
 
     @classmethod
