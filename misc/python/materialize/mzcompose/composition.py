@@ -163,12 +163,6 @@ class Composition:
         if munge_services:
             self.dependencies = self._munge_services(self.compose["services"].items())
 
-        # Emit the munged configuration to a temporary file so that we can later
-        # pass it to Docker Compose.
-        self.file = TemporaryFile(mode="w")
-        os.set_inheritable(self.file.fileno(), True)
-        self._write_compose()
-
     def _munge_services(
         self, services: list[tuple[str, dict]]
     ) -> mzbuild.DependencySet:
@@ -235,12 +229,6 @@ class Composition:
 
         return deps
 
-    def _write_compose(self) -> None:
-        self.file.seek(0)
-        self.file.truncate()
-        yaml.dump(self.compose, self.file)
-        self.file.flush()
-
     def invoke(
         self,
         *args: str,
@@ -265,8 +253,6 @@ class Composition:
         if not self.silent and not silent:
             print(f"--- docker compose {' '.join(args)}", file=sys.stderr)
 
-        self.file.seek(0)
-
         stdout = None
         if capture:
             stdout = subprocess.PIPE if capture == True else capture
@@ -277,14 +263,22 @@ class Composition:
             ("--project-name", self.project_name) if self.project_name else ()
         )
 
+        # Emit the munged configuration to a temporary file so that we can later
+        # pass it to Docker Compose.
+        file = TemporaryFile(mode="w")
+        os.set_inheritable(file.fileno(), True)
+        yaml.dump(self.compose, file)
+        file.flush()
+
         ret = None
         for retry in range(1, max_tries + 1):
+            file.seek(0)
             try:
                 ret = subprocess.run(
                     [
                         "docker",
                         "compose",
-                        f"-f/dev/fd/{self.file.fileno()}",
+                        f"-f/dev/fd/{file.fileno()}",
                         "--project-directory",
                         self.path,
                         *project_name_args,
@@ -399,8 +393,6 @@ class Composition:
         # config for an `mzbuild` config.
         deps.acquire()
 
-        self._write_compose()
-
         # Ensure image freshness
         self.pull_if_variable([service.name for service in services])
 
@@ -429,7 +421,6 @@ class Composition:
 
             # Restore the old composition.
             self.compose = old_compose
-            self._write_compose()
 
     @contextmanager
     def test_case(self, name: str) -> Iterator[None]:
@@ -696,7 +687,6 @@ class Composition:
             for service in self.compose["services"].values():
                 service["entrypoint"] = ["sleep", "infinity"]
                 service["command"] = []
-            self._write_compose()
 
         self.invoke(
             "up",
@@ -708,7 +698,6 @@ class Composition:
 
         if persistent:
             self.compose = old_compose  # type: ignore
-            self._write_compose()
 
     def validate_sources_sinks_clusters(self) -> str | None:
         """Validate that all sources, sinks & clusters are in a good state"""
