@@ -108,7 +108,7 @@ def get_version_tags(
         if not t.startswith(version_type.get_prefix()):
             continue
         try:
-            tags.append(version_type.parse_mz(t))
+            tags.append(version_type.parse(t))
         except ValueError as e:
             print(f"WARN: {e}", file=sys.stderr)
 

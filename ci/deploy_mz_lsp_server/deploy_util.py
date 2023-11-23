@@ -21,7 +21,7 @@ from materialize.mz_version import MzLspServerVersion
 
 BINARIES_BUCKET = "materialize-binaries"
 TAG = os.environ["BUILDKITE_TAG"]
-MZ_LSP_SERVER_VERSION = MzLspServerVersion.parse_mz(TAG)
+MZ_LSP_SERVER_VERSION = MzLspServerVersion.parse(TAG)
 
 
 def _tardir(name: str) -> tarfile.TarInfo:

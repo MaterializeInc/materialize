@@ -22,7 +22,7 @@ from materialize.mz_version import MzCliVersion
 APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"
 TAG = os.environ["BUILDKITE_TAG"]
-MZ_CLI_VERSION = MzCliVersion.parse_mz(TAG)
+MZ_CLI_VERSION = MzCliVersion.parse(TAG)
 
 
 def _tardir(name: str) -> tarfile.TarInfo:

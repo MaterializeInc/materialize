@@ -35,7 +35,7 @@ class TypedVersionBase(Version):
         cls: type[T], major: int, minor: int, patch: int, prerelease: str | None = None
     ) -> T:
         prerelease_suffix = f"-{prerelease}" if prerelease is not None else ""
-        return cls.parse_mz(
+        return cls.parse(
             f"{cls.get_prefix()}{major}.{minor}.{patch}{prerelease_suffix}"
         )
 
@@ -44,10 +44,10 @@ class TypedVersionBase(Version):
         cls: type[T], version_without_prefix: str, drop_dev_suffix: bool = False
     ) -> T:
         version = f"{cls.get_prefix()}{version_without_prefix}"
-        return cls.parse_mz(version, drop_dev_suffix=drop_dev_suffix)
+        return cls.parse(version, drop_dev_suffix=drop_dev_suffix)
 
     @classmethod
-    def parse_mz(cls: type[T], version: str, drop_dev_suffix: bool = False) -> T:
+    def parse(cls: type[T], version: str, drop_dev_suffix: bool = False) -> T:
         """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1)"""
         expected_prefix = cls.get_prefix()
         if not version.startswith(expected_prefix):
@@ -64,7 +64,7 @@ class TypedVersionBase(Version):
         if drop_dev_suffix:
             version = version.replace("-dev", "")
 
-        return cls.parse(version)
+        return super().parse(version)
 
     @classmethod
     def try_parse(
@@ -72,7 +72,7 @@ class TypedVersionBase(Version):
     ) -> T | None:
         """Parses a version string but returns empty if that fails"""
         try:
-            return cls.parse_mz(version, drop_dev_suffix=drop_dev_suffix)
+            return cls.parse(version, drop_dev_suffix=drop_dev_suffix)
         except ValueError:
             return None
 
@@ -95,6 +95,11 @@ class MzVersion(TypedVersionBase):
         return "v"
 
     @classmethod
+    def parse_mz(cls: type[T], version: str, drop_dev_suffix: bool = False) -> T:
+        """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1)"""
+        return cls.parse(version=version, drop_dev_suffix=drop_dev_suffix)
+
+    @classmethod
     def parse_cargo(cls) -> MzVersion:
         """Uses the cargo mz-environmentd package info to get the version of current source code state"""
         metadata = json.loads(
@@ -104,7 +109,7 @@ class MzVersion(TypedVersionBase):
         )
         for package in metadata["packages"]:
             if package["name"] == "mz-environmentd":
-                return cls.parse(package["version"])
+                return cls.parse_without_prefix(package["version"])
         else:
             raise ValueError("No mz-environmentd version found in cargo metadata")
 
