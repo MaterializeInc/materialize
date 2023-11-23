@@ -21,7 +21,7 @@ except ImportError:
 
 def resolve_ancestor_image_tag() -> str:
     image_tag, context = _resolve_ancestor_image_tag()
-    print(f"Using {image_tag} as image tag for comparison (context: {context})")
+    print(f"Using {image_tag} as image tag for ancestor (context: {context})")
     return image_tag
 
 
