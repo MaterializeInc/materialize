@@ -116,9 +116,6 @@ edition = "2021"
 rust-version = "1.74.0"
 
 [profile.dev]
-# TODO(gusywnn|benesch): incremental is still not reliable as of rust 1.72
-# in our workspace.
-incremental = false
 split-debuginfo = "unpacked"
 
 [profile.dev.package]
@@ -136,7 +133,6 @@ rustc-demangle = { opt-level = 3 }
 [profile.release]
 # Compile time seems similar to "lto = false", runtime ~10% faster
 lto = "thin"
-split-debuginfo = "unpacked"
 
 # Emit full debug info, allowing us to easily analyze core dumps from
 # staging (and, in an emergency, also prod).
