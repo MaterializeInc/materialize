@@ -12,8 +12,9 @@ filter = "package(mz-environmentd) and test(test_pgtest)"
 threads-required = 8
 slow-timeout = { period = "300s", terminate-after = 2 }
 
+# TODO(def-): Remove others than mz-environmentd after #19931 is fixed
 [[profile.default.overrides]]
-filter = "package(mz-environmentd)"
+filter = "package(mz-environmentd) or (package(mz-adapter) and (test(test_compare_builtins_postgres) or test(test_effective_search_path) or test(test_catalog_revision) or test(test_get_privileges) or test(test_large_catalog_item) or test(test_pg_views_forbidden_types) or test(test_normalized_create) or test(test_builtin_migration_child_migrations) or test(test_builtin_migration_topological_sort) or test(test_builtin_migration_multi_child_migrations) or test(test_builtin_migration_no_migrations) or test(test_smoketest_all_builtins) or test(test_minimal_qualification))) or (package(mz-catalog) and (test(test_stash_is_initialized) or test(test_debug_stash_open)))"
 threads-required = 8
 slow-timeout = { period = "120s", terminate-after = 2 }
 
