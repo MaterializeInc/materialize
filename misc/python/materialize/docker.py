@@ -21,7 +21,7 @@ except ImportError:
 
 def resolve_ancestor_image_tag() -> str:
     image_tag, context = _resolve_ancestor_image_tag()
-    print(f"Using {image_tag} as image tag for comparison (context: {context})")
+    print(f"Using {image_tag} as image tag for ancestor (context: {context})")
     return image_tag
 
 
@@ -101,10 +101,10 @@ def get_latest_published_version() -> Version:
         if _image_of_release_version_exists(latest_published_version):
             return latest_published_version
         else:
-            print(f"Skipping version {latest_published_version} (image not found)")
+            print(
+                f"Skipping version {latest_published_version} (image not found), trying earlier version"
+            )
             excluded_versions.add(latest_published_version)
-
-        return latest_published_version
 
 
 def get_previous_published_version(release_version: MzVersion) -> Version:
