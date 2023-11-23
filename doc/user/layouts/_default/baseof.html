@@ -93,7 +93,7 @@ Apache License, Version 2.0. */}}
           }, 1000);
           e.preventDefault();
           const copyText = target.href;
-
+          window.location.assign(target.href);
           navigator.clipboard
             .writeText(copyText)
             .then(() => {
