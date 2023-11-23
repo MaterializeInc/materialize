@@ -23,7 +23,6 @@ mz-sql-pretty = { path = "../sql-pretty" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
-assert_cmd = "2.0.5"
 httparse = "1.8.0"
 
 [package.metadata.cargo-udeps.ignore]

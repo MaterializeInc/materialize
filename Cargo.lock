@@ -4430,7 +4430,6 @@ dependencies = [
 name = "mz-lsp-server"
 version = "0.2.1"
 dependencies = [
- "assert_cmd",
  "httparse",
  "mz-build-info",
  "mz-ore",
@@ -5287,7 +5286,6 @@ dependencies = [
  "mz-cloud-resources",
  "mz-controller-types",
  "mz-expr",
- "mz-expr-test-util",
  "mz-interchange",
  "mz-kafka-util",
  "mz-lowertest",
@@ -5460,7 +5458,6 @@ dependencies = [
  "differential-dataflow",
  "fail",
  "futures",
- "insta",
  "itertools",
  "mz-ore",
  "mz-proto",
@@ -5769,7 +5766,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.107",
- "tokio",
  "workspace-hack",
 ]
 
