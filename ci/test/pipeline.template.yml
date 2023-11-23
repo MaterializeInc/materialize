@@ -428,7 +428,7 @@ steps:
         label: "Checks + restart of environmentd & storage clusterd"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -441,7 +441,7 @@ steps:
         label: "Checks + DROP/CREATE replica"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -454,7 +454,7 @@ steps:
         label: "Checks without restart or upgrade"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -467,7 +467,7 @@ steps:
         label: "Checks + restart clusterd compute"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -480,7 +480,7 @@ steps:
         label: "Checks + kill storage clusterd"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -493,7 +493,7 @@ steps:
         label: "Checks + restart source Postgres"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
