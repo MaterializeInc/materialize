@@ -16,10 +16,10 @@ from materialize.mz_version import MzVersion
 
 class CreateRole(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse("0.45.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.45.0-dev")
 
     def _if_can_grant_revoke(self, text: str) -> str:
-        if self.base_version >= MzVersion.parse("0.47.0-dev"):
+        if self.base_version >= MzVersion.parse_mz("v0.47.0-dev"):
             return text
         return ""
 

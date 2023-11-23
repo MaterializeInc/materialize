@@ -305,7 +305,7 @@ class SinkNullDefaults(Check):
     """Check on an Avro sink with NULL DEFAULTS"""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse("0.71.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.71.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -554,7 +554,7 @@ class SinkComments(Check):
     """Check on an Avro sink with comments"""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse("0.73.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.73.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

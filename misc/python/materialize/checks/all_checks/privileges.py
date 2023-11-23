@@ -123,7 +123,7 @@ class Privileges(Check):
 
     def _can_run(self, e: Executor) -> bool:
         # Privilege changes weren't persisted in some cases earlier than 0.63.0.
-        return self.base_version >= MzVersion.parse("0.63.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.63.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

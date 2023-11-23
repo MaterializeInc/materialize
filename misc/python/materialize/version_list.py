@@ -75,7 +75,7 @@ class VersionsFromGit(VersionList):
     >>> len(VersionsFromGit().minor_versions()) > 0
     True
 
-    >>> len(VersionsFromGit().patch_versions(minor_version=MzVersion.parse("0.52.0")))
+    >>> len(VersionsFromGit().patch_versions(minor_version=MzVersion.parse_mz("v0.52.0")))
     4
 
     >>> min(VersionsFromGit().all_versions())
@@ -102,7 +102,7 @@ class VersionsFromDocs(VersionList):
     >>> len(VersionsFromDocs().minor_versions()) > 0
     True
 
-    >>> len(VersionsFromDocs().patch_versions(minor_version=MzVersion.parse("0.52.0")))
+    >>> len(VersionsFromDocs().patch_versions(minor_version=MzVersion.parse_mz("v0.52.0")))
     4
 
     >>> min(VersionsFromDocs().all_versions())
