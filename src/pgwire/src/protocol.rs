@@ -279,39 +279,30 @@ where
         }
     };
 
-    let mut buf = vec![BackendMessage::AuthenticationOk];
-    for var in session.vars().notify_set() {
-        buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
-    }
-    buf.push(BackendMessage::BackendKeyData {
-        conn_id: session.conn_id().unhandled(),
-        secret_key: session.secret_key(),
-    });
-    // Immediately respond with connection success without waiting on the
-    // coordinator. This allows us to better meet SLA goals (like able to
-    // connect) at the expense of some specific problems:
-    // - Startup notices (like unknown database) won't be sent until the first
-    //   query.
-    // - An unknown username won't error until the first query. This won't be
-    //   noticed by users, though, since with frontegg enabled unknown users are
-    //   always created.
-    buf.push(BackendMessage::ReadyForQuery(session.transaction().into()));
-    conn.send_all(buf).await?;
-    conn.flush().await?;
-
     // Register session with adapter.
     let mut adapter_client = match adapter_client.startup(session).await {
         Ok(adapter_client) => adapter_client,
         Err(e) => return conn.send(e.into_response(Severity::Fatal)).await,
     };
 
-    let mut buf = Vec::new();
-    // NoticeResponse messages can be sent at any time
-    // (https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-ASYNC),
-    // so it is within spec to send them after the initial ReadyForQuery.
-    for notice in adapter_client.session().drain_notices() {
-        buf.push(notice.into_response().into());
+    let mut buf = vec![BackendMessage::AuthenticationOk];
+    for var in adapter_client.session().vars().notify_set() {
+        buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
     }
+    buf.push(BackendMessage::BackendKeyData {
+        conn_id: adapter_client.session().conn_id().unhandled(),
+        secret_key: adapter_client.session().secret_key(),
+    });
+    buf.extend(
+        adapter_client
+            .session()
+            .drain_notices()
+            .into_iter()
+            .map(|notice| BackendMessage::ErrorResponse(notice.into_response())),
+    );
+    buf.push(BackendMessage::ReadyForQuery(
+        adapter_client.session().transaction().into(),
+    ));
     conn.send_all(buf).await?;
     conn.flush().await?;
 
