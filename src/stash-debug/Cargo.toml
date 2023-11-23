@@ -1,7 +1,7 @@
 [package]
 name = "mz-stash-debug"
 description = "Durable metadata storage."
-version = "0.78.7"
+version = "0.78.8"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
