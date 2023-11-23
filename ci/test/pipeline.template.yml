@@ -542,7 +542,7 @@ steps:
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
     depends_on: build-x86_64
-    timeout_in_minutes: 30
+    timeout_in_minutes: 45
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
