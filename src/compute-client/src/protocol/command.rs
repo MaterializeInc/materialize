@@ -171,11 +171,12 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         frontier: Antichain<T>,
     },
 
-    /// `Peek` instructs the replica to perform a peek at an index.
+    /// `Peek` instructs the replica to perform a peek on a collection: either an index or a
+    /// Persist-backed collection.
     ///
     /// The [`Peek`] description must have the following properties:
     ///
-    ///   * The target index has previously been created by a corresponding `CreateDataflow`
+    ///   * If targeting an index, it has previously been created by a corresponding `CreateDataflow`
     ///     command.
     ///   * The [`Peek::uuid`] is unique, i.e., the UUIDs of peeks a replica gets instructed to
     ///     perform do not repeat (within a single protocol iteration).
@@ -492,8 +493,8 @@ pub enum PeekTarget {
 
 /// Peek a collection, either in an arrangement or Persist.
 ///
-/// This request elicits data from the worker, by naming an
-/// arrangement and some actions to apply to the results before
+/// This request elicits data from the worker, by naming the
+/// collection and some actions to apply to the results before
 /// returning them.
 ///
 /// The `timestamp` member must be valid for the arrangement that
@@ -504,9 +505,9 @@ pub enum PeekTarget {
 /// correctly answer the `Peek`.
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Peek<T = mz_repr::Timestamp> {
-    /// The identifier of the arrangement.
+    /// The identifier of the collection.
     pub id: GlobalId,
-    /// If `Some`, then look up only the given keys from the arrangement (instead of a full scan).
+    /// If `Some`, then look up only the given keys from the collection (instead of a full scan).
     /// The vector is never empty.
     #[proptest(strategy = "proptest::option::of(proptest::collection::vec(any::<Row>(), 1..5))")]
     pub literal_constraints: Option<Vec<Row>>,
@@ -515,7 +516,7 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// Used in responses and cancellation requests.
     #[proptest(strategy = "any_uuid()")]
     pub uuid: Uuid,
-    /// The logical timestamp at which the arrangement is queried.
+    /// The logical timestamp at which the collection is queried.
     pub timestamp: T,
     /// Actions to apply to the result set before returning them.
     pub finishing: RowSetFinishing,
