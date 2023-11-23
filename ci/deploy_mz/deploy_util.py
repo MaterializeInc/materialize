@@ -13,20 +13,16 @@ import tempfile
 import time
 from pathlib import Path
 
-try:
-    from semver.version import Version
-except ImportError:
-    from semver import VersionInfo as Version  # type: ignore
-
 import boto3
 import humanize
 
 from materialize import git
+from materialize.mz_version import MzAptVersion
 
 APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"
 TAG = os.environ["BUILDKITE_TAG"]
-VERSION = Version.parse(TAG.removeprefix("mz-v"))
+VERSION = MzAptVersion.parse_mz(TAG)
 
 
 def _tardir(name: str) -> tarfile.TarInfo:
@@ -96,7 +92,9 @@ def deploy_tarball(platform: str, mz: Path) -> None:
 
 
 def is_latest_version() -> bool:
-    latest_version = next(
-        t for t in git.get_version_tags(prefix="mz-v") if t.prerelease is None
+    latest_version = max(
+        t
+        for t in git.get_version_tags(version_type=MzAptVersion)
+        if t.prerelease is None
     )
     return VERSION == latest_version

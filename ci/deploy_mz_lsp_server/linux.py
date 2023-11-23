@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ci.deploy.deploy_util import rust_version
 from materialize import mzbuild, spawn
+from materialize.mz_version import MzLspServerVersion
 
 from . import deploy_util
 from .deploy_util import VERSION
@@ -22,7 +23,12 @@ def main() -> None:
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
     print("--- Checking version")
-    assert repo.rd.cargo_workspace.crates["mz-lsp-server"].version == VERSION
+    assert (
+        MzLspServerVersion.parse_mz_without_prefix(
+            repo.rd.cargo_workspace.crates["mz-lsp-server"].version_string
+        )
+        == VERSION
+    )
 
     print("--- Building mz-lsp-server")
     # The bin/ci-builder uses target-xcompile as the volume and

@@ -13,19 +13,15 @@ import tempfile
 import time
 from pathlib import Path
 
-try:
-    from semver.version import Version
-except ImportError:
-    from semver import VersionInfo as Version  # type: ignore
-
 import boto3
 import humanize
 
 from materialize import git
+from materialize.mz_version import MzLspServerVersion
 
 BINARIES_BUCKET = "materialize-binaries"
 TAG = os.environ["BUILDKITE_TAG"]
-VERSION = Version.parse(TAG.removeprefix("mz-lsp-server-v"))
+VERSION = MzLspServerVersion.parse_mz(TAG)
 
 
 def _tardir(name: str) -> tarfile.TarInfo:
@@ -103,9 +99,9 @@ def deploy_tarball(platform: str, lsp: Path) -> None:
 
 
 def is_latest_version() -> bool:
-    latest_version = next(
+    latest_version = max(
         t
-        for t in git.get_version_tags(prefix="mz-lsp-server-v")
+        for t in git.get_version_tags(version_type=MzLspServerVersion)
         if t.prerelease is None
     )
     return VERSION == latest_version

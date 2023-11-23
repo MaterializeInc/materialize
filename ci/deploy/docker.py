@@ -10,12 +10,8 @@
 import os
 from pathlib import Path
 
-try:
-    from semver.version import Version
-except ImportError:
-    from semver import VersionInfo as Version  # type: ignore
-
 from materialize import git, mzbuild
+from materialize.mz_version import MzVersion
 from materialize.xcompile import Arch
 
 
@@ -43,8 +39,12 @@ def main() -> None:
         mzbuild.publish_multiarch_images(buildkite_tag, deps)
 
         # Also tag the images as `latest` if this is the latest version.
-        version = Version.parse(buildkite_tag.lstrip("v"))
-        latest_version = next(t for t in git.get_version_tags() if t.prerelease is None)
+        version = MzVersion.parse_mz(buildkite_tag)
+        latest_version = max(
+            t
+            for t in git.get_version_tags(version_type=MzVersion)
+            if t.prerelease is None
+        )
         if version == latest_version:
             mzbuild.publish_multiarch_images("latest", deps)
     else:

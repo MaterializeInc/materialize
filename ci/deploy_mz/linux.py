@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 from materialize import mzbuild, spawn
+from materialize.mz_version import MzAptVersion
 
 from . import deploy_util
 from .deploy_util import APT_BUCKET, VERSION
@@ -21,7 +22,12 @@ def main() -> None:
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
     print("--- Checking version")
-    assert repo.rd.cargo_workspace.crates["mz"].version == VERSION
+    assert (
+        MzAptVersion.parse_mz_without_prefix(
+            repo.rd.cargo_workspace.crates["mz"].version_string
+        )
+        == VERSION
+    )
 
     print("--- Building mz")
     deps = repo.resolve_dependencies([repo.images["mz"]])

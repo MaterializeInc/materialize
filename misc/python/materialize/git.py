@@ -13,17 +13,14 @@ import functools
 import subprocess
 import sys
 from pathlib import Path
+from typing import TypeVar
 
-from materialize.mz_version import MzVersion
+from materialize import spawn
+from materialize.mz_version import MzVersion, TypedVersionBase
 from materialize.util import YesNoOnce
 from materialize.version_list import INVALID_VERSIONS
 
-try:
-    from semver.version import Version
-except ImportError:
-    from semver import VersionInfo as Version  # type: ignore
-
-from materialize import spawn
+VERSION_TYPE = TypeVar("VERSION_TYPE", bound=TypedVersionBase)
 
 fetched_tags_in_remotes: set[str | None] = set()
 
@@ -92,7 +89,9 @@ def expand_globs(root: Path, *specs: Path | str) -> set[str]:
     return set(f for f in (diff_files + ls_files).split("\0") if f.strip() != "")
 
 
-def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> list[Version]:
+def get_version_tags(
+    *, version_type: type[VERSION_TYPE], fetch: bool = True
+) -> list[VERSION_TYPE]:
     """List all the version-like tags in the repo
 
     Args:
@@ -106,18 +105,22 @@ def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> list[Version]:
         )
     tags = []
     for t in spawn.capture(["git", "tag"]).splitlines():
-        if not t.startswith(prefix):
+        if not t.startswith(version_type.get_prefix()):
             continue
         try:
-            tags.append(Version.parse(t.removeprefix(prefix)))
+            tags.append(version_type.parse_mz(t))
         except ValueError as e:
             print(f"WARN: {e}", file=sys.stderr)
 
     return sorted(tags, reverse=True)
 
 
-def get_latest_version(excluded_versions: set[Version] | None = None) -> Version:
-    all_version_tags: list[Version] = get_version_tags(fetch=True)
+def get_latest_version(
+    version_type: type[VERSION_TYPE], excluded_versions: set[VERSION_TYPE] | None = None
+) -> VERSION_TYPE:
+    all_version_tags: list[VERSION_TYPE] = get_version_tags(
+        version_type=version_type, fetch=True
+    )
 
     if excluded_versions is not None:
         all_version_tags = [v for v in all_version_tags if v not in excluded_versions]
@@ -275,7 +278,7 @@ def is_on_main_branch() -> bool:
     return get_branch_name() == "main"
 
 
-def get_tagged_release_version() -> MzVersion | None:
+def get_tagged_release_version(version_type: type[VERSION_TYPE]) -> VERSION_TYPE | None:
     """
     This returns the release version if exactly this commit is tagged.
     If multiple release versions are present, the highest one will be returned.
@@ -283,10 +286,10 @@ def get_tagged_release_version() -> MzVersion | None:
     """
     git_tags = get_tags_of_current_commit()
 
-    versions: list[MzVersion] = []
+    versions: list[VERSION_TYPE] = []
 
     for git_tag in git_tags:
-        version = MzVersion.try_parse_mz(git_tag)
+        version = version_type.try_parse_mz(git_tag)
 
         if version is not None:
             versions.append(version)
@@ -318,8 +321,8 @@ def get_branch_name() -> str:
 
 
 def get_previous_version(
-    version: MzVersion, excluded_versions: set[Version] | None = None
-) -> Version:
+    version: VERSION_TYPE, excluded_versions: set[VERSION_TYPE] | None = None
+) -> VERSION_TYPE:
     if excluded_versions is None:
         excluded_versions = set()
 
@@ -333,16 +336,13 @@ def get_previous_version(
             # start searching with this version
             version = found_version
 
-    # type must match for comparison
-    version_as_semver_version = version.to_semver()
-
-    all_versions: list[Version] = get_version_tags()
+    all_versions: list[VERSION_TYPE] = get_version_tags(version_type=type(version))
     all_suitable_previous_versions = [
         v
         for v in all_versions
-        if v < version_as_semver_version
+        if v < version
         and (v.prerelease is None or len(v.prerelease) == 0)
-        and MzVersion.from_semver(v) not in INVALID_VERSIONS
+        and (not isinstance(version, MzVersion) or v not in INVALID_VERSIONS)
         and v not in excluded_versions
     ]
     return max(all_suitable_previous_versions)

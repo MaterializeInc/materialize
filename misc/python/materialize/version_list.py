@@ -84,7 +84,7 @@ class VersionsFromGit(VersionList):
 
     def __init__(self) -> None:
         self.versions = list(
-            {MzVersion.from_semver(t) for t in git.get_version_tags(fetch=True)}
+            set(git.get_version_tags(version_type=MzVersion, fetch=True))
             - INVALID_VERSIONS
         )
         self.versions.sort()
