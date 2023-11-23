@@ -195,7 +195,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
 
                 if issue.info["number"] not in already_reported_issue_numbers:
                     known_errors.append(
-                        f"[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}) in {linked_file}:  \n``{error.match}``"
+                        f"[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}) in {linked_file}:  \n``{error.match.decode('utf-8')}``"
                     )
                     already_reported_issue_numbers.add(issue.info["number"])
                 break
