@@ -52,9 +52,10 @@ class PeekPersist(Check):
             3
             3
 
-            ? EXPLAIN SELECT * FROM peek_persist LIMIT 100
-            Explained Query (fast path):
-              Finish limit=100 output=[#0]
-                PeekPersist materialize.public.peek_persist
+            # TODO(bkirwi): revisit this when persist peeks have stabilized
+            # ? EXPLAIN SELECT * FROM peek_persist LIMIT 100
+            # Explained Query (fast path):
+            #   Finish limit=100 output=[#0]
+            #     PeekPersist materialize.public.peek_persist
             """
         )

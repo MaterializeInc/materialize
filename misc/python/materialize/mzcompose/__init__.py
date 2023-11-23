@@ -73,7 +73,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_sink_doc_on_option": "true",
     "enable_assert_not_null": "true",
     "enable_specialized_arrangements": "true",
-    "persist_fast_path_limit": "1000",
+    # TODO(def-,bkirwi): Reenable before this is used in production, #22042
+    # "persist_fast_path_limit": "1000",
     "enable_alter_swap": "true",
     "timestamp_oracle": "postgres",
 }
