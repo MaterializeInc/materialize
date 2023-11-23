@@ -271,7 +271,7 @@ def get_common_ancestor_commit(remote: str, branch: str, fetch_branch: bool) -> 
 
 def is_on_release_version() -> bool:
     git_tags = get_tags_of_current_commit()
-    return any(MzVersion.is_mz_version_string(git_tag) for git_tag in git_tags)
+    return any(MzVersion.is_valid_version_string(git_tag) for git_tag in git_tags)
 
 
 def is_on_main_branch() -> bool:
@@ -289,10 +289,8 @@ def get_tagged_release_version(version_type: type[VERSION_TYPE]) -> VERSION_TYPE
     versions: list[VERSION_TYPE] = []
 
     for git_tag in git_tags:
-        version = version_type.try_parse_mz(git_tag)
-
-        if version is not None:
-            versions.append(version)
+        if version_type.is_valid_version_string(git_tag):
+            versions.append(version_type.parse(git_tag))
 
     if len(versions) == 0:
         return None
@@ -328,7 +326,7 @@ def get_previous_version(
 
     if version.prerelease is not None and len(version.prerelease) > 0:
         # simply drop the prerelease, do not try to find a decremented version
-        found_version = MzVersion.create_mz(version.major, version.minor, version.patch)
+        found_version = MzVersion.create(version.major, version.minor, version.patch)
 
         if found_version not in excluded_versions:
             return found_version

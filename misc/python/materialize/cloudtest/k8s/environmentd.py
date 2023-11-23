@@ -311,7 +311,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         except ValueError:
             return default
 
-        cmp_version = MzVersion.parse_mz_without_prefix(version)
+        cmp_version = MzVersion.parse_without_prefix(version)
         return bool(operator(tag_version, cmp_version))
 
     def _meets_minimum_version(self, version: str) -> bool:

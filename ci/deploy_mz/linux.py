@@ -23,7 +23,7 @@ def main() -> None:
 
     print("--- Checking version")
     assert (
-        MzCliVersion.parse_mz_without_prefix(
+        MzCliVersion.parse_without_prefix(
             repo.rd.cargo_workspace.crates["mz"].version_string
         )
         == MZ_CLI_VERSION

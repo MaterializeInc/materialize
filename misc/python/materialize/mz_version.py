@@ -31,7 +31,7 @@ class TypedVersionBase(Version):
         raise NotImplementedError(f"Not implemented in {cls}")
 
     @classmethod
-    def create_mz(
+    def create(
         cls: type[T], major: int, minor: int, patch: int, prerelease: str | None = None
     ) -> T:
         prerelease_suffix = f"-{prerelease}" if prerelease is not None else ""
@@ -40,7 +40,7 @@ class TypedVersionBase(Version):
         )
 
     @classmethod
-    def parse_mz_without_prefix(
+    def parse_without_prefix(
         cls: type[T], version_without_prefix: str, drop_dev_suffix: bool = False
     ) -> T:
         version = f"{cls.get_prefix()}{version_without_prefix}"
@@ -67,7 +67,7 @@ class TypedVersionBase(Version):
         return cls.parse(version)
 
     @classmethod
-    def try_parse_mz(
+    def try_parse(
         cls: type[T], version: str, drop_dev_suffix: bool = False
     ) -> T | None:
         """Parses a version string but returns empty if that fails"""
@@ -77,8 +77,8 @@ class TypedVersionBase(Version):
             return None
 
     @classmethod
-    def is_mz_version_string(cls, version: str) -> bool:
-        return cls.try_parse_mz(version) is not None
+    def is_valid_version_string(cls, version: str) -> bool:
+        return cls.try_parse(version) is not None
 
     def str_without_prefix(self) -> str:
         return super().__str__()

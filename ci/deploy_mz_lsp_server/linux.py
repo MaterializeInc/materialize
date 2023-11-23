@@ -24,7 +24,7 @@ def main() -> None:
 
     print("--- Checking version")
     assert (
-        MzLspServerVersion.parse_mz_without_prefix(
+        MzLspServerVersion.parse_without_prefix(
             repo.rd.cargo_workspace.crates["mz-lsp-server"].version_string
         )
         == MZ_LSP_SERVER_VERSION
