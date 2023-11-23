@@ -159,8 +159,8 @@ timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
-dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
+differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git", branch="v0.78patch" }
+dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git", branch="v0.78patch" }
 
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
