@@ -22,7 +22,7 @@ use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
 };
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::notices::OptimizerNotice;
+use mz_transform::notice::OptimizerNotice;
 
 use crate::AdapterError;
 
@@ -50,7 +50,7 @@ pub(crate) fn explain_dataflow<T>(
     format: ExplainFormat,
     config: &ExplainConfig,
     humanizer: &dyn ExprHumanizer,
-    dataflow_metainfo: &DataflowMetainfo,
+    dataflow_metainfo: &DataflowMetainfo<OptimizerNotice>,
 ) -> Result<String, AdapterError>
 where
     for<'a> Explainable<'a, DataflowDescription<T>>: Explain<'a, Context = ExplainContext<'a>>,

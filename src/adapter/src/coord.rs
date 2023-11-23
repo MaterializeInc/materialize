@@ -1666,6 +1666,7 @@ impl Coordinator {
                     let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
                     let (physical_plan, metainfo) = global_lir_plan.unapply();
+                    let metainfo = self.catalog().render_notices(metainfo, Some(entry.id()));
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);
@@ -1707,6 +1708,7 @@ impl Coordinator {
                     let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
                     let (physical_plan, metainfo) = global_lir_plan.unapply();
+                    let metainfo = self.catalog().render_notices(metainfo, Some(entry.id()));
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);

@@ -75,7 +75,7 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourc
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::notices::RawOptimizerNotice;
+use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
@@ -1045,20 +1045,23 @@ impl Coordinator {
                 coord
                     .catalog_mut()
                     .set_physical_plan(id, global_lir_plan.df_desc().clone());
-                coord
-                    .catalog_mut()
-                    .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
-
-                // Emit notices.
-                coord.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
                 let output_desc = global_lir_plan.desc().clone();
-                let mut df_desc = global_lir_plan.unapply().0;
+                let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 // Timestamp selection
                 let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
                 let since = coord.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since.clone());
+
+                // Emit notices.
+                coord.emit_optimizer_notices(session, &df_meta.optimizer_notices);
+
+                // Notices rendering
+                let df_meta = coord.catalog().render_notices(df_meta, Some(id));
+                coord
+                    .catalog_mut()
+                    .set_dataflow_metainfo(id, df_meta.clone());
 
                 // Announce the creation of the materialized view source.
                 coord
@@ -1178,19 +1181,22 @@ impl Coordinator {
                 coord
                     .catalog_mut()
                     .set_physical_plan(id, global_lir_plan.df_desc().clone());
-                coord
-                    .catalog_mut()
-                    .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
 
-                // Emit notices.
-                coord.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
-
-                let mut df_desc = global_lir_plan.unapply().0;
+                let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 // Timestamp selection
                 let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
                 let since = coord.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since);
+
+                // Emit notices.
+                coord.emit_optimizer_notices(session, &df_meta.optimizer_notices);
+
+                // Notices rendering
+                let df_meta = coord.catalog().render_notices(df_meta, Some(id));
+                coord
+                    .catalog_mut()
+                    .set_dataflow_metainfo(id, df_meta.clone());
 
                 coord.ship_dataflow(df_desc, cluster_id).await;
 
