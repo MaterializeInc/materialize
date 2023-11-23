@@ -18,10 +18,10 @@
 
 use std::ops::DerefMut;
 
-use mz_sql_lexer::keywords::Keyword;
-use mz_sql_lexer::lexer::{self, Token};
 use ::serde::Deserialize;
 use mz_ore::collections::HashMap;
+use mz_sql_lexer::keywords::Keyword;
+use mz_sql_lexer::lexer::{self, Token};
 use mz_sql_parser::ast::{statement_kind_label_value, Raw, Statement};
 use mz_sql_parser::parser::parse_statements;
 use regex::Regex;
@@ -33,7 +33,6 @@ use tower_lsp::jsonrpc::{Error, ErrorCode, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
-use crate::functions::FUNCTIONS;
 use crate::{PKG_NAME, PKG_VERSION};
 
 /// Default formatting width to use in the [Backend::formatting] implementation.
@@ -104,29 +103,68 @@ pub struct Backend {
 
     /// Schema available in the client
     /// used for completion suggestions.
-    pub schema: Mutex<Option<Schema>>
+    pub schema: Mutex<Option<Schema>>,
 }
 
+/// Represents a column from an [ObjectType
 #[derive(Debug, Deserialize)]
 pub struct SchemaObjectColumn {
+    /// Represents the column's name.
     name: String,
-    #[serde(rename = "type")]
-    _type: String
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SchemaObject {
+    /// Represents the column's type.
     #[serde(rename = "type")]
     _type: String,
-    name: String,
-    columns: Vec<SchemaObjectColumn>
 }
 
 #[derive(Debug, Deserialize)]
+enum ObjectType {
+    MaterializedView,
+    View,
+    Source,
+    Table,
+    Sink,
+}
+
+impl ToString for ObjectType {
+    fn to_string(&self) -> String {
+        match &self {
+            ObjectType::MaterializedView => "Materialized View".to_string(),
+            ObjectType::View => "View".to_string(),
+            ObjectType::Source => "Source".to_string(),
+            ObjectType::Table => "Table".to_string(),
+            ObjectType::Sink => "Sink".to_string(),
+        }
+    }
+}
+
+/// Represents a Materialize object present in the schema,
+/// and its columns.
+///
+/// E.g. a table, view, source, etc.
+#[derive(Debug, Deserialize)]
+pub struct SchemaObject {
+    /// Represents the object type.
+    #[serde(rename = "type")]
+    _type: ObjectType,
+    /// Represents the object name.
+    name: String,
+    /// Contains all the columns available in the object.
+    columns: Vec<SchemaObjectColumn>,
+}
+
+/// Represents the current schema, database and all
+/// its objects the client is using.
+///
+/// This is later used to return completion items to the client.
+#[derive(Debug, Deserialize)]
 pub struct Schema {
+    /// Represents the schema name.
     schema: String,
+    /// Represents the database name.
     database: String,
-    objects: Vec<SchemaObject>
+    /// Contains all the user objects (tables, views, sources, etc.)
+    /// available in the current database/schema.
+    objects: Vec<SchemaObject>,
 }
 
 /// Contains customizable options send by the client.
@@ -135,7 +173,8 @@ pub struct Schema {
 pub struct InitializeOptions {
     /// Represents the width used to format text using [mz_sql_pretty].
     formatting_width: Option<usize>,
-    schema: Option<Schema>
+    /// Represents the current schema available in the client.
+    schema: Option<Schema>,
 }
 
 #[tower_lsp::async_trait]
@@ -277,18 +316,20 @@ impl LanguageServer for Backend {
 
                 if let Some(json_args) = json_args {
                     self.client
-                    .log_message(MessageType::INFO, format!("Json args: {:?}", json_args))
-                    .await;
+                        .log_message(MessageType::INFO, format!("Json args: {:?}", json_args))
+                        .await;
 
                     let args = serde_json::from_value::<InitializeOptions>(json_args.clone())
-                        .map_err(|_| build_error("Error deserializing parse args as InitializeOptions."))?;
+                        .map_err(|_| {
+                            build_error("Error deserializing parse args as InitializeOptions.")
+                        })?;
 
-                    if let Some(formatting_width) = args.formatting_width  {
+                    if let Some(formatting_width) = args.formatting_width {
                         let mut formatting_width_guard = self.formatting_width.lock().await;
                         *formatting_width_guard = formatting_width;
                     }
 
-                    if let Some(schema) = args.schema  {
+                    if let Some(schema) = args.schema {
                         let mut schema_guard = self.schema.lock().await;
                         *schema_guard = Some(schema);
                     }
@@ -371,42 +412,39 @@ impl LanguageServer for Backend {
 
         if let Some(content) = content {
             // Get the lex token.
-            let lex_results = lexer::lex(&content.to_string()).map_err(|_| build_error("Error getting lex tokens."))?;
-            let offset = position_to_offset(_position, &content).ok_or(build_error("Error getting completion offset."))?;
+            let lex_results = lexer::lex(&content.to_string())
+                .map_err(|_| build_error("Error getting lex tokens."))?;
+            let offset = position_to_offset(_position, content)
+                .ok_or(build_error("Error getting completion offset."))?;
             let mut last_keyword: Option<Keyword> = None;
-            lex_results
-                .iter()
-                .enumerate()
-                .find(|(_, x)| {
-                    match x.kind {
-                        Token::Keyword(k) => {
-                            match k {
-                                Keyword::Select => {
-                                    last_keyword = Some(k);
-                                }
-                                Keyword::From => {
-                                    last_keyword = Some(k);
-                                }
-                                _ => {}
-                            }
+            lex_results.iter().enumerate().find(|(_, x)| {
+                match x.kind {
+                    Token::Keyword(k) => match k {
+                        Keyword::Select => {
+                            last_keyword = Some(k);
                         }
-                        // Skip the rest for now.
+                        Keyword::From => {
+                            last_keyword = Some(k);
+                        }
                         _ => {}
-                    };
+                    },
+                    // Skip the rest for now.
+                    _ => {}
+                };
 
-                    return x.offset >= offset;
-                });
+                x.offset >= offset
+            });
 
             if let Some(keyword) = last_keyword {
                 let completions = match keyword {
                     Keyword::Select => {
                         // Return columns and function
                         let mut schema = self.schema.lock().await;
-                        let mut completions = FUNCTIONS.clone();
+                        let mut completions = Vec::new();
 
                         self.client
-                        .log_message(MessageType::INFO, format!("Schema: {:?}", schema))
-                        .await;
+                            .log_message(MessageType::INFO, format!("Schema: {:?}", schema))
+                            .await;
 
                         if let Some(schema) = schema.deref_mut() {
                             schema.objects.iter().for_each(|object| {
@@ -419,7 +457,16 @@ impl LanguageServer for Backend {
                                             description: Some(column._type.to_string()),
                                         }),
                                         kind: Some(CompletionItemKind::FIELD),
-                                        detail: Some(format!("From {} {}", object.name, object._type).to_string()),
+                                        detail: Some(
+                                            format!(
+                                                "From {}.{}.{} ({:?})",
+                                                schema.database,
+                                                schema.schema,
+                                                object.name,
+                                                object._type
+                                            )
+                                            .to_string(),
+                                        ),
                                         documentation: None,
                                         deprecated: Some(false),
                                         ..Default::default()
@@ -431,11 +478,10 @@ impl LanguageServer for Backend {
                         completions
                     }
                     Keyword::From => {
-                        let mut completions = FUNCTIONS.clone();
+                        let mut completions = Vec::new();
                         let mut schema = self.schema.lock().await;
 
                         if let Some(schema) = schema.deref_mut() {
-                            // Objects (tables, views, materialized views)
                             schema.objects.iter().for_each(|object| {
                                 completions.push(CompletionItem {
                                     label: object.name.to_string(),
@@ -443,7 +489,15 @@ impl LanguageServer for Backend {
                                         detail: None,
                                         description: Some(object._type.to_string()),
                                     }),
-                                    kind: Some(CompletionItemKind::FUNCTION),
+                                    kind: match object._type {
+                                        ObjectType::View => Some(CompletionItemKind::ENUM),
+                                        ObjectType::MaterializedView => {
+                                            Some(CompletionItemKind::ENUM_MEMBER)
+                                        }
+                                        ObjectType::Source => Some(CompletionItemKind::STRUCT),
+                                        ObjectType::Sink => Some(CompletionItemKind::STRUCT),
+                                        ObjectType::Table => Some(CompletionItemKind::CONSTANT)
+                                    },
                                     detail: None,
                                     documentation: None,
                                     deprecated: Some(false),
@@ -455,7 +509,9 @@ impl LanguageServer for Backend {
                         completions
                     }
                     // Skip the rest for now.
-                    _ => { vec![] }
+                    _ => {
+                        vec![]
+                    }
                 };
 
                 return Ok(Some(CompletionResponse::Array(completions)));
@@ -583,14 +639,13 @@ impl Backend {
     }
 }
 
-
 /// This function converts a (line, column) position in the text to an offset in the file.
 ///
 /// It is the inverse of the `offset_to_position` function.
 fn position_to_offset(position: Position, rope: &Rope) -> Option<usize> {
     // Convert line and column from u32 back to usize
-    let line = position.line as usize;
-    let column = position.character as usize;
+    let line: usize = position.line.try_into().ok()?;
+    let column: usize = position.character.try_into().ok()?;
 
     // Get the offset of the first character of the line
     let first_char_of_line_offset = rope.try_line_to_char(line).ok()?;

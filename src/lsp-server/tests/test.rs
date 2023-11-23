@@ -254,8 +254,6 @@ mod tests {
             expected_response,
         )
         .await;
-
-
     }
 
     /// Asserts that the server can parse a sql text file by using "workspace/executeCommand".
