@@ -136,3 +136,4 @@ required-features = ["async"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+development = ["tokio-test"]
