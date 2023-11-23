@@ -56,9 +56,9 @@ class InsertAndSelectCountInMvWorkload(Workload):
         return [InsertDefaultValues(), SelectCountInMv()]
 
 
-class InsertAndSelectStarWorkload(Workload):
+class InsertAndSelectLimitWorkload(Workload):
     def operations(self) -> list["Operation"]:
-        return [InsertDefaultValues(), SelectStar()]
+        return [InsertDefaultValues(), SelectLimit()]
 
 
 class UpdateWorkload(Workload):
