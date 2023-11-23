@@ -1036,6 +1036,8 @@ impl Coordinator {
                 let since = self.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since.clone());
 
+                assert!(since.clone().into_option().unwrap() <= self.xxx.unwrap());
+
                 // Announce the creation of the materialized view source.
                 self.controller
                     .storage

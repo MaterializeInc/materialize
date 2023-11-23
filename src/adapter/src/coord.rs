@@ -899,6 +899,10 @@ impl ExecuteContext {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Coordinator {
+
+    xxx: Option<Timestamp>,
+
+
     /// The controller for the storage and compute layers.
     #[derivative(Debug = "ignore")]
     controller: mz_controller::Controller,
@@ -2338,6 +2342,7 @@ pub fn serve(
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let mut coord = Coordinator {
+                    xxx: None,
                     controller: dataflow_client,
                     view_optimizer: Optimizer::logical_optimizer(
                         &mz_transform::typecheck::empty_context(),

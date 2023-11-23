@@ -25,7 +25,7 @@ use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn, CreateSinkConnection, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName, DocOnIdentifier, DocOnSchema, Envelope, Function, Ident, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, MaterializedViewOption, PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, Statement, UnresolvedItemName};
+use mz_sql_parser::ast::{AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn, CreateSinkConnection, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName, DocOnIdentifier, DocOnSchema, Envelope, Function, Ident, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, MaterializedViewOption, MaterializedViewOptionName, PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, Statement, UnresolvedItemName};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::{Connection, ConnectionContext};
 use mz_storage_types::errors::ContextCreationError;
@@ -1386,6 +1386,17 @@ pub fn purify_create_materialized_view_options(options: Vec<MaterializedViewOpti
     /////// todo
 
     options
+
+    // let xxx = options.clone();
+    //
+    // xxx.insert(MaterializedViewOption{
+    //     name: MaterializedViewOptionName::Refresh,
+    //     value: WithOptionValue::Refresh(RefreshOptionValue::At(RefreshAtOptionValue {
+    //         time:
+    //     }))
+    // });
+    //
+    // xxx
 }
 
 pub fn materialized_view_option_contains_temporal(mvo: &MaterializedViewOption<Aug>) -> bool {

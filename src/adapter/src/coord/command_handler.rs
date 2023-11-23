@@ -710,7 +710,10 @@ impl Coordinator {
                 with_options,
             }) => {
                 // (This won't be the same timestamp as the system table inserts, unfortunately.)
-                let mz_now = if with_options.iter().any(|wo| materialized_view_option_contains_temporal(wo)) {
+                let mz_now =
+                    //if with_options.iter().any(|wo| materialized_view_option_contains_temporal(wo))
+                if true ////////////////////
+                    {
                     let timeline_context = match self.validate_timeline_context(resolved_ids.0.clone()) {
                         Ok(tc) => tc,
                         Err(e) => return ctx.retire(Err(e.into())) /////// todo: provoke this in a test. See testdrive/timelines.td
@@ -736,6 +739,8 @@ impl Coordinator {
                 } else {
                     None
                 };
+
+                self.xxx = mz_now;
 
                 let purified_stmt = Statement::CreateMaterializedView(CreateMaterializedViewStatement::<Aug>{
                     if_exists,
