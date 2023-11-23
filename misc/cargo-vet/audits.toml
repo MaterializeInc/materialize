@@ -12,6 +12,12 @@ criteria = "safe-to-deploy"
 version = "0.26.0"
 
 [[audits.differential-dataflow]]
+who = "Marcos Antonio Vaz Salles <vmarcos@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.0@git:209b6ece18d04e42668b86db05cbdfd3cbf60d3f"
+notes = "The audit builds on our previous trust in 0.12.0, and a review of the additional single commit in 209b6ece18d04e42668b86db05cbdfd3cbf60d3f."
+
+[[audits.differential-dataflow]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.12.0 -> 0.12.0@git:d9896ce1f322fb89c3e6955441fb2d2c2e07bc1d"
