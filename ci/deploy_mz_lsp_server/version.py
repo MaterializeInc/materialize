@@ -9,13 +9,13 @@
 
 import boto3
 
-from .deploy_util import BINARIES_BUCKET, VERSION
+from .deploy_util import BINARIES_BUCKET, MZ_LSP_SERVER_VERSION
 
 
 def main() -> None:
     print("--- Uploading version file")
     boto3.client("s3").put_object(
-        Body=f"{VERSION.str_without_prefix()}",
+        Body=f"{MZ_LSP_SERVER_VERSION.str_without_prefix()}",
         Bucket=BINARIES_BUCKET,
         Key="mz-lsp-server-latest.version",
         ContentType="text/plain",

@@ -21,7 +21,7 @@ from materialize.mz_version import MzLspServerVersion
 
 BINARIES_BUCKET = "materialize-binaries"
 TAG = os.environ["BUILDKITE_TAG"]
-VERSION = MzLspServerVersion.parse_mz(TAG)
+MZ_LSP_SERVER_VERSION = MzLspServerVersion.parse_mz(TAG)
 
 
 def _tardir(name: str) -> tarfile.TarInfo:
@@ -93,9 +93,11 @@ def deploy_tarball(platform: str, lsp: Path) -> None:
     size = humanize.naturalsize(os.lstat(tar_path).st_size)
     print(f"Tarball size: {size}")
 
-    upload_tarball(tar_path, platform, f"v{VERSION.str_without_prefix()}")
+    upload_tarball(tar_path, platform, f"v{MZ_LSP_SERVER_VERSION.str_without_prefix()}")
     if is_latest_version():
-        upload_latest_redirect(platform, f"v{VERSION.str_without_prefix()}")
+        upload_latest_redirect(
+            platform, f"v{MZ_LSP_SERVER_VERSION.str_without_prefix()}"
+        )
 
 
 def is_latest_version() -> bool:
@@ -104,4 +106,4 @@ def is_latest_version() -> bool:
         for t in git.get_version_tags(version_type=MzLspServerVersion)
         if t.prerelease is None
     )
-    return VERSION == latest_version
+    return MZ_LSP_SERVER_VERSION == latest_version

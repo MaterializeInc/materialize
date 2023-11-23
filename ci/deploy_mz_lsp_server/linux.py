@@ -15,7 +15,7 @@ from materialize import mzbuild, spawn
 from materialize.mz_version import MzLspServerVersion
 
 from . import deploy_util
-from .deploy_util import VERSION
+from .deploy_util import MZ_LSP_SERVER_VERSION
 
 
 def main() -> None:
@@ -27,7 +27,7 @@ def main() -> None:
         MzLspServerVersion.parse_mz_without_prefix(
             repo.rd.cargo_workspace.crates["mz-lsp-server"].version_string
         )
-        == VERSION
+        == MZ_LSP_SERVER_VERSION
     )
 
     print("--- Building mz-lsp-server")
