@@ -225,6 +225,25 @@ impl LanguageServer for Backend {
                     return Err(build_error("Missing command args."));
                 }
             }
+            "optionsUpdate" => {
+                let json_args = command_params.arguments.get(0);
+
+                if let Some(json_args) = json_args {
+                    let args = serde_json::from_value::<InitializeOptions>(json_args.clone())
+                        .map_err(|_| {
+                            build_error("Error deserializing parse args as InitializeOptions.")
+                        })?;
+
+                    if let Some(formatting_width) = args.formatting_width {
+                        let mut formatting_width_guard = self.formatting_width.lock().await;
+                        *formatting_width_guard = formatting_width;
+                    }
+
+                    return Ok(None);
+                } else {
+                    return Err(build_error("Missing command args."));
+                }
+            }
             _ => {
                 return Err(build_error("Unknown command."));
             }
