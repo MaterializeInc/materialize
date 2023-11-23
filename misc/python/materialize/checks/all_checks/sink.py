@@ -252,6 +252,9 @@ class SinkTables(Check):
         return Testdrive(
             dedent(
                 """
+                $ schema-registry-verify schema-type=avro subject=testdrive-sink-large-transaction-sink-${testdrive.seed}-value
+                {"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"f1","type":"int"},{"name":"f2","type":["null","string"]}]}]},{"name":"after","type":["null","row"]}]}
+
                 # We check the contents of the sink topics by re-ingesting them.
                 > CREATE SOURCE sink_large_transaction_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}')
