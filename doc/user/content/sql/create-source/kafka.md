@@ -203,7 +203,7 @@ Note that:
 #### Headers
 
 Message headers can be exposed via the `INCLUDE HEADER key AS name` option.
-The `bytea` value of the header is automatically parsed into a UTF-8 string. To expose the raw bytes instead, the `BYTES` option can be used.
+The `bytea` value of the header is automatically parsed into an UTF-8 string. To expose the raw `bytea` instead, the `BYTES` option can be used.
 
 The following example demonstrates use of the `INCLUDE HEADER` option.
 
