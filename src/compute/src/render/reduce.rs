@@ -41,9 +41,7 @@ use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, HeapSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
-use crate::render::context::{
-    Arrangement, CollectionBundle, Context, KeyValArrangement, SpecializedArrangement,
-};
+use crate::render::context::{Arrangement, CollectionBundle, Context, SpecializedArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
 use crate::render::ArrangementFlavor;
@@ -597,7 +595,7 @@ where
         if distinct {
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_, Result<(), String>>(partial, None)
+                    .build_reduce_inaccumulable_distinct::<_, Result<(), String>, RowSpine<_, _, _, _>>(partial, None)
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .map_fallible("Demux Errors", move |(key, result)| match result {
                         Ok(()) => Ok(key),
@@ -607,7 +605,10 @@ where
                 partial = oks;
             } else {
                 partial = self
-                    .build_reduce_inaccumulable_distinct::<_, ()>(partial, Some(" [val: empty]"))
+                    .build_reduce_inaccumulable_distinct::<_, (), RowKeySpine<_, _, _>>(
+                        partial,
+                        Some(" [val: empty]"),
+                    )
                     .as_collection(|k, _| k.clone());
             }
         }
@@ -668,14 +669,17 @@ where
         }
     }
 
-    fn build_reduce_inaccumulable_distinct<S, R>(
+    fn build_reduce_inaccumulable_distinct<S, V, Tr>(
         &self,
         input: Collection<S, (Row, Row), Diff>,
         name_tag: Option<&str>,
-    ) -> KeyValArrangement<S, (Row, Row), R>
+    ) -> Arranged<S, TraceAgent<Tr>>
     where
         S: Scope<Timestamp = G::Timestamp>,
-        R: MaybeValidatingRow<(), String>,
+        V: MaybeValidatingRow<(), String>,
+        Tr: Trace + TraceReader<Key = (Row, Row), Val = V, Time = G::Timestamp, R = Diff> + 'static,
+        Tr::Batch: Batch,
+        Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
 
@@ -686,11 +690,11 @@ where
 
         let input: KeyCollection<_, _, _> = input.into();
         input
-            .mz_arrange::<RowSpine<(Row, Row), _, _, _>>(
+            .mz_arrange::<RowKeySpine<(Row, Row), _, _>>(
                 "Arranged ReduceInaccumulable Distinct [val: empty]",
             )
-            .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>(&output_name, move |_, source, t| {
-                if let Some(err) = R::into_error() {
+            .mz_reduce_abelian::<_, Tr>(&output_name, move |_, source, t| {
+                if let Some(err) = V::into_error() {
                     for (value, count) in source.iter() {
                         if count.is_positive() {
                             continue;
@@ -702,7 +706,7 @@ where
                         return;
                     }
                 }
-                t.push((R::ok(()), 1))
+                t.push((V::ok(()), 1))
             })
     }
 

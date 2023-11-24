@@ -416,7 +416,7 @@ true true true true
 # since we include monoids in the diff field. Note that in both materialized views below,
 # the output arrangements end up taking 72 bytes per element due to a similar reasoning
 # as above. The input arrangement of m_minmax takes (24 + 4) + (8 + (24 + (32 + 32))) = 124
-# bytes per element, while for m_top1 we have (24 + 4) + (0 + 4) + (8 + (48 + 16)) = 104.
+# bytes per element, while for m_top1 we have (24 + 4) + (8 + (48 + 16)) = 100.
 # A Vec<ReductionMonoid> takes 24 for the Vec plus 32 bytes per ReductionMonoid, while a
 # Top1Monoid takes 48 bytes plus 16 bytes per ColumnOrder.
 
@@ -447,8 +447,8 @@ true true true true
 
 > SELECT
     records >= 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size >= 0.7 * (104 + 72) * 1000 AND size < 2 * (104 + 72) * 1000,
-    capacity >= 0.7 * (104 + 72) * 1000 AND capacity < 2 * (104 + 72) * 1000,
+    size >= 0.7 * (100 + 72) * 1000 AND size < 1.1 * (100 + 72) * 1000,
+    capacity >= 0.7 * (100 + 72) * 1000 AND capacity < 1.5 * (100 + 72) * 1000,
     allocations > 100
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_top1%';
