@@ -93,7 +93,7 @@ privileges the role needs.
    other environments:
 
    ```sql
-   CREATE CLUSTER dev_cluster REPLICAS (devr1 (SIZE = '3xsmall'));
+   CREATE CLUSTER dev_cluster (SIZE = '3xsmall');
    ```
 
 1. Change into the example cluster:

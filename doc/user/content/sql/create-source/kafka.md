@@ -152,9 +152,10 @@ See the [reference documentation](/sql/create-cluster/#disk) for more details.
 To create a new cluster with spill to disk enabled, use the [`DISK` option](/sql/create-cluster/#disk):
 
 ```sql
-CREATE CLUSTER cluster_with_disk,
+CREATE CLUSTER cluster_with_disk (
   SIZE = '<size>',
-  DISK = true;
+  DISK = true
+);
 ```
 
 Alternatively, you can attach disk storage to an existing cluster using the [`ALTER CLUSTER`](/sql/alter-cluster/) command:
