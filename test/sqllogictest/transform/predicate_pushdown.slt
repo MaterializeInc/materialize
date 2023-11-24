@@ -387,12 +387,12 @@ Explained Query:
             ReadIndex on=mz_schemas mz_show_schemas_ind=[*** full scan ***] // { arity: 6 }
         ArrangeBy keys=[[#0]] // { arity: 3 }
           Union // { arity: 3 }
-            Project (#2, #3, #8) // { arity: 3 }
-              Map ("view") // { arity: 9 }
-                ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***] // { arity: 8 }
             Project (#2, #3, #9) // { arity: 3 }
-              Map ("materialized-view") // { arity: 10 }
-                ReadIndex on=mz_materialized_views mz_materialized_views_ind=[*** full scan ***] // { arity: 9 }
+              Map ("view") // { arity: 10 }
+                ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***] // { arity: 9 }
+            Project (#2, #3, #10) // { arity: 3 }
+              Map ("materialized-view") // { arity: 11 }
+                ReadIndex on=mz_materialized_views mz_materialized_views_ind=[*** full scan ***] // { arity: 10 }
 
 Used Indexes:
   - mz_internal.mz_show_schemas_ind (*** full scan ***)

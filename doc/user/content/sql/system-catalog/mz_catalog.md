@@ -128,6 +128,7 @@ Field        | Type                 | Meaning
 `owner_id`   | [`text`]             | The role ID of the owner of the connection. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges` | [`mz_aclitem array`] | The privileges belonging to the connection.
 `create_sql` | [`text`]             | The `CREATE` SQL statement for the connection.
+`redacted_create_sql` | [`text`]    | The redacted `CREATE` SQL statement for the connection.
 
 ### `mz_databases`
 
@@ -198,6 +199,7 @@ Field        | Type        | Meaning
 `cluster_id` | [`text`]    | The ID of the cluster in which the index is built.
 `owner_id`   | [`text`]    | The role ID of the owner of the index. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `create_sql` | [`text`]    | The `CREATE` SQL statement for the index.
+`redacted_create_sql` | [`text`] | The redacted `CREATE` SQL statement for the index.
 
 ### `mz_index_columns`
 
@@ -279,6 +281,7 @@ Field          | Type                 | Meaning
 `owner_id`     | [`text`]             | The role ID of the owner of the materialized view. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`   | [`mz_aclitem array`] | The privileges belonging to the materialized view.
 `create_sql`   | [`text`]             | The `CREATE` SQL statement for the materialized view.
+`redacted_create_sql` | [`text`]      | The redacted `CREATE` SQL statement for the materialized view.
 
 ### `mz_objects`
 
@@ -406,6 +409,7 @@ Field            | Type     | Meaning
 `cluster_id`     | [`text`] | The ID of the cluster maintaining the sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `owner_id`       | [`text`] | The role ID of the owner of the sink. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `create_sql`     | [`text`] | The `CREATE` SQL statement for the sink.
+`redacted_create_sql` | [`text`] | The redacted `CREATE` SQL statement for the sink.
 
 ### `mz_sources`
 
@@ -425,7 +429,8 @@ Field            | Type                 | Meaning
 `cluster_id`     | [`text`]             | The ID of the cluster maintaining the source. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `owner_id`       | [`text`]             | The role ID of the owner of the source. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`     | [`mz_aclitem array`] | The privileges belonging to the source.
-`create_sql`     | [`text`]            | The `CREATE` SQL statement for the source.
+`create_sql`     | [`text`]             | The `CREATE` SQL statement for the source.
+`redacted_create_sql` | [`text`]        | The redacted `CREATE` SQL statement for the source.
 
 ### `mz_storage_usage`
 
@@ -463,6 +468,7 @@ Field        | Type                 | Meaning
 `owner_id`   | [`text`]             | The role ID of the owner of the table. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges` | [`mz_aclitem array`] | The privileges belonging to the table.
 `create_sql` | [`text`]             | The `CREATE` SQL statement for the table.
+`redacted_create_sql` | [`text`]    | The redacted `CREATE` SQL statement for the table.
 
 ### `mz_timezone_abbreviations`
 
@@ -505,6 +511,7 @@ Field          | Type                 | Meaning
 `owner_id`     | [`text`]             | The role ID of the owner of the type. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`   | [`mz_aclitem array`] | The privileges belonging to the type.
 `create_sql`   | [`text`]             | The `CREATE` SQL statement for the type.
+`redacted_create_sql` | [`text`]      | The redacted `CREATE` SQL statement for the type.
 
 ### `mz_views`
 
@@ -521,6 +528,7 @@ Field          | Type                 | Meaning
 `owner_id`     | [`text`]             | The role ID of the owner of the view. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`   | [`mz_aclitem array`] | The privileges belonging to the view.
 `create_sql`    | [`text`]            | The `CREATE` SQL statement for the view.
+`redacted_create_sql` | [`text`]      | The redacted `CREATE` SQL statement for the view.
 
 [`bigint`]: /sql/types/bigint
 [`boolean`]: /sql/types/boolean

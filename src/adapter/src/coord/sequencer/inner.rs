@@ -550,7 +550,7 @@ impl Coordinator {
         };
         let table_id = self.catalog_mut().allocate_user_id().await?;
         let table = Table {
-            create_sql: table.create_sql,
+            create_sql: Some(table.create_sql),
             desc: table.desc,
             defaults: table.defaults,
             conn_id: conn_id.cloned(),
@@ -1196,7 +1196,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let typ = Type {
-            create_sql: plan.typ.create_sql,
+            create_sql: Some(plan.typ.create_sql),
             desc: plan.typ.inner.desc(&self.catalog().for_session(session))?,
             details: CatalogTypeDetails {
                 array_id: None,

@@ -357,7 +357,7 @@ impl From<CatalogEntry> for durable::Item {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Table {
-    pub create_sql: String,
+    pub create_sql: Option<String>,
     pub desc: RelationDesc,
     #[serde(skip)]
     pub defaults: Vec<Expr<Aug>>,
@@ -440,7 +440,7 @@ impl DataSourceDesc {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
-    pub create_sql: String,
+    pub create_sql: Option<String>,
     // TODO: Unskip: currently blocked on some inner BTreeMap<X, _> problems.
     #[serde(skip)]
     pub data_source: DataSourceDesc,
@@ -469,7 +469,7 @@ impl Source {
         is_retained_metrics_object: bool,
     ) -> Source {
         Source {
-            create_sql: plan.source.create_sql,
+            create_sql: Some(plan.source.create_sql),
             data_source: match plan.source.data_source {
                 mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => DataSourceDesc::ingestion(
                     id,
@@ -693,7 +693,7 @@ pub struct Index {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
-    pub create_sql: String,
+    pub create_sql: Option<String>,
     #[serde(skip)]
     pub details: CatalogTypeDetails<IdReference>,
     pub desc: Option<RelationDesc>,
@@ -897,13 +897,13 @@ impl CatalogItem {
         match self {
             CatalogItem::Table(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
+                i.create_sql = i.create_sql.map(do_rewrite).transpose()?;
                 Ok(CatalogItem::Table(i))
             }
             CatalogItem::Log(i) => Ok(CatalogItem::Log(i.clone())),
             CatalogItem::Source(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
+                i.create_sql = i.create_sql.map(do_rewrite).transpose()?;
                 Ok(CatalogItem::Source(i))
             }
             CatalogItem::Sink(i) => {
@@ -938,7 +938,7 @@ impl CatalogItem {
             }
             CatalogItem::Type(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
+                i.create_sql = i.create_sql.map(do_rewrite).transpose()?;
                 Ok(CatalogItem::Type(i))
             }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
@@ -970,13 +970,13 @@ impl CatalogItem {
         match self {
             CatalogItem::Table(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
+                i.create_sql = i.create_sql.map(do_rewrite).transpose()?;
                 Ok(CatalogItem::Table(i))
             }
             CatalogItem::Log(i) => Ok(CatalogItem::Log(i.clone())),
             CatalogItem::Source(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
+                i.create_sql = i.create_sql.map(do_rewrite).transpose()?;
                 Ok(CatalogItem::Source(i))
             }
             CatalogItem::Sink(i) => {
@@ -1126,20 +1126,32 @@ impl CatalogItem {
 
     pub fn to_serialized(&self) -> String {
         match self {
-            CatalogItem::Table(table) => table.create_sql.clone(),
+            CatalogItem::Table(table) => table
+                .create_sql
+                .as_ref()
+                .expect("builtin tables cannot be serialized")
+                .clone(),
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => {
                 assert!(
                     !matches!(source.data_source, DataSourceDesc::Introspection(_)),
                     "cannot serialize introspection/builtin sources",
                 );
-                source.create_sql.clone()
+                source
+                    .create_sql
+                    .as_ref()
+                    .expect("builtin sources cannot be serialized")
+                    .clone()
             }
             CatalogItem::View(view) => view.create_sql.clone(),
             CatalogItem::MaterializedView(mview) => mview.create_sql.clone(),
             CatalogItem::Index(index) => index.create_sql.clone(),
             CatalogItem::Sink(sink) => sink.create_sql.clone(),
-            CatalogItem::Type(typ) => typ.create_sql.clone(),
+            CatalogItem::Type(typ) => typ
+                .create_sql
+                .as_ref()
+                .expect("builtin types cannot be serialized")
+                .clone(),
             CatalogItem::Secret(secret) => secret.create_sql.clone(),
             CatalogItem::Connection(connection) => connection.create_sql.clone(),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
@@ -1148,20 +1160,24 @@ impl CatalogItem {
 
     pub fn into_serialized(self) -> String {
         match self {
-            CatalogItem::Table(table) => table.create_sql,
+            CatalogItem::Table(table) => table
+                .create_sql
+                .expect("builtin tables cannot be serialized"),
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => {
                 assert!(
                     !matches!(source.data_source, DataSourceDesc::Introspection(_)),
                     "cannot serialize introspection/builtin sources",
                 );
-                source.create_sql
+                source
+                    .create_sql
+                    .expect("builtin sources cannot be serialized")
             }
             CatalogItem::View(view) => view.create_sql,
             CatalogItem::MaterializedView(mview) => mview.create_sql,
             CatalogItem::Index(index) => index.create_sql,
             CatalogItem::Sink(sink) => sink.create_sql,
-            CatalogItem::Type(typ) => typ.create_sql,
+            CatalogItem::Type(typ) => typ.create_sql.expect("builtin types cannot be serialized"),
             CatalogItem::Secret(secret) => secret.create_sql,
             CatalogItem::Connection(connection) => connection.create_sql,
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
@@ -1963,13 +1979,19 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn create_sql(&self) -> &str {
         match self.item() {
-            CatalogItem::Table(Table { create_sql, .. }) => create_sql,
-            CatalogItem::Source(Source { create_sql, .. }) => create_sql,
+            CatalogItem::Table(Table { create_sql, .. }) => {
+                create_sql.as_deref().unwrap_or("<builtin>")
+            }
+            CatalogItem::Source(Source { create_sql, .. }) => {
+                create_sql.as_deref().unwrap_or("<builtin>")
+            }
             CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
             CatalogItem::View(View { create_sql, .. }) => create_sql,
             CatalogItem::MaterializedView(MaterializedView { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
-            CatalogItem::Type(Type { create_sql, .. }) => create_sql,
+            CatalogItem::Type(Type { create_sql, .. }) => {
+                create_sql.as_deref().unwrap_or("<builtin>")
+            }
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",

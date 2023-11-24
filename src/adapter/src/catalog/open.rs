@@ -33,7 +33,7 @@ use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
     Role, Schema, Source, Table, Type,
 };
-use mz_catalog::{CREATE_SQL_TODO, SYSTEM_CONN_ID};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
@@ -143,7 +143,6 @@ impl CatalogItemRebuilder {
             Self::SystemSource(entry.item().clone())
         } else {
             let create_sql = entry.create_sql().to_string();
-            assert_ne!(create_sql.to_lowercase(), CREATE_SQL_TODO.to_lowercase());
             let mut create_stmt = mz_sql::parse::parse(&create_sql)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
@@ -525,7 +524,7 @@ impl Catalog {
                                 oid,
                                 name.clone(),
                                 CatalogItem::Table(Table {
-                                    create_sql: CREATE_SQL_TODO.to_string(),
+                                    create_sql: None,
                                     desc: table.desc.clone(),
                                     defaults: vec![Expr::null(); table.desc.arity()],
                                     conn_id: None,
@@ -634,7 +633,7 @@ impl Catalog {
                                 oid,
                                 name.clone(),
                                 CatalogItem::Source(Source {
-                                    create_sql: CREATE_SQL_TODO.to_string(),
+                                    create_sql: None,
                                     data_source: DataSourceDesc::Introspection(introspection_type),
                                     desc: coll.desc.clone(),
                                     timeline: Timeline::EpochMilliseconds,
@@ -1252,7 +1251,7 @@ impl Catalog {
                     item: typ.name.to_owned(),
                 },
                 CatalogItem::Type(Type {
-                    create_sql: format!("CREATE TYPE {}", typ.name),
+                    create_sql: None,
                     details: typ.details.clone(),
                     desc,
                     resolved_ids: ResolvedIds(BTreeSet::new()),
@@ -1902,7 +1901,7 @@ mod builtin_migration_tests {
         ) -> (String, ItemNamespace, CatalogItem) {
             let item = match self.item {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
-                    create_sql: "TODO".to_string(),
+                    create_sql: Some("CREATE TABLE t ()".to_string()),
                     desc: RelationDesc::empty()
                         .with_column("a", ScalarType::Int32.nullable(true))
                         .with_key(vec![0]),

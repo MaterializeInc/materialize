@@ -376,7 +376,7 @@ impl CatalogState {
                         owner_id,
                         privileges,
                         diff,
-                        (!id.is_system()).then_some(&source.create_sql),
+                        source.create_sql.as_ref(),
                     );
 
                     updates.extend(match &source.data_source {
@@ -470,6 +470,14 @@ impl CatalogState {
         diff: Diff,
         table: &Table,
     ) -> Vec<BuiltinTableUpdate> {
+        let redacted = table.create_sql.as_ref().map(|create_sql| {
+            mz_sql::parse::parse(create_sql)
+                .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
+                .into_element()
+                .ast
+                .to_ast_string_redacted()
+        });
+
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_TABLES),
             row: Row::pack_slice(&[
@@ -479,8 +487,13 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&owner_id.to_string()),
                 privileges,
-                if !id.is_system() {
-                    Datum::String(&table.create_sql)
+                if let Some(create_sql) = &table.create_sql {
+                    Datum::String(create_sql)
+                } else {
+                    Datum::Null
+                },
+                if let Some(redacted) = &redacted {
+                    Datum::String(redacted)
                 } else {
                     Datum::Null
                 },
@@ -503,8 +516,15 @@ impl CatalogState {
         owner_id: &RoleId,
         privileges: Datum,
         diff: Diff,
-        create_sql: Option<&str>,
+        create_sql: Option<&String>,
     ) -> Vec<BuiltinTableUpdate> {
+        let redacted = create_sql.map(|create_sql| {
+            let create_stmt = mz_sql::parse::parse(create_sql)
+                .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
+                .into_element()
+                .ast;
+            create_stmt.to_ast_string_redacted()
+        });
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SOURCES),
             row: Row::pack_slice(&[
@@ -521,6 +541,11 @@ impl CatalogState {
                 privileges,
                 if let Some(create_sql) = create_sql {
                     Datum::String(create_sql)
+                } else {
+                    Datum::Null
+                },
+                if let Some(redacted) = &redacted {
+                    Datum::String(redacted)
                 } else {
                     Datum::Null
                 },
@@ -572,6 +597,10 @@ impl CatalogState {
         connection: &Connection,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
+        let create_stmt = mz_sql::parse::parse(&connection.create_sql)
+            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", connection.create_sql))
+            .into_element()
+            .ast;
         let mut updates = vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CONNECTIONS),
             row: Row::pack_slice(&[
@@ -594,6 +623,7 @@ impl CatalogState {
                 Datum::String(&owner_id.to_string()),
                 privileges,
                 Datum::String(&connection.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
         }];
@@ -711,8 +741,8 @@ impl CatalogState {
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", view.create_sql))
             .into_element()
             .ast;
-        let query = match create_stmt {
-            Statement::CreateView(stmt) => stmt.definition.query,
+        let query = match &create_stmt {
+            Statement::CreateView(stmt) => &stmt.definition.query,
             _ => unreachable!(),
         };
 
@@ -732,6 +762,7 @@ impl CatalogState {
                 Datum::String(&owner_id.to_string()),
                 privileges,
                 Datum::String(&view.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
         }]
@@ -752,8 +783,8 @@ impl CatalogState {
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", mview.create_sql))
             .into_element()
             .ast;
-        let query = match create_stmt {
-            Statement::CreateMaterializedView(stmt) => stmt.query,
+        let query = match &create_stmt {
+            Statement::CreateMaterializedView(stmt) => &stmt.query,
             _ => unreachable!(),
         };
 
@@ -774,6 +805,7 @@ impl CatalogState {
                 Datum::String(&owner_id.to_string()),
                 privileges,
                 Datum::String(&mview.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
         }]
@@ -805,6 +837,11 @@ impl CatalogState {
             }
         };
 
+        let create_stmt = mz_sql::parse::parse(&sink.create_sql)
+            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", sink.create_sql))
+            .into_element()
+            .ast;
+
         let envelope = sink.envelope();
 
         updates.push(BuiltinTableUpdate {
@@ -821,6 +858,7 @@ impl CatalogState {
                 Datum::String(&sink.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
                 Datum::String(&sink.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
         });
@@ -839,14 +877,15 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let mut updates = vec![];
 
-        let key_sqls = match mz_sql::parse::parse(&index.create_sql)
+        let create_stmt = mz_sql::parse::parse(&index.create_sql)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", index.create_sql))
             .into_element()
-            .ast
-        {
-            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => {
-                key_parts.expect("key_parts is filled in during planning")
-            }
+            .ast;
+
+        let key_sqls = match &create_stmt {
+            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts
+                .as_ref()
+                .expect("key_parts is filled in during planning"),
             _ => unreachable!(),
         };
 
@@ -860,6 +899,7 @@ impl CatalogState {
                 Datum::String(&index.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
                 Datum::String(&index.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
         });
@@ -915,6 +955,14 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let mut out = vec![];
 
+        let redacted = typ.create_sql.as_ref().map(|create_sql| {
+            mz_sql::parse::parse(create_sql)
+                .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
+                .into_element()
+                .ast
+                .to_ast_string_redacted()
+        });
+
         out.push(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_TYPES),
             row: Row::pack_slice(&[
@@ -925,7 +973,16 @@ impl CatalogState {
                 Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
                 Datum::String(&owner_id.to_string()),
                 privileges,
-                Datum::String(&typ.create_sql),
+                if let Some(create_sql) = &typ.create_sql {
+                    Datum::String(create_sql)
+                } else {
+                    Datum::Null
+                },
+                if let Some(redacted) = &redacted {
+                    Datum::String(redacted)
+                } else {
+                    Datum::Null
+                },
             ]),
             diff,
         });
