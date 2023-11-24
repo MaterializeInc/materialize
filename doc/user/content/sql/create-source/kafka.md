@@ -205,7 +205,6 @@ Note that:
 Message headers can be exposed via the `INCLUDE HEADER key AS name` option.
 The `bytea` value of the header is automatically parsed into an UTF-8 string. To expose the raw `bytea` instead, the `BYTES` option can be used.
 
-The following example demonstrates use of the `INCLUDE HEADER` option.
 
 ```sql
 CREATE SOURCE kafka_metadata
@@ -216,7 +215,7 @@ CREATE SOURCE kafka_metadata
   WITH (SIZE = '3xsmall');
 ```
 
-The headers can then be queried as any other column of the message.
+Headers can be queried as any other column in the source:
 
 ```sql
 SELECT
