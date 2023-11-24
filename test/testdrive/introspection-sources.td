@@ -337,7 +337,8 @@ true true true true true
 # (24 + 4) + (24 + 4) + (8 + 8) = 72 bytes per element. Note that the range for c2 comes from
 # different alignments for the enum Accum in ARM vs. x86 (namely, 16 vs. 8). Otherwise, the numbers
 # come from row keys and values taking 24 bytes, offsets 4 bytes, timestamps 8 bytes, regular diffs
-# 8 bytes, and reduce accumulable diffs [136|144] bytes.
+# 8 bytes, and reduce accumulable diffs [136|144] bytes. We also allow for comfortable
+# multiplicative margins when necessary due to deduplication in arrangements.
 
 > CREATE TABLE ten (f1 integer);
 
@@ -374,8 +375,8 @@ true true true true
 # For coverage, we also include a recursive materialized view to account for dynamic timestamps.
 # Here, the timestamps take not 8 bytes, but (8 + (24 + [0|1 * 8])) = [32|40] bytes. There are also
 # not two but six largest arrangements of interest (for one min/max aggregation and two distincts).
-# The distinct arrangements approach (24 + 4) + (0 + 4) + ([32|40] + 8) = [72|80] bytes per row;
-# However, one of them takes slightly less at 2/3* ((24 + 4) + (0 + 4)) + (40 + 8) = [62|70] bytes
+# The distinct arrangements approach (24 + 4) + ([32|40] + 8) = [68|76] bytes per row;
+# However, one of them takes slightly less at 2/3 * (24 + 4) + ([32|40] + 8) = [59|67] bytes
 # due to containing 3000 records but only 2000 distinct elements. The min/max reduction input
 # arrangement takes 1/2 * (24 + 4) + (24 + 24 + 4) + ([32|40] + 8) = [106|114] as there are 2000
 # records, but only 1000 keys and also the values are represented as Vec<Row>. The output
@@ -399,10 +400,10 @@ true true true true
 
 > SELECT
     records > (4 * 2 + 2 * 3) * 1000 AND records < 1.1 * (4 * 2 + 2 * 3) * 1000,
-    size > 0.7 * (3 * 72 * 2 + 62 * 3 + 106 * 2 + 68 * 3) * 1000
-      AND size < 1.1 * (3 * 80 * 2 + 70 * 3 + 114 * 2 + 76 * 3) * 1000,
-    capacity > 0.7 * (3 * 72 * 2 + 62 * 3 + 106 * 2 + 68 * 3) * 1000
-      AND capacity < 1.1 * (3 * 80 * 2 + 70 * 3 + 114 * 2 + 76 * 3) * 1000,
+    size > 0.7 * (3 * 68 * 2 + 59 * 3 + 106 * 2 + 68 * 3) * 1000
+      AND size < 1.1 * (3 * 76 * 2 + 67 * 3 + 114 * 2 + 76 * 3) * 1000,
+    capacity > 0.7 * (3 * 68 * 2 + 59 * 3 + 106 * 2 + 68 * 3) * 1000
+      AND capacity < 1.5 * (3 * 76 * 2 + 67 * 3 + 114 * 2 + 76 * 3) * 1000,
     allocations > 0
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%rec%';

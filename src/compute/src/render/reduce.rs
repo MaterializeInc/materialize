@@ -18,6 +18,8 @@ use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{Collection, ExchangeData};
 use mz_compute_types::plan::reduce::{
     reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
@@ -37,7 +39,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 use tracing::warn;
 
-use crate::extensions::arrange::{HeapSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, HeapSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
 use crate::render::context::{
     Arrangement, CollectionBundle, Context, KeyValArrangement, SpecializedArrangement,
@@ -456,17 +458,20 @@ where
     }
 
     /// Build the dataflow to compute the set of distinct keys.
-    fn build_distinct<S, V>(
+    fn build_distinct<Tr, S, V>(
         &self,
         collection: Collection<S, (Row, V), Diff>,
         tag: &str,
     ) -> (
-        KeyValArrangement<S, Row, V>,
+        Arranged<S, TraceAgent<Tr>>,
         Collection<S, DataflowError, Diff>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
+        Tr: Trace + TraceReader<Key = Row, Val = V, Time = G::Timestamp, R = Diff> + 'static,
+        Tr::Batch: Batch,
         V: Columnation + Default + ExchangeData + IntoRowByTypes,
+        Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
 
@@ -476,28 +481,28 @@ where
         );
 
         let (output, errors) = collection
-            .mz_arrange::<RowSpine<_, _, _, _>>(&input_name)
-            .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>(
-            &output_name,
-            "DistinctByErrorCheck",
-            |_key, _input, output| {
-                // We're pushing a unit value here because the key is implicitly added by the
-                // arrangement, and the permutation logic takes care of using the key part of the
-                // output.
-                output.push((V::default(), 1));
-            },
-            move |key, input: &[(_, Diff)], output| {
-                for (_, count) in input.iter() {
-                    if count.is_positive() {
-                        continue;
+            .mz_arrange::<Tr>(&input_name)
+            .reduce_pair::<_, Tr, _, ErrValSpine<_, _, _>>(
+                &output_name,
+                "DistinctByErrorCheck",
+                |_key, _input, output| {
+                    // We're pushing a unit value here because the key is implicitly added by the
+                    // arrangement, and the permutation logic takes care of using the key part of the
+                    // output.
+                    output.push((V::default(), 1));
+                },
+                move |key, input: &[(_, Diff)], output| {
+                    for (_, count) in input.iter() {
+                        if count.is_positive() {
+                            continue;
+                        }
+                        let message = "Non-positive multiplicity in DistinctBy";
+                        error_logger.log(message, &format!("row={key:?}, count={count}"));
+                        output.push((EvalError::Internal(message.to_string()).into(), 1));
+                        return;
                     }
-                    let message = "Non-positive multiplicity in DistinctBy";
-                    error_logger.log(message, &format!("row={key:?}, count={count}"));
-                    output.push((EvalError::Internal(message.to_string()).into(), 1));
-                    return;
-                }
-            },
-        );
+                },
+            );
         (output, errors.as_collection(|_k, v| v.clone()))
     }
 

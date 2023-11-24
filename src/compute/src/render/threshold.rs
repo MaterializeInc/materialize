@@ -12,7 +12,8 @@
 //! Consult [ThresholdPlan] documentation for details.
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::Data;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
@@ -22,28 +23,30 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 
-use crate::extensions::arrange::{HeapSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, HeapSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{
     ArrangementFlavor, CollectionBundle, Context, SpecializedArrangement,
     SpecializedArrangementImport,
 };
-use crate::typedefs::TraceRowHandle;
 
 /// Shared function to compute an arrangement of values matching `logic`.
-fn threshold_arrangement<G, K, V, T, R, L>(
+fn threshold_arrangement<G, Tr, K, V, T, R, L>(
     arrangement: &R,
     name: &str,
     logic: L,
-) -> Arranged<G, TraceRowHandle<K, V, G::Timestamp, Diff>>
+) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
+    Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, R = Diff> + 'static,
+    Tr::Key: Columnation + Data,
+    Tr::Val: Columnation + Data,
+    Tr::Batch: Batch,
     T: Timestamp + Lattice,
-    K: Columnation + Data,
-    V: Columnation + Data,
     R: MzReduce<G, K, V, Diff>,
     L: Fn(&Diff) -> bool + 'static,
+    Arranged<G, TraceAgent<Tr>>: ArrangementSize,
 {
     arrangement.mz_reduce_abelian(name, move |_key, s, t| {
         for (record, count) in s.iter() {

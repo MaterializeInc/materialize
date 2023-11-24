@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytesize::ByteSize;
+use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Data;
 use mz_compute_client::logging::LoggingConfig;
@@ -46,7 +47,6 @@ use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
 use crate::render::{LinearJoinImpl, LinearJoinSpec};
 use crate::server::{ComputeInstanceContext, ResponseSender};
-use crate::typedefs::TraceRowHandle;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -755,16 +755,17 @@ impl PendingPeek {
     }
 
     /// Collects data for a known-complete peek from the ok stream.
-    fn collect_ok_finished_data<K, V>(
+    fn collect_ok_finished_data<Tr, K, V>(
         peek: &mut Peek<Timestamp>,
-        oks_handle: &mut TraceRowHandle<K, V, Timestamp, Diff>,
+        oks_handle: &mut TraceAgent<Tr>,
         key_types: Option<&[ColumnType]>,
         val_types: Option<&[ColumnType]>,
         max_result_size: u32,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
-        K: Columnation + Data + FromRowByTypes + IntoRowByTypes,
-        V: Columnation + Data + IntoRowByTypes,
+        Tr: TraceReader<Key = K, Val = V, Time = Timestamp, R = Diff>,
+        Tr::Key: Columnation + Data + FromRowByTypes + IntoRowByTypes,
+        Tr::Val: Columnation + Data + IntoRowByTypes,
     {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();
