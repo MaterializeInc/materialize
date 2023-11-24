@@ -1,0 +1,68 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+);
+
+# Create an index that emits the optimizer notice.
+statement ok
+CREATE INDEX t_idx_empty_key ON t();
+
+# Verify that the notice is shown in EXPLAIN.
+query T multiline
+EXPLAIN WITH(humanized_exprs) INDEX t_idx_empty_key;
+----
+materialize.public.t_idx_empty_key:
+  ArrangeBy keys=[[]]
+    ReadStorage materialize.public.t
+
+Notices:
+  - Notice: Empty index key. The index will be completely skewed to one worker thread, which can lead to performance problems.
+    Hint: CREATE DEFAULT INDEX is almost always better than an index with an empty key. (Except for cross joins with big inputs, which are better to avoid anyway.)
+
+EOF
+
+# Verify that the same notice can be found in the catalog.
+query TTTTT
+SELECT
+  n.notice_type, n.message, n.hint, n.action, n.action_type
+FROM
+  mz_internal.mz_notices_redacted n JOIN
+  mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
+WHERE
+  idx.name = 't_idx_empty_key'
+----
+Empty index key
+Empty index key. The index will be completely skewed to one worker thread, which can lead to performance problems.
+CREATE DEFAULT INDEX is almost always better than an index with an empty key. (Except for cross joins with big inputs, which are better to avoid anyway.)
+Drop the encosing index and re-create it using `CREATE DEFAULT INDEX ON` instead.
+plain_text
+
+# Drop the catalog item associated with the notice.
+statement ok
+DROP INDEX t_idx_empty_key;
+
+# Verify that the notice is no longer in the catalog.
+query TTTTT
+SELECT
+  n.notice_type, n.message, n.hint, n.action, n.action_type
+FROM
+  mz_internal.mz_notices_redacted n JOIN
+  mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
+WHERE
+  idx.name = 't_idx_empty_key'
+----
