@@ -2580,72 +2580,72 @@ ALTER CONNECTION IF EXISTS mc ROTATE KEYS WITH (VALIDATE = 'abc')
 AlterConnection(AlterConnectionStatement { name: UnresolvedItemName([Ident("mc")]), if_exists: true, actions: [RotateKeys], with_options: [AlterConnectionOption { name: Validate, value: Some(Value(String("abc"))) }] })
 
 parse-statement
-ALTER CONNECTION IF EXISTS mc ROTATE KEYS WITH (VALIDATE = 'abc'), SET PROGRESS TOPIC = true,
+ALTER CONNECTION IF EXISTS mc ROTATE KEYS WITH (VALIDATE = 'abc'), SET (PROGRESS TOPIC = true),
 ----
 error: Expected end of statement, found comma
-ALTER CONNECTION IF EXISTS mc ROTATE KEYS WITH (VALIDATE = 'abc'), SET PROGRESS TOPIC = true,
+ALTER CONNECTION IF EXISTS mc ROTATE KEYS WITH (VALIDATE = 'abc'), SET (PROGRESS TOPIC = true),
                                                                  ^
 
 parse-statement
-ALTER CONNECTION IF EXISTS mc SET PROGRESS TOPIC = true, SET PROGRESS TOPIC = 'abc',
+ALTER CONNECTION IF EXISTS mc SET (PROGRESS TOPIC = true), SET (PROGRESS TOPIC = 'abc'),
 ----
 error: Expected one of ROTATE or SET or RESET or DROP, found EOF
-ALTER CONNECTION IF EXISTS mc SET PROGRESS TOPIC = true, SET PROGRESS TOPIC = 'abc',
-                                                                                    ^
+ALTER CONNECTION IF EXISTS mc SET (PROGRESS TOPIC = true), SET (PROGRESS TOPIC = 'abc'),
+                                                                                        ^
 
 parse-statement
-ALTER CONNECTION IF EXISTS mc SET BROKER db.schema, RESET BROKERS = ('abc', def.ghi)
+ALTER CONNECTION IF EXISTS mc SET (BROKER db.schema), RESET (BROKERS = ('abc', def.ghi))
 ----
 error: Expected literal string, found identifier "db"
-ALTER CONNECTION IF EXISTS mc SET BROKER db.schema, RESET BROKERS = ('abc', def.ghi)
-                                         ^
+ALTER CONNECTION IF EXISTS mc SET (BROKER db.schema), RESET (BROKERS = ('abc', def.ghi))
+                                          ^
 
 parse-statement
-ALTER CONNECTION IF EXISTS mc DROP BROKER, DROP BROKER, DROP BROKER, DROP BROKER
+ALTER CONNECTION IF EXISTS mc DROP (BROKER), DROP (BROKER), DROP (BROKER), DROP (BROKER)
 ----
-ALTER CONNECTION IF EXISTS mc DROP BROKER, DROP BROKER, DROP BROKER, DROP BROKER
+ALTER CONNECTION IF EXISTS mc DROP (BROKER), DROP (BROKER), DROP (BROKER), DROP (BROKER)
 =>
 AlterConnection(AlterConnectionStatement { name: UnresolvedItemName([Ident("mc")]), if_exists: true, actions: [DropOption(Broker), DropOption(Broker), DropOption(Broker), DropOption(Broker)], with_options: [] })
 
 parse-statement
-ALTER CONNECTION IF EXISTS mc DROP BROKER, SET BROKERS = ('abc', def.ghi)
+ALTER CONNECTION IF EXISTS mc DROP (BROKER), SET (BROKERS = ('abc', def.ghi))
 ----
 error: Expected literal string, found identifier "def"
-ALTER CONNECTION IF EXISTS mc DROP BROKER, SET BROKERS = ('abc', def.ghi)
-                                                                 ^
+ALTER CONNECTION IF EXISTS mc DROP (BROKER), SET (BROKERS = ('abc', def.ghi))
+                                                                    ^
 
 parse-statement
-ALTER CONNECTION IF EXISTS mc DROP BROKER, SET BROKERS = ('abc', def.ghi)
+ALTER CONNECTION IF EXISTS mc DROP (BROKER), SET (BROKERS = ('abc', def.ghi))
 ----
 error: Expected literal string, found identifier "def"
-ALTER CONNECTION IF EXISTS mc DROP BROKER, SET BROKERS = ('abc', def.ghi)
-                                                                 ^
+ALTER CONNECTION IF EXISTS mc DROP (BROKER), SET (BROKERS = ('abc', def.ghi))
+                                                                    ^
 
 parse-statement
-ALTER CONNECTION IF EXISTS mc SET PORT = 1 WITH (VALIDATE = true)
+ALTER CONNECTION IF EXISTS mc SET (PORT = 1) WITH (VALIDATE = true)
 ----
-ALTER CONNECTION IF EXISTS mc SET PORT = 1 WITH (VALIDATE = true)
+ALTER CONNECTION IF EXISTS mc SET (PORT = 1) WITH (VALIDATE = true)
 =>
 AlterConnection(AlterConnectionStatement { name: UnresolvedItemName([Ident("mc")]), if_exists: true, actions: [SetOption(ConnectionOption { name: Port, value: Some(Value(Number("1"))) })], with_options: [AlterConnectionOption { name: Validate, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
-ALTER CONNECTION IF EXISTS mc RESET PORT = 1 WITH (VALIDATE = true)
+ALTER CONNECTION IF EXISTS mc RESET (PORT = 1) WITH (VALIDATE = true)
 ----
-error: Expected end of statement, found equals sign
-ALTER CONNECTION IF EXISTS mc RESET PORT = 1 WITH (VALIDATE = true)
+error: Expected right parenthesis, found equals sign
+ALTER CONNECTION IF EXISTS mc RESET (PORT = 1) WITH (VALIDATE = true)
+                                          ^
+
+parse-statement
+ALTER CONNECTION IF EXISTS mc DROP (PORT = 1) WITH (VALIDATE = true)
+----
+error: Expected right parenthesis, found equals sign
+ALTER CONNECTION IF EXISTS mc DROP (PORT = 1) WITH (VALIDATE = true)
                                          ^
 
 parse-statement
-ALTER CONNECTION IF EXISTS mc DROP PORT = 1 WITH (VALIDATE = true)
+ALTER CONNECTION IF EXISTS mc SET (PORT = 1) WITH (VALIDATE = true)
 ----
-error: Expected end of statement, found equals sign
-ALTER CONNECTION IF EXISTS mc DROP PORT = 1 WITH (VALIDATE = true)
-                                        ^
-
-parse-statement
-ALTER CONNECTION IF EXISTS mc SET PORT = 1 WITH (VALIDATE = true)
-----
-ALTER CONNECTION IF EXISTS mc SET PORT = 1 WITH (VALIDATE = true)
+ALTER CONNECTION IF EXISTS mc SET (PORT = 1) WITH (VALIDATE = true)
 =>
 AlterConnection(AlterConnectionStatement { name: UnresolvedItemName([Ident("mc")]), if_exists: true, actions: [SetOption(ConnectionOption { name: Port, value: Some(Value(Number("1"))) })], with_options: [AlterConnectionOption { name: Validate, value: Some(Value(Boolean(true))) }] })
 

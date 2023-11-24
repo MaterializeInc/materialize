@@ -4774,11 +4774,15 @@ impl<'a> Parser<'a> {
                 AlterConnectionAction::RotateKeys
             }
             SET => {
+                self.expect_token(&Token::LParen)?;
                 let option = self.parse_connection_option_unified()?;
+                self.expect_token(&Token::RParen)?;
                 AlterConnectionAction::SetOption(option)
             }
             DROP | RESET => {
+                self.expect_token(&Token::LParen)?;
                 let option = self.parse_connection_option_name()?;
+                self.expect_token(&Token::RParen)?;
                 AlterConnectionAction::DropOption(option)
             }
             _ => unreachable!(),

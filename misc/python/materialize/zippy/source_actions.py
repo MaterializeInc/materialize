@@ -130,8 +130,8 @@ class AlterSourceConnection(Action):
         c.testdrive(
             dedent(
                 f"""
-                > ALTER CONNECTION {kafka_connection_name} SET BROKER '${{testdrive.kafka-addr}}'
-                  {'USING SSH TUNNEL zippy_ssh' if new_use_ssh_status else ''};
+                > ALTER CONNECTION {kafka_connection_name} SET (BROKER '${{testdrive.kafka-addr}}'
+                  {'USING SSH TUNNEL zippy_ssh' if new_use_ssh_status else ''});
                 """
             )
         )
