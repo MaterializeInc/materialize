@@ -47,6 +47,7 @@ steps:
 
   - id: analyze
     label: Analyze tests
+    timeout_in_minutes: 15
     plugins:
       - junit-annotate#v2.0.2:
           artifacts: "*junit_*.xml"
