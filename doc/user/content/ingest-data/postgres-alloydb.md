@@ -4,7 +4,7 @@ description: "How to stream data from AlloyDB to Materialize"
 menu:
   main:
     parent: "postgresql"
-    name: "AlloyDB for PostgreSQL"
+    name: "AlloyDB"
     weight: 25
 ---
 
