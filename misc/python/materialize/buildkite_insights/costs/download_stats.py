@@ -9,41 +9,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import json
-import os
 
-import requests
-
-BUILDKITE_API_URL = "https://api.buildkite.com/v2"
+from materialize.buildkite_insights.util.io import write_results_to_file
+from materialize.buildkite_insights.util.web_request import buildkite_get_request
 
 
 def main() -> None:
-    headers = {}
-    if token := os.getenv("BUILDKITE_TOKEN"):
-        headers["Authorization"] = f"Bearer {token}"
-    url = f"{BUILDKITE_API_URL}/organizations/materialize/builds"
+    request_path = "organizations/materialize/builds"
     params = {"include_retried_jobs": "true", "per_page": "100"}
-    results = []
 
-    print("Starting to fetch data from Buildkite...")
-
-    while True:
-        r = requests.get(headers=headers, url=url, params=params)
-        result = r.json()
-        if not result:
-            print("No further results.")
-            break
-
-        params["created_to"] = result[-1]["created_at"]
-
-        entry_count = len(result)
-        created_at = result[-1]["created_at"]
-        print(f"Fetched {entry_count} entries, created at {created_at}.")
-
-        results.extend(result)
-
-    with open("data.json", "w") as f:
-        json.dump(results, f, ensure_ascii=False, indent=4)
+    result = buildkite_get_request(request_path, params, max_fetches=None)
+    write_results_to_file(result, "data.json")
 
 
 if __name__ == "__main__":

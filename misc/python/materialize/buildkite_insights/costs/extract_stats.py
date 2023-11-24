@@ -9,9 +9,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import json
 from collections import defaultdict
 from datetime import datetime
+
+from materialize.buildkite_insights.util.io import read_results_from_file
 
 # https://instances.vantage.sh/aws/ec2
 instance_cost = {
@@ -41,8 +42,7 @@ def main() -> None:
     pipeline_counts = defaultdict(lambda: defaultdict(int))
     job_to_pipeline = {}
 
-    with open("data.json") as f:
-        data = json.load(f)
+    data = read_results_from_file("data.json")
 
     for build in data:
         pipeline_name = build["pipeline"]["name"]
