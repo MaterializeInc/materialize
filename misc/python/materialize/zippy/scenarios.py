@@ -39,7 +39,10 @@ from materialize.zippy.replica_actions import (
     DropReplica,
 )
 from materialize.zippy.sink_actions import CreateSinkParameterized
-from materialize.zippy.source_actions import CreateSourceParameterized
+from materialize.zippy.source_actions import (
+    AlterSourceConnectionParameterized,
+    CreateSourceParameterized,
+)
 from materialize.zippy.storaged_actions import (
     StoragedKill,
     StoragedRestart,
@@ -75,6 +78,30 @@ class KafkaSources(Scenario):
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
             CreateSinkParameterized(): 5,
+            ValidateView: 10,
+            Ingest: 100,
+            PeekCancellation: 5,
+        }
+
+
+class AlterConnectionWithKafkaSources(Scenario):
+    """A Zippy test using Kafka sources and alter connections."""
+
+    def bootstrap(self) -> list[ActionOrFactory]:
+        return DEFAULT_BOOTSTRAP
+
+    def config(self) -> dict[ActionOrFactory, float]:
+        return {
+            MzStart: 5,
+            MzStop: 1,
+            KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
+            CreateTopicParameterized(): 5,
+            CreateSourceParameterized(): 5,
+            CreateViewParameterized(max_inputs=2): 5,
+            CreateSinkParameterized(): 5,
+            AlterSourceConnectionParameterized(): 5,
             ValidateView: 10,
             Ingest: 100,
             PeekCancellation: 5,

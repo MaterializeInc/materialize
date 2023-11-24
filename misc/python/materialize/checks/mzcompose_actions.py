@@ -15,6 +15,9 @@ from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.ssh_bastion_host import (
+    setup_default_ssh_test_connection,
+)
 
 if TYPE_CHECKING:
     from materialize.checks.scenarios import Scenario
@@ -74,29 +77,8 @@ class StartMz(MzcomposeAction):
         # This should live in ssh.py and alter_connection.py, but accessing the
         # ssh bastion host from inside a check is not possible currently.
         for i in range(4):
-            c.sql(
-                f"""
-                CREATE CONNECTION IF NOT EXISTS ssh_tunnel_{i} TO SSH TUNNEL (
-                HOST 'ssh-bastion-host',
-                USER 'mz',
-                PORT 22
-                )"""
-            )
-
-            public_key = c.sql_query(
-                f"""
-                    select public_key_1 from mz_ssh_tunnel_connections ssh \
-                    join mz_connections c on c.id = ssh.id
-                    where c.name = 'ssh_tunnel_{i}';
-                    """
-            )[0][0]
-
-            c.exec(
-                "ssh-bastion-host",
-                "bash",
-                "-c",
-                f"echo '{public_key}' >> /etc/authorized_keys/mz",
-            )
+            ssh_tunnel_name = f"ssh_tunnel_{i}"
+            setup_default_ssh_test_connection(c, ssh_tunnel_name)
 
         mz_version = MzVersion.parse_mz(c.query_mz_version())
         if self.tag:
