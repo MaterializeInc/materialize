@@ -816,6 +816,7 @@ steps:
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"
+    timeout_in_minutes: 15
     artifact_paths: junit_*.xml
     agents:
       queue: linux-x86_64
@@ -825,6 +826,7 @@ steps:
 
   - id: pubsub-disruption
     label: "PubSub disruption"
+    timeout_in_minutes: 15
     artifact_paths: junit_*.xml
     agents:
       queue: builder-linux-x86_64
@@ -946,6 +948,7 @@ steps:
 
   - id: balancerd
     label: "Tests for balancerd"
+    timeout_in_minutes: 15
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
