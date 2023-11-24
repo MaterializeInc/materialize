@@ -236,7 +236,7 @@ Note that:
 
 - The `DEBEZIUM` envelope is incompatible with this option.
 - Messages that do not contain all header keys as specified in the source DDL will cause an error that prevents further querying the source.
-- Headers values containing badly formed UTF-8 strings will cause an error in the source that prevents querying it, unless the `BYTES` option is specified.
+- Header values containing badly formed UTF-8 strings will cause an error in the source that prevents querying it, unless the `BYTES` option is specified.
 
 #### Partition, offset, timestamp
 
