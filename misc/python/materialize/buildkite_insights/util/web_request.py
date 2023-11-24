@@ -33,7 +33,7 @@ def buildkite_get_request(
     while True:
         r = requests.get(headers=headers, url=url, params=params)
         result = r.json()
-        fetch_count = fetch_count + 1
+        fetch_count += 1
 
         if not result:
             print("No further results.")
