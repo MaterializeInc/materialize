@@ -193,13 +193,17 @@ struct Args {
     announce_memory_limit: Option<usize>,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,
     });
-    if let Err(err) = run(args).await {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(1024 * 1024 * 1024)
+        .enable_all()
+        .build().expect("tokio runtime");
+
+    if let Err(err) = runtime.block_on(run(args)) {
         eprintln!("clusterd: fatal: {}", err.display_with_causes());
         process::exit(1);
     }

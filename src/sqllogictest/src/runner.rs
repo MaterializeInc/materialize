@@ -30,7 +30,7 @@ use std::error::Error;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{env, fmt, ops, str, thread};
@@ -904,6 +904,7 @@ impl<'a> Runner<'a> {
 impl<'a> RunnerInner<'a> {
     pub async fn start(config: &RunConfig<'a>) -> Result<RunnerInner<'a>, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
+        let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, adapter_stash_url, storage_stash_url, timestamp_oracle_url) = {
             let postgres_url = &config.postgres_url;
@@ -957,7 +958,7 @@ impl<'a> RunnerInner<'a> {
                     .map_or(Ok(vec![]), |s| shell_words::split(s))?,
                 propagate_crashes: true,
                 tcp_proxy: None,
-                scratch_directory: PathBuf::from("scratch"),
+                scratch_directory: scratch_dir.path().to_path_buf(),
             })
             .await?,
         );

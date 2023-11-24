@@ -653,6 +653,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
                 format!("tokio:work-{}", id)
             })
+            .thread_stack_size(1024 * 1024 * 1024)
             .enable_all()
             .build()?,
     );

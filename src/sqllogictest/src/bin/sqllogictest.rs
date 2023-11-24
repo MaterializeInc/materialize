@@ -168,8 +168,16 @@ struct Args {
     pub log_filter: CloneableEnvFilter,
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(1024 * 1024 * 1024)
+        .enable_all()
+        .build().expect("tokio runtime");
+
+    runtime.block_on(run())
+}
+
+async fn run() -> ExitCode {
     mz_ore::panic::set_abort_on_panic();
 
     let args: Args = cli::parse_args(CliConfig {
