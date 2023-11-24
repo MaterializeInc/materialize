@@ -20,6 +20,7 @@ steps:
   - wait: ~
 
   - command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.trim_pipeline nightly
+    timeout_in_minutes: 10
     if: build.source == "ui"
     agents:
       queue: linux
@@ -27,6 +28,7 @@ steps:
   - wait: ~
 
   - id: closed-issues-detect
+    timeout_in_minutes: 10
     label: Detect references to already closed issues
     command: bin/ci-builder run stable bin/ci-closed-issues-detect
     agents:
@@ -81,6 +83,7 @@ steps:
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
+    timeout_in_minutes: 60
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
@@ -90,6 +93,7 @@ steps:
 
   - id: kafka-multi-broker
     label: Kafka multi-broker test
+    timeout_in_minutes: 10
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
@@ -948,6 +952,7 @@ steps:
 
   - id: incident-70
     label: "Test for incident 70"
+    timeout_in_minutes: 15
     skip: "Affected by #15209"
     agents:
       queue: linux-x86_64-large
@@ -972,6 +977,7 @@ steps:
 
   - id: analyze
     label: Analyze tests
+    timeout_in_minutes: 15
     plugins:
       - junit-annotate#v2.0.2:
           artifacts: "*junit_*.xml"
