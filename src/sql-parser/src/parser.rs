@@ -3469,7 +3469,13 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
+        // For historical reasons, the parentheses around the options can be
+        // omitted.
+        let paren = self.consume_token(&Token::LParen);
         let options = self.parse_comma_separated(Parser::parse_cluster_option)?;
+        if paren {
+            let _ = self.consume_token(&Token::RParen);
+        }
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
             options,
@@ -3609,8 +3615,13 @@ impl<'a> Parser<'a> {
         let of_cluster = self.parse_identifier()?;
         self.expect_token(&Token::Dot)?;
         let name = self.parse_identifier()?;
-
+        // For historical reasons, the parentheses around the options can be
+        // omitted.
+        let paren = self.consume_token(&Token::LParen);
         let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+        if paren {
+            let _ = self.consume_token(&Token::RParen);
+        }
         Ok(Statement::CreateClusterReplica(
             CreateClusterReplicaStatement {
                 of_cluster,

@@ -1658,8 +1658,9 @@ impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
         f.write_str("CREATE CLUSTER ");
         f.write_node(&self.name);
         if !self.options.is_empty() {
-            f.write_str(" ");
+            f.write_str(" (");
             f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
         }
     }
 }
@@ -1741,8 +1742,9 @@ impl<T: AstInfo> AstDisplay for CreateClusterReplicaStatement<T> {
         f.write_node(&self.of_cluster);
         f.write_str(".");
         f.write_node(&self.definition.name);
-        f.write_str(" ");
+        f.write_str(" (");
         f.write_node(&display::comma_separated(&self.definition.options));
+        f.write_str(")");
     }
 }
 impl_display_t!(CreateClusterReplicaStatement);
