@@ -59,28 +59,16 @@ def run(
     ports: dict[str, int],
     seed: str,
     runtime: int,
-    complexity_str: str,
-    scenario_str: str,
+    complexity: Complexity,
+    scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
     fast_startup: bool,
     composition: Composition | None,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
-    random.seed(seed)
 
     rng = random.Random(random.randrange(SEED_RANGE))
-
-    complexity = (
-        Complexity(rng.choice([elem.value for elem in Complexity]))
-        if complexity_str == "random"
-        else Complexity(complexity_str)
-    )
-    scenario = (
-        Scenario(rng.choice([elem.value for elem in Scenario]))
-        if scenario_str == "random"
-        else Scenario(scenario_str)
-    )
 
     print(
         f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} {'--fast-startup' if fast_startup else ''}(--host={host})"
@@ -435,13 +423,15 @@ def main() -> int:
             cur.execute(f"ALTER SYSTEM SET {key} = '{value}'")
     system_conn.close()
 
+    random.seed(args.seed)
+
     run(
         args.host,
         ports,
         args.seed,
         args.runtime,
-        args.complexity,
-        args.scenario,
+        Complexity(args.complexity),
+        Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
         args.fast_startup,
