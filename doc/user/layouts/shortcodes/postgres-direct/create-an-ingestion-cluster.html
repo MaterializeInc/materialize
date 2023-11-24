@@ -5,7 +5,7 @@ In this case, you'll create 1 new cluster containing 1 `medium` replica for inge
 1. In the `psql` shell connected to Materialize, use the [`CREATE CLUSTER`](/sql/create-cluster/) command to create the new cluster:
 
     ```sql
-    CREATE CLUSTER ingest_postgres SIZE = 'medium';
+    CREATE CLUSTER ingest_postgres (SIZE = 'medium');
     ```
 
     We recommend starting with a `medium` [size](/sql/create-cluster/#size) replica or larger. This will help Materialize more quickly process the initial snapshot of the tables in your publication. Once the snapshot is finished, you'll right-size the cluster.

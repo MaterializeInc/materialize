@@ -28,7 +28,7 @@ create a [cluster](/sql/create-cluster) guide,
 or create a managed cluster using the following SQL statement:
 
 ```sql
-CREATE CLUSTER rudderstack_cluster SIZE = '3xsmall';
+CREATE CLUSTER rudderstack_cluster (SIZE = '3xsmall');
 ```
 
 ## Step 2. Create a Shared Secret

@@ -201,7 +201,7 @@ As an example, consider the following sequence of events:
 
 Time                | Event
 --------------------|---------------------------------------------------------
-2023-08-29 3:45:00  | `CREATE CLUSTER c SIZE 'medium', REPLICATION FACTOR 2`
+2023-08-29 3:45:00  | `CREATE CLUSTER c (SIZE 'medium', REPLICATION FACTOR 2`)
 2023-08-29 3:45:45  | `ALTER CLUSTER c SET (REPLICATION FACTOR 1)`
 2023-08-29 3:47:15  | `DROP CLUSTER c`
 
@@ -239,7 +239,7 @@ We plan to remove these restrictions in future versions of Materialize.
 Create a cluster with two `medium` replicas:
 
 ```sql
-CREATE CLUSTER c1 SIZE = 'medium', REPLICATION FACTOR = 2;
+CREATE CLUSTER c1 (SIZE = 'medium', REPLICATION FACTOR = 2);
 ```
 
 ### Introspection disabled
@@ -247,7 +247,7 @@ CREATE CLUSTER c1 SIZE = 'medium', REPLICATION FACTOR = 2;
 Create a cluster with a single replica and introspection disabled:
 
 ```sql
-CREATE CLUSTER c SIZE = 'xsmall', INTROSPECTION INTERVAL = 0;
+CREATE CLUSTER c (SIZE = 'xsmall', INTROSPECTION INTERVAL = 0);
 ```
 
 Disabling introspection can yield a small performance improvement, but you lose
@@ -259,7 +259,7 @@ that cluster replica.
 Create a cluster with no replicas:
 
 ```sql
-CREATE CLUSTER c1 SIZE 'xsmall', REPLICATION FACTOR = 0;
+CREATE CLUSTER c1 (SIZE 'xsmall', REPLICATION FACTOR = 0);
 ```
 
 You can later add replicas to this cluster with [`ALTER CLUSTER`].
