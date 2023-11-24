@@ -68,7 +68,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # 128 MiB,
     "compute_dataflow_max_inflight_bytes": "134217728",
     "enable_unified_clusters": "true",
-    "enable_jemalloc_profiling": "true",
+    "enable_jemalloc_profiling": "false",
     "enable_comment": "true",
     "enable_sink_doc_on_option": "true",
     "enable_assert_not_null": "true",
