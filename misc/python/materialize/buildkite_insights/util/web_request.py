@@ -42,6 +42,9 @@ def buildkite_get_request(
             print("Max fetches reached.")
             break
 
+        if isinstance(result, dict) and result.get("message"):
+            raise RuntimeError(f"Something went wrong! ({result['message']})")
+
         params["created_to"] = result[-1]["created_at"]
 
         entry_count = len(result)
