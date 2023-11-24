@@ -2497,9 +2497,11 @@ fn kafka_sink_builder(
     sink_from: GlobalId,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
-    // Get Kafka connection + progress topic
+    // Get Kafka connection + progress topic.
     //
-    // TODO: In ALTER CONNECTION, the progress topic must be immutable
+    // We don't need to worry about the progress topic changing after sink
+    // creation as `ALTER CONNECTION` is not permitted to change a sink's
+    // progress topic.
     let (connection, progress_topic) = match item.connection()? {
         Connection::Kafka(connection) => {
             let id = item.id();
