@@ -126,6 +126,9 @@ def annotate_errors(errors: list[str], title: str, style: str) -> None:
     suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
 
     error_str = "\n".join(f"* {error}" for error in errors)
+    # 400 Bad Request: The annotation body must be less than 1 MB
+    if len(error_str) > 900_000:
+        error_str = error_str[:900_000] + "..."
 
     if style == "info":
         markdown = f"""<details><summary>{suite_name}: {title}</summary>
