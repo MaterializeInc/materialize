@@ -15,7 +15,7 @@ from materialize.mz_version import MzVersion
 
 class UnifiedCluster(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse("0.71.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.71.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

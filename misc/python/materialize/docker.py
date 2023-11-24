@@ -13,11 +13,6 @@ import subprocess
 from materialize import buildkite, git
 from materialize.mz_version import MzVersion
 
-try:
-    from semver.version import Version
-except ImportError:
-    from semver import VersionInfo as Version  # type: ignore
-
 
 def resolve_ancestor_image_tag() -> str:
     image_tag, context = _resolve_ancestor_image_tag()
@@ -42,7 +37,9 @@ def _resolve_ancestor_image_tag() -> tuple[str, str]:
                 )
         elif git.is_on_release_version():
             # return the previous release
-            tagged_release_version = git.get_tagged_release_version()
+            tagged_release_version = git.get_tagged_release_version(
+                version_type=MzVersion
+            )
             assert tagged_release_version is not None
             previous_release_version = get_previous_published_version(
                 tagged_release_version
@@ -60,7 +57,9 @@ def _resolve_ancestor_image_tag() -> tuple[str, str]:
     else:
         if git.is_on_release_version():
             # return the previous release
-            tagged_release_version = git.get_tagged_release_version()
+            tagged_release_version = git.get_tagged_release_version(
+                version_type=MzVersion
+            )
             assert tagged_release_version is not None
             previous_release_version = get_previous_published_version(
                 tagged_release_version
@@ -90,12 +89,12 @@ def _resolve_ancestor_image_tag() -> tuple[str, str]:
                 )
 
 
-def get_latest_published_version() -> Version:
+def get_latest_published_version() -> MzVersion:
     excluded_versions = set()
 
     while True:
         latest_published_version = git.get_latest_version(
-            excluded_versions=excluded_versions
+            version_type=MzVersion, excluded_versions=excluded_versions
         )
 
         if _image_of_release_version_exists(latest_published_version):
@@ -107,7 +106,7 @@ def get_latest_published_version() -> Version:
             excluded_versions.add(latest_published_version)
 
 
-def get_previous_published_version(release_version: MzVersion) -> Version:
+def get_previous_published_version(release_version: MzVersion) -> MzVersion:
     excluded_versions = set()
 
     while True:
@@ -122,8 +121,7 @@ def get_previous_published_version(release_version: MzVersion) -> Version:
             excluded_versions.add(previous_published_version)
 
 
-def _image_of_release_version_exists(version: Version) -> bool:
-    assert isinstance(version, Version)
+def _image_of_release_version_exists(version: MzVersion) -> bool:
     return _mz_image_tag_exists(_version_to_image_tag(version))
 
 
@@ -152,6 +150,5 @@ def _commit_to_image_tag(commit_hash: str) -> str:
     return f"devel-{commit_hash}"
 
 
-def _version_to_image_tag(version: Version) -> str:
-    assert isinstance(version, Version)
-    return f"v{version}"
+def _version_to_image_tag(version: MzVersion) -> str:
+    return str(version)

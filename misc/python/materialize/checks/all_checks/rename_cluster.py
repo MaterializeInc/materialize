@@ -16,7 +16,7 @@ from materialize.mz_version import MzVersion
 
 class RenameCluster(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse("0.58.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.58.0-dev")
 
     def manipulate(self) -> list[Testdrive]:
         return [

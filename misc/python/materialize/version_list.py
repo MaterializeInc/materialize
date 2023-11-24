@@ -75,7 +75,7 @@ class VersionsFromGit(VersionList):
     >>> len(VersionsFromGit().minor_versions()) > 0
     True
 
-    >>> len(VersionsFromGit().patch_versions(minor_version=MzVersion.parse("0.52.0")))
+    >>> len(VersionsFromGit().patch_versions(minor_version=MzVersion.parse_mz("v0.52.0")))
     4
 
     >>> min(VersionsFromGit().all_versions())
@@ -84,7 +84,7 @@ class VersionsFromGit(VersionList):
 
     def __init__(self) -> None:
         self.versions = list(
-            {MzVersion.from_semver(t) for t in git.get_version_tags(fetch=True)}
+            set(git.get_version_tags(version_type=MzVersion, fetch=True))
             - INVALID_VERSIONS
         )
         self.versions.sort()
@@ -102,7 +102,7 @@ class VersionsFromDocs(VersionList):
     >>> len(VersionsFromDocs().minor_versions()) > 0
     True
 
-    >>> len(VersionsFromDocs().patch_versions(minor_version=MzVersion.parse("0.52.0")))
+    >>> len(VersionsFromDocs().patch_versions(minor_version=MzVersion.parse_mz("v0.52.0")))
     4
 
     >>> min(VersionsFromDocs().all_versions())
