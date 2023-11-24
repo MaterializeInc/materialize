@@ -202,50 +202,42 @@ Note that:
 
 #### Headers
 
-Message headers can be exposed via the `INCLUDE HEADERS` option. They are included
-as a column (named `headers` by default) containing a [`list`](/sql/types/list/)
-of records of type `(key text, value bytea)`.
+Message headers can be exposed via the `INCLUDE HEADER key AS name` option.
+The `bytea` value of the header is automatically parsed into a UTF-8 string. To expose the raw bytes instead, the `BYTES` option can be used.
 
-The following example demonstrates use of the `INCLUDE HEADERS` option.
+The following example demonstrates use of the `INCLUDE HEADER` option.
 
 ```sql
 CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  INCLUDE HEADERS
+  INCLUDE HEADER 'c_id' AS client_id, HEADER 'key' AS encryption_key BYTES, 
   ENVELOPE NONE
   WITH (SIZE = '3xsmall');
 ```
 
-To retrieve the value of an individual header in a message, you can use standard
-SQL techniques for working with [`list`](/sql/types/list) and
-[`bytea`](/sql/types/bytea) types. The following example parses the UTF-8
-encoded `client_id` header of the messages from the Kafka topic. Messages
-without a `client_id` header result in null values (`"\N"`) for the parsed
-attribute.
+The headers can then be queried as any other column of the message.
 
 ```sql
 SELECT
     id,
     seller,
     item,
-    (
-        SELECT convert_from((h).value, 'utf8') AS client_id
-        FROM unnest(headers) AS h
-        WHERE (h).key = 'client_id'
-    )
+    client_id::numeric,
+    encryption_key
 FROM kafka_metadata;
 
- id | seller |        item        | client_id
-----+--------+--------------------+-----------
-  2 |   1592 | Custom Art         |        23
-  7 |   1509 | Custom Art         |        42
-  3 |   1411 | City Bar Crawl     |      "\N"
+ id | seller |        item        | client_id |    encryption_key
+----+--------+--------------------+-----------+----------------------
+  2 |   1592 | Custom Art         |        23 | \x796f75207769736821
+  3 |   1411 | City Bar Crawl     |        42 | \x796f75207769736821
 ```
 
 Note that:
 
 - The `DEBEZIUM` envelope is incompatible with this option.
+- Messages that do not contain all header keys as specified by the source will cause an error that prevents further querying the source.
+- Headers values containing ill-formed UTF-8 strings will cause an error in the source that prevents querying it unless the `BYTES` option is specified.
 
 #### Partition, offset, timestamp
 
