@@ -1307,6 +1307,18 @@ impl Coordinator {
                         );
                         df_desc.set_as_of(as_of);
 
+                        let df_meta = self
+                            .catalog()
+                            .try_get_dataflow_metainfo(&entry.id())
+                            .expect("added in `bootstrap_dataflow_plans`");
+
+                        // Collect optimization hint updates.
+                        self.catalog().pack_optimizer_notices(
+                            &mut builtin_table_updates,
+                            df_meta.optimizer_notices.iter(),
+                            1,
+                        );
+
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
                         policy_entry
@@ -1338,6 +1350,18 @@ impl Coordinator {
                     // Timestamp selection
                     let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
                     df_desc.set_as_of(as_of);
+
+                    let df_meta = self
+                        .catalog()
+                        .try_get_dataflow_metainfo(&entry.id())
+                        .expect("added in `bootstrap_dataflow_plans`");
+
+                    // Collect optimization hint updates.
+                    self.catalog().pack_optimizer_notices(
+                        &mut builtin_table_updates,
+                        df_meta.optimizer_notices.iter(),
+                        1,
+                    );
 
                     self.ship_dataflow(df_desc, mview.cluster_id).await;
                 }

@@ -581,6 +581,7 @@ mz_comments
 mz_internal_cluster_replicas
 mz_kafka_sources
 mz_object_dependencies
+mz_optimizer_notices
 mz_postgres_sources
 mz_sessions
 mz_storage_usage_by_shard
@@ -630,6 +631,8 @@ mz_global_frontiers
 mz_materialization_lag
 mz_message_counts
 mz_message_counts_per_worker
+mz_notices
+mz_notices_redacted
 mz_object_fully_qualified_names
 mz_object_lifetimes
 mz_object_transitive_dependencies
@@ -682,11 +685,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-47
+48
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-125
+126
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

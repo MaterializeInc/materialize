@@ -22,6 +22,8 @@
 //! More information about builtin system tables and types can be found in
 //! <https://materialize.com/docs/sql/system-catalog/>.
 
+pub mod notice;
+
 use std::hash::Hash;
 use std::string::ToString;
 use std::sync::Mutex;
@@ -6377,6 +6379,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_FRONTIERS_IND),
     ]);
+
+    builtins.extend(notice::builtins());
 
     builtins
 });
