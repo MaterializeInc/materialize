@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 
+import random
+
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -18,7 +20,7 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
-from materialize.parallel_workload.settings import Scenario
+from materialize.parallel_workload.settings import Complexity, Scenario
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -60,7 +62,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "materialized",
     ]
 
-    if Scenario(args.scenario) in (Scenario.Kill, Scenario.BackupRestore):
+    random.seed(args.seed)
+    scenario = Scenario(args.scenario)
+    complexity = Complexity(args.complexity)
+
+    if args.scenario in (Scenario.Kill, Scenario.BackupRestore):
         catalog_store = "stash"
         sanity_restart = False
     else:
@@ -100,8 +106,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ports,
             args.seed,
             args.runtime,
-            args.complexity,
-            args.scenario,
+            complexity,
+            scenario,
             args.threads,
             args.naughty_identifiers,
             args.fast_startup,
