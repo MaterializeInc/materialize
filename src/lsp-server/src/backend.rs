@@ -331,10 +331,6 @@ impl LanguageServer for Backend {
                 let json_args = command_params.arguments.get(0);
 
                 if let Some(json_args) = json_args {
-                    self.client
-                        .log_message(MessageType::INFO, format!("Json args: {:?}", json_args))
-                        .await;
-
                     let args = serde_json::from_value::<InitializeOptions>(json_args.clone())
                         .map_err(|_| {
                             build_error("Error deserializing parse args as InitializeOptions.")
