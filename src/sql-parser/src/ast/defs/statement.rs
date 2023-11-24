@@ -3149,7 +3149,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 WithOptionValue::Secret(_)
                 | WithOptionValue::ConnectionKafkaBroker(_)
                 | WithOptionValue::Ident(_) => {
-                    f.write_str("<REDACTED>");
+                    f.write_str("'<REDACTED>'");
                     return;
                 }
             }

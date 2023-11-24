@@ -21,7 +21,13 @@ CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCO
 query T multiline
 SELECT redacted_create_sql FROM mz_connections WHERE name = 'kafka_conn'
 ----
-CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = <REDACTED>, SECURITY PROTOCOL = <REDACTED>)
+CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = '<REDACTED>', SECURITY PROTOCOL = '<REDACTED>')
+EOF
+
+query T multiline
+SELECT pretty_sql(redacted_create_sql) FROM mz_connections WHERE name = 'kafka_conn'
+----
+CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = '<REDACTED>', SECURITY PROTOCOL = '<REDACTED>');
 EOF
 
 statement ok
@@ -48,16 +54,29 @@ CREATE VIEW v AS SELECT 1
 query T multiline
 SELECT redacted_create_sql FROM mz_views WHERE name = 'v'
 ----
-CREATE VIEW materialize.public.v AS SELECT <REDACTED>
+CREATE VIEW materialize.public.v AS SELECT '<REDACTED>'
+EOF
+
+query T multiline
+SELECT pretty_sql(redacted_create_sql) FROM mz_views WHERE name = 'v'
+----
+CREATE VIEW materialize.public.v AS SELECT '<REDACTED>';
 EOF
 
 statement ok
 CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
 
+# regexp_replace because local and testdrive produce different ids for an undiagnosed reason.
 query T multiline
-SELECT redacted_create_sql FROM mz_sources WHERE name = 's'
+SELECT regexp_replace(redacted_create_sql, 'u[0-9]+', 'uX') FROM mz_sources WHERE name = 's'
 ----
-CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS [u5 AS materialize.public.s_progress] WITH (SIZE = <REDACTED>)
+CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS [uX AS materialize.public.s_progress] WITH (SIZE = '<REDACTED>')
+EOF
+
+query T multiline
+SELECT regexp_replace(pretty_sql(redacted_create_sql), 'u[0-9]+', 'uX') FROM mz_sources WHERE name = 's'
+----
+CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS [uX AS materialize.public.s_progress] WITH (SIZE = '<REDACTED>');
 EOF
 
 statement ok
