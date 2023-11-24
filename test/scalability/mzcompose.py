@@ -51,9 +51,6 @@ SERVICES = [
         image="materialize/materialized:latest",
         sanity_restart=False,
         catalog_store="stash",
-        # TODO(def-,aljoscha) Switch this to "postgres" before #22029 is enabled in production
-        # Also verify that there is no regression when the "other" side uses catalog ts oracle and "this" uses postgres ts oracle
-        additional_system_parameter_defaults={"timestamp_oracle": "catalog"},
     ),
     Postgres(),
 ]
