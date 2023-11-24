@@ -12,7 +12,7 @@ use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
 use differential_dataflow::trace::{Cursor, TraceReader};
@@ -547,7 +547,13 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             PendingPeek::Index(peek) => {
                 peek.seek_fulfillment(upper, self.compute_state.max_result_size)
             }
-            PendingPeek::Persist(peek) => peek.result.try_recv().ok(),
+            PendingPeek::Persist(peek) => peek.result.try_recv().ok().map(|(result, duration)| {
+                self.compute_state
+                    .metrics
+                    .persist_peek_seconds
+                    .observe(duration.as_secs_f64());
+                result
+            }),
         };
 
         if let Some(response) = response {
@@ -704,6 +710,7 @@ impl PendingPeek {
         let max_results_needed = peek.finishing.limit.unwrap_or(usize::MAX) + peek.finishing.offset;
 
         let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {
+            let start = Instant::now();
             let result = if active_worker {
                 PersistPeek::do_peek(
                     &persist_clients,
@@ -720,7 +727,7 @@ impl PendingPeek {
                 Ok(rows) => PeekResponse::Rows(rows),
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
-            let _ = result_tx.send(result);
+            let _ = result_tx.send((result, start.elapsed()));
         });
         PendingPeek::Persist(PersistPeek {
             peek,
@@ -755,7 +762,7 @@ pub struct PersistPeek {
     /// If we're no longer interested in the results, we abort the task.
     _abort_handle: AbortOnDropAbortHandle,
     /// The result of the background task, eventually.
-    result: oneshot::Receiver<PeekResponse>,
+    result: oneshot::Receiver<(PeekResponse, Duration)>,
     /// The `tracing::Span` tracking this peek's operation
     span: tracing::Span,
 }
