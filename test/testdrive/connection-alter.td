@@ -39,13 +39,13 @@ first second
 ------------
 1     2
 
-! ALTER CONNECTION conn RESET broker;
+! ALTER CONNECTION conn RESET (broker);
 contains:invalid ALTER CONNECTION: invalid CONNECTION: must set either BROKER or BROKERS
 
-! ALTER CONNECTION conn SET broker = 'abcd' WITH (validate = true);
+! ALTER CONNECTION conn SET (broker = 'abcd') WITH (validate = true);
 contains:Failed to resolve hostname
 
-> ALTER CONNECTION conn SET broker = 'abcd' WITH (validate = false);
+> ALTER CONNECTION conn SET (broker = 'abcd') WITH (validate = false);
 
 > SELECT status = 'stalled' FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 true
@@ -58,7 +58,7 @@ materialize.public.conn   "CREATE CONNECTION \"materialize\".\"public\".\"conn\"
 $ kafka-ingest format=bytes topic=connection_test
 2,3
 
-> ALTER CONNECTION conn SET broker = '${testdrive.kafka-addr}' WITH (validate = true);
+> ALTER CONNECTION conn SET (broker = '${testdrive.kafka-addr}') WITH (validate = true);
 
 > SELECT * FROM mz_source
 first second
@@ -71,62 +71,62 @@ name   create_sql
 ---------------------------------
 materialize.public.conn   "CREATE CONNECTION \"materialize\".\"public\".\"conn\" TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = \"plaintext\")"
 
-> ALTER CONNECTION conn SET BROKERS ['${testdrive.kafka-addr}']
+> ALTER CONNECTION conn SET (BROKERS ['${testdrive.kafka-addr}'])
 
 > SHOW CREATE CONNECTION conn
 name   create_sql
 ---------------------------------
 materialize.public.conn   "CREATE CONNECTION \"materialize\".\"public\".\"conn\" TO KAFKA (BROKERS = ('${testdrive.kafka-addr}'), SECURITY PROTOCOL = \"plaintext\")"
 
-! ALTER CONNECTION conn DROP SECURITY PROTOCOL;
+! ALTER CONNECTION conn DROP (SECURITY PROTOCOL);
 contains:Broker does not support SSL connections
 
-! ALTER CONNECTION conn SET BROKER '${testdrive.kafka-addr}', RESET BROKER;
+! ALTER CONNECTION conn SET (BROKER '${testdrive.kafka-addr}'), RESET (BROKER);
 contains:cannot both SET and DROP/RESET options BROKER
 
-! ALTER CONNECTION conn SET BROKER '${testdrive.kafka-addr}', SET BROKER '${testdrive.kafka-addr}';
+! ALTER CONNECTION conn SET (BROKER '${testdrive.kafka-addr}'), SET (BROKER '${testdrive.kafka-addr}');
 contains:BROKER specified more than once
 
-! ALTER CONNECTION conn SET BROKER '${testdrive.kafka-addr}', SET BROKER '${testdrive.kafka-addr}', SET BROKER '${testdrive.kafka-addr}';
+! ALTER CONNECTION conn SET (BROKER '${testdrive.kafka-addr}'), SET (BROKER '${testdrive.kafka-addr}'), SET (BROKER '${testdrive.kafka-addr}');
 contains:BROKER specified more than once
 
-! ALTER CONNECTION conn SET BROKER '${testdrive.kafka-addr}', SET BROKERS ['${testdrive.kafka-addr}']
+! ALTER CONNECTION conn SET (BROKER '${testdrive.kafka-addr}'), SET (BROKERS ['${testdrive.kafka-addr}'])
 contains:invalid ALTER CONNECTION: invalid CONNECTION: cannot set BROKER and BROKERS
 
-! ALTER CONNECTION conn SET BROKER '${testdrive.kafka-addr}', DROP BROKERS
+! ALTER CONNECTION conn SET (BROKER '${testdrive.kafka-addr}'), DROP (BROKERS)
 contains:cannot both SET and DROP/RESET mutually exclusive KAFKA options BROKER, BROKERS
 
-! ALTER CONNECTION conn DROP BROKER, SET BROKERS ['${testdrive.kafka-addr}']
+! ALTER CONNECTION conn DROP (BROKER), SET (BROKERS ['${testdrive.kafka-addr}'])
 contains:cannot both SET and DROP/RESET mutually exclusive KAFKA options BROKER, BROKERS
 
 # We permit resetting both of these options, and the error occurs later in planning
-! ALTER CONNECTION conn RESET BROKER, RESET BROKERS;
+! ALTER CONNECTION conn RESET (BROKER), RESET (BROKERS);
 contains:invalid ALTER CONNECTION: invalid CONNECTION: must set either BROKER or BROKERS
 
-> ALTER CONNECTION conn SET BROKER = '${testdrive.kafka-addr}';
+> ALTER CONNECTION conn SET (BROKER = '${testdrive.kafka-addr}');
 
-! ALTER CONNECTION conn SET PROGRESS TOPIC = 'new';
+! ALTER CONNECTION conn SET (PROGRESS TOPIC = 'new');
 contains:cannot ALTER KAFKA option PROGRESS TOPIC
 
-! ALTER CONNECTION conn RESET PROGRESS TOPIC;
+! ALTER CONNECTION conn RESET (PROGRESS TOPIC);
 contains:cannot ALTER KAFKA option PROGRESS TOPIC
 
 # Misc. ALTER CONNECTION operations
 
-! ALTER CONNECTION conn RESET PROGRESS TOPIC, ROTATE KEYS;
+! ALTER CONNECTION conn RESET (PROGRESS TOPIC), ROTATE KEYS;
 contains:cannot specify any other actions alongside ALTER CONNECTION...ROTATE KEYS
 
-! ALTER CONNECTION conn ROTATE KEYS, RESET PROGRESS TOPIC;
+! ALTER CONNECTION conn ROTATE KEYS, RESET (PROGRESS TOPIC);
 contains:cannot specify any other actions alongside ALTER CONNECTION...ROTATE KEYS
 
 ! ALTER CONNECTION conn ROTATE KEYS, ROTATE KEYS;
 contains:cannot specify any other actions alongside ALTER CONNECTION...ROTATE KEYS
 
 # IF EXISTS
-> ALTER CONNECTION IF EXISTS abc RESET PROGRESS TOPIC;
+> ALTER CONNECTION IF EXISTS abc RESET (PROGRESS TOPIC);
 
 ## Mix altering option w/ rotate keys allowed iff in an IF EXISTS and object DNE
-> ALTER CONNECTION IF EXISTS abc RESET PROGRESS TOPIC, ROTATE KEYS;
+> ALTER CONNECTION IF EXISTS abc RESET (PROGRESS TOPIC), ROTATE KEYS;
 
 # Rotate keys on non-SSH conn
 ! ALTER CONNECTION conn ROTATE KEYS

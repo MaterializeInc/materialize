@@ -109,7 +109,7 @@ class AlterConnectionSshChangeBase(Check):
                 $ kafka-ingest topic=alter-connection-{i}a format=bytes
                 two
 
-                > ALTER CONNECTION kafka_conn_alter_connection_{i}a SET BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.ADD_SSH, SshChange.CHANGE_SSH_HOST} else ''};
+                > ALTER CONNECTION kafka_conn_alter_connection_{i}a SET (BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.ADD_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
                 $ kafka-ingest topic=alter-connection-{i}a format=bytes
                 three
@@ -130,7 +130,7 @@ class AlterConnectionSshChangeBase(Check):
                 $ kafka-ingest topic=alter-connection-{i}b format=bytes
                 twenty
 
-                {f"> ALTER CONNECTION ssh_tunnel_{i} SET HOST = 'other_ssh_bastion' WITH (VALIDATE = true);" if self.ssh_change == SshChange.CHANGE_SSH_HOST else "$ nop"}
+                {f"> ALTER CONNECTION ssh_tunnel_{i} SET (HOST = 'other_ssh_bastion') WITH (VALIDATE = true);" if self.ssh_change == SshChange.CHANGE_SSH_HOST else "$ nop"}
 
                 > INSERT INTO alter_connection_table_{i} VALUES (2);
                 """,
@@ -141,7 +141,7 @@ class AlterConnectionSshChangeBase(Check):
                 $ kafka-ingest topic=alter-connection-{i}b format=bytes
                 thirty
 
-                > ALTER CONNECTION kafka_conn_alter_connection_{i}b SET BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.ADD_SSH, SshChange.CHANGE_SSH_HOST} else ''};
+                > ALTER CONNECTION kafka_conn_alter_connection_{i}b SET (BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.ADD_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
                 $ kafka-ingest topic=alter-connection-{i}b format=bytes
                 fourty

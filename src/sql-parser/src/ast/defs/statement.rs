@@ -2197,12 +2197,14 @@ impl<T: AstInfo> AstDisplay for AlterConnectionAction<T> {
         match self {
             AlterConnectionAction::RotateKeys => f.write_str("ROTATE KEYS"),
             AlterConnectionAction::SetOption(option) => {
-                f.write_str("SET ");
+                f.write_str("SET (");
                 f.write_node(option);
+                f.write_str(")");
             }
             AlterConnectionAction::DropOption(option) => {
-                f.write_str("DROP ");
+                f.write_str("DROP (");
                 f.write_node(option);
+                f.write_str(")");
             }
         }
     }
