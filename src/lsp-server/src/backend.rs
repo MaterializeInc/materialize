@@ -16,8 +16,6 @@
 // The original source code is subject to the terms of the <APACHE|MIT> license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
-use std::ops::DerefMut;
-
 use ::serde::Deserialize;
 use mz_ore::collections::HashMap;
 use mz_sql_lexer::keywords::Keyword;
@@ -67,6 +65,18 @@ pub struct ExecuteCommandParseResponse {
     pub statements: Vec<ExecuteCommandParseStatement>,
 }
 
+/// Represents the completion items that will
+/// be returned to the client when requested.
+#[derive(Debug)]
+pub struct Completions {
+    /// Contains the completion items
+    /// after a SELECT token.
+    pub select: Vec<CompletionItem>,
+    /// Contains the completion items for
+    /// after a FROM token.
+    pub from: Vec<CompletionItem>,
+}
+
 /// The [Backend] struct implements the [LanguageServer] trait, and thus must provide implementations for its methods.
 /// Most imporant methods includes:
 /// - `initialize`: sets up the server.
@@ -104,24 +114,35 @@ pub struct Backend {
     /// Schema available in the client
     /// used for completion suggestions.
     pub schema: Mutex<Option<Schema>>,
+
+    /// Completion suggestion to return
+    /// to the client when requested.
+    pub completions: Mutex<Completions>,
 }
 
 /// Represents a column from an [ObjectType
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SchemaObjectColumn {
     /// Represents the column's name.
-    name: String,
+    pub name: String,
     /// Represents the column's type.
     #[serde(rename = "type")]
-    _type: String,
+    pub _type: String,
 }
 
-#[derive(Debug, Deserialize)]
-enum ObjectType {
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Represents each possible object type admissible by the LSP.
+pub enum ObjectType {
+    /// Represents a materialized view.
     MaterializedView,
+    /// Represents a view.
     View,
+    /// Represents a source.
     Source,
+    /// Represents a table.
     Table,
+    /// Represents a sink.
     Sink,
 }
 
@@ -141,30 +162,30 @@ impl ToString for ObjectType {
 /// and its columns.
 ///
 /// E.g. a table, view, source, etc.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SchemaObject {
     /// Represents the object type.
     #[serde(rename = "type")]
-    _type: ObjectType,
+    pub _type: ObjectType,
     /// Represents the object name.
-    name: String,
+    pub name: String,
     /// Contains all the columns available in the object.
-    columns: Vec<SchemaObjectColumn>,
+    pub columns: Vec<SchemaObjectColumn>,
 }
 
 /// Represents the current schema, database and all
 /// its objects the client is using.
 ///
 /// This is later used to return completion items to the client.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Schema {
     /// Represents the schema name.
-    schema: String,
+    pub schema: String,
     /// Represents the database name.
-    database: String,
+    pub database: String,
     /// Contains all the user objects (tables, views, sources, etc.)
     /// available in the current database/schema.
-    objects: Vec<SchemaObject>,
+    pub objects: Vec<SchemaObject>,
 }
 
 /// Contains customizable options send by the client.
@@ -172,9 +193,9 @@ pub struct Schema {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeOptions {
     /// Represents the width used to format text using [mz_sql_pretty].
-    formatting_width: Option<usize>,
+    pub formatting_width: Option<usize>,
     /// Represents the current schema available in the client.
-    schema: Option<Schema>,
+    pub schema: Option<Schema>,
 }
 
 #[tower_lsp::async_trait]
@@ -184,22 +205,16 @@ impl LanguageServer for Backend {
         if let Some(value_options) = params.initialization_options {
             match serde_json::from_value(value_options) {
                 Ok(options) => {
-                    self.client
-                        .log_message(
-                            MessageType::INFO,
-                            format!("Initialization options: {:?}", options),
-                        )
-                        .await;
-
                     let options: InitializeOptions = options;
                     if let Some(formatting_width) = options.formatting_width {
-                        let mut mutex_changer = self.formatting_width.lock().await;
-                        *mutex_changer = formatting_width;
+                        let mut formatting_width_guard = self.formatting_width.lock().await;
+                        *formatting_width_guard = formatting_width;
                     }
 
                     if let Some(schema) = options.schema {
-                        let mut mutex_changer = self.schema.lock().await;
-                        *mutex_changer = Some(schema);
+                        let mut schema_guard = self.schema.lock().await;
+                        *schema_guard = Some(schema.clone());
+                        self.build_completion_items(schema).await;
                     };
                 }
                 Err(err) => {
@@ -331,7 +346,8 @@ impl LanguageServer for Backend {
 
                     if let Some(schema) = args.schema {
                         let mut schema_guard = self.schema.lock().await;
-                        *schema_guard = Some(schema);
+                        *schema_guard = Some(schema.clone());
+                        self.build_completion_items(schema).await;
                     }
 
                     return Ok(None);
@@ -417,106 +433,41 @@ impl LanguageServer for Backend {
             let offset = position_to_offset(_position, content)
                 .ok_or(build_error("Error getting completion offset."))?;
             let mut last_keyword: Option<Keyword> = None;
-            lex_results.iter().enumerate().find(|(_, x)| {
-                match x.kind {
-                    Token::Keyword(k) => match k {
-                        Keyword::Select => {
-                            last_keyword = Some(k);
-                        }
-                        Keyword::From => {
-                            last_keyword = Some(k);
-                        }
+            lex_results.iter().find(|x| {
+                if x.offset < offset {
+                    match x.kind {
+                        Token::Keyword(k) => match k {
+                            Keyword::Select => {
+                                last_keyword = Some(k);
+                            }
+                            Keyword::From => {
+                                last_keyword = Some(k);
+                            }
+                            _ => {}
+                        },
+                        // Skip the rest for now.
                         _ => {}
-                    },
-                    // Skip the rest for now.
-                    _ => {}
-                };
+                    };
+                }
 
                 x.offset >= offset
             });
 
             if let Some(keyword) = last_keyword {
-                let completions = match keyword {
+                return match keyword {
                     Keyword::Select => {
-                        // Return columns and function
-                        let mut schema = self.schema.lock().await;
-                        let mut completions = Vec::new();
-
-                        self.client
-                            .log_message(MessageType::INFO, format!("Schema: {:?}", schema))
-                            .await;
-
-                        if let Some(schema) = schema.deref_mut() {
-                            schema.objects.iter().for_each(|object| {
-                                // Columns
-                                object.columns.iter().for_each(|column| {
-                                    completions.push(CompletionItem {
-                                        label: column.name.to_string(),
-                                        label_details: Some(CompletionItemLabelDetails {
-                                            detail: Some(column._type.to_string()),
-                                            description: Some(column._type.to_string()),
-                                        }),
-                                        kind: Some(CompletionItemKind::FIELD),
-                                        detail: Some(
-                                            format!(
-                                                "From {}.{}.{} ({:?})",
-                                                schema.database,
-                                                schema.schema,
-                                                object.name,
-                                                object._type
-                                            )
-                                            .to_string(),
-                                        ),
-                                        documentation: None,
-                                        deprecated: Some(false),
-                                        ..Default::default()
-                                    });
-                                });
-                            });
-                        }
-
-                        completions
+                        let completions = self.completions.lock().await;
+                        let select_completions = completions.select.clone();
+                        Ok(Some(CompletionResponse::Array(select_completions)))
                     }
                     Keyword::From => {
-                        let mut completions = Vec::new();
-                        let mut schema = self.schema.lock().await;
-
-                        if let Some(schema) = schema.deref_mut() {
-                            schema.objects.iter().for_each(|object| {
-                                completions.push(CompletionItem {
-                                    label: object.name.to_string(),
-                                    label_details: Some(CompletionItemLabelDetails {
-                                        detail: None,
-                                        description: Some(object._type.to_string()),
-                                    }),
-                                    kind: match object._type {
-                                        ObjectType::View => Some(CompletionItemKind::ENUM),
-                                        ObjectType::MaterializedView => {
-                                            Some(CompletionItemKind::ENUM_MEMBER)
-                                        }
-                                        ObjectType::Source => Some(CompletionItemKind::STRUCT),
-                                        ObjectType::Sink => Some(CompletionItemKind::STRUCT),
-                                        ObjectType::Table => Some(CompletionItemKind::CONSTANT)
-                                    },
-                                    detail: None,
-                                    documentation: None,
-                                    deprecated: Some(false),
-                                    ..Default::default()
-                                });
-                            });
-                        }
-
-                        completions
+                        let completions = self.completions.lock().await;
+                        let from_completions = completions.from.clone();
+                        Ok(Some(CompletionResponse::Array(from_completions)))
                     }
-                    // Skip the rest for now.
-                    _ => {
-                        vec![]
-                    }
+                    _ => Ok(None),
                 };
-
-                return Ok(Some(CompletionResponse::Array(completions)));
             }
-
             return Ok(None);
         } else {
             return Ok(None);
@@ -568,15 +519,16 @@ impl Backend {
         let rope = ropey::Rope::from_str(&params.text);
 
         let mut content = self.content.lock().await;
-        content.insert(params.uri.clone(), rope.clone());
-
         let mut parse_results = self.parse_results.lock().await;
+
         // Parse the text
         let parse_result = mz_sql_parser::parser::parse_statements(&params.text);
 
         match parse_result {
             // The parser will return Ok when everything is well written.
             Ok(results) => {
+                content.insert(params.uri.clone(), rope.clone());
+
                 // Clear the diagnostics in case there were issues before.
                 self.client
                     .publish_diagnostics(params.uri.clone(), vec![], Some(params.version))
@@ -602,6 +554,9 @@ impl Backend {
                     // Do not send any new diagnostics
                     return;
                 }
+
+                // Only insert content if it is not Jinja code.
+                content.insert(params.uri.clone(), rope.clone());
 
                 let diagnostics = Diagnostic::new_simple(range, err_parsing.error.message);
 
@@ -636,6 +591,66 @@ impl Backend {
     /// Returns true if Jinja code is detected.
     fn is_jinja(&self, s: &str, code: String) -> bool {
         s == "unexpected character in input: {" && self.contains_jinja_code(&code)
+    }
+
+    async fn build_completion_items(&self, schema: Schema) {
+        // Build SELECT completion items:
+        let mut select_completions = Vec::new();
+        let mut from_completions = Vec::new();
+
+        schema.objects.iter().for_each(|object| {
+            // Columns
+            object.columns.iter().for_each(|column| {
+                select_completions.push(CompletionItem {
+                    label: column.name.to_string(),
+                    label_details: Some(CompletionItemLabelDetails {
+                        detail: Some(column._type.to_string()),
+                        description: None,
+                    }),
+                    kind: Some(CompletionItemKind::FIELD),
+                    detail: Some(
+                        format!(
+                            "From {}.{}.{} ({:?})",
+                            schema.database, schema.schema, object.name, object._type
+                        )
+                        .to_string(),
+                    ),
+                    documentation: None,
+                    deprecated: Some(false),
+                    ..Default::default()
+                });
+            });
+
+            // Objects
+            from_completions.push(CompletionItem {
+                label: object.name.to_string(),
+                label_details: Some(CompletionItemLabelDetails {
+                    detail: Some(object._type.to_string()),
+                    description: None,
+                }),
+                kind: match object._type {
+                    ObjectType::View => Some(CompletionItemKind::ENUM_MEMBER),
+                    ObjectType::MaterializedView => Some(CompletionItemKind::ENUM),
+                    ObjectType::Source => Some(CompletionItemKind::CLASS),
+                    ObjectType::Sink => Some(CompletionItemKind::CLASS),
+                    ObjectType::Table => Some(CompletionItemKind::CONSTANT),
+                },
+                detail: Some(
+                    format!(
+                        "Represents {}.{}.{} ({:?})",
+                        schema.database, schema.schema, object.name, object._type
+                    )
+                    .to_string(),
+                ),
+                documentation: None,
+                deprecated: Some(false),
+                ..Default::default()
+            });
+        });
+
+        let mut completions = self.completions.lock().await;
+        completions.from = from_completions;
+        completions.select = select_completions;
     }
 }
 
