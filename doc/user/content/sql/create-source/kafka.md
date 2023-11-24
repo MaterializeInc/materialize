@@ -211,7 +211,7 @@ The following example demonstrates use of the `INCLUDE HEADER` option.
 CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  INCLUDE HEADER 'c_id' AS client_id, HEADER 'key' AS encryption_key BYTES, 
+  INCLUDE HEADER 'c_id' AS client_id, HEADER 'key' AS encryption_key BYTES,
   ENVELOPE NONE
   WITH (SIZE = '3xsmall');
 ```
