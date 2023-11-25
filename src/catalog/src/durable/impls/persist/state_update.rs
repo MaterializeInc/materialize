@@ -24,15 +24,11 @@ use crate::durable::Epoch;
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKindBinary`].
 pub(crate) trait IntoStateUpdateKindBinary:
-    Into<StateUpdateKindBinary>
-    + TryFrom<StateUpdateKindBinary>
-    + PartialEq
-    + Eq
-    + PartialOrd
-    + Ord
-    + Debug
-    + Clone
+    Into<StateUpdateKindBinary> + PartialEq + Eq + PartialOrd + Ord + Debug + Clone
 {
+    type Error: Debug;
+
+    fn try_from(binary: StateUpdateKindBinary) -> Result<Self, Self::Error>;
 }
 impl<
         T: Into<StateUpdateKindBinary>
@@ -44,7 +40,14 @@ impl<
             + Debug
             + Clone,
     > IntoStateUpdateKindBinary for T
+where
+    T::Error: Debug,
 {
+    type Error = T::Error;
+
+    fn try_from(binary: StateUpdateKindBinary) -> Result<Self, Self::Error> {
+        <T as TryFrom<StateUpdateKindBinary>>::try_from(binary)
+    }
 }
 
 /// A single update to the catalog state.
@@ -541,7 +544,7 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
 
 /// Binary version of [`StateUpdateKind`] to allow reading/writing raw binary from/to persist.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
-pub(crate) struct StateUpdateKindBinary(Vec<u8>);
+pub(crate) struct StateUpdateKindBinary(pub(crate) Vec<u8>);
 
 #[derive(Debug, Clone, Default)]
 pub struct StateUpdateKindSchema;
