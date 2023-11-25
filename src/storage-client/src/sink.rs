@@ -28,9 +28,12 @@ use mz_storage_types::sinks::{
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
+use rdkafka::message::ToBytes;
 use rdkafka::{ClientContext, Message, Offset, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+
+use crate::sink::progress_key::ProgressKey;
 
 /// Formatter for Kafka group.id setting
 pub struct SinkGroupId;
@@ -41,12 +44,33 @@ impl SinkGroupId {
     }
 }
 
-/// Formatter for the progress topic's key's
-pub struct ProgressKey;
+pub mod progress_key {
+    use std::fmt;
 
-impl ProgressKey {
-    pub fn new(sink_id: GlobalId) -> String {
-        format!("mz-sink-{sink_id}")
+    use mz_repr::GlobalId;
+    use rdkafka::message::ToBytes;
+
+    /// A key identifying a given sink within a progress topic.
+    #[derive(Debug, Clone)]
+    pub struct ProgressKey(String);
+
+    impl ProgressKey {
+        /// Constructs a progress key for the sink with the specified ID.
+        pub fn new(sink_id: GlobalId) -> ProgressKey {
+            ProgressKey(format!("mz-sink-{sink_id}"))
+        }
+    }
+
+    impl ToBytes for ProgressKey {
+        fn to_bytes(&self) -> &[u8] {
+            self.0.as_bytes()
+        }
+    }
+
+    impl fmt::Display for ProgressKey {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            self.0.fmt(f)
+        }
     }
 }
 
@@ -351,11 +375,11 @@ pub struct ProgressRecord {
 }
 
 /// Determines the latest progress record from the specified topic for the given
-/// key (e.g. akin to a sink's GlobalId).
+/// progress key.
 async fn determine_latest_progress_record(
     name: String,
     progress_topic: String,
-    progress_key: String,
+    progress_key: ProgressKey,
     progress_client: Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>,
 ) -> Result<Option<Timestamp>, anyhow::Error> {
     // Polls a message from a Kafka Source.  Blocking so should always be called on background
@@ -386,7 +410,7 @@ async fn determine_latest_progress_record(
     // always be called on background thread
     fn get_latest_ts<C>(
         progress_topic: &str,
-        progress_key: &str,
+        progress_key: &ProgressKey,
         progress_client: &BaseConsumer<C>,
         timeout: Duration,
     ) -> Result<Option<Timestamp>, anyhow::Error>
@@ -463,7 +487,7 @@ async fn determine_latest_progress_record(
             assert!(latest_offset < Some(offset));
             latest_offset = Some(offset);
 
-            if &key != progress_key.as_bytes() {
+            if &key != progress_key.to_bytes() {
                 continue;
             }
 
