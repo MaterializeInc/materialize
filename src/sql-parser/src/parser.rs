@@ -2357,6 +2357,7 @@ impl<'a> Parser<'a> {
         let name = match self.expect_one_of_keywords(&[
             ACKS,
             CLIENT,
+            COMPRESSION,
             ENABLE,
             FETCH,
             GROUP,
@@ -2373,6 +2374,10 @@ impl<'a> Parser<'a> {
             CLIENT => {
                 self.expect_keyword(ID)?;
                 KafkaConfigOptionName::ClientId
+            }
+            COMPRESSION => {
+                self.expect_keyword(TYPE)?;
+                KafkaConfigOptionName::CompressionType
             }
             ENABLE => {
                 self.expect_keyword(IDEMPOTENCE)?;
