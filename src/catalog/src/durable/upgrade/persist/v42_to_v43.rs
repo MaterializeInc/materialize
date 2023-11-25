@@ -7,5 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-/// No-op migration for adding a new type to the audit log.
-pub fn upgrade() {}
+use crate::durable::upgrade::persist::MigrationAction;
+use crate::durable::upgrade::{objects_v42 as v42, objects_v43 as v43};
+
+/// No-op migration for removing storage objects.
+pub fn upgrade(
+    _snapshot: Vec<v42::StateUpdateKind>,
+) -> Vec<MigrationAction<v42::StateUpdateKind, v43::StateUpdateKind>> {
+    Vec::new()
+}

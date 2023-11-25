@@ -18,10 +18,6 @@ breaking:
     # reason: does currently not require backward-compatibility
     - catalog/protos/objects.proto
     # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v40.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v41.proto
-    # reason: does currently not require backward-compatibility
     - catalog/protos/objects_v42.proto
     # reason: does currently not require backward-compatibility
     - catalog/protos/objects_v43.proto

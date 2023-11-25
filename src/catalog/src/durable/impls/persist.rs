@@ -311,7 +311,7 @@ impl PersistHandle {
     ///
     /// The output is consolidated and sorted by timestamp in ascending order.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn snapshot_binary(
+    pub(crate) async fn snapshot_binary(
         &mut self,
         as_of: Timestamp,
     ) -> &Vec<StateUpdate<StateUpdateKindBinary>> {
@@ -452,7 +452,7 @@ impl PersistHandle {
 
     /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
     /// iff the current global upper of the catalog is `current_upper`.
-    async fn compare_and_append<T: IntoStateUpdateKindBinary>(
+    pub(crate) async fn compare_and_append<T: IntoStateUpdateKindBinary>(
         &mut self,
         updates: Vec<StateUpdate<T>>,
         current_upper: Timestamp,

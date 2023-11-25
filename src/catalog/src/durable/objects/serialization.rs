@@ -30,8 +30,10 @@ use mz_sql::names::{
 };
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_types::instances::StorageInstanceId;
+use prost::Message;
 use std::time::Duration;
 
+use crate::durable::impls::persist::state_update::StateUpdateKindBinary;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
@@ -47,6 +49,20 @@ use crate::durable::{
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/objects.rs"));
+}
+
+impl From<proto::StateUpdateKind> for StateUpdateKindBinary {
+    fn from(value: proto::StateUpdateKind) -> Self {
+        Self(value.encode_to_vec())
+    }
+}
+
+impl TryFrom<StateUpdateKindBinary> for proto::StateUpdateKind {
+    type Error = String;
+
+    fn try_from(value: StateUpdateKindBinary) -> Result<Self, Self::Error> {
+        proto::StateUpdateKind::decode(value.0.as_slice()).map_err(|err| err.to_string())
+    }
 }
 
 impl RustType<proto::ClusterConfig> for ClusterConfig {
