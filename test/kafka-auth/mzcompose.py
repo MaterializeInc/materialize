@@ -187,8 +187,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     # Restrict the `materialize_no_describe_configs` user from running the
-    # `DescribeConfigs` cluster operation, but allow it to idempotently write
-    # to all topics.
+    # `DescribeConfigs` cluster operation, but allow it to idempotently read and
+    # write to all topics.
     c.exec(
         "kafka",
         "kafka-acls",
@@ -218,6 +218,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--allow-principal=User:materialize_no_describe_configs",
         "--operation=ALL",
         "--topic=*",
+    )
+    c.exec(
+        "kafka",
+        "kafka-acls",
+        "--bootstrap-server",
+        "localhost:9092",
+        "--add",
+        "--allow-principal=User:materialize_no_describe_configs",
+        "--operation=ALL",
+        "--group=*",
     )
 
     # Now that the Kafka topic has been bootstrapped, it's safe to bring up all
