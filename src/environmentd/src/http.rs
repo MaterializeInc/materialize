@@ -545,7 +545,6 @@ impl AuthedClient {
         let conn_id = adapter_client.new_conn_id()?;
         let mut session = adapter_client.new_session(conn_id, user);
         session_config(&mut session);
-        let mut set_setting_keys = Vec::new();
         for (key, val) in options {
             const LOCAL: bool = false;
             if let Err(err) = session
@@ -556,11 +555,9 @@ impl AuthedClient {
                     name: key.to_string(),
                     reason: err.to_string(),
                 })
-            } else {
-                set_setting_keys.push(key);
             }
         }
-        let adapter_client = adapter_client.startup(session, set_setting_keys).await?;
+        let adapter_client = adapter_client.startup(session).await?;
         Ok(AuthedClient {
             client: adapter_client,
             drop_connection,
@@ -622,7 +619,11 @@ where
             &adapter_client,
             user.clone(),
             Arc::clone(active_connection_count),
-            |session| session.vars_mut().set_default("welcome_message", &false),
+            |session| {
+                session
+                    .vars_mut()
+                    .set_default("welcome_message", Box::new(false))
+            },
             options,
         )
         .await

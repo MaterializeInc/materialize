@@ -236,7 +236,6 @@ where
         (session, is_expired)
     };
 
-    let mut setting_keys = vec![];
     for (name, value) in params {
         let settings = match name.as_str() {
             "options" => match parse_options(&value) {
@@ -265,8 +264,6 @@ where
                     name: key,
                     reason: err.to_string(),
                 });
-            } else {
-                setting_keys.push(key);
             }
         }
     }
@@ -303,7 +300,7 @@ where
     conn.flush().await?;
 
     // Register session with adapter.
-    let mut adapter_client = match adapter_client.startup(session, setting_keys).await {
+    let mut adapter_client = match adapter_client.startup(session).await {
         Ok(adapter_client) => adapter_client,
         Err(e) => return conn.send(e.into_response(Severity::Fatal)).await,
     };

@@ -145,13 +145,7 @@ impl Client {
     /// Returns a new client that is bound to the session and a response
     /// containing various details about the startup.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn startup(
-        &self,
-        session: Session,
-        // keys of settings that were set on statup, and thus should not be
-        // overridden by defaults.
-        set_setting_keys: Vec<String>,
-    ) -> Result<SessionClient, AdapterError> {
+    pub async fn startup(&self, session: Session) -> Result<SessionClient, AdapterError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
         // connection. The coordinator will send a canceled message on it if a
@@ -171,7 +165,6 @@ impl Client {
         self.send(Command::Startup {
             cancel_tx: Arc::clone(&cancel_tx),
             tx,
-            set_setting_keys,
             user,
             conn_id,
             secret_key,
@@ -199,8 +192,8 @@ impl Client {
         let StartupResponse {
             role_id,
             write_notify,
-            session_vars,
-            role_vars,
+            session_defaults,
+            role_defaults,
             catalog,
         } = response;
 
@@ -212,12 +205,10 @@ impl Client {
         let session = client.session();
         session.initialize_role_metadata(role_id);
         let vars_mut = session.vars_mut();
-        for (name, val) in session_vars {
-            vars_mut
-                .set(None, &name, val.borrow(), false)
-                .expect("constrained to be valid");
+        for (name, val) in session_defaults {
+            vars_mut.set_default(&name, val);
         }
-        for (name, val) in role_vars {
+        for (name, val) in role_defaults {
             if let Err(err) = vars_mut.set_role_default(&name, val.borrow()) {
                 // Note: erroring here is unexpected, but we don't want to panic if somehow our
                 // assumptions are wrong.
@@ -284,7 +275,7 @@ Issue a SQL query to get started. Need help?
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(conn_id, SUPPORT_USER.clone());
-        let mut session_client = self.startup(session, vec![]).await?;
+        let mut session_client = self.startup(session).await?;
 
         // Parse the SQL statement.
         let stmts = mz_sql::parse::parse(sql)?;

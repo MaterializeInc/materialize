@@ -2351,7 +2351,7 @@ impl SessionVars {
 
     /// Sets the default value for the parameter named `name` to the value
     /// represented by `value`.
-    pub fn set_default(&mut self, name: &str, input: &'static dyn Any) {
+    pub fn set_default(&mut self, name: &str, input: Box<dyn Any>) {
         let name = UncasedStr::new(name);
         let var = self.vars.get_mut(name).unwrap_or_else(|| {
             panic!("SessionVars::set_default called with unknown variable {name}")
@@ -3985,7 +3985,7 @@ where
     V: Value + ToOwned + Debug + PartialEq + 'static,
 {
     /// Default value.
-    default_value: Option<&'static V>,
+    default_value: Option<V::Owned>,
     /// Value persisted with the current role.
     role_value: Option<V::Owned>,
     /// Value `LOCAL` to a transaction, will be unset at the completion of the transaction.
@@ -4106,7 +4106,7 @@ where
             .or_else(|| self.staged_value.as_ref().map(|v| v.borrow()))
             .or_else(|| self.session_value.as_ref().map(|v| v.borrow()))
             .or_else(|| self.role_value.as_ref().map(|v| v.borrow()))
-            .or(self.default_value)
+            .or_else(|| self.default_value.as_ref().map(|v| v.borrow()))
             .unwrap_or(self.parent.value)
     }
 }
@@ -4153,7 +4153,7 @@ pub trait SessionVarMut: Var + Send + Sync {
     fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError>;
 
     /// Sets the default value for the variable.
-    fn set_default(&mut self, value: &'static dyn Any);
+    fn set_default(&mut self, value: Box<dyn Any>);
 
     /// Parse the input and update the default Role value.
     ///
@@ -4198,15 +4198,15 @@ where
     }
 
     /// Sets the default value.
-    fn set_default(&mut self, input: &'static dyn Any) {
-        let v = input.downcast_ref().unwrap_or_else(|| {
+    fn set_default(&mut self, input: Box<dyn Any>) {
+        let v = input.downcast().unwrap_or_else(|input| {
             panic!(
                 "SessionVar::set_default called with invalid value {:?} for {}",
                 input,
                 self.name()
             )
         });
-        self.default_value = Some(v);
+        self.default_value = Some(*v);
     }
 
     /// Parse the input and set the default Role value.
@@ -4223,7 +4223,7 @@ where
             .role_value
             .as_ref()
             .map(|v| v.borrow())
-            .or_else(|| self.default_value.map(|v| v.borrow()))
+            .or_else(|| self.default_value.as_ref().map(|v| v.borrow()))
             .unwrap_or(self.parent.value)
             .to_owned();
         if local {
