@@ -332,12 +332,28 @@ Consider using the Debezium envelope if:
 ### Automatic topic creation
 
 If the specified Kafka topic does not exist, Materialize will attempt to create
-it while processing the `CREATE SINK` statement. Materialize will configure the
-topic with the broker's default number of partitions and replication factor.
+it using the broker's default number of partitions, default replication factor,
+default compaction policy, and default retention policy.
 
-To customize the topic configuration, create the sink's topic outside of
-Materialize with the desired configuration (e.g., using the [`kafka-topics.sh`]
-tool) before running `CREATE SINK`.
+If the connection's [progress topic](#exactly-once-processing) does not exist,
+Materialize will attempt to create it with a single partition, the broker's
+default replication factor, compaction enabled, and both size- and time-based
+retention disabled.
+
+To customize a topic's configuration, manually create the topic in Kafka with
+the desired configuration (e.g., using the [`kafka-topics.sh`] tool) before
+running `CREATE SINK`. If you choose to do so, observe the following guidance:
+
+| Topic          | Configuration       | Guidance
+|----------------|---------------------|---------
+| Data topic     | Partition count     | Your choice, based on your performance and ordering requirements.
+| Data topic     | Replication factor  | Your choice, based on your durability requirements.
+| Data topic     | Compaction          | Your choice, based on your downstream applications' requirements. If using the [Upsert envelope](#upsert), enabling compaction is typically the right choice.
+| Data topic     | Retention           | Your choice, based on your downstream applications' requirements.
+| Progress topic | Partition count     | **Must be set to 1.** Using multiple partitions can cause Materialize to violate its [exactly-once guarantees](#exactly-once-processing).
+| Progress topic | Replication factor  | Your choice, based on your durability requirements.
+| Progress topic | Compaction          | We recommend enabling compaction to avoid accumulating unbounded state. Disabling compaction may cause performance issues, but will not cause correctness issues.
+| Progress topic | Retention           | **Must be disabled.** Enabling retention can cause Materialize to violate its [exactly-once guarantees](#exactly-once-processing).
 
 {{< warning >}}
 {{% kafka-sink-drop %}}
@@ -347,7 +363,14 @@ tool) before running `CREATE SINK`.
 
 By default, Kafka sinks provide [exactly-once processing guarantees](https://kafka.apache.org/documentation/#semantics), which ensures that messages are not duplicated or dropped in failure scenarios.
 
-To achieve this, Materialize stores some internal metadata in an additional *progress topic*. This topic is shared among all sinks that use a particular [Kafka connection](/sql/create-connection/#kafka). The name of the progress topic can be specified when [creating a connection](/sql/create-connection/#kafka-options); otherwise, a default is chosen based on the Materialize environment `id` and the connection `id`. In either case, Materialize will attempt to create the topic if it does not exist. The contents of this topic are not user-specified.
+To achieve this, Materialize stores some internal metadata in an additional
+*progress topic*. This topic is shared among all sinks that use a particular
+[Kafka connection](/sql/create-connection/#kafka). The name of the progress
+topic can be specified when [creating a
+connection](/sql/create-connection/#kafka-options); otherwise, a default name of
+`_materialize-progress-{REGION ID}-{CONNECTION ID}` is used. In either case,
+Materialize will attempt to create the topic if it does not exist. The contents
+of this topic are not user-specified.
 
 #### End-to-end exactly-once processing
 
