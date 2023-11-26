@@ -14,7 +14,6 @@ from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodS
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
-from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID
 
 
 class TestdriveBase:
@@ -57,7 +56,6 @@ class TestdriveBase:
             f"--schema-registry-url={self.schema_registry_url}",
             f"--default-timeout={default_timeout}",
             f"--log-filter={log_filter}",
-            f"--environment-id={DEFAULT_MZ_ENVIRONMENT_ID}",
             "--var=replicas=1",
             "--var=default-storage-size=1",
             "--var=default-replica-size=1",
