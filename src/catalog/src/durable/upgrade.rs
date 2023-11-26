@@ -71,14 +71,14 @@ macro_rules! objects {
         }
     }
 
-objects!(v42, v43, v44);
+objects!(v42, v43, v44, v45);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub(crate) const CATALOG_VERSION: u64 = 44;
+pub(crate) const CATALOG_VERSION: u64 = 45;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -104,6 +104,7 @@ pub(crate) mod stash {
 
     mod v42_to_v43;
     mod v43_to_v44;
+    mod v44_to_v45;
 
     #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
     pub(crate) async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
@@ -129,6 +130,7 @@ pub(crate) mod stash {
 
                             42 => v42_to_v43::upgrade(),
                             43 => v43_to_v44::upgrade(),
+                            44 => v44_to_v45::upgrade(&tx).await?,
 
                             // Up-to-date, no migration needed!
                             CATALOG_VERSION => return Ok(CATALOG_VERSION),
@@ -203,6 +205,7 @@ pub(crate) mod persist {
 
     mod v42_to_v43;
     mod v43_to_v44;
+    mod v44_to_v45;
 
     /// Describes a single action to take during a migration from `V1` to `V2`.
     enum MigrationAction<V1: IntoStateUpdateKindBinary, V2: IntoStateUpdateKindBinary> {
@@ -303,6 +306,9 @@ pub(crate) mod persist {
                 }
                 43 => {
                     run_versioned_upgrade(persist_handle, upper, version, v43_to_v44::upgrade).await
+                }
+                44 => {
+                    run_versioned_upgrade(persist_handle, upper, version, v44_to_v45::upgrade).await
                 }
 
                 // Up-to-date, no migration needed!

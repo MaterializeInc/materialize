@@ -851,8 +851,8 @@ impl FromStr for SchemaId {
     Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
 )]
 pub enum DatabaseId {
-    User(u64),
-    System(u64),
+    User(u32),
+    System(u32),
 }
 
 impl DatabaseId {
@@ -884,7 +884,7 @@ impl FromStr for DatabaseId {
                 s
             )));
         }
-        let val: u64 = s[1..].parse()?;
+        let val: u32 = s[1..].parse()?;
         match s.chars().next() {
             Some('s') => Ok(DatabaseId::System(val)),
             Some('u') => Ok(DatabaseId::User(val)),

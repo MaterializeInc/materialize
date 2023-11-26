@@ -624,7 +624,7 @@ Trace {
                         key: "user_version",
                     },
                     ConfigValue {
-                        value: 44,
+                        value: 45,
                     },
                 ),
                 "1",

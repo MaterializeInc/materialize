@@ -57,7 +57,7 @@ const DEFAULT_USER_CLUSTER_NAME: &str = "default";
 const DEFAULT_USER_REPLICA_ID: ReplicaId = ReplicaId::User(1);
 const DEFAULT_USER_REPLICA_NAME: &str = "r1";
 
-const MATERIALIZE_DATABASE_ID_VAL: u64 = 1;
+const MATERIALIZE_DATABASE_ID_VAL: u32 = 1;
 const MATERIALIZE_DATABASE_ID: DatabaseId = DatabaseId::User(MATERIALIZE_DATABASE_ID_VAL);
 
 const MZ_CATALOG_SCHEMA_ID: u64 = 1;
@@ -82,12 +82,13 @@ pub async fn initialize(
     // First thing we need to do is persist the timestamp we're booting with.
     tx.insert_timestamp(Timeline::EpochMilliseconds, now.into())?;
 
+    #[allow(clippy::as_conversions)]
     for (name, next_id) in [
         (USER_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
         (SYSTEM_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
         (
             DATABASE_ID_ALLOC_KEY.to_string(),
-            MATERIALIZE_DATABASE_ID_VAL + 1,
+            MATERIALIZE_DATABASE_ID_VAL as u64 + 1,
         ),
         (
             SCHEMA_ID_ALLOC_KEY.to_string(),

@@ -156,7 +156,8 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
     ) -> Result<DatabaseId, CatalogError> {
-        let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
+        #[allow(clippy::as_conversions)]
+        let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())? as u32;
         // TODO(parkertimmerman): Support creating databases in the System namespace.
         let id = DatabaseId::User(id);
         self.insert_database(id, database_name, owner_id, privileges)?;
