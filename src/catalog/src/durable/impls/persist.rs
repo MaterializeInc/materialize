@@ -81,6 +81,8 @@ pub struct PersistHandle {
     persist_client: PersistClient,
     /// Catalog shard ID.
     shard_id: ShardId,
+    /// Cache of the most recent catalog snapshot.
+    snapshot_cache: Option<(Timestamp, Vec<StateUpdate>)>,
 }
 
 impl PersistHandle {
@@ -112,6 +114,7 @@ impl PersistHandle {
             read_handle,
             persist_client,
             shard_id,
+            snapshot_cache: None,
         }
     }
 
@@ -157,7 +160,7 @@ impl PersistHandle {
         // TODO(jkosh44) When we no longer use an epoch then it will make more sense to use a
         // subscription instead of a snapshot + listen. For now we need to treat the initial
         // snapshot differently, so this is easier.
-        let mut initial_snapshot: Vec<_> = self.snapshot(restart_as_of).await.collect();
+        let mut initial_snapshot = self.snapshot(restart_as_of).await.clone();
         let listen = self
             .read_handle
             .listen(Antichain::from_elem(restart_as_of))
@@ -286,14 +289,15 @@ impl PersistHandle {
     ///
     /// The output is consolidated and sorted by timestamp in ascending order and the current upper.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn current_snapshot(&mut self) -> (Vec<StateUpdate>, Timestamp) {
+    async fn current_snapshot(&mut self) -> (&Vec<StateUpdate>, Timestamp) {
+        static EMPTY_SNAPSHOT: Vec<StateUpdate> = Vec::new();
         let (is_initialized, current_upper) = self.is_initialized_inner().await;
         if is_initialized {
             let as_of = self.as_of(current_upper);
-            let snapshot = self.snapshot(as_of).await.collect();
+            let snapshot = self.snapshot(as_of).await;
             (snapshot, current_upper)
         } else {
-            (Vec::new(), current_upper)
+            (&EMPTY_SNAPSHOT, current_upper)
         }
     }
 
@@ -302,11 +306,16 @@ impl PersistHandle {
     ///
     /// The output is consolidated and sorted by timestamp in ascending order.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn snapshot(
-        &mut self,
-        as_of: Timestamp,
-    ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-        snapshot(&mut self.read_handle, as_of).await
+    async fn snapshot<'a>(&'a mut self, as_of: Timestamp) -> &'a Vec<StateUpdate> {
+        match &self.snapshot_cache {
+            Some((cached_as_of, _)) if as_of == *cached_as_of => {}
+            _ => {
+                let snapshot: Vec<_> = snapshot(&mut self.read_handle, as_of).await.collect();
+                self.snapshot_cache = Some((as_of, snapshot));
+            }
+        }
+
+        &self.snapshot_cache.as_ref().expect("populated above").1
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
@@ -355,6 +364,7 @@ impl PersistHandle {
         let mut configs: Vec<_> = self
             .snapshot(as_of)
             .await
+            .into_iter()
             .rev()
             .filter_map(
                 |StateUpdate {
@@ -1146,7 +1156,7 @@ impl PersistHandle {
     {
         let (snapshot, current_upper) = self.current_snapshot().await;
         let next_upper = current_upper.step_forward();
-        let trace = Trace::from_snapshot(snapshot);
+        let trace = Trace::from_snapshot(snapshot.clone());
         let collection_trace = T::collection_trace(trace);
         let prev_values: Vec<_> = collection_trace
             .values
@@ -1209,7 +1219,7 @@ impl PersistHandle {
     {
         let (snapshot, current_upper) = self.current_snapshot().await;
         let next_upper = current_upper.step_forward();
-        let trace = Trace::from_snapshot(snapshot);
+        let trace = Trace::from_snapshot(snapshot.clone());
         let collection_trace = T::collection_trace(trace);
         let retractions = collection_trace
             .values
