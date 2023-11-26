@@ -160,12 +160,45 @@ async fn discover_topic_configs<C: ClientContext>(
     })
 }
 
+/// Configuration of a topic created by `ensure_kafka_topic`.
+#[derive(Debug, Clone)]
+pub struct TopicConfig {
+    /// The number of partitions to create.
+    ///
+    /// Use `-1` to indicate broker default.
+    pub partition_count: i32,
+    /// The replication factor.
+    ///
+    /// Use `-1` to indicate broker default.
+    pub replication_factor: i32,
+    /// Describes how to clean up old data in the topic.
+    pub cleanup_policy: TopicCleanupPolicy,
+}
+
+/// Describes how to clean up old data in the topic.
+#[derive(Debug, Clone)]
+pub enum TopicCleanupPolicy {
+    /// Clean up the topic using a time and/or size based retention policies.
+    ///
+    /// Use `-1` to indicate infinite retention.
+    Retention(KafkaSinkConnectionRetention),
+    /// Clean up the topic using key-based compaction.
+    Compaction,
+}
+
+/// Ensures that the named Kafka topic exists.
+///
+/// If the topic does not exist, the function creates the topic with the
+/// provided `config`. Note that if the topic already exists, the function does
+/// *not* verify that the topic's configuration matches `config`.
 async fn ensure_kafka_topic<C>(
     client: &AdminClient<C>,
     topic: &str,
-    mut partition_count: i32,
-    mut replication_factor: i32,
-    retention: KafkaSinkConnectionRetention,
+    TopicConfig {
+        mut partition_count,
+        mut replication_factor,
+        cleanup_policy,
+    }: TopicConfig,
 ) -> Result<(), anyhow::Error>
 where
     C: ClientContext,
@@ -198,13 +231,23 @@ where
         TopicReplication::Fixed(replication_factor),
     );
 
-    let retention_ms_str = retention.duration.map(|d| d.to_string());
-    let retention_bytes_str = retention.bytes.map(|s| s.to_string());
-    if let Some(ref retention_ms) = retention_ms_str {
-        kafka_topic = kafka_topic.set("retention.ms", retention_ms);
-    }
-    if let Some(ref retention_bytes) = retention_bytes_str {
-        kafka_topic = kafka_topic.set("retention.bytes", retention_bytes);
+    let retention_ms_slot;
+    let retention_bytes_slot;
+    match cleanup_policy {
+        TopicCleanupPolicy::Retention(retention) => {
+            kafka_topic = kafka_topic.set("cleanup.policy", "delete");
+            if let Some(retention_ms) = &retention.duration {
+                retention_ms_slot = retention_ms.to_string();
+                kafka_topic = kafka_topic.set("retention.ms", &retention_ms_slot);
+            }
+            if let Some(retention_bytes) = &retention.bytes {
+                retention_bytes_slot = retention_bytes.to_string();
+                kafka_topic = kafka_topic.set("retention.bytes", &retention_bytes_slot);
+            }
+        }
+        TopicCleanupPolicy::Compaction => {
+            kafka_topic = kafka_topic.set("cleanup.policy", "compact");
+        }
     }
 
     mz_kafka_util::admin::ensure_topic(
@@ -329,9 +372,13 @@ pub async fn build_kafka(
     ensure_kafka_topic(
         &admin_client,
         &progress_topic,
-        1,
-        connection.replication_factor,
-        KafkaSinkConnectionRetention::default(),
+        TopicConfig {
+            partition_count: 1,
+            // TODO: introduce and use `PROGRESS TOPIC REPLICATION FACTOR`
+            // on Kafka connections.
+            replication_factor: -1,
+            cleanup_policy: TopicCleanupPolicy::Compaction,
+        },
     )
     .await
     .check_ssh_status(admin_client.inner().context())
@@ -339,9 +386,13 @@ pub async fn build_kafka(
     ensure_kafka_topic(
         &admin_client,
         &connection.topic,
-        connection.partition_count,
-        connection.replication_factor,
-        connection.retention,
+        TopicConfig {
+            partition_count: connection.partition_count,
+            replication_factor: connection.replication_factor,
+            // TODO: allow users to request compaction cleanup policy instead of
+            // retention.
+            cleanup_policy: TopicCleanupPolicy::Retention(connection.retention),
+        },
     )
     .await
     .check_ssh_status(admin_client.inner().context())
