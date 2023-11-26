@@ -2184,10 +2184,13 @@ fn test_internal_ws_auth() {
     };
 
     let (mut ws, _resp) = tungstenite::connect(make_req()).unwrap();
-    let options = BTreeMap::from([(
-        "application_name".to_string(),
-        "billion_dollar_idea".to_string(),
-    )]);
+    let options = BTreeMap::from([
+        (
+            "application_name".to_string(),
+            "billion_dollar_idea".to_string(),
+        ),
+        ("welcome_message".to_string(), "off".to_string()),
+    ]);
     // We should receive error if sending the standard bearer auth, since that is unexpected
     // for the Internal HTTP API
     assert_eq!(

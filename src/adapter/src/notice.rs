@@ -125,6 +125,7 @@ pub enum AdapterNotice {
     PerReplicaLogRead {
         log_names: Vec<String>,
     },
+    Welcome(String),
 }
 
 impl AdapterNotice {
@@ -184,6 +185,7 @@ impl AdapterNotice {
             AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
             AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
             AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
+            AdapterNotice::Welcome(_) => Severity::Notice,
         }
     }
 
@@ -272,6 +274,7 @@ impl AdapterNotice {
             AdapterNotice::DroppedInUseIndex { .. } => SqlState::WARNING,
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::WARNING,
             AdapterNotice::PerReplicaLogRead { .. } => SqlState::WARNING,
+            AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
         }
     }
 }
@@ -422,6 +425,7 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::PerReplicaLogRead { log_names } => {
                 write!(f, "Queried introspection relations: {}. Unlike other objects in Materialize, results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables.", log_names.join(", "))
             }
+            AdapterNotice::Welcome(message) => message.fmt(f),
         }
     }
 }

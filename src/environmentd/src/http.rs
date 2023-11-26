@@ -35,6 +35,7 @@ use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Method, Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
+use mz_adapter::session::Session;
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, Error as FronteggError,
@@ -529,16 +530,21 @@ pub struct AuthedClient {
 }
 
 impl AuthedClient {
-    async fn new(
+    async fn new<F>(
         adapter_client: &Client,
         user: AuthedUser,
         active_connection_count: SharedConnectionCounter,
+        session_config: F,
         options: BTreeMap<String, String>,
-    ) -> Result<Self, AdapterError> {
+    ) -> Result<Self, AdapterError>
+    where
+        F: FnOnce(&mut Session),
+    {
         let AuthedUser(user) = user;
         let drop_connection = DropConnection::new_connection(&user, active_connection_count)?;
         let conn_id = adapter_client.new_conn_id()?;
         let mut session = adapter_client.new_session(conn_id, user);
+        session_config(&mut session);
         let mut set_setting_keys = Vec::new();
         for (key, val) in options {
             const LOCAL: bool = false;
@@ -616,6 +622,7 @@ where
             &adapter_client,
             user.clone(),
             Arc::clone(active_connection_count),
+            |session| session.vars_mut().set_default("welcome_message", &false),
             options,
         )
         .await
@@ -786,6 +793,7 @@ async fn init_ws(
         &adapter_client_rx.clone().await?,
         user,
         Arc::clone(active_connection_count),
+        |_session| (),
         options,
     )
     .await?;

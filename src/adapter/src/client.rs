@@ -18,6 +18,7 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
+use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
@@ -208,8 +209,9 @@ impl Client {
         // block the coordinator on a Builtin Table write.
         write_notify.await;
 
-        client.session().initialize_role_metadata(role_id);
-        let vars_mut = client.session().vars_mut();
+        let session = client.session();
+        session.initialize_role_metadata(role_id);
+        let vars_mut = session.vars_mut();
         for (name, val) in session_vars {
             vars_mut
                 .set(None, &name, val.borrow(), false)
@@ -222,17 +224,47 @@ impl Client {
                 tracing::error!("failed to set peristed role default, {err:?}");
             }
         }
-        client
-            .session()
+        session
             .vars_mut()
             .end_transaction(EndTransactionAction::Commit);
 
-        let catalog = catalog.for_session(client.session());
+        let catalog = catalog.for_session(session);
         if catalog.active_database().is_none() {
-            let db = client.session().vars().database().into();
-            client
-                .session()
-                .add_notice(AdapterNotice::UnknownSessionDatabase(db));
+            let db = session.vars().database().into();
+            session.add_notice(AdapterNotice::UnknownSessionDatabase(db));
+        }
+
+        if session.vars().welcome_message() {
+            // Emit a welcome message, optimized for readability by humans using
+            // interactive tools. If you change the message, make sure that it
+            // formats nicely in both `psql` and the console's SQL shell.
+            session.add_notice(AdapterNotice::Welcome(format!(
+                "connected to Materialize v{}
+  Org ID: {}
+  Region: {}
+  User: {}
+  Cluster: {}
+  Database: {}
+  {}
+
+Issue a SQL query to get started. Need help?
+  View documentation: https://materialize.com/s/docs
+  Join our Slack community: https://materialize.com/s/chat
+    ",
+                session.vars().build_info().semver_version(),
+                self.environment_id.organization_id(),
+                self.environment_id.region(),
+                session.vars().user().name,
+                session.vars().cluster(),
+                session.vars().database(),
+                match session.vars().search_path() {
+                    [schema] => format!("Schema: {}", schema),
+                    schemas => format!(
+                        "Search path: {}",
+                        schemas.iter().map(|id| id.to_string()).join(", ")
+                    ),
+                },
+            )));
         }
 
         Ok(client)
