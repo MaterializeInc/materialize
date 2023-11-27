@@ -67,11 +67,28 @@ Field                | Value  | Description
 `AVRO KEY FULLNAME`  | `text` | Default: `row`. Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`.
 `AVRO VALUE FULLNAME`| `text` | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
 `NULL DEFAULTS`      | `bool` | Default: `false`. Whether to automatically default nullable fields to `null` in the generated schemas.
-`[KEY\|VALUE] DOC ON [TYPE\|COLUMN] <identifier>`|`text` | Sets the avro "doc" comment for the given type or column identifier in the generated schemas. See [avro comments](#avro-comments) for more information.
+`DOC ON`             | `text` | Add a documentation comment to the generated Avro schemas. See [`DOC ON` option syntax](#doc-on-option-syntax) below.
 
-{{< private-preview >}}
-`[KEY|VALUE] DOC ON [TYPE|COLUMN]` option
-{{</ private-preview >}}
+#### `DOC ON` option syntax
+
+{{< private-preview />}}
+
+{{< diagram "create-sink-doc-on-option.svg" >}}
+
+The `DOC ON` option has special syntax, shown above, with the following
+mechanics:
+
+  * The `KEY` and `VALUE` options specify whether the comment applies to the
+    key schema or the value schema. If neither `KEY` or `VALUE` is specified, the
+    comment applies to both types of schemas.
+
+  * The `TYPE` clause names a SQL type or relation, e.g. `my_app.point`.
+
+  * The `COLUMN` clause names a column of a SQL type or relation, e.g.
+    `my_app.point.x`.
+
+See [Avro schema documentation](#avro-schema-documentation) for details on
+how documentation comments are added to the generated Avro schemas.
 
 ### `WITH` options
 
@@ -127,7 +144,7 @@ When using a Confluent Schema Registry:
   * You can automatically have nullable fields in the Avro schemas default to `null`
     by using the [`NULL DEFAULTS` option](#syntax).
 
-  * It's possible to add [avro "doc" comments](#avro-comments) in the generated avro schema.
+  * You can [add `doc` fields](#avro-schema-documentation) to the Avro schemas.
 
 SQL types are converted to Avro types according to the following conversion
 table:
@@ -169,87 +186,50 @@ conservatively assume the columns are nullable, thus producing a union
 type as described above. If this is not desired, the materialized view
 may be created using [non-null assertions](../../create-materialized-view#non-null-assertions).
 
-#### Avro comments
+#### Avro schema documentation
+
 {{< private-preview />}}
-There are two ways to add comments to the generated avro schema
-* Any [comments](/sql/comment-on) added to the materialized view used in the sink
-  will be propagated the generated schema's "doc" options. Note, the comments for the avro schema
-  will be frozen when the sink is created. Any further comment updates will not be propagated to the schema.
-* Comments can also be specified while creating the sink in the [CSR connection options](#csr-connection-options)
-  using `[KEY|VALUE] DOC ON [TYPE|COLUMN] <identifier>` option. This will override any materialize comment.
-  Specifying `KEY` or `VALUE` is optional and it specifies whether the avro comment is meant for the generated key
-  or the value schema. If it's not specified, then it's applicable for both.
-  The `<identifier>` can be either
-  * a `TYPE` like materialied view, source, table or custom type used in the sink,
-  * or it can be a `COLUMN` in a materialized view, source, table or a composite type.
 
-Usage example:
-```sql
-CREATE TABLE t (c1 int, c2 text);
-COMMENT ON TABLE t IS 'materialize comment on t';
-COMMENT ON COLUMN t.c2 IS 'materialize comment on t.c2';
+Materialize allows control over the `doc` attribute for record fields and types
+in the generated Avro schemas for the sink.
 
-CREATE SINK avro_sink
-  IN CLUSTER my_io_cluster
-  FROM t
-  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
-  KEY (c1)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  (
-    DOC ON TYPE t = 'top-level comment for avro record in both key and value schemas',
-    KEY DOC ON COLUMN t.c1 = 'comment on column only in key schema',
-    VALUE DOC ON COLUMN t.c1 = 'comment on column only in value schema'
-  )
-  ENVELOPE UPSERT;
-```
-The above will create the following key and value avro schemas.
-##### Key Schema:
-```json
-{
-  "type": "record",
-  "name": "row",
-  "doc": "top-level comment for avro record in both key and value schemas",
-  "fields": [
-    {
-      "name": "c1",
-      "type": [
-        "null",
-        "int"
-      ],
-      "doc": "comment on column only in key schema"
-    }
-  ]
-}
+For the container record type (named `row` for the key schema and `envelope` for
+the value schema, unless overridden by the [`AVRO ... FULLNAME`
+options](#csr-connection-options)), Materialize searches for documentation in
+the following locations, in order:
 
-```
+1. For the key schema, a [`KEY DOC ON TYPE` option](#doc-on-option-syntax)
+   naming the sink's underlying relation. For the value schema, a
+   [`VALUE DOC ON TYPE` option](#doc-on-option-syntax) naming the
+   sink's underlying relation.
+2. A [comment](/sql/comment-on) on the sink's underlying relation.
 
-##### Value Schema:
-```json
-{
-  "type": "record",
-  "name": "envelope",
-  "doc": "top-level comment for avro record in both key and value schemas",
-  "fields": [
-    {
-      "name": "c1",
-      "type": [
-        "null",
-        "int"
-      ],
-      "doc": "comment on column only in value schema"
-    },
-    {
-      "name": "c2",
-      "type": [
-        "null",
-        "string"
-      ],
-      "doc": "materialize comment on t.c2"
-    }
-  ]
-}
+For record types within the container record type, Materialize searches for
+documentation in the following locations, in order:
 
-```
+1. For the key schema, a [`KEY DOC ON TYPE` option](#doc-on-option-syntax)
+   naming the SQL type corresponding to the record type. For the value schema, a
+   [`VALUE DOC ON TYPE` option](#doc-on-option-syntax) naming the SQL type
+   corresponding to the record type.
+2. A [`DOC ON TYPE` option](#doc-on-option-syntax) naming the SQL type
+   corresponding to the record type.
+3. A [comment](/sql/comment-on) on the SQL type corresponding to the record
+   type.
+
+Similarly, for each field of each record type in the Avro schema, Materialize
+documentation in the following locations, in order:
+
+1. For the key schema, a [`KEY DOC ON COLUMN` option](#doc-on-option-syntax)
+   naming the SQL column corresponding to the field. For the value schema, a
+   [`VALUE DOC ON COLUMN` option](#doc-on-option-syntax) naming the column
+   corresponding to the field.
+2. A [`DOC ON COLUMN` option](#doc-on-option-syntax) naming the SQL column
+   corresponding to the field.
+3. A [comment](/sql/comment-on) on the SQL column corresponding to the field.
+
+For each field or type, Materialize uses the documentation from the first
+location that exists. If no documentation is found for a given field or type,
+the `doc` attribute is omitted for that field or type.
 
 ### JSON
 
@@ -630,6 +610,73 @@ ALTER SINK avro_sink SET (SIZE = 'large');
 ```
 
 The smallest sink size (`3xsmall`) is a resonable default to get started. For more details on sizing sources, check the [`CREATE SINK`](../#sizing-a-sink) documentation page.
+
+#### Documentation comments
+
+Consider the following sink, `docs_sink`, built on top of a relation `t` with
+several [SQL comments](/sql/comment-on) attached.
+
+```sql
+CREATE TABLE t (key int NOT NULL, value text NOT NULL);
+COMMENT ON TABLE t IS 'SQL comment on t';
+COMMENT ON COLUMN t.value IS 'SQL comment on t.value';
+
+CREATE SINK docs_sink IN CLUSTER ...
+FROM t
+INTO KAFKA CONNECTION kafka_connection (TOPIC 'doc-commont-example')
+KEY (key)
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection (
+    DOC ON TYPE t = 'Top-level comment for container record in both key and value schemas',
+    KEY DOC ON COLUMN t.key = 'Comment on column only in key schema',
+    VALUE DOC ON COLUMN t.key = 'Comment on column only in value schema'
+)
+ENVELOPE UPSERT;
+```
+
+When `docs_sink` is created, Materialize will publish the following Avro schemas
+to the Confluent Schema Registry:
+
+  * Key schema:
+
+    ```json
+    {
+      "type": "record",
+      "name": "row",
+      "doc": "Top-level comment for container record in both key and value schemas",
+      "fields": [
+        {
+          "name": "key",
+          "type": "int",
+          "doc": "Comment on column only in key schema"
+        }
+      ]
+    }
+    ```
+
+  * Value schema:
+
+    ```json
+    {
+      "type": "record",
+      "name": "envelope",
+      "doc": "Top-level comment for container record in both key and value schemas",
+      "fields": [
+        {
+          "name": "key",
+          "type": "int",
+          "doc": "Comment on column only in value schema"
+        },
+        {
+          "name": "value",
+          "type": "string",
+          "doc": "SQL comment on t.value"
+        }
+      ]
+    }
+    ```
+
+See [Avro schema documentation](#avro-schema-documentation) for details
+about the rules by which Materialize attaches `doc` fields to records.
 
 ## Related pages
 
