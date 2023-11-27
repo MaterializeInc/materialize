@@ -13,7 +13,10 @@ from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.result_analyzer import (
     ResultAnalyzer,
 )
-from materialize.scalability.scalability_change import Regression
+from materialize.scalability.scalability_change import (
+    Regression,
+    ScalabilityImprovement,
+)
 from materialize.scalability.workload_result import WorkloadResult
 
 
@@ -38,6 +41,11 @@ class DefaultResultAnalyzer(ResultAnalyzer):
         entries_worse_than_threshold = tps_per_endpoint_data.to_filtered_with_threshold(
             self.max_deviation_as_percent_decimal * (-1)
         )
+        entries_better_than_threshold = (
+            tps_per_endpoint_data.to_filtered_with_threshold(
+                self.max_deviation_as_percent_decimal
+            )
+        )
 
         comparison_outcome = ComparisonOutcome()
         regressions = entries_worse_than_threshold.to_scalability_change(
@@ -45,6 +53,15 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             workload_name,
             other_endpoint,
         )
+        improvements = entries_better_than_threshold.to_scalability_change(
+            ScalabilityImprovement,
+            workload_name,
+            other_endpoint,
+        )
         comparison_outcome.regressions.extend(regressions)
-        comparison_outcome.append_raw_data(entries_worse_than_threshold)
+        comparison_outcome.significant_improvements.extend(improvements)
+        comparison_outcome.append_regression_df(entries_worse_than_threshold)
+        comparison_outcome.append_significant_improvement_df(
+            entries_better_than_threshold
+        )
         return comparison_outcome
