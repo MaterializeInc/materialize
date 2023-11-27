@@ -24,7 +24,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec64, StepForward};
 use timely::order::TotalOrder;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, instrument};
 
 use crate::txn_read::{DataListenNext, DataSnapshot};
@@ -576,7 +576,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         txns_write: &mut WriteHandle<C::Key, C::Val, T, i64>,
     ) -> Self {
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
-        let mut ret = Self::from_read(txns_read, None).await;
+        let as_of = txns_read.since().clone();
+        let mut ret = Self::from_read(txns_read, as_of, None).await;
         ret.update_gt(&init_ts).await;
         ret
     }
@@ -604,15 +605,16 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             )
             .await
             .expect("txns schema shouldn't change");
-        Self::from_read(txns_read, only_data_id).await
+        let as_of = txns_read.since().clone();
+        Self::from_read(txns_read, as_of, only_data_id).await
     }
 
     pub(crate) async fn from_read(
         txns_read: ReadHandle<C::Key, C::Val, T, i64>,
+        as_of: Antichain<T>,
         only_data_id: Option<ShardId>,
     ) -> Self {
         let txns_id = txns_read.shard_id();
-        let as_of = txns_read.since().clone();
         let since_ts = as_of.as_option().expect("txns shard is not closed").clone();
         let txns_subscribe = txns_read
             .subscribe(as_of)
@@ -857,7 +859,8 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
 
 #[cfg(test)]
 mod tests {
-    use mz_persist_client::PersistClient;
+    use mz_persist_client::{PersistClient, ShardIdSchema};
+    use mz_persist_types::codec_impls::VecU8Schema;
     use DataListenNext::*;
 
     use crate::operator::DataSubscribe;
@@ -1105,5 +1108,51 @@ mod tests {
         assert_eq!(dt(&[1, 3], &[4]), Err(()));
         assert_eq!(dt(&[1, 3, 5], &[4]), Err(()));
         assert_eq!(dt(&[1, 4], &[3, 2]), Err(()));
+    }
+
+    /// Regression test for a bug caught by higher level tests in CI:
+    /// - Commit a write at 5
+    /// - Apply it and commit the tidy retraction at 20.
+    /// - Catch up to both of these in the TxnsHandle and call compact_to(10).
+    ///   The TxnsHandle knows the write has been applied and lets it CaDS the
+    ///   txns shard since to 10.
+    /// - Open a TxnsCache starting at the txns shard since (10) to serve a
+    ///   snapshot at 12. Catch it up through 12, but _not_ the tidy at 20.
+    /// - This TxnsCache gets the write with a ts compacted forward to 10, but
+    ///   no retraction. The snapshot resolves with an incorrect latest_write of
+    ///   `Some(10)`.
+    /// - The unblock read waits for this write to be applied before doing the
+    ///   empty CaA, but this write never existed so it hangs forever.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    #[ignore] // TODO(txn): Fix this bug in a way that is not awful.
+    async fn regression_compact_latest_write() {
+        let client = PersistClient::new_for_tests().await;
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns.new_log();
+        let d0 = txns.expect_register(1).await;
+
+        let tidy_5 = txns.expect_commit_at(5, d0, &["5"], &log).await;
+        let _ = txns.expect_commit_at(15, d0, &["15"], &log).await;
+        txns.tidy_at(20, tidy_5).await.unwrap();
+        txns.txns_cache.update_gt(&20).await;
+        assert_eq!(txns.txns_cache.min_unapplied_ts(), &15);
+        txns.compact_to(10).await;
+
+        let txns_read = client
+            .open_leased_reader(
+                txns.txns_id(),
+                Arc::new(ShardIdSchema),
+                Arc::new(VecU8Schema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("txns schema shouldn't change");
+        let mut cache =
+            TxnsCache::<_, TxnsCodecDefault>::from_read(txns_read, Antichain::from_elem(10), None)
+                .await;
+        cache.update_gt(&15).await;
+        let snap = cache.data_snapshot(d0, 12);
+        assert_eq!(snap.latest_write, None);
     }
 }
