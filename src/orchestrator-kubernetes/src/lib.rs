@@ -978,12 +978,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         };
 
         let pod_annotations = btreemap! {
-            // Prevent the cluster-autoscaler from evicting these pods in attempts to scale down
+            // Prevent the cluster-autoscaler (or karpenter) from evicting these pods in attempts to scale down
             // and terminate nodes.
             // This will cost us more money, but should give us better uptime.
             // This does not prevent all evictions by Kubernetes, only the ones initiated by the
-            // cluster-autoscaler. Notably, eviction of pods for resource overuse is still enabled.
+            // cluster-autoscaler (or karpenter). Notably, eviction of pods for resource overuse is still enabled.
             "cluster-autoscaler.kubernetes.io/safe-to-evict".to_owned() => "false".to_string(),
+            "karpenter.sh/do-not-evict".to_owned() => "true".to_string(),
         };
 
         let mut node_selector: BTreeMap<String, String> = self
