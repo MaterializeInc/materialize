@@ -196,6 +196,20 @@ where
 
                     // Listen for a shutdown signal so we can gracefully cleanup.
                     _ = &mut shutdown_rx => {
+                        let mut senders = Vec::new();
+
+                        // Get as many waiting senders as possible.
+                        'collect: while let Ok((_batch, sender)) = rx.try_recv() {
+                            senders.push(sender);
+
+                            if senders.len() >= CHANNEL_CAPACITY {
+                                break 'collect;
+                            }
+                        }
+
+                        // Notify them that this collection is closed.
+                        notify_listeners(senders, || Err(StorageError::IdentifierInvalid(id)));
+
                         break 'run;
                     }
 
