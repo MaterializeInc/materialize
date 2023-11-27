@@ -39,7 +39,7 @@ impl Metrics {
                 var_labels: ["cause"],
             )),
             transaction_commit_latency_duration_seconds: registry.register(metric!(
-                name: "catalog_transaction_latency",
+                name: "catalog_transaction_latency_seconds",
                 help: "Latency for durable catalog transactions.",
             )),
             transactions_committed: registry.register(metric!(
