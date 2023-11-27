@@ -99,7 +99,6 @@ class Tables(Generator):
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_tables = {Tables.COUNT * 10};")
-        print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {Tables.COUNT * 10};")
         for i in cls.all():
             print(f"> CREATE TABLE t{i} (f1 INTEGER);")
@@ -163,7 +162,6 @@ class KafkaTopics(Generator):
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {KafkaTopics.COUNT * 10};")
-        print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {KafkaTopics.COUNT * 10};")
         print('$ set key-schema={"type": "string"}')
         print(
@@ -210,7 +208,6 @@ class KafkaSourcesSameTopic(Generator):
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {KafkaSourcesSameTopic.COUNT * 10};")
-        print("$ postgres-execute connection=mz_system")
         print(
             f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSourcesSameTopic.COUNT * 10};"
         )
@@ -257,7 +254,6 @@ class KafkaPartitions(Generator):
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {KafkaPartitions.COUNT * 10};")
-        print("$ postgres-execute connection=mz_system")
         print(
             f"ALTER SYSTEM SET max_objects_per_schema = {KafkaPartitions.COUNT * 10};"
         )
@@ -319,7 +315,6 @@ class KafkaRecordsEnvelopeNone(Generator):
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {KafkaRecordsEnvelopeNone.COUNT * 10};")
-        print("$ postgres-execute connection=mz_system")
         print(
             f"ALTER SYSTEM SET max_objects_per_schema = {KafkaRecordsEnvelopeNone.COUNT * 10};"
         )
@@ -365,7 +360,6 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
         print(
             f"ALTER SYSTEM SET max_sources = {KafkaRecordsEnvelopeUpsertSameValue.COUNT * 10};"
         )
-        print("$ postgres-execute connection=mz_system")
         print(
             f"ALTER SYSTEM SET max_objects_per_schema = {KafkaRecordsEnvelopeUpsertSameValue.COUNT * 10};"
         )
@@ -415,7 +409,6 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         print(
             f"ALTER SYSTEM SET max_sources = {KafkaRecordsEnvelopeUpsertDistinctValues.COUNT * 10};"
         )
-        print("$ postgres-execute connection=mz_system")
         print(
             f"ALTER SYSTEM SET max_objects_per_schema = {KafkaRecordsEnvelopeUpsertDistinctValues.COUNT * 10};"
         )
@@ -469,20 +462,18 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 
 
 class KafkaSinks(Generator):
-    COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
+    COUNT = min(Generator.COUNT, 100)  # $ kafka-verify-data is slow
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-regex match=\\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_materialized_views = {KafkaSinks.COUNT * 10};")
-        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {KafkaSinks.COUNT * 10};")
         print(f"ALTER SYSTEM SET max_sinks = {KafkaSinks.COUNT * 10};")
-        print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinks.COUNT * 10};")
-        for i in cls.all():
-            print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
 
+        print(
+            "> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)"
+        )
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
@@ -494,16 +485,19 @@ class KafkaSinks(Generator):
             print(
                 dedent(
                     f"""
-                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
-                     > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
-                     > CREATE SINK s{i} FROM v{i}
+                     > CREATE TABLE t{i} (f1 INTEGER NOT NULL)
+                     > CREATE SINK s{i} FROM t{i}
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE DEBEZIUM;
-                     $ kafka-verify-topic sink=materialize.public.s{i}
                      """
                 )
             )
+
+        for i in cls.all():
+            print(f"> INSERT INTO t{i} VALUES ({i})")
+            print(f"> INSERT INTO t{i} VALUES ({i+1})")
+            print(f"> INSERT INTO t{i} VALUES ({i+2})")
 
         for i in cls.all():
             print(
@@ -511,6 +505,8 @@ class KafkaSinks(Generator):
                     f"""
                     $ kafka-verify-data format=avro sink=materialize.public.s{i}
                     {{"before": null, "after": {{"row": {{"f1": {i}}}}}}}
+                    {{"before": null, "after": {{"row": {{"f1": {i+1}}}}}}}
+                    {{"before": null, "after": {{"row": {{"f1": {i+2}}}}}}}
                     """
                 )
             )
@@ -524,7 +520,6 @@ class KafkaSinksSameSource(Generator):
         print("$ set-regex match=\\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sinks = {KafkaSinksSameSource.COUNT * 10};")
-        print("$ postgres-execute connection=mz_system")
         print(
             f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinksSameSource.COUNT * 10};"
         )
@@ -540,8 +535,6 @@ class KafkaSinksSameSource(Generator):
             print(
                 dedent(
                     f"""
-                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
-                     > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
                      > CREATE SINK s{i} FROM v1
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-same-source-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -785,7 +778,6 @@ class ViewsMaterializedNested(Generator):
         print(
             f"ALTER SYSTEM SET max_materialized_views = {ViewsMaterializedNested.COUNT * 10};"
         )
-        print("$ postgres-execute connection=mz_system")
         print(
             f"ALTER SYSTEM SET max_objects_per_schema = {ViewsMaterializedNested.COUNT * 10};"
         )
