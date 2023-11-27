@@ -177,7 +177,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// The [`Peek`] description must have the following properties:
     ///
     ///   * If targeting an index, it has previously been created by a corresponding `CreateDataflow`
-    ///     command.
+    ///     command. (If targeting a persist collection, that collection should exist.)
     ///   * The [`Peek::uuid`] is unique, i.e., the UUIDs of peeks a replica gets instructed to
     ///     perform do not repeat (within a single protocol iteration).
     ///

@@ -661,6 +661,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 }
 
 /// A peek against either an index or a Persist collection.
+///
+/// Note that `PendingPeek` intentionally does not implement or derive `Clone`,
+/// as each `PendingPeek` is meant to be dropped after it's responded to.
 pub enum PendingPeek {
     /// A peek against an index. (Possibly a temporary index created for the purpose.)
     Index(IndexPeek),
@@ -838,9 +841,6 @@ impl PersistPeek {
 }
 
 /// An in-progress index-backed peek, and data to eventually fulfill it.
-///
-/// Note that `PendingPeek` intentionally does not implement or derive `Clone`,
-/// as each `PendingPeek` is meant to be dropped after it's responded to.
 pub struct IndexPeek {
     peek: Peek,
     /// The data from which the trace derives.
