@@ -84,7 +84,7 @@ use prometheus::core::AtomicU64;
 
 use crate::render::upsert::rocksdb::RocksDB;
 use crate::render::upsert::{UpsertKey, UpsertValue};
-use crate::source::metrics::UpsertSharedMetrics;
+use crate::metrics::source::UpsertSharedMetrics;
 use crate::source::types::UpsertMetrics;
 use crate::source::SourceStatistics;
 

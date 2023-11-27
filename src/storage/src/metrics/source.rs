@@ -27,19 +27,19 @@ use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, GenericCounterVec};
 
 #[derive(Clone, Debug)]
-pub(super) struct SourceSpecificMetrics {
-    pub(super) capability: UIntGaugeVec,
-    pub(super) resume_upper: IntGaugeVec,
+pub(crate) struct SourceSpecificMetrics {
+    pub(crate) capability: UIntGaugeVec,
+    pub(crate) resume_upper: IntGaugeVec,
     /// A timestamp gauge representing forward progress
     /// in the data shard.
-    pub(super) progress: IntGaugeVec,
-    pub(super) row_inserts: IntCounterVec,
-    pub(super) row_retractions: IntCounterVec,
-    pub(super) error_inserts: IntCounterVec,
-    pub(super) error_retractions: IntCounterVec,
-    pub(super) persist_sink_processed_batches: IntCounterVec,
-    pub(super) offset_commit_failures: IntCounterVec,
-    pub(super) inmemory_remap_bindings: UIntGaugeVec,
+    pub(crate) progress: IntGaugeVec,
+    pub(crate) row_inserts: IntCounterVec,
+    pub(crate) row_retractions: IntCounterVec,
+    pub(crate) error_inserts: IntCounterVec,
+    pub(crate) error_retractions: IntCounterVec,
+    pub(crate) persist_sink_processed_batches: IntCounterVec,
+    pub(crate) offset_commit_failures: IntCounterVec,
+    pub(crate) inmemory_remap_bindings: UIntGaugeVec,
 }
 
 impl SourceSpecificMetrics {
@@ -104,12 +104,12 @@ impl SourceSpecificMetrics {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct PartitionSpecificMetrics {
-    pub(super) offset_ingested: UIntGaugeVec,
-    pub(super) offset_received: UIntGaugeVec,
-    pub(super) closed_ts: UIntGaugeVec,
-    pub(super) messages_ingested: GenericCounterVec<AtomicI64>,
-    pub(super) partition_offset_max: IntGaugeVec,
+pub(crate) struct PartitionSpecificMetrics {
+    pub(crate) offset_ingested: UIntGaugeVec,
+    pub(crate) offset_received: UIntGaugeVec,
+    pub(crate) closed_ts: UIntGaugeVec,
+    pub(crate) messages_ingested: GenericCounterVec<AtomicI64>,
+    pub(crate) partition_offset_max: IntGaugeVec,
 }
 
 impl PartitionSpecificMetrics {
@@ -146,15 +146,15 @@ impl PartitionSpecificMetrics {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct PostgresSourceSpecificMetrics {
-    pub(super) total_messages: IntCounterVec,
-    pub(super) transactions: IntCounterVec,
-    pub(super) ignored_messages: IntCounterVec,
-    pub(super) insert_messages: IntCounterVec,
-    pub(super) update_messages: IntCounterVec,
-    pub(super) delete_messages: IntCounterVec,
-    pub(super) tables_in_publication: UIntGaugeVec,
-    pub(super) wal_lsn: UIntGaugeVec,
+pub(crate) struct PostgresSourceSpecificMetrics {
+    pub(crate) total_messages: IntCounterVec,
+    pub(crate) transactions: IntCounterVec,
+    pub(crate) ignored_messages: IntCounterVec,
+    pub(crate) insert_messages: IntCounterVec,
+    pub(crate) update_messages: IntCounterVec,
+    pub(crate) delete_messages: IntCounterVec,
+    pub(crate) tables_in_publication: UIntGaugeVec,
+    pub(crate) wal_lsn: UIntGaugeVec,
 }
 
 impl PostgresSourceSpecificMetrics {
@@ -206,42 +206,42 @@ impl PostgresSourceSpecificMetrics {
 
 /// Metrics for the `upsert` operator.
 #[derive(Clone, Debug)]
-pub(super) struct UpsertMetrics {
-    pub(super) rehydration_latency: GaugeVec,
-    pub(super) rehydration_total: UIntGaugeVec,
-    pub(super) rehydration_updates: UIntGaugeVec,
+pub(crate) struct UpsertMetrics {
+    pub(crate) rehydration_latency: GaugeVec,
+    pub(crate) rehydration_total: UIntGaugeVec,
+    pub(crate) rehydration_updates: UIntGaugeVec,
 
     // Metric will contain either 0 to denote in-memory state usage,
     // and 1 to denote auto spill to rocksdb
-    pub(super) rocksdb_autospill_in_use: UIntGaugeVec,
+    pub(crate) rocksdb_autospill_in_use: UIntGaugeVec,
 
     // These are used by `shared`.
-    pub(super) merge_snapshot_latency: HistogramVec,
-    pub(super) merge_snapshot_updates: IntCounterVec,
-    pub(super) merge_snapshot_inserts: IntCounterVec,
-    pub(super) merge_snapshot_deletes: IntCounterVec,
-    pub(super) upsert_inserts: IntCounterVec,
-    pub(super) upsert_updates: IntCounterVec,
-    pub(super) upsert_deletes: IntCounterVec,
-    pub(super) multi_get_latency: HistogramVec,
-    pub(super) multi_get_size: IntCounterVec,
-    pub(super) multi_get_result_count: IntCounterVec,
-    pub(super) multi_get_result_bytes: IntCounterVec,
-    pub(super) multi_put_latency: HistogramVec,
-    pub(super) multi_put_size: IntCounterVec,
+    pub(crate) merge_snapshot_latency: HistogramVec,
+    pub(crate) merge_snapshot_updates: IntCounterVec,
+    pub(crate) merge_snapshot_inserts: IntCounterVec,
+    pub(crate) merge_snapshot_deletes: IntCounterVec,
+    pub(crate) upsert_inserts: IntCounterVec,
+    pub(crate) upsert_updates: IntCounterVec,
+    pub(crate) upsert_deletes: IntCounterVec,
+    pub(crate) multi_get_latency: HistogramVec,
+    pub(crate) multi_get_size: IntCounterVec,
+    pub(crate) multi_get_result_count: IntCounterVec,
+    pub(crate) multi_get_result_bytes: IntCounterVec,
+    pub(crate) multi_put_latency: HistogramVec,
+    pub(crate) multi_put_size: IntCounterVec,
 
     /// The number of legacy errors encountered during rehydration
-    pub(super) legacy_value_errors: UIntGaugeVec,
+    pub(crate) legacy_value_errors: UIntGaugeVec,
 
     // These are used by `rocksdb`.
-    pub(super) rocksdb_multi_get_latency: HistogramVec,
-    pub(super) rocksdb_multi_get_size: IntCounterVec,
-    pub(super) rocksdb_multi_get_result_count: IntCounterVec,
-    pub(super) rocksdb_multi_get_result_bytes: IntCounterVec,
-    pub(super) rocksdb_multi_get_count: IntCounterVec,
-    pub(super) rocksdb_multi_put_count: IntCounterVec,
-    pub(super) rocksdb_multi_put_latency: HistogramVec,
-    pub(super) rocksdb_multi_put_size: IntCounterVec,
+    pub(crate) rocksdb_multi_get_latency: HistogramVec,
+    pub(crate) rocksdb_multi_get_size: IntCounterVec,
+    pub(crate) rocksdb_multi_get_result_count: IntCounterVec,
+    pub(crate) rocksdb_multi_get_result_bytes: IntCounterVec,
+    pub(crate) rocksdb_multi_get_count: IntCounterVec,
+    pub(crate) rocksdb_multi_put_count: IntCounterVec,
+    pub(crate) rocksdb_multi_put_latency: HistogramVec,
+    pub(crate) rocksdb_multi_put_size: IntCounterVec,
     // These are maps so that multiple timely workers can interact with the same
     // `DeleteOnDropHistogram`, which is only dropped once ALL workers drop it.
     // The map may contain arbitrary, old `Weak`s for deleted sources, which are
@@ -249,8 +249,8 @@ pub(super) struct UpsertMetrics {
     //
     // We don't parameterize these by `worker_id` like the `rehydration_*` ones
     // to save on time-series cardinality.
-    pub(super) shared: Arc<Mutex<BTreeMap<GlobalId, Weak<UpsertSharedMetrics>>>>,
-    pub(super) rocksdb_shared:
+    pub(crate) shared: Arc<Mutex<BTreeMap<GlobalId, Weak<UpsertSharedMetrics>>>>,
+    pub(crate) rocksdb_shared:
         Arc<Mutex<BTreeMap<GlobalId, Weak<mz_rocksdb::RocksDBSharedMetrics>>>>,
 }
 
@@ -437,7 +437,7 @@ impl UpsertMetrics {
         }
     }
 
-    pub(super) fn shared(&self, source_id: &GlobalId) -> Arc<UpsertSharedMetrics> {
+    pub(crate) fn shared(&self, source_id: &GlobalId) -> Arc<UpsertSharedMetrics> {
         let mut shared = self.shared.lock().expect("mutex poisoned");
         if let Some(shared_metrics) = shared.get(source_id) {
             if let Some(shared_metrics) = shared_metrics.upgrade() {
@@ -453,7 +453,7 @@ impl UpsertMetrics {
         shared_metrics
     }
 
-    pub(super) fn rocksdb_shared(
+    pub(crate) fn rocksdb_shared(
         &self,
         source_id: &GlobalId,
     ) -> Arc<mz_rocksdb::RocksDBSharedMetrics> {
@@ -550,11 +550,11 @@ impl UpsertBackpressureMetrics {
 /// belong to.
 #[derive(Debug, Clone)]
 pub struct SourceBaseMetrics {
-    pub(super) source_specific: SourceSpecificMetrics,
-    pub(super) partition_specific: PartitionSpecificMetrics,
-    pub(super) postgres_source_specific: PostgresSourceSpecificMetrics,
+    pub(crate) source_specific: SourceSpecificMetrics,
+    pub(crate) partition_specific: PartitionSpecificMetrics,
+    pub(crate) postgres_source_specific: PostgresSourceSpecificMetrics,
 
-    pub(super) upsert_specific: UpsertMetrics,
+    pub(crate) upsert_specific: UpsertMetrics,
     pub(crate) upsert_backpressure_specific: UpsertBackpressureMetrics,
 
     pub(crate) bytes_read: IntCounter,

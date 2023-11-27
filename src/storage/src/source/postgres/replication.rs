@@ -105,8 +105,9 @@ use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 
+use crate::metrics::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
-use crate::source::postgres::{metrics::PgSourceMetrics, DefiniteError, TransientError};
+use crate::source::postgres::{DefiniteError, TransientError};
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 

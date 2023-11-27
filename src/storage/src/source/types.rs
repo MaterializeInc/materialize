@@ -34,7 +34,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
-use crate::source::metrics::{SourceBaseMetrics, UpsertSharedMetrics};
+use crate::metrics::source::{SourceBaseMetrics, UpsertSharedMetrics};
 use crate::source::RawSourceCreationConfig;
 
 /// Describes a source that can render itself in a timely scope.

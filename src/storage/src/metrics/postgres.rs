@@ -7,25 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Metrics for Postgres.
+
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
 use prometheus::core::AtomicU64;
 
-use crate::source::metrics::SourceBaseMetrics;
+use crate::metrics::source::SourceBaseMetrics;
 
-pub(super) struct PgSourceMetrics {
-    pub inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub ignored: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub total: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub transactions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub tables: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub lsn: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+pub(crate) struct PgSourceMetrics {
+    pub(crate) inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) ignored: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) total: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) transactions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) tables: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) lsn: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl PgSourceMetrics {
-    pub(super) fn new(base_metrics: &SourceBaseMetrics, source_id: GlobalId) -> Self {
+    pub(crate) fn new(base_metrics: &SourceBaseMetrics, source_id: GlobalId) -> Self {
         let labels = &[source_id.to_string()];
         let pg_metrics = &base_metrics.postgres_source_specific;
         Self {

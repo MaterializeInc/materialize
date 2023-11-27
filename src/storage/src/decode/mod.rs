@@ -40,14 +40,13 @@ use tracing::error;
 
 use crate::decode::avro::AvroDecoderState;
 use crate::decode::csv::CsvDecoderState;
-use crate::decode::metrics::DecodeMetrics;
 use crate::decode::protobuf::ProtobufDecoderState;
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::decode::DecodeMetrics;
 use crate::source::types::{DecodeResult, SourceOutput};
 
 mod avro;
 mod csv;
-pub mod metrics;
 mod protobuf;
 
 /// Decode delimited CDCv2 messages.

@@ -13,6 +13,7 @@ use mz_ore::metric;
 use mz_ore::metrics::{IntCounterVec, MetricsRegistry, UIntGaugeVec};
 
 /// Metrics reported by each kafka sink.
+// TODO(guswynn): naming
 #[derive(Clone)]
 pub struct KafkaBaseMetrics {
     pub(crate) messages_sent_counter: IntCounterVec,

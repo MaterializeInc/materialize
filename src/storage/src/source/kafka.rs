@@ -55,11 +55,9 @@ use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::kafka::metrics::KafkaPartitionMetrics;
+use crate::metrics::kafka::KafkaPartitionMetrics;
 use crate::source::types::{SourceReaderMetrics, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
-
-mod metrics;
 
 #[derive(Default)]
 struct HealthStatus {

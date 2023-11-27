@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Metrics for Kafka consumption.
+
 use std::collections::BTreeMap;
 
 use mz_ore::iter::IteratorExt;
@@ -15,15 +17,15 @@ use mz_repr::GlobalId;
 use prometheus::core::AtomicI64;
 use tracing::debug;
 
-use crate::source::metrics::SourceBaseMetrics;
-pub(super) struct KafkaPartitionMetrics {
+use crate::metrics::source::SourceBaseMetrics;
+pub(crate) struct KafkaPartitionMetrics {
     labels: Vec<String>,
     base_metrics: SourceBaseMetrics,
     partition_offset_map: BTreeMap<i32, DeleteOnDropGauge<'static, AtomicI64, Vec<String>>>,
 }
 
 impl KafkaPartitionMetrics {
-    pub fn new(
+    pub(crate) fn new(
         base_metrics: SourceBaseMetrics,
         ids: Vec<i32>,
         topic: String,
@@ -45,7 +47,7 @@ impl KafkaPartitionMetrics {
         }
     }
 
-    pub fn set_offset_max(&mut self, id: i32, offset: i64) {
+    pub(crate) fn set_offset_max(&mut self, id: i32, offset: i64) {
         // Valid partition ids start at 0, librdkafka uses -1 as a sentinel for unassigned partitions
         if id < 0 {
             return;

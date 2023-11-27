@@ -112,12 +112,12 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 use tracing::{info, trace, warn};
 
-use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{
     self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
 };
+use crate::metrics::decode::DecodeMetrics;
+use crate::metrics::source::SourceBaseMetrics;
 use crate::sink::SinkBaseMetrics;
-use crate::source::metrics::SourceBaseMetrics;
 use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 

@@ -23,7 +23,7 @@ use timely::communication::initialize::WorkerGuards;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::sink::SinkBaseMetrics;
-use crate::source::metrics::SourceBaseMetrics;
+use crate::metrics::source::SourceBaseMetrics;
 use crate::storage_state::{StorageInstanceContext, Worker};
 use crate::DecodeMetrics;
 

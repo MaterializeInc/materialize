@@ -76,7 +76,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
-use crate::source::metrics::SourceBaseMetrics;
+use crate::metrics::source::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
     MaybeLength, SourceMessage, SourceMetrics, SourceOutput, SourceReaderError, SourceRender,

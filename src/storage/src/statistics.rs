@@ -23,8 +23,8 @@ use prometheus::core::{AtomicI64, AtomicU64};
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
 
-use crate::sink::metrics::SinkBaseMetrics;
-use crate::source::metrics::SourceBaseMetrics;
+use crate::metrics::sink::SinkBaseMetrics;
+use crate::metrics::source::SourceBaseMetrics;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SourceStatisticsMetricsDefinitions {
