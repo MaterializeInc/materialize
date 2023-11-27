@@ -9,6 +9,7 @@
 
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import frontmatter
@@ -212,8 +213,33 @@ def get_previous_published_version(release_version: MzVersion) -> MzVersion:
             excluded_versions.add(previous_published_version)
 
 
-def get_published_minor_mz_versions(limit: int | None = None) -> list[MzVersion]:
-    return limit_to_published_versions(get_all_minor_mz_versions(), limit)
+def get_published_minor_mz_versions(
+    limit: int | None = None, include_filter: Callable[[MzVersion], bool] | None = None
+) -> list[MzVersion]:
+    """Return the latest patch version for every minor version."""
+
+    # sorted in descending order
+    all_versions = get_all_mz_versions()
+    minor_versions: dict[str, MzVersion] = {}
+
+    for version in all_versions:
+        if include_filter is not None and not include_filter(version):
+            continue
+
+        minor_version = f"{version.major}.{version.minor}"
+        if minor_version in minor_versions.keys():
+            continue
+
+        if not image_of_release_version_exists(version):
+            continue
+
+        minor_versions[minor_version] = version
+
+        if limit is not None and len(minor_versions.keys()) == limit:
+            break
+
+    assert len(minor_versions) > 0
+    return sorted(minor_versions.values())
 
 
 def get_all_mz_versions() -> list[MzVersion]:
@@ -241,22 +267,6 @@ def limit_to_published_versions(
             break
 
     return versions
-
-
-def get_all_minor_mz_versions() -> list[MzVersion]:
-    """Return the latest patch version for every minor version."""
-
-    # sorted in descending order
-    all_versions = get_all_mz_versions()
-    minor_versions: dict[str, MzVersion] = {}
-
-    for version in all_versions:
-        minor_version = f"{version.major}.{version.minor}"
-        if minor_version not in minor_versions.keys():
-            minor_versions[minor_version] = version
-
-    assert len(minor_versions) > 0
-    return sorted(minor_versions.values())
 
 
 def get_previous_mz_version(
