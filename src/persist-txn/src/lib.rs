@@ -294,16 +294,20 @@ pub mod txns;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TxnsEntry {
     /// A data shard register operation.
-    Register(ShardId),
+    ///
+    /// The `[u8; 8]` is a Codec64 encoded timestamp.
+    Register(ShardId, [u8; 8]),
     /// A batch written to a data shard in a txn.
-    Append(ShardId, Vec<u8>),
+    ///
+    /// The `[u8; 8]` is a Codec64 encoded timestamp.
+    Append(ShardId, [u8; 8], Vec<u8>),
 }
 
 impl TxnsEntry {
     fn data_id(&self) -> &ShardId {
         match self {
-            TxnsEntry::Register(data_id) => data_id,
-            TxnsEntry::Append(data_id, _) => data_id,
+            TxnsEntry::Register(data_id, _) => data_id,
+            TxnsEntry::Append(data_id, _, _) => data_id,
         }
     }
 }
@@ -351,15 +355,22 @@ impl TxnsCodec for TxnsCodecDefault {
     }
     fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
         match e {
-            TxnsEntry::Register(data_id) => (data_id, Vec::new()),
-            TxnsEntry::Append(data_id, batch) => (data_id, batch),
+            TxnsEntry::Register(data_id, ts) => (data_id, ts.to_vec()),
+            TxnsEntry::Append(data_id, ts, batch) => {
+                // Put the ts at the end to let decode truncate it off.
+                (data_id, batch.into_iter().chain(ts).collect())
+            }
         }
     }
-    fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry {
+    fn decode(key: Self::Key, mut val: Self::Val) -> TxnsEntry {
+        let mut ts = [0u8; 8];
+        let ts_idx = val.len().checked_sub(8).expect("ts encoded at end of val");
+        ts.copy_from_slice(&val[ts_idx..]);
+        val.truncate(ts_idx);
         if val.is_empty() {
-            TxnsEntry::Register(key)
+            TxnsEntry::Register(key, ts)
         } else {
-            TxnsEntry::Append(key, val)
+            TxnsEntry::Append(key, ts, val)
         }
     }
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
