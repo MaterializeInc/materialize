@@ -148,6 +148,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     versions = get_published_minor_mz_versions(
         include_filter=lambda v: v >= args.min_version
     )
+    # sort versions in ascending order
+    versions.sort(reverse=False)
     print(
         "--- Testing upgrade scenarios involving the following versions: "
         + " ".join([str(v) for v in versions])

@@ -237,7 +237,7 @@ def get_published_minor_mz_versions(
             break
 
     assert len(minor_versions) > 0
-    return sorted(minor_versions.values())
+    return sorted(minor_versions.values(), reverse=True)
 
 
 def get_all_mz_versions() -> list[MzVersion]:

@@ -21,7 +21,7 @@ from materialize.mz_version import MzVersion
 from materialize.version_list import get_published_minor_mz_versions
 
 minor_versions = get_published_minor_mz_versions(limit=4)
-previous_version, last_version = minor_versions[-2:]
+last_version, previous_version = minor_versions[:2]
 
 
 class UpgradeEntireMz(Scenario):
@@ -114,17 +114,17 @@ class UpgradeEntireMzFourVersions(Scenario):
     """Test upgrade X-4 -> X-3 -> X-2 -> X-1 -> X"""
 
     def base_version(self) -> MzVersion:
-        return minor_versions[-4]
+        return minor_versions[3]
 
     def actions(self) -> list[Action]:
         print(
-            f"Upgrading going through {minor_versions[-4]} -> {minor_versions[-3]} -> {previous_version} -> {last_version}"
+            f"Upgrading going through {minor_versions[3]} -> {minor_versions[2]} -> {previous_version} -> {last_version}"
         )
         return [
-            StartMz(self, tag=minor_versions[-4]),
+            StartMz(self, tag=minor_versions[3]),
             Initialize(self),
             KillMz(),
-            StartMz(self, tag=minor_versions[-3]),
+            StartMz(self, tag=minor_versions[2]),
             Manipulate(self, phase=1),
             KillMz(),
             StartMz(self, tag=previous_version),
