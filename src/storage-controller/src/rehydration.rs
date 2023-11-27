@@ -15,7 +15,7 @@
 //! with the underlying client, it will reconnect the client and replay the
 //! command stream.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
 use std::time::Duration;
 
@@ -24,6 +24,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::{Stream, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_types::Codec64;
@@ -68,6 +69,7 @@ where
         metrics: RehydratingStorageClientMetrics,
         envd_epoch: NonZeroI64,
         grpc_client_params: GrpcClientParameters,
+        now: NowFn,
     ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
@@ -84,6 +86,7 @@ where
             config: Default::default(),
             metrics,
             grpc_client_params,
+            now,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -135,7 +138,10 @@ enum RehydrationCommand<T> {
 }
 
 /// A task that manages rehydration.
-struct RehydrationTask<T> {
+struct RehydrationTask<T>
+where
+    T: Timestamp + Lattice + Codec64,
+{
     /// The build information for this process.
     build_info: &'static BuildInfo,
     /// A channel upon which commands intended for the storage replica are
@@ -162,6 +168,8 @@ struct RehydrationTask<T> {
     metrics: RehydratingStorageClientMetrics,
     /// gRPC client parameters.
     grpc_client_params: GrpcClientParameters,
+    /// A function that returns the current time.
+    now: NowFn,
 }
 
 enum RehydrationTaskState<T: Timestamp + Lattice> {
@@ -205,14 +213,22 @@ where
     }
 
     async fn step_await_address(&mut self) -> RehydrationTaskState<T> {
+        if self.initialized {
+            self.update_paused_statuses();
+        }
+
         loop {
             match self.command_rx.recv().await {
                 None => break RehydrationTaskState::Done,
                 Some(RehydrationCommand::Connect { location }) => {
-                    break RehydrationTaskState::Rehydrate { location }
+                    break RehydrationTaskState::Rehydrate { location };
                 }
                 Some(RehydrationCommand::Send(command)) => {
                     self.absorb_command(&command);
+
+                    if self.initialized {
+                        self.update_paused_statuses();
+                    }
                 }
                 Some(RehydrationCommand::Reset) => {}
             }
@@ -243,7 +259,9 @@ where
                     Ok(RehydrationCommand::Send(command)) => {
                         self.absorb_command(&command);
                     }
-                    Ok(RehydrationCommand::Reset) => return RehydrationTaskState::AwaitAddress,
+                    Ok(RehydrationCommand::Reset) => {
+                        return RehydrationTaskState::AwaitAddress;
+                    }
                     Err(TryRecvError::Disconnected) => return RehydrationTaskState::Done,
                     Err(TryRecvError::Empty) => break,
                 }
@@ -360,6 +378,45 @@ where
                 self.send_response(location, client, response)
             }
         }
+    }
+
+    /// Sets the status to paused for sources/sinks this task manages.
+    fn update_paused_statuses(&self) {
+        // If the `response_tx` is closed, then we no longer need to report on this
+        // object.
+        let _ = self.response_tx.send(StorageResponse::StatusUpdates(
+            self.sources
+                .keys()
+                .map(|id| mz_storage_client::client::StatusUpdate {
+                    id: *id,
+                    status: "paused".to_string(),
+                    timestamp: mz_ore::now::to_datetime((self.now)()),
+                    error: None,
+                    hints: BTreeSet::from([
+                        "There is currently no replica running this source".to_string()
+                    ]),
+                    namespaced_errors: Default::default(),
+                })
+                .collect(),
+        ));
+
+        // If the `response_tx` is closed, then we no longer need to report on this
+        // object.
+        let _ = self.response_tx.send(StorageResponse::StatusUpdates(
+            self.sinks
+                .keys()
+                .map(|id| mz_storage_client::client::StatusUpdate {
+                    id: *id,
+                    status: "paused".to_string(),
+                    timestamp: mz_ore::now::to_datetime((self.now)()),
+                    error: None,
+                    hints: BTreeSet::from([
+                        "There is currently no replica running this source".to_string()
+                    ]),
+                    namespaced_errors: Default::default(),
+                })
+                .collect(),
+        ));
     }
 
     async fn send_commands(
@@ -481,6 +538,10 @@ where
             StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
                 // Just forward it along.
                 Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats))
+            }
+            StorageResponse::StatusUpdates(updates) => {
+                // Just forward it along.
+                Some(StorageResponse::StatusUpdates(updates))
             }
         }
     }
