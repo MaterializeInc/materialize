@@ -110,7 +110,6 @@ use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
-use mz_storage_types::connections::ConnectionContext;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
@@ -146,12 +145,6 @@ pub struct Config {
     pub tls: Option<TlsCertConfig>,
     /// Frontegg JWT authentication configuration.
     pub frontegg: Option<FronteggAuthentication>,
-
-    // === Connection options. ===
-    /// Configuration for source and sink connections created by the storage
-    /// layer. This can include configuration for external
-    /// sources.
-    pub connection_context: ConnectionContext,
 
     // === Controller options. ===
     /// Storage and compute controller configuration.
@@ -558,7 +551,6 @@ impl Listeners {
             builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
             availability_zones: config.availability_zones,
             system_parameter_defaults: config.system_parameter_defaults,
-            connection_context: config.connection_context,
             storage_usage_client,
             storage_usage_collection_interval: config.storage_usage_collection_interval,
             storage_usage_retention_period: config.storage_usage_retention_period,

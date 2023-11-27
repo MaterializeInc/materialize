@@ -21,9 +21,7 @@ use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt};
-use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionRetention,
-};
+use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkConnectionRetention};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -274,9 +272,7 @@ pub async fn build_kafka(
     connection_cx: &ConnectionContext,
 ) -> Result<Option<Timestamp>, ContextCreationError> {
     // Fetch the progress of the last incarnation of the sink, if any.
-    let progress_topic = match &connection.consistency_config {
-        KafkaConsistencyConfig::Progress { topic } => topic,
-    };
+    let progress_topic = connection.progress_topic(connection_cx).into_owned();
     // For details about the two clients constructed here, see
     // `determine_latest_progress_record`.
     let make_progress_client = |isolation_level: &'static str| async {
@@ -302,7 +298,7 @@ pub async fn build_kafka(
         format!("build_kafka_{}", sink_id),
         Arc::clone(&progress_client_read_committed),
         progress_client_read_uncommitted,
-        progress_topic.to_string(),
+        progress_topic.clone(),
         ProgressKey::new(sink_id),
     )
     .await
@@ -332,7 +328,7 @@ pub async fn build_kafka(
     // Create Kafka topics.
     ensure_kafka_topic(
         &admin_client,
-        progress_topic,
+        &progress_topic,
         1,
         connection.replication_factor,
         KafkaSinkConnectionRetention::default(),

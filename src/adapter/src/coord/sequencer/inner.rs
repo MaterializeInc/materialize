@@ -358,7 +358,7 @@ impl Coordinator {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             let transient_revision = self.catalog().transient_revision();
             let conn_id = ctx.session().conn_id().clone();
-            let connection_context = self.connection_context.clone();
+            let connection_context = self.connection_context().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
 
@@ -4756,7 +4756,7 @@ impl Coordinator {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             let transient_revision = self.catalog().transient_revision();
             let conn_id = ctx.session().conn_id().clone();
-            let connection_context = self.connection_context.clone();
+            let connection_context = self.connection_context().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
 

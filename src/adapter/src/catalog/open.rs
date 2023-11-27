@@ -237,6 +237,7 @@ impl Catalog {
                     build_info: config.build_info,
                     timestamp_interval: Duration::from_secs(1),
                     now: config.now.clone(),
+                    connection_context: config.connection_context,
                 },
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
@@ -817,7 +818,7 @@ impl Catalog {
                 .unwrap_or_else(|| "new".to_string());
 
             if !config.skip_migrations {
-                migrate::migrate(&state, &mut txn, config.now, config.connection_context)
+                migrate::migrate(&state, &mut txn, config.now, &state.config.connection_context)
                     .await
                     .map_err(|e| {
                         Error::new(ErrorKind::FailedMigration {
@@ -898,6 +899,7 @@ impl Catalog {
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
+            let secrets_reader = &catalog.state.config.connection_context.secrets_reader;
 
             // Load public keys for SSH connections from the secrets store to the catalog
             for (id, entry) in catalog.state.entry_by_id.iter_mut() {
@@ -905,7 +907,7 @@ impl Catalog {
                     if let mz_storage_types::connections::Connection::Ssh(ref mut ssh) =
                         connection.connection
                     {
-                        let secret = config.secrets_reader.read(*id).await?;
+                        let secret = secrets_reader.read(*id).await?;
                         let keyset = SshKeyPairSet::from_bytes(&secret)?;
                         let public_key_pair = keyset.public_keys();
                         ssh.public_keys = Some(public_key_pair);

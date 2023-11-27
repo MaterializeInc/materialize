@@ -9,6 +9,7 @@
 
 //! Connection types.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -118,6 +119,13 @@ impl<V: std::fmt::Display> From<V> for StringOrSecret {
 /// Should be kept cheaply cloneable.
 #[derive(Debug, Clone)]
 pub struct ConnectionContext {
+    /// An opaque identifier for the environment in which this process is
+    /// running.
+    ///
+    /// The storage layer is intentionally unaware of the structure within this
+    /// identifier. Higher layers of the stack can make use of that structure,
+    /// but the storage layer should be oblivious to it.
+    pub environment_id: String,
     /// The level for librdkafka's logs.
     pub librdkafka_log_level: tracing::Level,
     /// A prefix for an external ID to use for all AWS AssumeRole operations.
@@ -139,12 +147,14 @@ impl ConnectionContext {
     /// (e.g., via a configuration option in a SQL statement). See
     /// [`AwsExternalIdPrefix`] for details.
     pub fn from_cli_args(
+        environment_id: String,
         startup_log_level: &CloneableEnvFilter,
         aws_external_id_prefix: Option<AwsExternalIdPrefix>,
         secrets_reader: Arc<dyn SecretsReader>,
         cloud_resource_reader: Option<Arc<dyn CloudResourceReader>>,
     ) -> ConnectionContext {
         ConnectionContext {
+            environment_id,
             librdkafka_log_level: mz_ore::tracing::crate_level(
                 &startup_log_level.clone().into(),
                 "librdkafka",
@@ -159,6 +169,7 @@ impl ConnectionContext {
     /// Constructs a new connection context for usage in tests.
     pub fn for_tests(secrets_reader: Arc<dyn SecretsReader>) -> ConnectionContext {
         ConnectionContext {
+            environment_id: "test-environment-id".into(),
             librdkafka_log_level: tracing::Level::INFO,
             aws_external_id_prefix: None,
             secrets_reader,
@@ -373,6 +384,25 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaConnection, R>
 }
 
 impl<C: ConnectionAccess> KafkaConnection<C> {
+    /// Returns the name of the progress topic to use for the connection.
+    ///
+    /// The caller is responsible for providing the connection ID as it is not
+    /// known to `KafkaConnection`.
+    pub fn progress_topic(
+        &self,
+        connection_context: &ConnectionContext,
+        connection_id: GlobalId,
+    ) -> Cow<str> {
+        if let Some(progress_topic) = &self.progress_topic {
+            Cow::Borrowed(progress_topic)
+        } else {
+            Cow::Owned(format!(
+                "_materialize-progress-{}-{}",
+                connection_context.environment_id, connection_id,
+            ))
+        }
+    }
+
     fn validate_by_default(&self) -> bool {
         true
     }

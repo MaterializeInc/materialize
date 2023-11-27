@@ -32,7 +32,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, Ident, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
-use mz_storage_types::connections::Connection;
+use mz_storage_types::connections::{Connection, ConnectionContext};
 use mz_storage_types::sources::SourceDesc;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -350,17 +350,8 @@ pub struct CatalogConfig {
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
-}
-
-impl CatalogConfig {
-    /// Returns the default progress topic name for a Kafka sink for a given
-    /// connection.
-    pub fn default_kafka_sink_progress_topic(&self, connection_id: GlobalId) -> String {
-        format!(
-            "_materialize-progress-{}-{connection_id}",
-            self.environment_id
-        )
-    }
+    /// Context for source and sink connections.
+    pub connection_context: ConnectionContext,
 }
 
 /// A database in a [`SessionCatalog`].

@@ -215,7 +215,7 @@ impl SourceRender for KafkaSourceConnection {
                 "instantiating Kafka source reader at offsets {start_offsets:?}"
             );
 
-            let group_id = self.group_id(config.id);
+            let group_id = self.group_id(&connection_context, config.id);
             let KafkaSourceConnection {
                 connection, topic, ..
             } = self;

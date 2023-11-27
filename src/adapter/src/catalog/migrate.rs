@@ -55,7 +55,7 @@ pub(crate) async fn migrate(
     state: &CatalogState,
     txn: &mut Transaction<'_>,
     now: NowFn,
-    _connection_context: Option<ConnectionContext>,
+    _connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let catalog_version = txn.get_catalog_content_version();
     let catalog_version = match catalog_version {

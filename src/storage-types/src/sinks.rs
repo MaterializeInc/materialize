@@ -9,6 +9,7 @@
 
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
-use crate::connections::StringOrSecret;
+use crate::connections::{ConnectionContext, StringOrSecret};
 use crate::controller::{CollectionMetadata, StorageError};
 
 use crate::connections::inline::{
@@ -334,7 +335,7 @@ impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
 
         let kind = proto
             .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaConsistencyConfig::kind"))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoStorageSinkConnection::kind"))?;
 
         Ok(match kind {
             KafkaV2(proto) => Self::Kafka(proto.into_rust()?),
@@ -397,37 +398,6 @@ impl RustType<proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec> for Ve
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum KafkaConsistencyConfig {
-    Progress { topic: String },
-}
-
-impl RustType<ProtoKafkaConsistencyConfig> for KafkaConsistencyConfig {
-    fn into_proto(&self) -> ProtoKafkaConsistencyConfig {
-        use proto_kafka_consistency_config::Kind::*;
-        use proto_kafka_consistency_config::ProtoKafkaConsistencyConfigProgress;
-
-        ProtoKafkaConsistencyConfig {
-            kind: Some(match self {
-                Self::Progress { topic } => Progress(ProtoKafkaConsistencyConfigProgress {
-                    topic: topic.clone(),
-                }),
-            }),
-        }
-    }
-    fn from_proto(proto: ProtoKafkaConsistencyConfig) -> Result<Self, TryFromProtoError> {
-        use proto_kafka_consistency_config::Kind::*;
-
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaConsistencyConfig::kind"))?;
-
-        Ok(match kind {
-            Progress(proto) => Self::Progress { topic: proto.topic },
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: GlobalId,
     pub connection: C::Kafka,
@@ -438,7 +408,6 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
     pub topic: String,
-    pub consistency_config: KafkaConsistencyConfig,
     pub partition_count: i32,
     pub replication_factor: i32,
     pub fuel: usize,
@@ -446,6 +415,14 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     /// Additional options that need to be set on the connection whenever it's
     /// inlined.
     pub connection_options: BTreeMap<String, StringOrSecret>,
+}
+
+impl KafkaSinkConnection {
+    /// Returns the name of the progress topic to use for the sink.
+    pub fn progress_topic(&self, connection_context: &ConnectionContext) -> Cow<str> {
+        self.connection
+            .progress_topic(connection_context, self.connection_id)
+    }
 }
 
 impl<C: ConnectionAccess> KafkaSinkConnection<C> {
@@ -470,7 +447,6 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             key_desc_and_indices,
             value_desc,
             topic,
-            consistency_config,
             partition_count,
             replication_factor,
             fuel,
@@ -491,10 +467,6 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             ),
             (value_desc == &other.value_desc, "value_desc"),
             (topic == &other.topic, "topic"),
-            (
-                consistency_config == &other.consistency_config,
-                "consistency_config",
-            ),
             (partition_count == &other.partition_count, "partition_count"),
             (
                 replication_factor == &other.replication_factor,
@@ -535,7 +507,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             value_desc,
             topic,
-            consistency_config,
             partition_count,
             replication_factor,
             fuel,
@@ -554,7 +525,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             value_desc,
             topic,
-            consistency_config,
             partition_count,
             replication_factor,
             fuel,
@@ -574,7 +544,6 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             relation_key_indices: self.relation_key_indices.into_proto(),
             value_desc: Some(self.value_desc.into_proto()),
             topic: self.topic.clone(),
-            consistency_config: Some(self.consistency_config.into_proto()),
             partition_count: self.partition_count,
             replication_factor: self.replication_factor,
             fuel: u64::cast_from(self.fuel),
@@ -604,9 +573,6 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 .value_desc
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::value_desc")?,
             topic: proto.topic,
-            consistency_config: proto
-                .consistency_config
-                .into_rust_if_some("ProtoKafkaSinkConnectionV2::consistency_config")?,
             partition_count: proto.partition_count,
             replication_factor: proto.replication_factor,
             fuel: proto.fuel.into_rust()?,

@@ -576,7 +576,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::ValidateConnection(plan) => {
-                    let connection_context = self.connection_context.clone();
+                    let connection_context = self.connection_context().clone();
                     let connection = plan
                         .connection
                         .into_inline_connection(self.catalog().state());

@@ -646,7 +646,7 @@ impl Coordinator {
                 let conn_id = ctx.session().conn_id().clone();
                 let catalog = self.owned_catalog();
                 let now = self.now();
-                let connection_context = self.connection_context.clone();
+                let connection_context = self.connection_context().clone();
                 let otel_ctx = OpenTelemetryContext::obtain();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let catalog = catalog.for_session(ctx.session());
