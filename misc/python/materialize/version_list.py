@@ -12,11 +12,10 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-from materialize import buildkite, git
+from materialize import buildkite, docker, git
 from materialize.docker import (
     commit_to_image_tag,
     image_of_commit_exists,
-    image_of_release_version_exists,
     version_to_image_tag,
 )
 from materialize.git import get_version_tags
@@ -39,6 +38,8 @@ INVALID_VERSIONS = {
     MzVersion.parse_mz("v0.57.5"),
     MzVersion.parse_mz("v0.57.6"),
 }
+
+SKIP_IMAGE_CHECK_BELOW_THIS_VERSION = MzVersion.parse_mz("v0.77.0")
 
 
 """
@@ -187,7 +188,7 @@ def get_latest_published_version() -> MzVersion:
             version_type=MzVersion, excluded_versions=excluded_versions
         )
 
-        if image_of_release_version_exists(latest_published_version):
+        if is_valid_release_image(latest_published_version):
             return latest_published_version
         else:
             print(
@@ -204,7 +205,7 @@ def get_previous_published_version(release_version: MzVersion) -> MzVersion:
             release_version, excluded_versions=excluded_versions
         )
 
-        if image_of_release_version_exists(previous_published_version):
+        if is_valid_release_image(previous_published_version):
             return previous_published_version
         else:
             print(f"Skipping version {previous_published_version} (image not found)")
@@ -228,7 +229,7 @@ def get_published_minor_mz_versions(
         if minor_version in minor_versions.keys():
             continue
 
-        if not image_of_release_version_exists(version):
+        if not is_valid_release_image(version):
             continue
 
         minor_versions[minor_version] = version
@@ -258,7 +259,7 @@ def limit_to_published_versions(
     versions = []
 
     for v in all_versions:
-        if image_of_release_version_exists(v):
+        if is_valid_release_image(v):
             versions.append(v)
 
         if limit is not None and len(versions) == limit:
@@ -293,3 +294,14 @@ def get_previous_mz_version(
         and v not in excluded_versions
     ]
     return max(all_suitable_previous_versions)
+
+
+def is_valid_release_image(version: MzVersion) -> bool:
+    if version in INVALID_VERSIONS:
+        return False
+
+    if version < SKIP_IMAGE_CHECK_BELOW_THIS_VERSION:
+        # optimization: assume that all versions older than this one are either valid or listed in INVALID_VERSIONS
+        return True
+
+    return docker.image_of_release_version_exists(version)
