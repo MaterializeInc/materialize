@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
+from typing import TypeVar
+
 import pandas as pd
 
 from materialize.scalability.df import df_totals_cols, df_totals_ext_cols
@@ -16,7 +18,9 @@ from materialize.scalability.df.df_wrapper_base import (
     concat_df_wrapper_data,
 )
 from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.scalability_change import Regression
+from materialize.scalability.scalability_change import ScalabilityChange
+
+SCALABILITY_CHANGE_TYPE = TypeVar("SCALABILITY_CHANGE_TYPE", bound=ScalabilityChange)
 
 
 class DfTotalsBase(DfWrapperBase):
@@ -111,21 +115,22 @@ class DfTotalsExtended(DfTotalsBase):
     def to_filtered_with_threshold(self, max_deviation: float) -> DfTotalsExtended:
         tps_per_endpoint = self.data
         filtered_data = tps_per_endpoint.loc[
-            # keep entries x% worse than the baseline
-            tps_per_endpoint[df_totals_ext_cols.TPS_DIFF_PERC] * (-1)
+            # keep entries exceeding the baseline by x%
+            tps_per_endpoint[df_totals_ext_cols.TPS_DIFF_PERC]
             > max_deviation
         ]
 
         return DfTotalsExtended(filtered_data)
 
-    def to_regressions(
+    def to_scalability_change(
         self,
+        change_type: type[SCALABILITY_CHANGE_TYPE],
         workload_name: str,
         other_endpoint: Endpoint,
-    ) -> list[Regression]:
+    ) -> list[SCALABILITY_CHANGE_TYPE]:
         result = []
         for index, row in self.data.iterrows():
-            regression = Regression(
+            regression = change_type(
                 workload_name,
                 concurrency=int(row[df_totals_ext_cols.CONCURRENCY]),
                 count=int(row[df_totals_ext_cols.COUNT]),
