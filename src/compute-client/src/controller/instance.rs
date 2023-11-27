@@ -887,7 +887,7 @@ where
         peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
         let since = match &peek_target {
-            PeekTarget::Index => self.compute.collection(id)?.read_capabilities.frontier(),
+            PeekTarget::Index { .. } => self.compute.collection(id)?.read_capabilities.frontier(),
             PeekTarget::Persist { .. } => self
                 .storage_controller
                 .collection(id)
@@ -909,7 +909,7 @@ where
         let mut updates = BTreeMap::new();
         updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
         match &peek_target {
-            PeekTarget::Index => self.update_read_capabilities(&mut updates),
+            PeekTarget::Index { .. } => self.update_read_capabilities(&mut updates),
             PeekTarget::Persist { .. } => self
                 .storage_controller
                 .update_read_capabilities(&mut updates),
@@ -919,18 +919,16 @@ where
         self.compute.peeks.insert(
             uuid,
             PendingPeek {
-                target: id,
+                target: peek_target.clone(),
                 time: timestamp.clone(),
                 target_replica,
                 // TODO(guswynn): can we just hold the `tracing::Span` here instead?
                 otel_ctx: otel_ctx.clone(),
                 requested_at: Instant::now(),
-                target_meta: peek_target.clone(),
             },
         );
 
         self.compute.send(ComputeCommand::Peek(Peek {
-            id,
             literal_constraints,
             uuid,
             timestamp,
@@ -1232,10 +1230,10 @@ where
         // to avoid the edge case that caused #16615.
         self.compute.send(ComputeCommand::CancelPeek { uuid });
 
-        let update = (peek.target, ChangeBatch::new_from(peek.time, -1));
+        let update = (peek.target.id(), ChangeBatch::new_from(peek.time, -1));
         let mut updates = [update].into();
-        match &peek.target_meta {
-            PeekTarget::Index => self.update_read_capabilities(&mut updates),
+        match &peek.target {
+            PeekTarget::Index { .. } => self.update_read_capabilities(&mut updates),
             PeekTarget::Persist { .. } => self
                 .storage_controller
                 .update_read_capabilities(&mut updates),
@@ -1422,10 +1420,8 @@ where
 
 #[derive(Debug)]
 struct PendingPeek<T> {
-    /// ID of the collection targeted by this peek.
-    target: GlobalId,
     /// Information about the collection targeted by the peek.
-    target_meta: PeekTarget,
+    target: PeekTarget,
     /// The peek time.
     time: T,
     /// For replica-targeted peeks, this specifies the replica whose response we should pass on.

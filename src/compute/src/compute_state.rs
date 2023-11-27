@@ -353,12 +353,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     #[tracing::instrument(level = "debug", skip(self))]
     fn handle_peek(&mut self, peek: Peek) {
         let pending = match &peek.target {
-            PeekTarget::Index => {
+            PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
+                let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
                 PendingPeek::index(peek, trace_bundle)
             }
-            PeekTarget::Persist { metadata } => {
+            PeekTarget::Persist { metadata, .. } => {
                 let active_worker = {
                     // Choose the worker that does the actual peek arbitrarily but consistently.
                     let chosen_index =
@@ -675,7 +675,7 @@ impl PendingPeek {
     /// Produces a corresponding log event.
     pub fn as_log_event(&self) -> logging::compute::Peek {
         let peek = self.peek();
-        logging::compute::Peek::new(peek.id, peek.timestamp, peek.uuid)
+        logging::compute::Peek::new(peek.target.id(), peek.timestamp, peek.uuid)
     }
 
     fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {

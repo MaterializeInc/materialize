@@ -483,12 +483,26 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
 pub enum PeekTarget {
     /// This peek is against an index. Since this should be held in memory on
     /// the target cluster, no additional coordinates are necessary.
-    Index,
+    Index {
+        /// The id of the (possibly transient) index.
+        id: GlobalId,
+    },
     /// This peek is against a Persist collection.
     Persist {
+        /// The id of the backing Persist collection.
+        id: GlobalId,
         /// The identifying metadata of the Persist shard.
         metadata: CollectionMetadata,
     },
+}
+
+impl PeekTarget {
+    pub fn id(&self) -> GlobalId {
+        match self {
+            PeekTarget::Index { id, .. } => *id,
+            PeekTarget::Persist { id, .. } => *id,
+        }
+    }
 }
 
 /// Peek a collection, either in an arrangement or Persist.
@@ -505,8 +519,8 @@ pub enum PeekTarget {
 /// correctly answer the `Peek`.
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Peek<T = mz_repr::Timestamp> {
-    /// The identifier of the collection.
-    pub id: GlobalId,
+    /// Target-specific metadata.
+    pub target: PeekTarget,
     /// If `Some`, then look up only the given keys from the collection (instead of a full scan).
     /// The vector is never empty.
     #[proptest(strategy = "proptest::option::of(proptest::collection::vec(any::<Row>(), 1..5))")]
@@ -527,14 +541,12 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// the compute controller and the compute worker.
     #[proptest(strategy = "empty_otel_ctx()")]
     pub otel_ctx: OpenTelemetryContext,
-    /// Target-specific metadata.
-    pub target: PeekTarget,
 }
 
 impl RustType<ProtoPeek> for Peek {
     fn into_proto(&self) -> ProtoPeek {
         ProtoPeek {
-            id: Some(self.id.into_proto()),
+            id: Some(self.target.id().into_proto()),
             key: match &self.literal_constraints {
                 // In the Some case, the vector is never empty, so it's safe to encode None as an
                 // empty vector, and Some(vector) as just the vector.
@@ -549,20 +561,23 @@ impl RustType<ProtoPeek> for Peek {
             finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
             otel_ctx: self.otel_ctx.clone().into(),
-            target: match &self.target {
-                PeekTarget::Index => None,
-                PeekTarget::Persist { metadata } => {
-                    Some(proto_peek::Target::Persist(ProtoPersistTarget {
+            target: Some(match &self.target {
+                PeekTarget::Index { id } => proto_peek::Target::Index(ProtoIndexTarget {
+                    id: Some(id.into_proto()),
+                }),
+
+                PeekTarget::Persist { id, metadata } => {
+                    proto_peek::Target::Persist(ProtoPersistTarget {
+                        id: Some(id.into_proto()),
                         metadata: Some(metadata.into_proto()),
-                    }))
+                    })
                 }
-            },
+            }),
         }
     }
 
     fn from_proto(x: ProtoPeek) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            id: x.id.into_rust_if_some("ProtoPeek::id")?,
             literal_constraints: {
                 let vec: Vec<Row> = x.key.into_rust()?;
                 if vec.is_empty() {
@@ -579,10 +594,16 @@ impl RustType<ProtoPeek> for Peek {
                 .into_rust_if_some("ProtoPeek::map_filter_project")?,
             otel_ctx: x.otel_ctx.into(),
             target: match x.target {
-                Some(proto_peek::Target::Persist(p)) => PeekTarget::Persist {
-                    metadata: p.metadata.into_rust_if_some("ProtoPeek::target")?,
+                Some(proto_peek::Target::Index(target)) => PeekTarget::Index {
+                    id: target.id.into_rust_if_some("ProtoIndexTarget::id")?,
                 },
-                None => PeekTarget::Index,
+                Some(proto_peek::Target::Persist(target)) => PeekTarget::Persist {
+                    id: target.id.into_rust_if_some("ProtoIndexTarget::id")?,
+                    metadata: target.metadata.into_rust_if_some("ProtoPeek::target")?,
+                },
+                None => PeekTarget::Index {
+                    id: x.id.into_rust_if_some("ProtoPeek::id")?,
+                },
             },
         })
     }

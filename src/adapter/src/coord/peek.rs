@@ -468,7 +468,7 @@ impl crate::coord::Coordinator {
                 (idx_id, literal_constraints, timestamp, map_filter_project),
                 None,
                 true,
-                PeekTarget::Index,
+                PeekTarget::Index { id: idx_id },
             ),
             PeekPlan::FastPath(FastPathPlan::PeekPersist(coll_id, map_filter_project)) => {
                 let peek_command = (coll_id, None, timestamp, map_filter_project);
@@ -479,7 +479,15 @@ impl crate::coord::Coordinator {
                     .expect("storage collection for fast-path peek")
                     .collection_metadata
                     .clone();
-                (peek_command, None, true, PeekTarget::Persist { metadata })
+                (
+                    peek_command,
+                    None,
+                    true,
+                    PeekTarget::Persist {
+                        id: coll_id,
+                        metadata,
+                    },
+                )
             }
             PeekPlan::SlowPath(PeekDataflowPlan {
                 desc: dataflow,
@@ -521,7 +529,7 @@ impl crate::coord::Coordinator {
                     ),
                     Some(index_id),
                     false,
-                    PeekTarget::Index,
+                    PeekTarget::Index { id: index_id },
                 )
             }
             _ => {
