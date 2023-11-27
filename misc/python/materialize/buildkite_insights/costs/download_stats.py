@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -10,15 +9,15 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.buildkite_insights.util.io import write_results_to_file
-from materialize.buildkite_insights.util.web_request import buildkite_get_request
+from materialize.buildkite_insights.util import buildkite_api
+from materialize.buildkite_insights.util.data_io import write_results_to_file
 
 
 def main() -> None:
     request_path = "organizations/materialize/builds"
     params = {"include_retried_jobs": "true", "per_page": "100"}
 
-    result = buildkite_get_request(request_path, params, max_fetches=None)
+    result = buildkite_api.get(request_path, params, max_fetches=None)
     write_results_to_file(result, "data.json")
 
 

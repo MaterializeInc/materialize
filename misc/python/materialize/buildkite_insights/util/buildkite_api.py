@@ -17,7 +17,7 @@ import requests
 BUILDKITE_API_URL = "https://api.buildkite.com/v2"
 
 
-def buildkite_get_request(
+def get(
     request_path: str, params: dict[str, str], max_fetches: int | None
 ) -> list[Any]:
     headers = {}

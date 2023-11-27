@@ -12,7 +12,7 @@
 from collections import defaultdict
 from datetime import datetime
 
-from materialize.buildkite_insights.util.io import read_results_from_file
+from materialize.buildkite_insights.util.data_io import read_results_from_file
 
 # https://instances.vantage.sh/aws/ec2
 instance_cost = {

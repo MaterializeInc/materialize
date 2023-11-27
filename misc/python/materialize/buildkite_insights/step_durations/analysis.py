@@ -16,11 +16,11 @@ from typing import Any
 
 import pandas as pd
 
-from materialize.buildkite_insights.util.io import (
+from materialize.buildkite_insights.util import buildkite_api
+from materialize.buildkite_insights.util.data_io import (
     read_results_from_file,
     write_results_to_file,
 )
-from materialize.buildkite_insights.util.web_request import buildkite_get_request
 
 OUTPUT_TYPE_TXT = "txt"
 OUTPUT_TYPE_CSV = "csv"
@@ -46,7 +46,7 @@ def get_data(pipeline_slug: str, no_fetch: bool, max_fetches: int | None) -> lis
     request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
     params = {"branch": "main", "include_retried_jobs": "true", "per_page": "100"}
 
-    result = buildkite_get_request(request_path, params, max_fetches=max_fetches)
+    result = buildkite_api.get(request_path, params, max_fetches=max_fetches)
     write_results_to_file(result, get_file_name(pipeline_slug))
     return result
 
