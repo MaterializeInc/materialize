@@ -21,9 +21,9 @@ from materialize.checks.executors import CloudtestExecutor
 from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.wait import wait
-from materialize.docker import get_latest_published_version
 from materialize.mz_version import MzVersion
 from materialize.util import all_subclasses
+from materialize.version_list import get_latest_published_version
 
 LOGGER = logging.getLogger(__name__)
 

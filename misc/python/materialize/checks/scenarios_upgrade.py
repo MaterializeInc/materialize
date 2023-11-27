@@ -17,8 +17,8 @@ from materialize.checks.mzcompose_actions import (
     UseClusterdCompute,
 )
 from materialize.checks.scenarios import Scenario
-from materialize.docker import get_published_minor_mz_versions
 from materialize.mz_version import MzVersion
+from materialize.version_list import get_published_minor_mz_versions
 
 minor_versions = get_published_minor_mz_versions(limit=4)
 previous_version, last_version = minor_versions[-2:]

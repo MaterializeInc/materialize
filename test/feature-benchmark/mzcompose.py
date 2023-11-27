@@ -14,8 +14,10 @@ import time
 import uuid
 from textwrap import dedent
 
-from materialize import docker
-from materialize.docker import get_latest_published_version
+from materialize.version_list import (
+    get_latest_published_version,
+    resolve_ancestor_image_tag,
+)
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
@@ -132,7 +134,7 @@ def run_one_scenario(
         )
 
         if tag == "common-ancestor":
-            tag = docker.resolve_ancestor_image_tag()
+            tag = resolve_ancestor_image_tag()
 
         entrypoint_host = "balancerd" if balancerd else "materialized"
 
