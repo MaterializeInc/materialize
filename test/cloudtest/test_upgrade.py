@@ -27,14 +27,12 @@ from materialize.version_list import get_latest_published_version
 
 LOGGER = logging.getLogger(__name__)
 
-LAST_RELEASED_VERSION = get_latest_published_version()
-
 
 class CloudtestUpgrade(Scenario):
     """A Platform Checks scenario that performs an upgrade in cloudtest/K8s"""
 
     def base_version(self) -> MzVersion:
-        return LAST_RELEASED_VERSION
+        return get_latest_published_version()
 
     def actions(self) -> list[Action]:
         return [
@@ -49,12 +47,14 @@ class CloudtestUpgrade(Scenario):
 @pytest.mark.long
 def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
+    last_released_version = get_latest_published_version()
+
     LOGGER.info(
-        f"Testing upgrade from base version {LAST_RELEASED_VERSION} to current version"
+        f"Testing upgrade from base version {last_released_version} to current version"
     )
 
     mz = MaterializeApplication(
-        tag=str(LAST_RELEASED_VERSION),
+        tag=str(last_released_version),
         aws_region=aws_region,
         log_filter=log_filter,
         release_mode=(not dev),
@@ -65,7 +65,7 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
         label="cluster.environmentd.materialize.cloud/cluster-id=u1",
     )
 
-    executor = CloudtestExecutor(application=mz, version=LAST_RELEASED_VERSION)
+    executor = CloudtestExecutor(application=mz, version=last_released_version)
     # No SSH bastion host in cloudtest (yet)
     checks = list(all_subclasses(Check) - {SshPg, SshKafka})
     scenario = CloudtestUpgrade(checks=checks, executor=executor)

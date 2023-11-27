@@ -28,8 +28,6 @@ from materialize.version_list import (
     get_published_minor_mz_versions,
 )
 
-all_versions = get_all_published_mz_versions()
-
 mz_options: dict[MzVersion, str] = {}
 
 SERVICES = [
@@ -72,6 +70,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     tested_versions = get_published_minor_mz_versions(limit=2)
+    all_versions = get_all_published_mz_versions()
 
     for tested_version in tested_versions:
         priors = [v for v in all_versions if v <= tested_version]
