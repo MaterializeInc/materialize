@@ -278,6 +278,8 @@ pub enum DefiniteError {
     TableDropped,
     #[error("publication {0:?} does not exist")]
     PublicationDropped(String),
+    #[error("replication slot has been invalidated because it exceeded the maximum reserved size")]
+    InvalidReplicationSlot,
     #[error("unexpected number of columns while parsing COPY output")]
     MissingColumn,
     #[error("failed to parse COPY protocol")]
