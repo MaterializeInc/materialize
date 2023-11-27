@@ -985,6 +985,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             // cluster-autoscaler (or karpenter). Notably, eviction of pods for resource overuse is still enabled.
             "cluster-autoscaler.kubernetes.io/safe-to-evict".to_owned() => "false".to_string(),
             "karpenter.sh/do-not-evict".to_owned() => "true".to_string(),
+
+            // It's called do-not-disrupt in newer versions of karpenter, so adding for forward/backward compatibility
+            "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
         };
 
         let mut node_selector: BTreeMap<String, String> = self
