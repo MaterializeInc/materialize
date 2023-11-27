@@ -104,7 +104,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
-use mz_persist_txn::txn_cache::TxnsCache;
+use mz_persist_txn::txn_read::TxnsRead;
 use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
@@ -298,11 +298,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
-    /// The shard id of the persist-txn txns shard or None if persist-txn is not
+    /// A handle for reading persist-txn managed shards or None if persist-txn is not
     /// enabled.
-    txns_id: Option<ShardId>,
-    /// A PersistClient usable for opening txns_id.
-    txns_client: PersistClient,
+    txns_read: Option<TxnsRead<T>>,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
@@ -584,9 +582,9 @@ where
                 // pass along the shard id for the txns shard to dataflow rendering.
                 let txns_shard = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) => {
-                        // `self.txns_id` is None if persist-txn is not enabled, which makes this
+                        // `self.txns_read` is None if persist-txn is not enabled, which makes this
                         // do the right thing.
-                        self.txns_id.clone()
+                        self.txns_read.as_ref().map(|x| *x.txns_id())
                     }
                     DataSource::Ingestion(_)
                     | DataSource::Introspection(_)
@@ -1340,14 +1338,12 @@ where
                 // never come (worse, it's tricky to keep it making progress, which results in a
                 // stuck since). Replace this with the shared TxnsCache thing we'll have to do
                 // anyway for the dataflow operators.
-                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
-                    &self.txns_client,
-                    *txns_id,
-                    Some(metadata.data_shard),
-                )
-                .await;
-                txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let txns_read = self.txns_read.as_ref().expect("set if txns are enabled");
+                assert_eq!(txns_id, txns_read.txns_id());
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
                 data_snapshot.snapshot_and_fetch(&mut read_handle).await
             }
@@ -1390,16 +1386,12 @@ where
                 }
             }
             Some(txns_id) => {
-                // TODO(txn): Replace this with the shared TxnsCache thing
-                // we'll have to do anyway for the dataflow operators.
-                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
-                    &self.txns_client,
-                    *txns_id,
-                    Some(metadata.data_shard),
-                )
-                .await;
-                txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let txns_read = self.txns_read.as_ref().expect("set if txns are enabled");
+                assert_eq!(txns_id, txns_read.txns_id());
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
                 let mut handle = self.read_handle_for_snapshot(id).await?;
                 let cursor = data_snapshot
                     .snapshot_cursor(&mut handle)
@@ -2139,11 +2131,11 @@ where
             .await
             .expect("stash operation must succeed");
 
-        let txns_client = persist_clients
-            .open(persist_location.clone())
-            .await
-            .expect("location should be valid");
-        let (persist_table_worker, txns_id) = if enable_persist_txn_tables {
+        let (persist_table_worker, txns_read) = if enable_persist_txn_tables {
+            let txns_client = persist_clients
+                .open(persist_location.clone())
+                .await
+                .expect("location should be valid");
             let txns_id = PERSIST_TXNS_SHARD
                 .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
                 .await
@@ -2159,7 +2151,8 @@ where
             )
             .await;
             let worker = persist_handles::PersistTableWriteWorker::new_txns(tx.clone(), txns);
-            (worker, Some(txns_id))
+            let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client, txns_id);
+            (worker, Some(txns_read))
         } else {
             let worker = persist_handles::PersistTableWriteWorker::new_legacy(tx.clone());
             (worker, None)
@@ -2179,8 +2172,7 @@ where
             persist_table_worker,
             persist_monotonic_worker,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
-            txns_id,
-            txns_client,
+            txns_read,
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
@@ -3334,16 +3326,12 @@ where
                 }
             }
             Some(txns_id) => {
-                // TODO(txn): Replace this with the shared TxnsCache thing
-                // we'll have to do anyway for the dataflow operators.
-                let mut txns_cache = TxnsCache::<T, TxnsCodecRow>::open(
-                    &self.txns_client,
-                    *txns_id,
-                    Some(metadata.data_shard),
-                )
-                .await;
-                txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let txns_read = self.txns_read.as_ref().expect("set if txns are enabled");
+                assert_eq!(txns_id, txns_read.txns_id());
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
                 let mut handle = self.read_handle_for_snapshot(id).await?;
                 let contents = data_snapshot.snapshot_and_stream(&mut handle).await;
                 match contents {
