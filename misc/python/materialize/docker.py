@@ -205,6 +205,7 @@ def _mz_image_tag_exists(image_tag: str) -> bool:
         subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
         return True
     except subprocess.CalledProcessError as e:
+        print(f"Failed to pull image: {image}")
         return "not found: manifest unknown: manifest unknown" not in e.output
 
 
