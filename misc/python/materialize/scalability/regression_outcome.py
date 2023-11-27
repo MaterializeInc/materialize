@@ -12,7 +12,7 @@ from materialize.scalability.df.df_totals import (
     DfTotalsExtended,
     concat_df_totals_extended,
 )
-from materialize.scalability.regression import Regression
+from materialize.scalability.scalability_change import Regression
 
 
 class RegressionOutcome:

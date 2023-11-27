@@ -16,7 +16,7 @@ from materialize.scalability.df.df_wrapper_base import (
     concat_df_wrapper_data,
 )
 from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.regression import Regression
+from materialize.scalability.scalability_change import Regression
 
 
 class DfTotalsBase(DfWrapperBase):
