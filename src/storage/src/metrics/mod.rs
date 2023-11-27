@@ -14,3 +14,4 @@ pub mod kafka;
 pub mod postgres;
 pub mod sink;
 pub mod source;
+pub mod upsert;
