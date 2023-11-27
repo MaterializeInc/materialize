@@ -713,7 +713,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                                         None
                                     }
                                 } else {
-                                    tracing::error!(
+                                    // `fetch_service_metrics` gets the `disk_limit` from the
+                                    // `service_infos`, which can be _more_ up-to-date than the
+                                    // actual replica when it is altered, so we warn instead of
+                                    // error. This is the same as the warning above about not
+                                    // finding the containers above, which could occur when the
+                                    // `scale` is being altered.
+                                    tracing::warn!(
                                         "disk capacity {} is larger than the disk limit {} ?",
                                         disk_capacity,
                                         disk_limit.0
