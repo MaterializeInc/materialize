@@ -47,7 +47,7 @@ impl Metrics {
                 help: "Count of transactions committed.",
             )),
             snapshot_latency_duration_seconds: registry.register(metric!(
-                name: "catalog_snapshot_latency",
+                name: "catalog_snapshot_latency_seconds",
                 help: "Latency for fetching a snapshot of the durable catalog.",
             )),
             snapshots_taken: registry.register(metric!(
