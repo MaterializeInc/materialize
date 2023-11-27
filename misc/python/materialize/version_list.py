@@ -14,6 +14,7 @@ from pathlib import Path
 import frontmatter
 
 from materialize import git
+from materialize.git import get_version_tags
 from materialize.mz_version import MzVersion
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
@@ -33,6 +34,34 @@ INVALID_VERSIONS = {
     MzVersion.parse_mz("v0.57.5"),
     MzVersion.parse_mz("v0.57.6"),
 }
+
+
+def get_previous_mz_version(
+    version: MzVersion, excluded_versions: set[MzVersion] | None = None
+) -> MzVersion:
+    if excluded_versions is None:
+        excluded_versions = set()
+
+    if version.prerelease is not None and len(version.prerelease) > 0:
+        # simply drop the prerelease, do not try to find a decremented version
+        found_version = MzVersion.create(version.major, version.minor, version.patch)
+
+        if found_version not in excluded_versions:
+            return found_version
+        else:
+            # start searching with this version
+            version = found_version
+
+    all_versions: list[MzVersion] = get_version_tags(version_type=type(version))
+    all_suitable_previous_versions = [
+        v
+        for v in all_versions
+        if v < version
+        and (v.prerelease is None or len(v.prerelease) == 0)
+        and v not in INVALID_VERSIONS
+        and v not in excluded_versions
+    ]
+    return max(all_suitable_previous_versions)
 
 
 class VersionList:

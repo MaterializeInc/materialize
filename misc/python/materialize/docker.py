@@ -12,6 +12,7 @@ import subprocess
 
 from materialize import buildkite, git
 from materialize.mz_version import MzVersion
+from materialize.version_list import get_previous_mz_version
 
 """
 Git revisions that are based on commits listed as keys require at least the version specified in the value.
@@ -149,7 +150,7 @@ def get_previous_published_version(release_version: MzVersion) -> MzVersion:
     excluded_versions = set()
 
     while True:
-        previous_published_version = git.get_previous_version(
+        previous_published_version = get_previous_mz_version(
             release_version, excluded_versions=excluded_versions
         )
 
