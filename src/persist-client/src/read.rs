@@ -213,26 +213,12 @@ where
     /// is a bit subtle). Also, explicit expiry allows for control over when it
     /// happens.
     pub async fn expire(mut self) {
-        self.snapshot.take();
-        self.listen.expire().await;
-    }
-}
-
-impl<K, V, T, D> Drop for Subscribe<K, V, T, D>
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
-{
-    fn drop(&mut self) {
-        // Return all leased parts from the snapshot to ensure they don't panic
-        // if dropped.
         if let Some(parts) = self.snapshot.take() {
             for part in parts {
                 self.return_leased_part(part)
             }
         }
+        self.listen.expire().await;
     }
 }
 
