@@ -55,7 +55,7 @@ impl Metrics {
                 help: "Count of snapshots taken.",
             )),
             sync_latency_duration_seconds: registry.register(metric!(
-                name: "catalog_sync_latency",
+                name: "catalog_sync_latency_seconds",
                 help: "Latency for syncing the in-memory state of the durable catalog with the persisted contents.",
             )),
             syncs: registry.register(metric!(
