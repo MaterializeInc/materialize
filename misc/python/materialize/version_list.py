@@ -36,6 +36,30 @@ INVALID_VERSIONS = {
 }
 
 
+def get_all_mz_versions() -> list[MzVersion]:
+    return [
+        version
+        for version in get_version_tags(version_type=MzVersion)
+        if version not in INVALID_VERSIONS
+    ]
+
+
+def get_all_minor_mz_versions() -> list[MzVersion]:
+    """Return the latest patch version for every minor version."""
+
+    # sorted in descending order
+    all_versions = get_all_mz_versions()
+    minor_versions: dict[str, MzVersion] = {}
+
+    for version in all_versions:
+        minor_version = f"{version.major}.{version.minor}"
+        if minor_version not in minor_versions.keys():
+            minor_versions[minor_version] = version
+
+    assert len(minor_versions) > 0
+    return sorted(minor_versions.values())
+
+
 def get_previous_mz_version(
     version: MzVersion, excluded_versions: set[MzVersion] | None = None
 ) -> MzVersion:

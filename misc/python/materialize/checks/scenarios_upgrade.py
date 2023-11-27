@@ -17,11 +17,10 @@ from materialize.checks.mzcompose_actions import (
     UseClusterdCompute,
 )
 from materialize.checks.scenarios import Scenario
+from materialize.docker import get_published_minor_mz_versions
 from materialize.mz_version import MzVersion
-from materialize.version_list import VersionsFromDocs
 
-version_list = VersionsFromDocs()
-minor_versions = version_list.minor_versions()
+minor_versions = get_published_minor_mz_versions(limit=4)
 previous_version, last_version = minor_versions[-2:]
 
 
@@ -119,7 +118,7 @@ class UpgradeEntireMzFourVersions(Scenario):
 
     def actions(self) -> list[Action]:
         print(
-            f"Upgrading going through {minor_versions[-4]} -> {minor_versions[-3]} -> {minor_versions[-2]} -> {minor_versions[-1]}"
+            f"Upgrading going through {minor_versions[-4]} -> {minor_versions[-3]} -> {previous_version} -> {last_version}"
         )
         return [
             StartMz(self, tag=minor_versions[-4]),
@@ -128,10 +127,10 @@ class UpgradeEntireMzFourVersions(Scenario):
             StartMz(self, tag=minor_versions[-3]),
             Manipulate(self, phase=1),
             KillMz(),
-            StartMz(self, tag=minor_versions[-2]),
+            StartMz(self, tag=previous_version),
             Manipulate(self, phase=2),
             KillMz(),
-            StartMz(self, tag=minor_versions[-1]),
+            StartMz(self, tag=last_version),
             KillMz(),
             StartMz(self, tag=None),
             Validate(self),

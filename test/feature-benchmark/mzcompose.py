@@ -15,6 +15,7 @@ import uuid
 from textwrap import dedent
 
 from materialize import docker
+from materialize.docker import get_latest_published_version
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
@@ -56,7 +57,6 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
-from materialize.version_list import VersionsFromDocs
 
 #
 # Global feature benchmark thresholds and termination conditions
@@ -270,7 +270,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--other-tag",
         metavar="TAG",
         type=str,
-        default=os.getenv("OTHER_TAG", str(VersionsFromDocs().all_versions()[-1])),
+        default=os.getenv("OTHER_TAG", str(get_latest_published_version())),
         help="'Other' Materialize container tag to benchmark. If not provided, the last released Mz version will be used.",
     )
 

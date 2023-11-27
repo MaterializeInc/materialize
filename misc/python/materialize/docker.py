@@ -12,7 +12,7 @@ import subprocess
 
 from materialize import buildkite, git
 from materialize.mz_version import MzVersion
-from materialize.version_list import get_previous_mz_version
+from materialize.version_list import get_all_minor_mz_versions, get_previous_mz_version
 
 """
 Git revisions that are based on commits listed as keys require at least the version specified in the value.
@@ -159,6 +159,20 @@ def get_previous_published_version(release_version: MzVersion) -> MzVersion:
         else:
             print(f"Skipping version {previous_published_version} (image not found)")
             excluded_versions.add(previous_published_version)
+
+
+def get_published_minor_mz_versions(limit: int | None = None) -> list[MzVersion]:
+    minor_mz_versions = get_all_minor_mz_versions()
+    versions = []
+
+    for v in minor_mz_versions:
+        if image_of_release_version_exists(v):
+            versions.append(v)
+
+        if limit is not None and len(versions) == limit:
+            break
+
+    return versions
 
 
 def _get_override_commit_instead_of_version(

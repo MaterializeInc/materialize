@@ -21,13 +21,13 @@ from materialize.checks.executors import CloudtestExecutor
 from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.wait import wait
+from materialize.docker import get_latest_published_version
 from materialize.mz_version import MzVersion
 from materialize.util import all_subclasses
-from materialize.version_list import VersionsFromDocs
 
 LOGGER = logging.getLogger(__name__)
 
-LAST_RELEASED_VERSION = VersionsFromDocs().minor_versions()[-1]
+LAST_RELEASED_VERSION = get_latest_published_version()
 
 
 class CloudtestUpgrade(Scenario):
