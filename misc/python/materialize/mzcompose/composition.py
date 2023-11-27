@@ -778,6 +778,12 @@ class Composition:
                 "Sanity Restart skipped because Mz not in services or `sanity_restart` label not set"
             )
 
+    def capture_logs(self) -> None:
+        # Capture logs into services.log since they will be lost otherwise
+        # after dowing a composition.
+        with open(MZ_ROOT / "services.log", "a") as f:
+            self.invoke("logs", "--no-color", capture=f)
+
     def down(
         self,
         destroy_volumes: bool = True,
@@ -796,12 +802,7 @@ class Composition:
         """
         if sanity_restart_mz:
             self.sanity_restart_mz()
-
-        # Capture logs into services.log since they will be lost otherwise
-        # after dowing a composition.
-        with open(MZ_ROOT / "services.log", "a") as f:
-            self.invoke("logs", "--no-color", capture=f)
-
+        self.capture_logs()
         self.invoke(
             "down",
             *(["--volumes"] if destroy_volumes else []),
@@ -863,6 +864,7 @@ class Composition:
                 service. Note that this does not destroy any named volumes
                 attached to the service.
         """
+        self.capture_logs()
         self.invoke(
             "rm",
             "--force",
