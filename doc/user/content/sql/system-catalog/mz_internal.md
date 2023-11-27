@@ -806,7 +806,7 @@ The `mz_active_peeks` view describes all read queries ("peeks") that are pending
 | Field       | Type               | Meaning                                                                                                                                              |
 | ----------- | ------------------ |------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `id`        | [`uuid`]           | The ID of the peek request.                                                                                                                          |
-| `index_id`  | [`text`]           | The ID of the collection the peek is targeting. When targeting an index, this corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes). |
+| `index_id`  | [`text`]           | The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
 | `time`      | [`mz_timestamp`]   | The timestamp the peek has requested.                                                                                                                |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_active_peeks_per_worker -->
