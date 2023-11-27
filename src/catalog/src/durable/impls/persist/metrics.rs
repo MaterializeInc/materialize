@@ -30,12 +30,12 @@ impl Metrics {
     pub fn new(registry: &MetricsRegistry) -> Self {
         Self {
             transactions: registry.register(metric!(
-                name: "catalog_transactions", 
+                name: "catalog_transactions",
                 help: "Total number of started transactions.",
             )),
             transaction_commit_errors: registry.register(metric!(
-                name: "catalog_transaction_errors", 
-                help: "Total number of transaction errors.", 
+                name: "catalog_transaction_errors",
+                help: "Total number of transaction errors.",
                 var_labels: ["cause"],
             )),
             transaction_commit_latency_duration_seconds: registry.register(metric!(
