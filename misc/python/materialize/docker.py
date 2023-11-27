@@ -136,7 +136,7 @@ def get_latest_published_version() -> MzVersion:
             version_type=MzVersion, excluded_versions=excluded_versions
         )
 
-        if _image_of_release_version_exists(latest_published_version):
+        if image_of_release_version_exists(latest_published_version):
             return latest_published_version
         else:
             print(
@@ -153,7 +153,7 @@ def get_previous_published_version(release_version: MzVersion) -> MzVersion:
             release_version, excluded_versions=excluded_versions
         )
 
-        if _image_of_release_version_exists(previous_published_version):
+        if image_of_release_version_exists(previous_published_version):
             return previous_published_version
         else:
             print(f"Skipping version {previous_published_version} (image not found)")
@@ -183,7 +183,7 @@ def _get_override_commit_instead_of_version(
     return None
 
 
-def _image_of_release_version_exists(version: MzVersion) -> bool:
+def image_of_release_version_exists(version: MzVersion) -> bool:
     return _mz_image_tag_exists(_version_to_image_tag(version))
 
 
