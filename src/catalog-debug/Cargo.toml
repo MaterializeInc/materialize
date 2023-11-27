@@ -13,8 +13,10 @@ mz-adapter = { path = "../adapter" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
 mz-ore = { path = "../ore" }
+mz-storage-types = { path = "../storage-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-tls-util = { path = "../tls-util" }
+mz-secrets = { path = "../secrets" }
 mz-sql = { path = "../sql" }
 mz-stash = { path = "../stash" }
 once_cell = "1.16.0"

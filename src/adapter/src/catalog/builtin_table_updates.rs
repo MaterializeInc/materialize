@@ -580,7 +580,7 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_KAFKA_SOURCES),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::String(&kafka.group_id(id)),
+                Datum::String(&kafka.group_id(&self.config.connection_context, id)),
             ]),
             diff,
         }]
@@ -683,14 +683,7 @@ impl CatalogState {
         kafka: &KafkaConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
-        let progress_topic_holder;
-        let progress_topic = match kafka.progress_topic {
-            Some(ref topic) => Datum::String(topic),
-            None => {
-                progress_topic_holder = self.config.default_kafka_sink_progress_topic(id);
-                Datum::String(&progress_topic_holder)
-            }
-        };
+        let progress_topic = kafka.progress_topic(&self.config.connection_context, id);
         let mut row = Row::default();
         row.packer()
             .push_array(
@@ -707,7 +700,11 @@ impl CatalogState {
         let brokers = row.unpack_first();
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_KAFKA_CONNECTIONS),
-            row: Row::pack_slice(&[Datum::String(&id.to_string()), brokers, progress_topic]),
+            row: Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                brokers,
+                Datum::String(&progress_topic),
+            ]),
             diff,
         }]
     }

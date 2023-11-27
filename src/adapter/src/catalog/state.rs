@@ -12,11 +12,14 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
+use mz_secrets::InMemorySecretsController;
+use mz_storage_types::connections::ConnectionContext;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -162,6 +165,9 @@ impl CatalogState {
                 build_info: &DUMMY_BUILD_INFO,
                 timestamp_interval: Default::default(),
                 now: NOW_ZERO.clone(),
+                connection_context: ConnectionContext::for_tests(Arc::new(
+                    InMemorySecretsController::new(),
+                )),
             },
             oid_counter: Default::default(),
             cluster_replica_sizes: Default::default(),

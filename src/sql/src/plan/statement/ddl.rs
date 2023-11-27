@@ -46,8 +46,8 @@ use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionRetention, KafkaSinkFormat,
-    SinkEnvelope, StorageSinkConnection,
+    KafkaSinkConnection, KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope,
+    StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -737,7 +737,6 @@ pub fn plan_create_source(
                 topic,
                 start_offsets,
                 group_id_prefix,
-                environment_id: scx.catalog.config().environment_id.to_string(),
                 metadata_columns,
                 connection_options,
             };
@@ -2496,21 +2495,14 @@ fn kafka_sink_builder(
     envelope: SinkEnvelope,
     sink_from: GlobalId,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
-    let item = scx.get_item_by_resolved_name(&connection)?;
-    // Get Kafka connection + progress topic.
-    let (connection, progress_topic) = match item.connection()? {
-        Connection::Kafka(connection) => {
-            let id = item.id();
-            let progress_topic = connection
-                .progress_topic
-                .clone()
-                .unwrap_or_else(|| scx.catalog.config().default_kafka_sink_progress_topic(id));
-
-            (id, progress_topic)
-        }
+    // Get Kafka connection.
+    let connection_item = scx.get_item_by_resolved_name(&connection)?;
+    let connection_id = connection_item.id();
+    match connection_item.connection()? {
+        Connection::Kafka(_) => (),
         _ => sql_bail!(
             "{} is not a kafka connection",
-            scx.catalog.resolve_full_name(item.name())
+            scx.catalog.resolve_full_name(connection_item.name())
         ),
     };
 
@@ -2538,7 +2530,6 @@ fn kafka_sink_builder(
 
     let connection_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
 
-    let connection_id = item.id();
     let KafkaConfigOptionExtracted {
         topic,
         partition_count,
@@ -2643,10 +2634,6 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    let consistency_config = KafkaConsistencyConfig::Progress {
-        topic: progress_topic,
-    };
-
     if partition_count == 0 || partition_count < -1 {
         sql_bail!(
             "PARTION COUNT for sink topics must be a positive integer or -1 for broker default"
@@ -2674,10 +2661,9 @@ fn kafka_sink_builder(
 
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
         connection_id,
-        connection,
+        connection: connection_id,
         format,
         topic: topic_name,
-        consistency_config,
         partition_count,
         replication_factor,
         fuel: 10000,

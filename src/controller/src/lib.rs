@@ -120,6 +120,7 @@ use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::StorageController;
+use mz_storage_types::connections::ConnectionContext;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -159,6 +160,8 @@ pub struct ControllerConfig {
     pub persist_pubsub_url: String,
     /// Arguments for secrets readers.
     pub secrets_args: SecretsReaderCliArgs,
+    /// The connection context, to thread through to clusterd.
+    pub connection_context: ConnectionContext,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -234,7 +237,9 @@ pub struct Controller<T = mz_repr::Timestamp> {
     enable_persist_txn_tables: bool,
 
     /// Arguments for secrets readers.
-    pub secrets_args: SecretsReaderCliArgs,
+    secrets_args: SecretsReaderCliArgs,
+    /// The connection context, to thread through to clusterd.
+    connection_context: ConnectionContext,
 }
 
 impl<T> Controller<T> {
@@ -419,6 +424,12 @@ where
             persist_pubsub_url: config.persist_pubsub_url,
             enable_persist_txn_tables,
             secrets_args: config.secrets_args,
+            connection_context: config.connection_context,
         }
+    }
+
+    /// Returns the connection context installed in the controller.
+    pub fn connection_context(&self) -> &ConnectionContext {
+        &self.connection_context
     }
 }

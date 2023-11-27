@@ -19,6 +19,7 @@ use std::time::Duration;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
+use mz_storage_types::connections::ConnectionContext;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
 use tracing::{info, trace};
@@ -585,7 +586,6 @@ impl Catalog {
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
             metrics_registry,
-            secrets_reader,
             // when debugging, no reaping
             storage_usage_retention_period: None,
             state: StateConfig {
@@ -605,7 +605,7 @@ impl Catalog {
                 aws_privatelink_availability_zones: None,
                 system_parameter_sync_config: None,
                 http_host_name: None,
-                connection_context: None,
+                connection_context: ConnectionContext::for_tests(secrets_reader),
                 active_connection_count,
             },
         })
