@@ -459,8 +459,12 @@ class CreateTableAction(Action):
             return False
         table_id = exe.db.table_id
         exe.db.table_id += 1
-        table = Table(self.rng, table_id, self.rng.choice(exe.db.schemas))
-        table.create(exe)
+        schema = self.rng.choice(exe.db.schemas)
+        with schema.lock:
+            if schema not in exe.db.schemas:
+                return False
+            table = Table(self.rng, table_id, schema)
+            table.create(exe)
         exe.db.tables.append(table)
         return True
 
@@ -740,14 +744,18 @@ class CreateViewAction(Action):
         )
         if self.rng.choice([True, False]) or base_object2 == base_object:
             base_object2 = None
-        view = View(
-            self.rng,
-            view_id,
-            base_object,
-            base_object2,
-            self.rng.choice(exe.db.schemas),
-        )
-        view.create(exe)
+        schema = self.rng.choice(exe.db.schemas)
+        with schema.db.lock:
+            if schema not in exe.db.schemas:
+                return False
+            view = View(
+                self.rng,
+                view_id,
+                base_object,
+                base_object2,
+                schema,
+            )
+            view.create(exe)
         exe.db.views.append(view)
         return True
 
