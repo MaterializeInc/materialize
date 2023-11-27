@@ -78,11 +78,11 @@ class BenchmarkExecutor:
             baseline_result = None
 
         for other_endpoint in self.other_endpoints:
-            regression_outcome = self.run_and_evaluate_workload_for_endpoint(
+            comparison_outcome = self.run_and_evaluate_workload_for_endpoint(
                 workload_cls, other_endpoint, baseline_result, try_count=0
             )
 
-            self.result.add_regression(regression_outcome)
+            self.result.add_regression(comparison_outcome)
 
     def run_and_evaluate_workload_for_endpoint(
         self,
@@ -99,7 +99,7 @@ class BenchmarkExecutor:
         if self.baseline_endpoint is None or baseline_result is None:
             return None
 
-        outcome = self.result_analyzer.determine_regression_in_workload(
+        outcome = self.result_analyzer.perform_comparison_in_workload(
             workload_name,
             self.baseline_endpoint,
             other_endpoint,

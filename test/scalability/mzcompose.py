@@ -205,7 +205,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     upload_plots_to_buildkite()
 
     report_regression_result(
-        baseline_endpoint, benchmark_result.overall_regression_outcome
+        baseline_endpoint, benchmark_result.overall_comparison_outcome
     )
 
 

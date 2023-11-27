@@ -16,7 +16,7 @@ from materialize.scalability.workload_result import WorkloadResult
 
 
 class ResultAnalyzer:
-    def determine_regression_in_workload(
+    def perform_comparison_in_workload(
         self,
         workload_name: str,
         baseline_endpoint: Endpoint,

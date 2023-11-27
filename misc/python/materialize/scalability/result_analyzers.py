@@ -20,7 +20,7 @@ class DefaultResultAnalyzer(ResultAnalyzer):
     def __init__(self, max_deviation_as_percent_decimal: float):
         self.max_deviation_as_percent_decimal = max_deviation_as_percent_decimal
 
-    def determine_regression_in_workload(
+    def perform_comparison_in_workload(
         self,
         workload_name: str,
         baseline_endpoint: Endpoint,
@@ -38,11 +38,11 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             self.max_deviation_as_percent_decimal
         )
 
-        regression_outcome = ComparisonOutcome()
+        comparison_outcome = ComparisonOutcome()
         regressions = entries_exceeding_threshold.to_regressions(
             workload_name,
             other_endpoint,
         )
-        regression_outcome.regressions.extend(regressions)
-        regression_outcome.append_raw_data(entries_exceeding_threshold)
-        return regression_outcome
+        comparison_outcome.regressions.extend(regressions)
+        comparison_outcome.append_raw_data(entries_exceeding_threshold)
+        return comparison_outcome

@@ -19,18 +19,18 @@ T = TypeVar("T")
 
 @dataclass
 class BenchmarkResult:
-    overall_regression_outcome: ComparisonOutcome
+    overall_comparison_outcome: ComparisonOutcome
     df_total_by_endpoint_name_and_workload: dict[str, dict[str, DfTotals]]
     df_details_by_endpoint_name_and_workload: dict[str, dict[str, DfDetails]]
 
     def __init__(self):
-        self.overall_regression_outcome = ComparisonOutcome()
+        self.overall_comparison_outcome = ComparisonOutcome()
         self.df_total_by_endpoint_name_and_workload = dict()
         self.df_details_by_endpoint_name_and_workload = dict()
 
-    def add_regression(self, regression_outcome: ComparisonOutcome | None) -> None:
-        if regression_outcome is not None:
-            self.overall_regression_outcome.merge(regression_outcome)
+    def add_regression(self, comparison_outcome: ComparisonOutcome | None) -> None:
+        if comparison_outcome is not None:
+            self.overall_comparison_outcome.merge(comparison_outcome)
 
     def get_endpoint_names(self) -> list[str]:
         return list(self.df_total_by_endpoint_name_and_workload.keys())
