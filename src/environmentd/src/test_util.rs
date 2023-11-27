@@ -614,6 +614,7 @@ impl<'s> ConnectBuilder<'s, (), NoHandle> {
         pg_config
             .host(&Ipv4Addr::LOCALHOST.to_string())
             .user("materialize")
+            .options("--welcome_message=off")
             .application_name("environmentd_test_framework");
 
         ConnectBuilder {
@@ -693,6 +694,12 @@ impl<'s, T, H> ConnectBuilder<'s, T, H> {
     /// Set the database name for the pgwire connection.
     pub fn dbname(mut self, dbname: &str) -> Self {
         self.pg_config.dbname(dbname);
+        self
+    }
+
+    /// Set the options for the pgwire connection.
+    pub fn options(mut self, options: &str) -> Self {
+        self.pg_config.options(options);
         self
     }
 
@@ -887,7 +894,8 @@ impl TestServerWithRuntime {
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
             .port(local_addr.port())
-            .user("materialize");
+            .user("materialize")
+            .options("--welcome_message=off");
         config
     }
 
@@ -899,7 +907,8 @@ impl TestServerWithRuntime {
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
             .port(local_addr.port())
-            .user("mz_system");
+            .user("mz_system")
+            .options("--welcome_message=off");
         config
     }
 
@@ -912,6 +921,7 @@ impl TestServerWithRuntime {
             .host(&Ipv4Addr::LOCALHOST.to_string())
             .port(local_addr.port())
             .user("materialize")
+            .options("--welcome_message=off")
             .ssl_mode(tokio_postgres::config::SslMode::Disable);
         config
     }
@@ -1168,8 +1178,11 @@ pub async fn wait_for_view_population(
 // Initializes a websocket connection. Returns the init messages before the initial ReadyForQuery.
 pub fn auth_with_ws(
     ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
-    options: BTreeMap<String, String>,
+    mut options: BTreeMap<String, String>,
 ) -> Result<Vec<WebSocketResponse>, anyhow::Error> {
+    if !options.contains_key("welcome_message") {
+        options.insert("welcome_message".into(), "off".into());
+    }
     auth_with_ws_impl(
         ws,
         Message::Text(

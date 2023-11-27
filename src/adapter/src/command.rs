@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -56,9 +57,6 @@ pub enum Command {
     Startup {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
-        /// keys of settings that were set on statup, and thus should not be
-        /// overridden by defaults.
-        set_setting_keys: Vec<String>,
         user: User,
         conn_id: ConnectionId,
         secret_key: u32,
@@ -185,10 +183,10 @@ pub struct StartupResponse {
     /// A future that completes when all necessary Builtin Table writes have completed.
     #[derivative(Debug = "ignore")]
     pub write_notify: BoxFuture<'static, ()>,
-    /// Vec of (name, VarInput::Flat) tuples of session variables that should be set.
-    pub session_vars: Vec<(String, OwnedVarInput)>,
+    /// Vec of (name, VarInput::Flat) tuples of session default variables that should be set.
+    pub session_defaults: Vec<(String, Box<dyn Any + Send + Sync>)>,
     /// Vec of (name, VarInput::Flat) tuples of Role default variables that should be set.
-    pub role_vars: Vec<(String, OwnedVarInput)>,
+    pub role_defaults: Vec<(String, OwnedVarInput)>,
     pub catalog: Arc<Catalog>,
 }
 
