@@ -15,7 +15,7 @@ from materialize.scalability.df.df_totals import (
 from materialize.scalability.scalability_change import Regression
 
 
-class RegressionOutcome:
+class ComparisonOutcome:
     def __init__(
         self,
     ):
@@ -32,7 +32,7 @@ class RegressionOutcome:
 
         return "\n".join(f"* {x}" for x in self.regressions)
 
-    def merge(self, other: RegressionOutcome) -> None:
+    def merge(self, other: ComparisonOutcome) -> None:
         self.regressions.extend(other.regressions)
         self.append_raw_data(other.regression_data)
 

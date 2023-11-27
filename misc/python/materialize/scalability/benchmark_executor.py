@@ -18,13 +18,13 @@ from psycopg import Cursor
 
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.benchmark_result import BenchmarkResult
+from materialize.scalability.comparison_outcome import ComparisonOutcome
 from materialize.scalability.df import df_details_cols, df_totals_cols
 from materialize.scalability.df.df_details import DfDetails, concat_df_details
 from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.io import paths
 from materialize.scalability.operation import Operation
-from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.schema import Schema
 from materialize.scalability.workload import Workload
@@ -90,7 +90,7 @@ class BenchmarkExecutor:
         other_endpoint: Endpoint,
         baseline_result: WorkloadResult | None,
         try_count: int,
-    ) -> RegressionOutcome | None:
+    ) -> ComparisonOutcome | None:
         workload_name = workload_cls.__name__
         other_endpoint_result = self.run_workload_for_endpoint(
             other_endpoint, workload_cls()

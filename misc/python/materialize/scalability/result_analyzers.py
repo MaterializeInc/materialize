@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 
 
+from materialize.scalability.comparison_outcome import ComparisonOutcome
 from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import (
     ResultAnalyzer,
 )
@@ -27,7 +27,7 @@ class DefaultResultAnalyzer(ResultAnalyzer):
         other_endpoint: Endpoint,
         regression_baseline_result: WorkloadResult,
         other_result: WorkloadResult,
-    ) -> RegressionOutcome:
+    ) -> ComparisonOutcome:
         # tps = transactions per seconds (higher is better)
 
         merged_data = regression_baseline_result.df_totals.merge(other_result.df_totals)
@@ -38,7 +38,7 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             self.max_deviation_as_percent_decimal
         )
 
-        regression_outcome = RegressionOutcome()
+        regression_outcome = ComparisonOutcome()
         regressions = entries_exceeding_threshold.to_regressions(
             workload_name,
             other_endpoint,

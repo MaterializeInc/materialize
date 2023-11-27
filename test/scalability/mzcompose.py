@@ -22,6 +22,7 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.benchmark_executor import BenchmarkExecutor
 from materialize.scalability.benchmark_result import BenchmarkResult
+from materialize.scalability.comparison_outcome import ComparisonOutcome
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
     MaterializeContainer,
@@ -36,7 +37,6 @@ from materialize.scalability.plot.plot import (
     plot_duration_by_endpoints_for_workload,
     plot_tps_per_connections,
 )
-from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
@@ -278,7 +278,7 @@ def get_workload_classes(args: argparse.Namespace) -> list[type[Workload]]:
 
 def report_regression_result(
     baseline_endpoint: Endpoint | None,
-    outcome: RegressionOutcome,
+    outcome: ComparisonOutcome,
 ) -> None:
     if baseline_endpoint is None:
         print("No regression detection because '--regression-against' param is not set")
@@ -361,7 +361,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         )
 
 
-def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
+def upload_regressions_to_buildkite(outcome: ComparisonOutcome) -> None:
     if not outcome.has_regressions():
         return
 
