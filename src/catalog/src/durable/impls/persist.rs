@@ -575,6 +575,7 @@ impl PersistCatalogState {
     }
 
     /// Listen and apply all updates up to `target_upper`.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sync(&mut self, target_upper: Timestamp) -> Result<(), CatalogError> {
         self.metrics.syncs.inc();
         let counter = self.metrics.sync_latency_duration_seconds.clone();
@@ -584,8 +585,7 @@ impl PersistCatalogState {
             .await
     }
 
-    /// Listen and apply all updates up to `target_upper`.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), CatalogError> {
         let mut updates = Vec::new();
 
@@ -1088,7 +1088,7 @@ async fn compare_and_append(
 /// state up to, and including, `as_of`.
 ///
 /// The output is consolidated and sorted by timestamp in ascending order.
-#[tracing::instrument(level = "debug", skip(read_handle))]
+#[tracing::instrument(level = "debug", skip(read_handle, metrics))]
 async fn snapshot(
     read_handle: &mut ReadHandle<StateUpdateKind, (), Timestamp, Diff>,
     as_of: Timestamp,
@@ -1102,6 +1102,7 @@ async fn snapshot(
         .await
 }
 
+#[tracing::instrument(level = "debug", skip(read_handle))]
 async fn snapshot_inner(
     read_handle: &mut ReadHandle<StateUpdateKind, (), Timestamp, Diff>,
     as_of: Timestamp,

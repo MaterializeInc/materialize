@@ -11,8 +11,7 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
-use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{Counter, Histogram, IntCounterVec};
+use prometheus::{Counter, IntCounterVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
