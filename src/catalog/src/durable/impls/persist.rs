@@ -264,7 +264,7 @@ impl PersistHandle {
     ///
     /// The output is consolidated and sorted by timestamp in ascending order and the current upper.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn current_snapshot(&mut self) -> (Vec<StateUpdate>, Timestamp) {
+    async fn current_snapshot(&mut self) -> (&Vec<StateUpdate>, Timestamp) {
         static EMPTY_SNAPSHOT: Vec<StateUpdate> = Vec::new();
         let current_upper = self.current_upper().await;
         if current_upper != Timestamp::minimum() {
@@ -357,22 +357,23 @@ impl PersistHandle {
     /// Get all Configs.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
-    async fn get_configs(&mut self, as_of: Timestamp) -> impl Iterator<Item = Config> {
-        self.snapshot(as_of)
-            .await
-            .into_iter()
-            .rev()
-            .filter_map(|StateUpdate { kind, ts: _, diff }| {
-                soft_assert_eq!(1, diff);
+    async fn get_configs(&mut self, as_of: Timestamp) -> impl Iterator<Item = Config> + '_ {
+        self.snapshot(as_of).await.into_iter().rev().filter_map(
+            |StateUpdate { kind, ts: _, diff }| {
+                soft_assert_eq!(1, *diff);
                 match kind {
                     StateUpdateKind::Config(k, v) => {
-                        let k = k.into_rust().expect("invalid config key persisted");
-                        let v = v.into_rust().expect("invalid config value persisted");
+                        let k = k.clone().into_rust().expect("invalid config key persisted");
+                        let v = v
+                            .clone()
+                            .into_rust()
+                            .expect("invalid config value persisted");
                         Some(Config::from_key_value(k, v))
                     }
                     _ => None,
                 }
-            })
+            },
+        )
     }
 
     /// Get the user version of this instance.
@@ -385,19 +386,17 @@ impl PersistHandle {
 
     /// Get epoch at `as_of`.
     async fn get_epoch(&mut self, as_of: Timestamp) -> Epoch {
-        let epochs =
-            self.snapshot(as_of)
-                .await
-                .rev()
-                .filter_map(|StateUpdate { kind, ts: _, diff }| {
-                    soft_assert_eq!(1, diff);
-                    match kind {
-                        StateUpdateKind::Epoch(epoch) => Some(epoch),
-                        _ => None,
-                    }
-                });
+        let epochs = self.snapshot(as_of).await.into_iter().rev().filter_map(
+            |StateUpdate { kind, ts: _, diff }| {
+                soft_assert_eq!(1, *diff);
+                match kind {
+                    StateUpdateKind::Epoch(epoch) => Some(epoch),
+                    _ => None,
+                }
+            },
+        );
         // There must always be a single epoch.
-        epochs.into_element()
+        *epochs.into_element()
     }
 
     /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
