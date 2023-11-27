@@ -225,6 +225,7 @@ mod tests {
                             }
                             "expire-writer" => machine_dd::expire_writer(&mut state, args).await,
                             "fetch-batch" => machine_dd::fetch_batch(&state, args).await,
+                            "finalize" => machine_dd::finalize(&mut state, args).await,
                             "gc" => machine_dd::gc(&mut state, args).await,
                             "heartbeat-leased-reader" => {
                                 machine_dd::heartbeat_leased_reader(&mut state, args).await

@@ -1985,6 +1985,15 @@ pub mod datadriven {
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
+    pub(crate) async fn finalize(
+        datadriven: &mut MachineState,
+        _args: DirectiveArgs<'_>,
+    ) -> anyhow::Result<String> {
+        let maintenance = datadriven.machine.become_tombstone().await?;
+        datadriven.routine.push(maintenance);
+        Ok(format!("{} ok\n", datadriven.machine.seqno()))
+    }
+
     pub async fn compare_and_append(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
