@@ -124,11 +124,11 @@ impl PersistHandle {
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         let read_only = matches!(mode, Mode::Readonly);
-        let upper = self.current_upper().await;
+        let (persist_shard_readable, upper) = self.is_persist_shard_readable().await;
 
         // Fence out previous catalogs.
         let mut fence_updates = Vec::with_capacity(2);
-        let prev_epoch = if upper != Timestamp::minimum() {
+        let prev_epoch = if persist_shard_readable {
             let as_of = self.as_of(upper);
             let prev_epoch = self.get_epoch(as_of).await;
             fence_updates.push(StateUpdate {
@@ -249,14 +249,23 @@ impl PersistHandle {
 
     /// Reports if the catalog state has been initialized, and the current upper.
     async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
-        let upper = self.current_upper().await;
-        let is_initialized = if upper == Timestamp::minimum() {
+        let (persist_shard_readable, upper) = self.is_persist_shard_readable().await;
+        let is_initialized = if !persist_shard_readable {
             false
         } else {
             let as_of = self.as_of(upper);
+            // Configs are readable using any catalog version since they can't be migrated, so they
+            // can be used to tell if the catalog is populated.
             self.get_configs(as_of).await.next().is_some()
         };
         (is_initialized, upper)
+    }
+
+    /// Reports if the persist shard can be read at some time, and the current upper. A persist
+    /// shard can only be read once it's been written to at least once.
+    async fn is_persist_shard_readable(&mut self) -> (bool, Timestamp) {
+        let upper = self.current_upper().await;
+        (upper > Timestamp::minimum(), upper)
     }
 
     /// Generates a [`Vec<StateUpdate>`] that contain all updates to the catalog
@@ -266,8 +275,8 @@ impl PersistHandle {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn current_snapshot(&mut self) -> (&Vec<StateUpdate>, Timestamp) {
         static EMPTY_SNAPSHOT: Vec<StateUpdate> = Vec::new();
-        let current_upper = self.current_upper().await;
-        if current_upper != Timestamp::minimum() {
+        let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
+        if persist_shard_readable {
             let as_of = self.as_of(current_upper);
             let snapshot = self.snapshot(as_of).await;
             (snapshot, current_upper)
@@ -323,8 +332,8 @@ impl PersistHandle {
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
     async fn get_current_config(&mut self, key: &str) -> Option<u64> {
-        let current_upper = self.current_upper().await;
-        if current_upper != Timestamp::minimum() {
+        let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
+        if persist_shard_readable {
             let as_of = self.as_of(current_upper);
             self.get_config(key, as_of).await
         } else {
@@ -472,8 +481,8 @@ impl OpenableDurableCatalogState for PersistHandle {
 
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
-        let current_upper = self.current_upper().await;
-        if current_upper != Timestamp::minimum() {
+        let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
+        if persist_shard_readable {
             let as_of = self.as_of(current_upper);
             let snapshot = self.snapshot_unconsolidated(as_of).await;
             Ok(Trace::from_snapshot(snapshot))
