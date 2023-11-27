@@ -13,7 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
-use prometheus::{Histogram, HistogramVec, IntCounterVec, IntGaugeVec};
+use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -27,7 +27,6 @@ pub struct Metrics {
     pub storage_usage_collection_time_seconds: HistogramVec,
     pub subscribe_outputs: IntCounterVec,
     pub canceled_peeks: IntCounterVec,
-    pub persist_peek_seconds: Histogram,
     pub linearize_message_seconds: HistogramVec,
     pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_unsampled_bytes: IntCounterVec,
@@ -90,11 +89,6 @@ impl Metrics {
             canceled_peeks: registry.register(metric!(
                 name: "mz_canceled_peeks_total",
                 help: "The total number of canceled peeks since process start.",
-            )),
-            persist_peek_seconds: registry.register(metric!(
-                name: "mz_persist_peek_seconds",
-                help: "Time spent in (experimental) Persist fast-path peeks.",
-                buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
             linearize_message_seconds: registry.register(metric!(
                 name: "mz_linearize_message_seconds",

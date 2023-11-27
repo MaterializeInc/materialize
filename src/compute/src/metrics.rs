@@ -54,6 +54,8 @@ pub struct ComputeMetrics {
 
     /// Heap capacity of the shared row
     pub(crate) shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
+
+    pub(crate) persist_peek_seconds: Histogram,
 }
 
 impl ComputeMetrics {
@@ -105,7 +107,13 @@ impl ComputeMetrics {
                 name: "mz_dataflow_shared_row_heap_capacity_bytes",
                 help: "The heap capacity of the shared row.",
                 var_labels: ["worker_id"],
-            ))
+            )),
+
+            persist_peek_seconds: registry.register(metric!(
+                name: "mz_persist_peek_seconds",
+                help: "Time spent in (experimental) Persist fast-path peeks.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
         }
     }
 
