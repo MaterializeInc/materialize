@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
+use futures::future::BoxFuture;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
@@ -71,8 +72,24 @@ impl Coordinator {
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        self.catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
-            .await
+        let (result, table_updates) = self
+            .catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
+            .await?;
+        table_updates.await;
+
+        Ok(result)
+    }
+
+    /// BLAH BLAH BLAH
+    pub(crate) async fn catalog_transact_defer_table_updates(
+        &mut self,
+        session: Option<&Session>,
+        ops: Vec<catalog::Op>,
+    ) -> Result<BoxFuture<'static, ()>, AdapterError> {
+        let ((), table_updates) = self
+            .catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
+            .await?;
+        Ok(table_updates)
     }
 
     /// Same as [`Self::catalog_transact_with`] without a closure passed in.
@@ -82,7 +99,9 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        self.catalog_transact_with(conn_id, ops, |_| Ok(())).await
+        let (result, table_updates) = self.catalog_transact_with(conn_id, ops, |_| Ok(())).await?;
+        table_updates.await;
+        Ok(result)
     }
 
     /// Executes a Catalog transaction with handling if the provided `Session` is in a SQL
@@ -117,7 +136,7 @@ impl Coordinator {
         all_ops.extend(ops.clone());
 
         // Run our Catalog transaction, but abort before committing.
-        let result = self
+        let (result, table_updates) = self
             .catalog_transact_with(Some(&conn_id), all_ops.clone(), |state| {
                 // Return an error so we don't commit the Catalog Transaction, but include our
                 // updated state.
@@ -126,7 +145,8 @@ impl Coordinator {
                     new_state: state.catalog.clone(),
                 })
             })
-            .await;
+            .await?;
+        table_updates.await;
 
         match result {
             // We purposefully fail with this error to prevent committing the transaction.
@@ -160,7 +180,7 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
         f: F,
-    ) -> Result<R, AdapterError>
+    ) -> Result<(R, BoxFuture<'static, ()>), AdapterError>
     where
         F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, AdapterError>,
     {
@@ -434,12 +454,14 @@ impl Coordinator {
             })
             .await?;
 
+        // TODO
+        let builtin_updates_fut = self
+            .send_builtin_table_updates_right_now_but_dont_block(builtin_table_updates)
+            .await;
+
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            self.send_builtin_table_updates_blocking(builtin_table_updates)
-                .await;
-
             if !timeline_associations.is_empty() {
                 for (timeline, (should_be_empty, id_bundle)) in timeline_associations {
                     let became_empty =
@@ -607,7 +629,7 @@ impl Coordinator {
             "coordinator inconsistency detected"
         );
 
-        Ok(result)
+        Ok((result, builtin_updates_fut))
     }
 
     async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {

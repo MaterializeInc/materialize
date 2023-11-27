@@ -385,11 +385,15 @@ impl Coordinator {
                 async move {
                     if let Ok(response) = append_fut.await {
                         response.unwrap_or_terminate("cannot fail to apply appends");
+                        for notify in notifies {
+                            let _ = notify.send(());
+                        }
+
                         if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
                             timestamp,
                             responses,
                             write_lock_guard,
-                            notifies,
+                            vec![],
                             permit,
                         )) {
                             warn!("Server closed with non-responded writes, {e}");
@@ -485,6 +489,24 @@ impl Coordinator {
         // Avoid excessive group commits by resetting the periodic table advancement timer. The
         // group commit triggered by above will already advance all tables.
         self.advance_timelines_interval.reset();
+    }
+
+    pub(crate) async fn send_builtin_table_updates_right_now_but_dont_block(
+        &mut self,
+        updates: Vec<BuiltinTableUpdate>,
+    ) -> BoxFuture<'static, ()> {
+        let (tx, rx) = oneshot::channel();
+        self.pending_writes.push(PendingWriteTxn::System {
+            updates,
+            source: BuiltinTableUpdateSource::AsyncSystem(tx),
+        });
+        self.group_commit_initiate(None, None).await;
+
+        // Avoid excessive group commits by resetting the periodic table advancement timer. The
+        // group commit triggered by above will already advance all tables.
+        self.advance_timelines_interval.reset();
+
+        Box::pin(rx.map(|_| ()))
     }
 
     /// Submits a write to be executed during the next group commit and triggers a group commit.

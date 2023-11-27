@@ -586,8 +586,11 @@ impl Coordinator {
             item: CatalogItem::Table(table.clone()),
             owner_id: *ctx.session().current_role_id(),
         }];
-        match self.catalog_transact(Some(ctx.session()), ops).await {
-            Ok(()) => {
+        match self
+            .catalog_transact_defer_table_updates(Some(ctx.session()), ops)
+            .await
+        {
+            Ok(table_updates) => {
                 // Determine the initial validity for the table.
                 let register_ts = self.get_local_write_ts().await.timestamp;
                 if let Some(id) = ctx.extra().contents() {
@@ -610,6 +613,9 @@ impl Coordinator {
                     Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
                 )
                 .await;
+
+                // Make sure our builtin table updates complete.
+                table_updates.await;
 
                 // Advance the new table to a timestamp higher than the current
                 // read timestamp so that the table is immediately readable.
@@ -781,7 +787,7 @@ impl Coordinator {
             .await;
 
         match result {
-            Ok(()) => {}
+            Ok(((), table_updates)) => table_updates.await,
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
