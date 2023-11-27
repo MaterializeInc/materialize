@@ -40,7 +40,7 @@ impl Metrics {
             )),
             transaction_commit_latency_duration_seconds: registry.register(metric!(
                 name: "catalog_transaction_latency_seconds",
-                help: "Latency for durable catalog transactions.",
+                help: "Total latency for durable catalog transactions.",
             )),
             transactions_committed: registry.register(metric!(
                 name: "catalog_transactions_committed",
@@ -48,7 +48,7 @@ impl Metrics {
             )),
             snapshot_latency_duration_seconds: registry.register(metric!(
                 name: "catalog_snapshot_latency_seconds",
-                help: "Latency for fetching a snapshot of the durable catalog.",
+                help: "Total latency for fetching a snapshot of the durable catalog.",
             )),
             snapshots_taken: registry.register(metric!(
                 name: "catalog_snapshots_taken",
@@ -56,7 +56,7 @@ impl Metrics {
             )),
             sync_latency_duration_seconds: registry.register(metric!(
                 name: "catalog_sync_latency_seconds",
-                help: "Latency for syncing the in-memory state of the durable catalog with the persisted contents.",
+                help: "Total latency for syncing the in-memory state of the durable catalog with the persisted contents.",
             )),
             syncs: registry.register(metric!(
                 name: "catalog_syncs",
