@@ -50,3 +50,74 @@ world
 > SELECT text FROM lz4
 hello
 world
+
+$ kafka-create-topic topic=zstd compression=zstd
+
+$ kafka-ingest format=bytes topic=zstd timestamp=1
+hello
+world
+
+> CREATE SOURCE zstd
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-zstd-${testdrive.seed}')
+  FORMAT TEXT
+> SELECT text FROM zstd
+hello
+world
+
+> CREATE SOURCE zstd_fast_forwarded
+  FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-zstd-${testdrive.seed}')
+  FORMAT TEXT
+> SELECT text FROM zstd_fast_forwarded
+world
+
+# Test compression with sinks.
+
+> CREATE TABLE feed (a text)
+> INSERT INTO feed VALUES ('hello'), ('world')
+
+! CREATE SINK invalid_sink
+  FROM feed
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'pied-piper')
+  KEY (a) NOT ENFORCED
+  FORMAT JSON ENVELOPE UPSERT
+contains:KAFKA sink validation: admin client errored
+# The detail field of the error message is actually quite descriptive ("Invalid
+# value "pied-piper" for configuration property "compression.codec"), but
+# testdrive cannot assert on the detail field.
+
+> CREATE SINK none_sink
+  FROM feed
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression')
+  KEY (a) NOT ENFORCED
+  FORMAT JSON ENVELOPE UPSERT
+
+> CREATE SINK gzip_sink
+  FROM feed
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'gzip')
+  KEY (a) NOT ENFORCED
+  FORMAT JSON ENVELOPE UPSERT
+
+> CREATE SINK lz4_sink
+  FROM feed
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'lz4')
+  KEY (a) NOT ENFORCED
+  FORMAT JSON ENVELOPE UPSERT
+
+> CREATE SINK zstd_sink
+  FROM feed
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'zstd')
+  KEY (a) NOT ENFORCED
+  FORMAT JSON ENVELOPE UPSERT
+
+# The Kafka APIs do not make it possible to assess whether the compression
+# actually took place, so we settle for just validating that the data is
+# readable.
+$ kafka-verify-data format=json key=false sink=materialize.public.none_sink
+{"a": "hello"}
+{"a": "world"}
+{"a": "hello"}
+{"a": "world"}
+{"a": "hello"}
+{"a": "world"}
+{"a": "hello"}
+{"a": "world"}

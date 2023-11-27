@@ -2518,7 +2518,10 @@ fn kafka_sink_builder(
 
     // Starting offsets are allowed with feature flags mode, as they are a simple,
     // useful way to specify where to start reading a topic.
-    const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[KafkaConfigOptionName::Topic];
+    const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[
+        KafkaConfigOptionName::Topic,
+        KafkaConfigOptionName::CompressionType,
+    ];
 
     if let Some(op) = options
         .iter()

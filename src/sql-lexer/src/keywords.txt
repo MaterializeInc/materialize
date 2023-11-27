@@ -79,6 +79,7 @@ Comment
 Commit
 Committed
 Compaction
+Compression
 Compute
 Computectl
 Confluent
