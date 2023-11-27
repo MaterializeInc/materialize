@@ -213,17 +213,7 @@ def get_previous_published_version(release_version: MzVersion) -> MzVersion:
 
 
 def get_published_minor_mz_versions(limit: int | None = None) -> list[MzVersion]:
-    minor_mz_versions = get_all_minor_mz_versions()
-    versions = []
-
-    for v in minor_mz_versions:
-        if image_of_release_version_exists(v):
-            versions.append(v)
-
-        if limit is not None and len(versions) == limit:
-            break
-
-    return versions
+    return limit_to_published_versions(get_all_minor_mz_versions(), limit)
 
 
 def get_all_mz_versions() -> list[MzVersion]:
@@ -232,6 +222,25 @@ def get_all_mz_versions() -> list[MzVersion]:
         for version in get_version_tags(version_type=MzVersion)
         if version not in INVALID_VERSIONS
     ]
+
+
+def get_all_published_mz_versions(limit: int | None = None) -> list[MzVersion]:
+    return limit_to_published_versions(get_all_mz_versions(), limit)
+
+
+def limit_to_published_versions(
+    all_versions: list[MzVersion], limit: int | None = None
+) -> list[MzVersion]:
+    versions = []
+
+    for v in all_versions:
+        if image_of_release_version_exists(v):
+            versions.append(v)
+
+        if limit is not None and len(versions) == limit:
+            break
+
+    return versions
 
 
 def get_all_minor_mz_versions() -> list[MzVersion]:
