@@ -576,10 +576,11 @@ impl PersistCatalogState {
 
     /// Listen and apply all updates up to `target_upper`.
     async fn sync(&mut self, target_upper: Timestamp) -> Result<(), CatalogError> {
-        let histogram = self.metrics.sync_latency_duration_seconds.clone();
+        self.metrics.syncs.inc();
+        let counter = self.metrics.sync_latency_duration_seconds.clone();
         self.sync_inner(target_upper)
             .wall_time()
-            .observe(histogram)
+            .inc_by(counter)
             .await
     }
 
@@ -895,14 +896,15 @@ impl DurableCatalogState for PersistCatalogState {
 
             Ok(())
         }
-        let histogram = self
+        let counter = self
             .metrics
             .transaction_commit_latency_duration_seconds
             .clone();
         let res = commit_transaction_inner(self, txn_batch)
             .wall_time()
-            .observe(histogram)
+            .inc_by(counter)
             .await;
+        self.metrics.transactions_committed.inc();
         if let Err(e) = &res {
             let cause = e.to_string_with_causes();
             self.metrics
@@ -1092,10 +1094,20 @@ async fn snapshot(
     as_of: Timestamp,
     metrics: &Arc<Metrics>,
 ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
+    metrics.snapshots_taken.inc();
+    let counter = metrics.snapshot_latency_duration_seconds.clone();
+    snapshot_inner(read_handle, as_of)
+        .wall_time()
+        .inc_by(counter)
+        .await
+}
+
+async fn snapshot_inner(
+    read_handle: &mut ReadHandle<StateUpdateKind, (), Timestamp, Diff>,
+    as_of: Timestamp,
+) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
     let snapshot = read_handle
         .snapshot_and_fetch(Antichain::from_elem(as_of))
-        .wall_time()
-        .observe(metrics.snapshot_latency_duration_seconds.clone())
         .await
         .expect("we have advanced the restart_as_of by the since");
     soft_assert!(

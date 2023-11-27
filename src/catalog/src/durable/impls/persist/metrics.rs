@@ -12,15 +12,18 @@
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{Histogram, IntCounterVec};
+use prometheus::{Counter, Histogram, IntCounterVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
     pub transactions: IntCounter,
     pub transaction_commit_errors: IntCounterVec,
-    pub transaction_commit_latency_duration_seconds: Histogram,
-    pub snapshot_latency_duration_seconds: Histogram,
-    pub sync_latency_duration_seconds: Histogram,
+    pub transaction_commit_latency_duration_seconds: Counter,
+    pub transactions_committed: IntCounter,
+    pub snapshot_latency_duration_seconds: Counter,
+    pub snapshots_taken: IntCounter,
+    pub sync_latency_duration_seconds: Counter,
+    pub syncs: IntCounter,
 }
 
 impl Metrics {
@@ -39,17 +42,26 @@ impl Metrics {
             transaction_commit_latency_duration_seconds: registry.register(metric!(
                 name: "catalog_transaction_latency",
                 help: "Latency for durable catalog transactions.",
-                buckets: histogram_seconds_buckets(0.000_128, 32.0),
+            )),
+            transactions_committed: registry.register(metric!(
+                name: "catalog_transactions_committed",
+                help: "Count of transactions committed.",
             )),
             snapshot_latency_duration_seconds: registry.register(metric!(
                 name: "catalog_snapshot_latency",
                 help: "Latency for fetching a snapshot of the durable catalog.",
-                buckets: histogram_seconds_buckets(0.000_128, 32.0),
+            )),
+            snapshots_taken: registry.register(metric!(
+                name: "catalog_snapshots_taken",
+                help: "Count of snapshots taken.",
             )),
             sync_latency_duration_seconds: registry.register(metric!(
                 name: "catalog_sync_latency",
                 help: "Latency for syncing the in-memory state of the durable catalog with the persisted contents.",
-                buckets: histogram_seconds_buckets(0.000_128, 32.0),
+            )),
+            syncs: registry.register(metric!(
+                name: "catalog_syncs",
+                help: "Count of catalog syncs.",
             )),
         }
     }
