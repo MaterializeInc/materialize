@@ -42,17 +42,25 @@ use crate::extensions::arrange::{HeapSize, KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinSpec;
 use crate::render::RenderTimestamp;
-use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
+use crate::typedefs::{
+    ErrSpine, RowKeySpine, RowSpine, TraceErrHandle, TraceKeyHandle, TraceRowHandle,
+};
 
 // Local type definition to avoid the horror in signatures.
 pub(crate) type KeyValArrangement<S, K, V> =
     Arranged<S, TraceRowHandle<K, V, <S as ScopeParent>::Timestamp, Diff>>;
 pub(crate) type Arrangement<S, V> = KeyValArrangement<S, V, V>;
+pub(crate) type KeyArrangement<S, K> =
+    Arranged<S, TraceKeyHandle<K, <S as ScopeParent>::Timestamp, Diff>>;
 pub(crate) type ErrArrangement<S> =
     Arranged<S, TraceErrHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
 pub(crate) type KeyValArrangementImport<S, K, V, T> = Arranged<
     S,
     TraceEnter<TraceFrontier<TraceRowHandle<K, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
+>;
+pub(crate) type KeyArrangementImport<S, K, T> = Arranged<
+    S,
+    TraceEnter<TraceFrontier<TraceKeyHandle<K, T, Diff>>, <S as ScopeParent>::Timestamp>,
 >;
 pub(crate) type ErrArrangementImport<S, T> = Arranged<
     S,
@@ -232,7 +240,7 @@ pub enum SpecializedArrangement<S: Scope>
 where
     <S as ScopeParent>::Timestamp: Lattice + Columnation,
 {
-    RowUnit(KeyValArrangement<S, Row, ()>),
+    RowUnit(KeyArrangement<S, Row>),
     RowRow(KeyValArrangement<S, Row, Row>),
 }
 
@@ -369,7 +377,7 @@ where
     T: Timestamp + Lattice + Columnation,
     <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
 {
-    RowUnit(KeyValArrangementImport<S, Row, (), T>),
+    RowUnit(KeyArrangementImport<S, Row, T>),
     RowRow(KeyValArrangementImport<S, Row, Row, T>),
 }
 
@@ -1088,7 +1096,7 @@ where
                         ),
                     );
                     let name = &format!("{} [val: empty]", name);
-                    let oks = oks.mz_arrange::<RowSpine<Row, (), _, _>>(name);
+                    let oks = oks.mz_arrange::<RowKeySpine<Row, _, _>>(name);
                     return (SpecializedArrangement::RowUnit(oks), errs);
                 }
             }

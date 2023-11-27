@@ -31,7 +31,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 
-use crate::extensions::arrange::{HeapSize, MzArrange};
+use crate::extensions::arrange::{HeapSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
@@ -350,18 +350,19 @@ where
             let m = "tried to build monotonic top-1 on non-monotonic input".to_string();
             (EvalError::Internal(m).into(), 1)
         });
-        let partial = partial.explode_one(move |(group_key, row)| {
-            (
-                group_key,
-                monoids::Top1Monoid {
-                    row,
-                    order_key: order_key.clone(),
-                },
-            )
-        });
+        let partial: KeyCollection<_, _, _> = partial
+            .explode_one(move |(group_key, row)| {
+                (
+                    group_key,
+                    monoids::Top1Monoid {
+                        row,
+                        order_key: order_key.clone(),
+                    },
+                )
+            })
+            .into();
         let result = partial
-            .map(|k| (k, ()))
-            .mz_arrange::<RowSpine<Row, _, _, _>>("Arranged MonotonicTop1 partial")
+            .mz_arrange::<RowKeySpine<Row, _, _>>("Arranged MonotonicTop1 partial [val: empty]")
             .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("MonotonicTop1", {
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
