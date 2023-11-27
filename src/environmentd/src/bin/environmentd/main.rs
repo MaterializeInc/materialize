@@ -944,7 +944,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             CatalogKind::Stash => CatalogConfig::Stash {
                 url: args.adapter_stash_url.expect("required for stash catalog"),
             },
-            CatalogKind::Persist => CatalogConfig::Persist { persist_clients },
+            CatalogKind::Persist => CatalogConfig::Persist {
+                persist_clients,
+                metrics_registry: metrics_registry.clone(),
+            },
             CatalogKind::Shadow => CatalogConfig::Shadow {
                 url: args.adapter_stash_url.expect("required for shadow catalog"),
                 persist_clients,

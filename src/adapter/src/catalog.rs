@@ -533,6 +533,7 @@ impl Catalog {
             mz_catalog::durable::persist_backed_catalog_state(
                 persist_client,
                 environment_id.organization_id(),
+                &MetricsRegistry::new(),
             )
             .await,
         );

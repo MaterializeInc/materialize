@@ -82,6 +82,7 @@ use mz_catalog::durable::{
     CatalogError, DurableCatalogError, OpenableDurableCatalogState,
 };
 use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NOW_ZERO;
 use mz_persist_client::PersistClient;
 use mz_stash::DebugStashFactory;
@@ -109,12 +110,24 @@ async fn test_stash_debug() {
 async fn test_persist_debug() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_openable_state1 =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state2 =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state3 =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let persist_openable_state1 = persist_backed_catalog_state(
+        persist_client.clone(),
+        organization_id,
+        &MetricsRegistry::new(),
+    )
+    .await;
+    let persist_openable_state2 = persist_backed_catalog_state(
+        persist_client.clone(),
+        organization_id,
+        &MetricsRegistry::new(),
+    )
+    .await;
+    let persist_openable_state3 = persist_backed_catalog_state(
+        persist_client.clone(),
+        organization_id,
+        &MetricsRegistry::new(),
+    )
+    .await;
 
     test_debug(
         "persist",

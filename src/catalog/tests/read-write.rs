@@ -87,6 +87,7 @@ use mz_catalog::durable::{
     USER_ITEM_ALLOC_KEY,
 };
 use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistClient;
 use mz_proto::RustType;
@@ -113,9 +114,15 @@ async fn test_stash_confirm_leadership() {
 async fn test_persist_confirm_leadership() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let openable_state1 =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let openable_state2 = persist_backed_catalog_state(persist_client, organization_id).await;
+    let openable_state1 = persist_backed_catalog_state(
+        persist_client.clone(),
+        organization_id,
+        &MetricsRegistry::new(),
+    )
+    .await;
+    let openable_state2 =
+        persist_backed_catalog_state(persist_client, organization_id, &MetricsRegistry::new())
+            .await;
     test_confirm_leadership(openable_state1, openable_state2).await;
 }
 
@@ -168,8 +175,12 @@ async fn test_stash_get_and_prune_storage_usage() {
 async fn test_persist_get_and_prune_storage_usage() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let openable_state =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let openable_state = persist_backed_catalog_state(
+        persist_client.clone(),
+        organization_id,
+        &MetricsRegistry::new(),
+    )
+    .await;
     test_get_and_prune_storage_usage(openable_state).await;
 }
 
@@ -230,8 +241,12 @@ async fn test_stash_timestamps() {
 async fn test_persist_timestamps() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let openable_state =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let openable_state = persist_backed_catalog_state(
+        persist_client.clone(),
+        organization_id,
+        &MetricsRegistry::new(),
+    )
+    .await;
     test_timestamps(openable_state).await;
 }
 
@@ -280,8 +295,12 @@ async fn test_stash_allocate_id() {
 async fn test_persist_allocate_id() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let openable_state =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let openable_state = persist_backed_catalog_state(
+        persist_client.clone(),
+        organization_id,
+        &MetricsRegistry::new(),
+    )
+    .await;
     test_allocate_id(openable_state).await;
 }
 
@@ -327,8 +346,12 @@ async fn test_stash_audit_logs() {
 async fn test_persist_audit_logs() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let openable_state =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let openable_state = persist_backed_catalog_state(
+        persist_client.clone(),
+        organization_id,
+        &MetricsRegistry::new(),
+    )
+    .await;
     test_audit_logs(openable_state).await;
 }
 
@@ -395,8 +418,12 @@ async fn test_stash_items() {
 async fn test_persist_items() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let openable_state =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let openable_state = persist_backed_catalog_state(
+        persist_client.clone(),
+        organization_id,
+        &MetricsRegistry::new(),
+    )
+    .await;
     test_items(openable_state).await;
 }
 

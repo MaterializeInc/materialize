@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod metrics;
 mod state_update;
 
 use std::collections::BTreeMap;
@@ -21,6 +22,8 @@ use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_ore::error::ErrorExt;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{soft_assert, soft_assert_eq};
@@ -38,6 +41,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
+use crate::durable::impls::persist::metrics::Metrics;
 use crate::durable::impls::persist::state_update::StateUpdateKindSchema;
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
 use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, USER_VERSION_KEY};
@@ -83,6 +87,8 @@ pub struct PersistHandle {
     shard_id: ShardId,
     /// Cache of the most recent catalog snapshot.
     snapshot_cache: Option<(Timestamp, Vec<StateUpdate>)>,
+    /// Metrics for the persist catalog.
+    metrics: Arc<Metrics>,
 }
 
 impl PersistHandle {
@@ -96,7 +102,11 @@ impl PersistHandle {
 
     /// Create a new [`PersistHandle`] to the catalog state associated with `organization_id`.
     #[tracing::instrument(level = "debug", skip(persist_client))]
-    pub(crate) async fn new(persist_client: PersistClient, organization_id: Uuid) -> PersistHandle {
+    pub(crate) async fn new(
+        persist_client: PersistClient,
+        organization_id: Uuid,
+        registry: &MetricsRegistry,
+    ) -> PersistHandle {
         const SEED: usize = 1;
         let shard_id = Self::shard_id(organization_id, SEED);
         debug!(?shard_id, "new persist backed catalog state");
@@ -109,12 +119,14 @@ impl PersistHandle {
             )
             .await
             .expect("invalid usage");
+        let metrics = Arc::new(Metrics::new(registry));
         PersistHandle {
             write_handle,
             read_handle,
             persist_client,
             shard_id,
             snapshot_cache: None,
+            metrics,
         }
     }
 
@@ -222,6 +234,7 @@ impl PersistHandle {
             // Initialize empty in-memory state.
             snapshot: Snapshot::empty(),
             fence: Some(Fence { prev_epoch }),
+            metrics: self.metrics,
         };
 
         let txn = if is_initialized {
@@ -310,7 +323,9 @@ impl PersistHandle {
         match &self.snapshot_cache {
             Some((cached_as_of, _)) if as_of == *cached_as_of => {}
             _ => {
-                let snapshot: Vec<_> = snapshot(&mut self.read_handle, as_of).await.collect();
+                let snapshot: Vec<_> = snapshot(&mut self.read_handle, as_of, &self.metrics)
+                    .await
+                    .collect();
                 self.snapshot_cache = Some((as_of, snapshot));
             }
         }
@@ -504,6 +519,8 @@ pub struct PersistCatalogState {
     /// `Some` indicates that we need to fence the previous catalog, None indicates that we've
     /// already fenced the previous catalog.
     fence: Option<Fence>,
+    /// Metrics for the persist catalog.
+    metrics: Arc<Metrics>,
 }
 
 impl PersistCatalogState {
@@ -533,7 +550,7 @@ impl PersistCatalogState {
     ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
         let mut read_handle = self.read_handle().await;
         let as_of = as_of(&read_handle, self.upper);
-        let snapshot = snapshot(&mut read_handle, as_of).await;
+        let snapshot = snapshot(&mut read_handle, as_of, &self.metrics).await;
         read_handle.expire().await;
         snapshot
     }
@@ -558,8 +575,17 @@ impl PersistCatalogState {
     }
 
     /// Listen and apply all updates up to `target_upper`.
-    #[tracing::instrument(level = "debug", skip_all)]
     async fn sync(&mut self, target_upper: Timestamp) -> Result<(), CatalogError> {
+        let histogram = self.metrics.sync_latency_duration_seconds.clone();
+        self.sync_inner(target_upper)
+            .wall_time()
+            .observe(histogram)
+            .await
+    }
+
+    /// Listen and apply all updates up to `target_upper`.
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), CatalogError> {
         let mut updates = Vec::new();
 
         while self.upper < target_upper {
@@ -807,6 +833,7 @@ impl DurableCatalogState for PersistCatalogState {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
+        self.metrics.transactions.inc();
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
     }
@@ -816,50 +843,74 @@ impl DurableCatalogState for PersistCatalogState {
         &mut self,
         txn_batch: TransactionBatch,
     ) -> Result<(), CatalogError> {
-        // If the transaction is empty then we don't error, even in read-only mode. This matches the
-        // semantics that the stash uses.
-        if !txn_batch.is_empty() && self.is_read_only() {
-            return Err(DurableCatalogError::NotWritable(
-                "cannot commit a transaction in a read-only catalog".to_string(),
-            )
-            .into());
-        }
+        async fn commit_transaction_inner(
+            catalog: &mut PersistCatalogState,
+            txn_batch: TransactionBatch,
+        ) -> Result<(), CatalogError> {
+            // If the transaction is empty then we don't error, even in read-only mode. This matches the
+            // semantics that the stash uses.
+            if !txn_batch.is_empty() && catalog.is_read_only() {
+                return Err(DurableCatalogError::NotWritable(
+                    "cannot commit a transaction in a read-only catalog".to_string(),
+                )
+                .into());
+            }
 
-        let current_upper = self.upper.clone();
-        let next_upper = current_upper.step_forward();
+            let current_upper = catalog.upper.clone();
+            let next_upper = current_upper.step_forward();
 
-        let mut updates = StateUpdate::from_txn_batch(txn_batch, current_upper);
-        debug!("committing updates: {updates:?}");
+            let mut updates = StateUpdate::from_txn_batch(txn_batch, current_upper);
+            debug!("committing updates: {updates:?}");
 
-        if matches!(self.mode, Mode::Writable) {
-            // If we haven't fenced the previous catalog state, do that now.
-            if let Some(Fence { prev_epoch }) = self.fence.take() {
-                debug!(
-                    "fencing previous catalogs prev_epoch={:?} current_epoch={:?}",
-                    prev_epoch, self.epoch
-                );
-                if let Some(prev_epoch) = prev_epoch {
+            if matches!(catalog.mode, Mode::Writable) {
+                // If we haven't fenced the previous catalog state, do that now.
+                if let Some(Fence { prev_epoch }) = catalog.fence.take() {
+                    debug!(
+                        "fencing previous catalogs prev_epoch={:?} current_epoch={:?}",
+                        prev_epoch, catalog.epoch
+                    );
+                    if let Some(prev_epoch) = prev_epoch {
+                        updates.push(StateUpdate {
+                            kind: StateUpdateKind::Epoch(prev_epoch),
+                            ts: current_upper,
+                            diff: -1,
+                        });
+                    }
                     updates.push(StateUpdate {
-                        kind: StateUpdateKind::Epoch(prev_epoch),
+                        kind: StateUpdateKind::Epoch(catalog.epoch),
                         ts: current_upper,
-                        diff: -1,
+                        diff: 1,
                     });
                 }
-                updates.push(StateUpdate {
-                    kind: StateUpdateKind::Epoch(self.epoch),
-                    ts: current_upper,
-                    diff: 1,
-                });
+                catalog
+                    .compare_and_append(updates, current_upper, next_upper)
+                    .await?;
+                debug!(
+                    "commit successful, upper advanced from {current_upper:?} to {next_upper:?}",
+                );
+                catalog.sync(next_upper).await?;
+            } else if matches!(catalog.mode, Mode::Savepoint) {
+                catalog.apply_updates(updates)?;
             }
-            self.compare_and_append(updates, current_upper, next_upper)
-                .await?;
-            debug!("commit successful, upper advanced from {current_upper:?} to {next_upper:?}",);
-            self.sync(next_upper).await?;
-        } else if matches!(self.mode, Mode::Savepoint) {
-            self.apply_updates(updates)?;
-        }
 
-        Ok(())
+            Ok(())
+        }
+        let histogram = self
+            .metrics
+            .transaction_commit_latency_duration_seconds
+            .clone();
+        let res = commit_transaction_inner(self, txn_batch)
+            .wall_time()
+            .observe(histogram)
+            .await;
+        if let Err(e) = &res {
+            let cause = e.to_string_with_causes();
+            self.metrics
+                .transaction_commit_errors
+                .with_label_values(&[&cause])
+                .inc();
+        }
+        res
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1039,9 +1090,12 @@ async fn compare_and_append(
 async fn snapshot(
     read_handle: &mut ReadHandle<StateUpdateKind, (), Timestamp, Diff>,
     as_of: Timestamp,
+    metrics: &Arc<Metrics>,
 ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
     let snapshot = read_handle
         .snapshot_and_fetch(Antichain::from_elem(as_of))
+        .wall_time()
+        .observe(metrics.snapshot_latency_duration_seconds.clone())
         .await
         .expect("we have advanced the restart_as_of by the since");
     soft_assert!(
