@@ -203,6 +203,19 @@ where
     pub(crate) fn lease_returner(&self) -> &SubscriptionLeaseReturner {
         self.listen.handle.lease_returner()
     }
+
+    /// Politely expires this subscribe, releasing its lease.
+    ///
+    /// There is a best-effort impl in Drop to expire a listen that wasn't
+    /// explicitly expired with this method. When possible, explicit expiry is
+    /// still preferred because the Drop one is best effort and is dependant on
+    /// a tokio [Handle] being available in the TLC at the time of drop (which
+    /// is a bit subtle). Also, explicit expiry allows for control over when it
+    /// happens.
+    pub async fn expire(mut self) {
+        self.snapshot.take();
+        self.listen.expire().await;
+    }
 }
 
 impl<K, V, T, D> Drop for Subscribe<K, V, T, D>
@@ -441,7 +454,7 @@ where
     /// Politely expires this listen, releasing its lease.
     ///
     /// There is a best-effort impl in Drop to expire a listen that wasn't
-    /// explictly expired with this method. When possible, explicit expiry is
+    /// explicitly expired with this method. When possible, explicit expiry is
     /// still preferred because the Drop one is best effort and is dependant on
     /// a tokio [Handle] being available in the TLC at the time of drop (which
     /// is a bit subtle). Also, explicit expiry allows for control over when it
