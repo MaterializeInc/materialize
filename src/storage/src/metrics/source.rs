@@ -14,11 +14,277 @@
 //! vectors to the registry once, and then generate concrete instantiations of them for the
 //! appropriate source.
 
+use std::collections::BTreeMap;
+
+use mz_expr::PartitionId;
 use mz_ore::metric;
-use mz_ore::metrics::{IntCounter, IntCounterVec, IntGaugeVec, MetricsRegistry, UIntGaugeVec};
-use prometheus::core::{AtomicI64, GenericCounterVec};
+use mz_ore::metrics::{
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounter, IntCounterVec,
+    IntGaugeVec, MetricsRegistry, UIntGaugeVec,
+};
+use mz_repr::GlobalId;
+use mz_storage_types::sources::MzOffset;
+use prometheus::core::{AtomicI64, AtomicU64, GenericCounterVec};
 
 use super::upsert::{UpsertBackpressureMetricDefs, UpsertMetricDefs};
+
+/// Source-specific metrics in the persist sink
+pub(crate) struct SourcePersistSinkMetrics {
+    pub(crate) progress: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub(crate) row_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) row_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) error_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) error_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) processed_batches: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+}
+
+impl SourcePersistSinkMetrics {
+    /// Initialises source metrics used in the `persist_sink`.
+    pub(crate) fn new(
+        base: &SourceBaseMetrics,
+        _source_id: GlobalId,
+        parent_source_id: GlobalId,
+        worker_id: usize,
+        shard_id: &mz_persist_client::ShardId,
+        output_index: usize,
+    ) -> SourcePersistSinkMetrics {
+        let shard = shard_id.to_string();
+        SourcePersistSinkMetrics {
+            progress: base.source_specific.progress.get_delete_on_drop_gauge(vec![
+                parent_source_id.to_string(),
+                output_index.to_string(),
+                shard.clone(),
+                worker_id.to_string(),
+            ]),
+            row_inserts: base
+                .source_specific
+                .row_inserts
+                .get_delete_on_drop_counter(vec![
+                    parent_source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                    worker_id.to_string(),
+                ]),
+            row_retractions: base
+                .source_specific
+                .row_retractions
+                .get_delete_on_drop_counter(vec![
+                    parent_source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                    worker_id.to_string(),
+                ]),
+            error_inserts: base
+                .source_specific
+                .error_inserts
+                .get_delete_on_drop_counter(vec![
+                    parent_source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                    worker_id.to_string(),
+                ]),
+            error_retractions: base
+                .source_specific
+                .error_retractions
+                .get_delete_on_drop_counter(vec![
+                    parent_source_id.to_string(),
+                    output_index.to_string(),
+                    shard.clone(),
+                    worker_id.to_string(),
+                ]),
+            processed_batches: base
+                .source_specific
+                .persist_sink_processed_batches
+                .get_delete_on_drop_counter(vec![
+                    parent_source_id.to_string(),
+                    output_index.to_string(),
+                    shard,
+                    worker_id.to_string(),
+                ]),
+        }
+    }
+}
+
+/// Source-specific Prometheus metrics
+pub(crate) struct SourceMetrics {
+    /// Value of the capability associated with this source
+    pub(crate) capability: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    /// The resume_upper for a source.
+    pub(crate) resume_upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    /// Per-partition Prometheus metrics.
+    pub(crate) partition_metrics: BTreeMap<PartitionId, PartitionMetrics>,
+    /// The number of in-memory remap bindings that reclocking a time needs to iterate over.
+    pub(crate) inmemory_remap_bindings: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    source_name: String,
+    source_id: GlobalId,
+    base_metrics: SourceBaseMetrics,
+}
+
+impl SourceMetrics {
+    /// Initialises source metrics for a given (source_id, worker_id)
+    pub(crate) fn new(
+        base: &SourceBaseMetrics,
+        source_name: &str,
+        source_id: GlobalId,
+        worker_id: &str,
+    ) -> SourceMetrics {
+        let labels = &[
+            source_name.to_string(),
+            source_id.to_string(),
+            worker_id.to_string(),
+        ];
+        SourceMetrics {
+            capability: base
+                .source_specific
+                .capability
+                .get_delete_on_drop_gauge(labels.to_vec()),
+            resume_upper: base
+                .source_specific
+                .resume_upper
+                .get_delete_on_drop_gauge(vec![source_id.to_string()]),
+            inmemory_remap_bindings: base
+                .source_specific
+                .inmemory_remap_bindings
+                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
+            partition_metrics: Default::default(),
+            source_name: source_name.to_string(),
+            source_id,
+            base_metrics: base.clone(),
+        }
+    }
+
+    /// Log updates to which offsets / timestamps read up to.
+    pub(crate) fn record_partition_offsets(
+        &mut self,
+        offsets: BTreeMap<PartitionId, (MzOffset, mz_repr::Timestamp, i64)>,
+    ) {
+        for (partition, (offset, timestamp, count)) in offsets {
+            let metric = self
+                .partition_metrics
+                .entry(partition.clone())
+                .or_insert_with(|| {
+                    PartitionMetrics::new(
+                        &self.base_metrics,
+                        &self.source_name,
+                        self.source_id,
+                        &partition,
+                    )
+                });
+
+            metric.messages_ingested.inc_by(count);
+
+            metric.record_offset(
+                &self.source_name,
+                self.source_id,
+                &partition,
+                offset.offset,
+                i64::try_from(timestamp).expect("materialize exists after 250M AD"),
+            );
+        }
+    }
+}
+
+/// Partition-specific metrics, recorded to both Prometheus and a system table
+pub(crate) struct PartitionMetrics {
+    /// Highest offset that has been received by the source and timestamped
+    pub(crate) offset_ingested: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    /// Highest offset that has been received by the source
+    pub(crate) offset_received: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    /// Value of the highest timestamp that is closed (for which all messages have been ingested)
+    pub(crate) closed_ts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    /// Total number of messages that have been received by the source and timestamped
+    pub(crate) messages_ingested: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
+    pub(crate) last_offset: u64,
+    pub(crate) last_timestamp: i64,
+}
+
+impl PartitionMetrics {
+    /// Record the latest offset ingested high-water mark
+    fn record_offset(
+        &mut self,
+        _source_name: &str,
+        _source_id: GlobalId,
+        _partition_id: &PartitionId,
+        offset: u64,
+        timestamp: i64,
+    ) {
+        self.offset_received.set(offset);
+        self.offset_ingested.set(offset);
+        self.last_offset = offset;
+        self.last_timestamp = timestamp;
+    }
+
+    /// Initialises partition metrics for a given (source_id, partition_id)
+    pub(crate) fn new(
+        base_metrics: &SourceBaseMetrics,
+        source_name: &str,
+        source_id: GlobalId,
+        partition_id: &PartitionId,
+    ) -> PartitionMetrics {
+        let labels = &[
+            source_name.to_string(),
+            source_id.to_string(),
+            partition_id.to_string(),
+        ];
+        let base = &base_metrics.partition_specific;
+        PartitionMetrics {
+            offset_ingested: base
+                .offset_ingested
+                .get_delete_on_drop_gauge(labels.to_vec()),
+            offset_received: base
+                .offset_received
+                .get_delete_on_drop_gauge(labels.to_vec()),
+            closed_ts: base.closed_ts.get_delete_on_drop_gauge(labels.to_vec()),
+            messages_ingested: base
+                .messages_ingested
+                .get_delete_on_drop_counter(labels.to_vec()),
+            last_offset: 0,
+            last_timestamp: 0,
+        }
+    }
+}
+
+/// Source reader operator specific Prometheus metrics
+pub(crate) struct SourceReaderMetrics {
+    source_id: GlobalId,
+    base_metrics: SourceBaseMetrics,
+}
+
+impl SourceReaderMetrics {
+    /// Initialises source metrics for a given (source_id, worker_id)
+    pub(crate) fn new(base: &SourceBaseMetrics, source_id: GlobalId) -> SourceReaderMetrics {
+        SourceReaderMetrics {
+            source_id,
+            base_metrics: base.clone(),
+        }
+    }
+
+    /// Get metrics struct for offset committing.
+    pub(crate) fn offset_commit_metrics(&self) -> OffsetCommitMetrics {
+        OffsetCommitMetrics::new(&self.base_metrics, self.source_id)
+    }
+}
+
+/// Metrics about committing offsets
+pub(crate) struct OffsetCommitMetrics {
+    /// The offset-domain resume_upper for a source.
+    pub(crate) offset_commit_failures: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+}
+
+impl OffsetCommitMetrics {
+    /// Initialises partition metrics for a given (source_id, partition_id)
+    pub(crate) fn new(
+        base_metrics: &SourceBaseMetrics,
+        source_id: GlobalId,
+    ) -> OffsetCommitMetrics {
+        let base = &base_metrics.source_specific;
+        OffsetCommitMetrics {
+            offset_commit_failures: base
+                .offset_commit_failures
+                .get_delete_on_drop_counter(vec![source_id.to_string()]),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct SourceSpecificMetrics {

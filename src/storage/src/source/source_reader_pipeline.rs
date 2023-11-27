@@ -76,10 +76,10 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
-use crate::metrics::source::SourceBaseMetrics;
+use crate::metrics::source::{SourceBaseMetrics, SourceMetrics};
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
-    MaybeLength, SourceMessage, SourceMetrics, SourceOutput, SourceReaderError, SourceRender,
+    MaybeLength, SourceMessage, SourceOutput, SourceReaderError, SourceRender,
 };
 use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
 

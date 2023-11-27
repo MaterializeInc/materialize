@@ -26,6 +26,9 @@ use timely::progress::Timestamp;
 use crate::metrics::sink::SinkBaseMetrics;
 use crate::metrics::source::SourceBaseMetrics;
 
+// Note(guswynn): ordinarily these metric structs would be in the `metrics` modules, but we
+// put them here so they can be near the user-facing definitions as well.
+
 #[derive(Clone, Debug)]
 pub(crate) struct SourceStatisticsMetricsDefinitions {
     pub(crate) snapshot_committed: UIntGaugeVec,

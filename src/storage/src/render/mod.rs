@@ -212,7 +212,7 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::SourcePersistSinkMetrics;
+use crate::metrics::source::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
 mod debezium;

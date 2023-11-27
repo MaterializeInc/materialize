@@ -56,7 +56,8 @@ use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::kafka::KafkaPartitionMetrics;
-use crate::source::types::{SourceReaderMetrics, SourceRender};
+use crate::metrics::source::SourceReaderMetrics;
+use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 #[derive(Default)]

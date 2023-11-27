@@ -423,6 +423,7 @@ where
                                                 let (feedback_handle, feedback_data) =
                                                     scope.feedback(Default::default());
 
+                                                // TODO(guswynn): cleanup
                                                 let backpressure_metrics =
                                                     Some(BackpressureMetrics {
                                                         emitted_bytes: Arc::new(
