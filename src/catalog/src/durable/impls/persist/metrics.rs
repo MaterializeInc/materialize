@@ -27,21 +27,28 @@ impl Metrics {
     /// Returns a new [Metrics] instance connected to the given registry.
     pub fn new(registry: &MetricsRegistry) -> Self {
         Self {
-            transactions: registry.register(metric!(name: "catalog_transactions", help: "Total number of started transactions.")),
-            transaction_commit_errors: registry.register(metric!(name: "catalog_transaction_errors", help: "Total number of transaction errors.", var_labels: ["cause"],)),
+            transactions: registry.register(metric!(
+                name: "catalog_transactions", 
+                help: "Total number of started transactions.",
+            )),
+            transaction_commit_errors: registry.register(metric!(
+                name: "catalog_transaction_errors", 
+                help: "Total number of transaction errors.", 
+                var_labels: ["cause"],
+            )),
             transaction_commit_latency_duration_seconds: registry.register(metric!(
                 name: "catalog_transaction_latency",
-                help: "Latency for durable catalog transactions",
+                help: "Latency for durable catalog transactions.",
                 buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
             snapshot_latency_duration_seconds: registry.register(metric!(
                 name: "catalog_snapshot_latency",
-                help: "Latency for fetching a snapshot of the durable catalog",
+                help: "Latency for fetching a snapshot of the durable catalog.",
                 buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
             sync_latency_duration_seconds: registry.register(metric!(
                 name: "catalog_sync_latency",
-                help: "Latency for syncing the in-memory state of the durable catalog with the persisted contents",
+                help: "Latency for syncing the in-memory state of the durable catalog with the persisted contents.",
                 buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
         }

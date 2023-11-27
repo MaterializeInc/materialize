@@ -277,6 +277,15 @@ pub async fn persist_backed_catalog_state(
     PersistHandle::new(persist_client, organization_id, registry).await
 }
 
+/// Creates an openable durable catalog state implemented using persist that is meant to be used in
+/// tests.
+pub async fn test_persist_backed_catalog_state(
+    persist_client: PersistClient,
+    organization_id: Uuid,
+) -> PersistHandle {
+    persist_backed_catalog_state(persist_client, organization_id, &MetricsRegistry::new()).await
+}
+
 /// Creates an openable durable catalog state implemented using both the stash and persist, that
 /// compares the results. The stash results is used as the source of truth when there's a
 /// discrepancy.
@@ -286,10 +295,9 @@ pub async fn shadow_catalog_state(
     organization_id: Uuid,
 ) -> impl OpenableDurableCatalogState {
     let stash = Box::new(stash_backed_catalog_state(stash_config));
-    let persist = Box::new(
-        persist_backed_catalog_state(persist_client, organization_id, &MetricsRegistry::new())
-            .await,
-    );
+    // Shadow catalog is only used for tests, so it's OK to get a test persist catalog state.
+    let persist =
+        Box::new(test_persist_backed_catalog_state(persist_client, organization_id).await);
     OpenableShadowCatalogState { stash, persist }
 }
 

@@ -77,11 +77,10 @@
 
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
-    persist_backed_catalog_state, shadow_catalog_state, stash_backed_catalog_state,
-    test_bootstrap_args, test_stash_backed_catalog_state, CatalogError, Epoch,
+    shadow_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
+    test_persist_backed_catalog_state, test_stash_backed_catalog_state, CatalogError, Epoch,
     OpenableDurableCatalogState, StashConfig,
 };
-use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
 use mz_proto::RustType;
@@ -115,15 +114,10 @@ async fn test_debug_stash_is_initialized() {
 async fn test_persist_is_initialized() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_openable_state1 = persist_backed_catalog_state(
-        persist_client.clone(),
-        organization_id,
-        &MetricsRegistry::new(),
-    )
-    .await;
+    let persist_openable_state1 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
-        persist_backed_catalog_state(persist_client, organization_id, &MetricsRegistry::new())
-            .await;
+        test_persist_backed_catalog_state(persist_client, organization_id).await;
     test_is_initialized(persist_openable_state1, persist_openable_state2).await;
 }
 
@@ -178,15 +172,10 @@ async fn test_debug_stash_get_deployment_generation() {
 async fn test_persist_get_deployment_generation() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_openable_state1 = persist_backed_catalog_state(
-        persist_client.clone(),
-        organization_id,
-        &MetricsRegistry::new(),
-    )
-    .await;
+    let persist_openable_state1 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
-        persist_backed_catalog_state(persist_client, organization_id, &MetricsRegistry::new())
-            .await;
+        test_persist_backed_catalog_state(persist_client, organization_id).await;
     test_get_deployment_generation(persist_openable_state1, persist_openable_state2).await;
 }
 
@@ -260,27 +249,14 @@ async fn test_debug_stash_open_savepoint() {
 async fn test_persist_open_savepoint() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_openable_state1 = persist_backed_catalog_state(
-        persist_client.clone(),
-        organization_id,
-        &MetricsRegistry::new(),
-    )
-    .await;
-    let persist_openable_state2 = persist_backed_catalog_state(
-        persist_client.clone(),
-        organization_id,
-        &MetricsRegistry::new(),
-    )
-    .await;
-    let persist_openable_state3 = persist_backed_catalog_state(
-        persist_client.clone(),
-        organization_id,
-        &MetricsRegistry::new(),
-    )
-    .await;
+    let persist_openable_state1 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let persist_openable_state2 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let persist_openable_state3 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state4 =
-        persist_backed_catalog_state(persist_client, organization_id, &MetricsRegistry::new())
-            .await;
+        test_persist_backed_catalog_state(persist_client, organization_id).await;
     test_open_savepoint(
         persist_openable_state1,
         persist_openable_state2,
@@ -394,21 +370,12 @@ async fn test_debug_stash_open_read_only() {
 async fn test_persist_open_read_only() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_openable_state1 = persist_backed_catalog_state(
-        persist_client.clone(),
-        organization_id,
-        &MetricsRegistry::new(),
-    )
-    .await;
-    let persist_openable_state2 = persist_backed_catalog_state(
-        persist_client.clone(),
-        organization_id,
-        &MetricsRegistry::new(),
-    )
-    .await;
+    let persist_openable_state1 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let persist_openable_state2 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state3 =
-        persist_backed_catalog_state(persist_client, organization_id, &MetricsRegistry::new())
-            .await;
+        test_persist_backed_catalog_state(persist_client, organization_id).await;
     test_open_read_only(
         persist_openable_state1,
         persist_openable_state2,
@@ -544,21 +511,12 @@ async fn test_debug_stash_open() {
 async fn test_persist_open() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_openable_state1 = persist_backed_catalog_state(
-        persist_client.clone(),
-        organization_id,
-        &MetricsRegistry::new(),
-    )
-    .await;
-    let persist_openable_state2 = persist_backed_catalog_state(
-        persist_client.clone(),
-        organization_id,
-        &MetricsRegistry::new(),
-    )
-    .await;
+    let persist_openable_state1 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let persist_openable_state2 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state3 =
-        persist_backed_catalog_state(persist_client, organization_id, &MetricsRegistry::new())
-            .await;
+        test_persist_backed_catalog_state(persist_client, organization_id).await;
     test_open(
         persist_openable_state1,
         persist_openable_state2,

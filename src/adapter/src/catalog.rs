@@ -530,10 +530,9 @@ impl Catalog {
         environment_id: EnvironmentId,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(
-            mz_catalog::durable::persist_backed_catalog_state(
+            mz_catalog::durable::test_persist_backed_catalog_state(
                 persist_client,
                 environment_id.organization_id(),
-                &MetricsRegistry::new(),
             )
             .await,
         );
