@@ -12,8 +12,6 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-import frontmatter
-
 from materialize import buildkite, git
 from materialize.docker import (
     commit_to_image_tag,
@@ -295,97 +293,3 @@ def get_previous_mz_version(
         and v not in excluded_versions
     ]
     return max(all_suitable_previous_versions)
-
-
-class VersionList:
-    def __init__(self) -> None:
-        self.versions: list[MzVersion]
-        assert False
-
-    def all_versions(self) -> list[MzVersion]:
-        return self.versions
-
-    def minor_versions(self) -> list[MzVersion]:
-        """Return the latest patch version for every minor version."""
-        minor_versions = {}
-        for version in self.versions:
-            minor_versions[f"{version.major}.{version.minor}"] = version
-
-        assert len(minor_versions) > 0
-        return sorted(minor_versions.values())
-
-    def patch_versions(self, minor_version: MzVersion) -> list[MzVersion]:
-        """Return all patch versions within the given minor version."""
-        patch_versions = []
-        for version in self.versions:
-            if (
-                version.major == minor_version.major
-                and version.minor == minor_version.minor
-            ):
-                patch_versions.append(version)
-
-        assert len(patch_versions) > 0
-        return sorted(patch_versions)
-
-
-class VersionsFromGit(VersionList):
-    """Materialize versions as tagged in Git.
-
-    >>> len(VersionsFromGit().all_versions()) > 0
-    True
-
-    >>> len(VersionsFromGit().minor_versions()) > 0
-    True
-
-    >>> len(VersionsFromGit().patch_versions(minor_version=MzVersion.parse_mz("v0.52.0")))
-    4
-
-    >>> min(VersionsFromGit().all_versions())
-    MzVersion(major=0, minor=1, patch=0, prerelease='rc', build=None)
-    """
-
-    def __init__(self) -> None:
-        self.versions = list(
-            set(git.get_version_tags(version_type=MzVersion, fetch=True))
-            - INVALID_VERSIONS
-        )
-        self.versions.sort()
-
-
-class VersionsFromDocs(VersionList):
-    """Materialize versions as listed in doc/user/content/versions
-
-    Only versions that declare `versiond: true` in their
-    frontmatter are considered.
-
-    >>> len(VersionsFromDocs().all_versions()) > 0
-    True
-
-    >>> len(VersionsFromDocs().minor_versions()) > 0
-    True
-
-    >>> len(VersionsFromDocs().patch_versions(minor_version=MzVersion.parse_mz("v0.52.0")))
-    4
-
-    >>> min(VersionsFromDocs().all_versions())
-    MzVersion(major=0, minor=27, patch=0, prerelease=None, build=None)
-    """
-
-    def __init__(self) -> None:
-        files = Path(MZ_ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
-        self.versions = []
-        for f in files:
-            base = f.stem
-            metadata = frontmatter.load(f)
-            if not metadata.get("released", False):
-                continue
-
-            current_patch = metadata.get("patch", 0)
-
-            for patch in range(current_patch + 1):
-                version = MzVersion.parse_mz(f"{base}.{patch}")
-                if version not in INVALID_VERSIONS:
-                    self.versions.append(version)
-
-        assert len(self.versions) > 0
-        self.versions.sort()
