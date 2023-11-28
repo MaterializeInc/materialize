@@ -49,7 +49,9 @@ class Uint8MixedWithTypedArgsValidator(NumericArgsValidator):
             return False
 
         index_of_uint8 = self.index_of_type_with_properties(
-            args, lambda number_type: number_type.identifier == UINT8_TYPE_IDENTIFIER
+            args,
+            lambda number_type: number_type.internal_identifier
+            == UINT8_TYPE_IDENTIFIER,
         )
         index_of_signed = self.index_of_type_with_properties(
             args, lambda number_type: number_type.is_signed

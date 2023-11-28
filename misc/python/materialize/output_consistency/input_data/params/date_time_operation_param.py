@@ -61,7 +61,7 @@ class DateTimeOperationParam(OperationParam):
     ) -> bool:
         return (
             isinstance(data_type, DateTimeDataType)
-            and data_type.identifier in self.supported_type_identifiers
+            and data_type.internal_identifier in self.supported_type_identifiers
         )
 
     def might_support_type_as_input_assuming_category_matches(
@@ -93,5 +93,5 @@ class TimeIntervalOperationParam(OperationParam):
     ) -> bool:
         return (
             isinstance(data_type, DateTimeDataType)
-            and data_type.identifier == INTERVAL_TYPE_IDENTIFIER
+            and data_type.internal_identifier == INTERVAL_TYPE_IDENTIFIER
         )
