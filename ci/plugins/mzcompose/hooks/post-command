@@ -108,7 +108,7 @@ artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 buildkite-agent artifact upload "$artifacts_str"
 bin/ci-builder run stable bin/ci-logged-errors-detect "${artifacts[@]}"
 
-if [ ! -s services.log ] && [ "$BUILDKITE_STEP_KEY" != "persist-maelstrom" ]; then
-    echo "services.log is empty"
+if [ ! -s services.log ] && [ "$BUILDKITE_STEP_KEY" != "persist-maelstrom" ] && [ "$BUILDKITE_STEP_KEY" != "persist-maelstrom-single-node" ] && [ "$BUILDKITE_STEP_KEY" != "mz-e2e" ] && [ "$BUILDKITE_STEP_KEY" != "version-consistency" ]; then
+    echo "+++ services.log is empty, failing"
     exit 1
 fi
