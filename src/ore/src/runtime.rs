@@ -21,8 +21,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tokio::runtime::{Builder, Runtime};
 
-/// The default in tokio: <https://docs.rs/tokio/latest/tokio/runtime/struct.Builder.html#method.thread_stack_size>
-const THREAD_STACK_SIZE_DEFAULT: usize = 2 * 1024 * 1024;
+/// 8MiB, 4x the default in tokio: <https://docs.rs/tokio/latest/tokio/runtime/struct.Builder.html#method.thread_stack_size>
+const THREAD_STACK_SIZE_DEFAULT: usize = 8 * 1024 * 1024;
 
 /// Sets up a tokio runtime with a reasonable set of defaults.
 pub fn build_tokio_runtime(
