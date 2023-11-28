@@ -588,6 +588,7 @@ where
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let enable_persist_txn_tables = self.enable_persist_txn_tables;
         let secrets_args = self.secrets_args.to_flags();
+        let tokio_thread_stack_size = self.tokio_thread_stack_size;
         let service = self
             .orchestrator
             .ensure_service(
@@ -615,6 +616,13 @@ where
                             args.push(format!(
                                 "--announce-memory-limit={}",
                                 memory_limit.0.as_u64()
+                            ));
+                        }
+
+                        if let Some(tokio_thread_stack_size) = tokio_thread_stack_size {
+                            args.push(format!(
+                                "--tokio-worker-thread-stack-size={}",
+                                tokio_thread_stack_size
                             ));
                         }
 

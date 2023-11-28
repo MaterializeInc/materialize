@@ -906,6 +906,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             ),
             secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
         },
+        tokio_thread_stack_size: args.tokio_worker_thread_stack_size,
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
