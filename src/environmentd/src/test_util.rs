@@ -1032,17 +1032,17 @@ pub async fn create_postgres_source_with_table<'a>(
     table_name: &str,
     table_schema: &str,
     source_name: &str,
-) -> Result<
-    (
-        Client,
-        impl FnOnce(&'a Client, &'a Client) -> LocalBoxFuture<'a, Result<(), Box<dyn Error>>>,
-    ),
-    Box<dyn Error>,
-> {
+) -> (
+    Client,
+    impl FnOnce(&'a Client, &'a Client) -> LocalBoxFuture<'a, ()>,
+) {
     let postgres_url = env::var("POSTGRES_URL")
-        .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
+        .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))
+        .unwrap();
 
-    let (pg_client, connection) = tokio_postgres::connect(&postgres_url, postgres::NoTls).await?;
+    let (pg_client, connection) = tokio_postgres::connect(&postgres_url, postgres::NoTls)
+        .await
+        .unwrap();
 
     let pg_config: tokio_postgres::Config = postgres_url.parse().unwrap();
     let user = pg_config.get_user().unwrap_or("postgres");
@@ -1069,25 +1069,30 @@ pub async fn create_postgres_source_with_table<'a>(
     // Create table in Postgres with publication.
     let _ = pg_client
         .execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[])
-        .await?;
+        .await
+        .unwrap();
     let _ = pg_client
         .execute(&format!("DROP PUBLICATION IF EXISTS {source_name};"), &[])
-        .await?;
+        .await
+        .unwrap();
     let _ = pg_client
         .execute(&format!("CREATE TABLE {table_name} {table_schema};"), &[])
-        .await?;
+        .await
+        .unwrap();
     let _ = pg_client
         .execute(
             &format!("ALTER TABLE {table_name} REPLICA IDENTITY FULL;"),
             &[],
         )
-        .await?;
+        .await
+        .unwrap();
     let _ = pg_client
         .execute(
             &format!("CREATE PUBLICATION {source_name} FOR TABLE {table_name};"),
             &[],
         )
-        .await?;
+        .await
+        .unwrap();
 
     // Create postgres source in Materialize.
     let mut connection_str = format!("HOST '{host}', PORT {port}, USER {user}, DATABASE {db_name}");
@@ -1095,14 +1100,16 @@ pub async fn create_postgres_source_with_table<'a>(
         let password = std::str::from_utf8(password).unwrap();
         mz_client
             .batch_execute(&format!("CREATE SECRET s AS '{password}'"))
-            .await?;
+            .await
+            .unwrap();
         connection_str = format!("{connection_str}, PASSWORD SECRET s");
     }
     mz_client
         .batch_execute(&format!(
             "CREATE CONNECTION pgconn TO POSTGRES ({connection_str})"
         ))
-        .await?;
+        .await
+        .unwrap();
     mz_client
         .batch_execute(&format!(
             "CREATE SOURCE {source_name}
@@ -1111,45 +1118,48 @@ pub async fn create_postgres_source_with_table<'a>(
             (PUBLICATION '{source_name}')
             FOR TABLES ({table_name});"
         ))
-        .await?;
+        .await
+        .unwrap();
 
     let table_name = table_name.to_string();
     let source_name = source_name.to_string();
-    Ok((
+    (
         pg_client,
         move |mz_client: &'a Client, pg_client: &'a Client| {
-            let f: Pin<Box<dyn Future<Output = Result<(), Box<dyn Error>>> + 'a>> =
-                Box::pin(async move {
-                    mz_client
-                        .batch_execute(&format!("DROP SOURCE {source_name};"))
-                        .await?;
-                    mz_client.batch_execute("DROP CONNECTION pgconn;").await?;
+            let f: Pin<Box<dyn Future<Output = ()> + 'a>> = Box::pin(async move {
+                mz_client
+                    .batch_execute(&format!("DROP SOURCE {source_name};"))
+                    .await
+                    .unwrap();
+                mz_client
+                    .batch_execute("DROP CONNECTION pgconn;")
+                    .await
+                    .unwrap();
 
-                    let _ = pg_client
-                        .execute(&format!("DROP PUBLICATION {source_name};"), &[])
-                        .await?;
-                    let _ = pg_client
-                        .execute(&format!("DROP TABLE {table_name};"), &[])
-                        .await?;
-                    Ok(())
-                });
+                let _ = pg_client
+                    .execute(&format!("DROP PUBLICATION {source_name};"), &[])
+                    .await
+                    .unwrap();
+                let _ = pg_client
+                    .execute(&format!("DROP TABLE {table_name};"), &[])
+                    .await
+                    .unwrap();
+            });
             f
         },
-    ))
+    )
 }
 
-pub async fn wait_for_view_population(
-    mz_client: &Client,
-    view_name: &str,
-    source_rows: i64,
-) -> Result<(), Box<dyn Error>> {
+pub async fn wait_for_view_population(mz_client: &Client, view_name: &str, source_rows: i64) {
     let current_isolation = mz_client
         .query_one("SHOW transaction_isolation", &[])
-        .await?
+        .await
+        .unwrap()
         .get::<_, String>(0);
     mz_client
         .batch_execute("SET transaction_isolation = SERIALIZABLE")
-        .await?;
+        .await
+        .unwrap();
     Retry::default()
         .retry_async(|_| async move {
             let rows = mz_client
@@ -1171,8 +1181,8 @@ pub async fn wait_for_view_population(
         .batch_execute(&format!(
             "SET transaction_isolation = '{current_isolation}'"
         ))
-        .await?;
-    Ok(())
+        .await
+        .unwrap();
 }
 
 // Initializes a websocket connection. Returns the init messages before the initial ReadyForQuery.
