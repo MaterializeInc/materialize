@@ -429,7 +429,7 @@ where
                                                         emitted_bytes: Arc::new(
                                                             base_source_config
                                                                 .base_metrics
-                                                                .upsert_backpressure_specific
+                                                                .upsert_backpressure_defs
                                                                 .emitted_bytes
                                                                 .get_delete_on_drop_counter(vec![
                                                                     id.to_string(),
@@ -439,7 +439,7 @@ where
                                                         last_backpressured_bytes: Arc::new(
                                                             base_source_config
                                                                 .base_metrics
-                                                                .upsert_backpressure_specific
+                                                                .upsert_backpressure_defs
                                                                 .last_backpressured_bytes
                                                                 .get_delete_on_drop_gauge(vec![
                                                                     id.to_string(),
@@ -449,7 +449,7 @@ where
                                                         retired_bytes: Arc::new(
                                                             base_source_config
                                                                 .base_metrics
-                                                                .upsert_backpressure_specific
+                                                                .upsert_backpressure_defs
                                                                 .retired_bytes
                                                                 .get_delete_on_drop_counter(vec![
                                                                     id.to_string(),

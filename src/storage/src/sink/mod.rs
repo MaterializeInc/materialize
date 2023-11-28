@@ -10,7 +10,3 @@
 //! Moving data to external systems
 
 mod kafka;
-
-// TODO(guswynn): this shouldn't be here
-pub(crate) use crate::metrics::sink::KafkaBaseMetrics;
-pub use crate::metrics::sink::SinkBaseMetrics;

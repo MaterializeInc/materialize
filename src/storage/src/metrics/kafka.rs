@@ -12,38 +12,56 @@
 use std::collections::BTreeMap;
 
 use mz_ore::iter::IteratorExt;
-use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
+use mz_ore::metric;
+use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt, IntGaugeVec, MetricsRegistry};
 use mz_repr::GlobalId;
 use prometheus::core::AtomicI64;
 use tracing::debug;
 
-use crate::metrics::source::SourceBaseMetrics;
+/// Definitions for kafka-specific per-partition metrics.
+#[derive(Clone, Debug)]
+pub(crate) struct KafkaPartitionMetricDefs {
+    pub(crate) partition_offset_max: IntGaugeVec,
+}
+
+impl KafkaPartitionMetricDefs {
+    pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            partition_offset_max: registry.register(metric!(
+                name: "mz_kafka_partition_offset_max",
+                help: "High watermark offset on broker for partition",
+                var_labels: ["topic", "source_id", "partition_id"],
+            )),
+        }
+    }
+}
+
+/// Kafka-specific per-partition metrics.
 pub(crate) struct KafkaPartitionMetrics {
     labels: Vec<String>,
-    base_metrics: SourceBaseMetrics,
+    defs: KafkaPartitionMetricDefs,
     partition_offset_map: BTreeMap<i32, DeleteOnDropGauge<'static, AtomicI64, Vec<String>>>,
 }
 
 impl KafkaPartitionMetrics {
+    /// Create a `KafkaPartitionMetrics` from the `KafkaPartitionMetricDefs`.
     pub(crate) fn new(
-        base_metrics: SourceBaseMetrics,
+        defs: &KafkaPartitionMetricDefs,
         ids: Vec<i32>,
         topic: String,
         source_id: GlobalId,
     ) -> Self {
-        let metrics = &base_metrics.partition_specific;
         Self {
             partition_offset_map: BTreeMap::from_iter(ids.iter().map(|id| {
                 let labels = &[topic.clone(), source_id.to_string(), format!("{}", id)];
                 (
                     *id,
-                    metrics
-                        .partition_offset_max
+                    defs.partition_offset_max
                         .get_delete_on_drop_gauge(labels.to_vec()),
                 )
             })),
             labels: vec![topic.clone(), source_id.to_string()],
-            base_metrics,
+            defs: defs.clone(),
         }
     }
 
@@ -61,16 +79,13 @@ impl KafkaPartitionMetrics {
         self.partition_offset_map
             .entry(id)
             .or_insert_with_key(|id| {
-                self.base_metrics
-                    .partition_specific
-                    .partition_offset_max
-                    .get_delete_on_drop_gauge(
-                        self.labels
-                            .iter()
-                            .cloned()
-                            .chain_one(format!("{}", id))
-                            .collect(),
-                    )
+                self.defs.partition_offset_max.get_delete_on_drop_gauge(
+                    self.labels
+                        .iter()
+                        .cloned()
+                        .chain_one(format!("{}", id))
+                        .collect(),
+                )
             })
             .set(offset);
     }

@@ -274,7 +274,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 let source_data = ok.map(Ok).concat(&err.map(Err));
 
                 let metrics = SourcePersistSinkMetrics::new(
-                    &storage_state.source_metrics,
+                    &storage_state.source_metrics.source_defs,
                     export_id,
                     primary_source_id,
                     worker_id,

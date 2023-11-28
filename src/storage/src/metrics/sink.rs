@@ -10,20 +10,23 @@
 //! Metrics that sinks report.
 
 use mz_ore::metric;
-use mz_ore::metrics::{IntCounterVec, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounterVec,
+    MetricsRegistry, UIntGaugeVec,
+};
+use prometheus::core::AtomicU64;
 
-/// Metrics reported by each kafka sink.
-// TODO(guswynn): naming
+/// Definitions for metrics reported by each kafka sink.
 #[derive(Clone)]
-pub struct KafkaBaseMetrics {
+pub struct SinkMetricDefs {
     pub(crate) messages_sent_counter: IntCounterVec,
     pub(crate) message_send_errors_counter: IntCounterVec,
     pub(crate) message_delivery_errors_counter: IntCounterVec,
     pub(crate) rows_queued: UIntGaugeVec,
 }
 
-impl KafkaBaseMetrics {
-    fn register_with(registry: &MetricsRegistry) -> Self {
+impl SinkMetricDefs {
+    pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             messages_sent_counter: registry.register(metric!(
                 name: "mz_kafka_messages_sent_total",
@@ -49,23 +52,58 @@ impl KafkaBaseMetrics {
     }
 }
 
-/// TODO(undocumented)
+/// Per-Kafka sink metrics.
+pub(crate) struct SinkMetrics {
+    pub(crate) messages_sent_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) message_send_errors_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) message_delivery_errors_counter:
+        DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) rows_queued: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+}
+
+impl SinkMetrics {
+    /// Create a `SinkMetrics` from the `SinkMetricDefs`.
+    pub(crate) fn new(
+        base: &SinkMetricDefs,
+        topic_name: &str,
+        sink_id: &str,
+        worker_id: &str,
+    ) -> SinkMetrics {
+        let labels = vec![
+            topic_name.to_string(),
+            sink_id.to_string(),
+            worker_id.to_string(),
+        ];
+        SinkMetrics {
+            messages_sent_counter: base
+                .messages_sent_counter
+                .get_delete_on_drop_counter(labels.clone()),
+            message_send_errors_counter: base
+                .message_send_errors_counter
+                .get_delete_on_drop_counter(labels.clone()),
+            message_delivery_errors_counter: base
+                .message_delivery_errors_counter
+                .get_delete_on_drop_counter(labels.clone()),
+            rows_queued: base.rows_queued.get_delete_on_drop_gauge(labels),
+        }
+    }
+}
+
+/// Definitions for sink metrics.
 #[derive(Clone)]
 pub struct SinkBaseMetrics {
-    pub(crate) kafka: KafkaBaseMetrics,
+    pub(crate) sink_defs: SinkMetricDefs,
 
     /// Metrics that are also exposed to users.
-    pub(crate) sink_statistics: crate::statistics::SinkStatisticsMetricsDefinitions,
+    pub(crate) sink_statistics: crate::statistics::SinkStatisticsMetricDefs,
 }
 
 impl SinkBaseMetrics {
-    /// TODO(undocumented)
+    /// Register sink metrics with the registry.
     pub fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
-            kafka: KafkaBaseMetrics::register_with(registry),
-            sink_statistics: crate::statistics::SinkStatisticsMetricsDefinitions::register_with(
-                registry,
-            ),
+            sink_defs: SinkMetricDefs::register_with(registry),
+            sink_statistics: crate::statistics::SinkStatisticsMetricDefs::register_with(registry),
         }
     }
 }

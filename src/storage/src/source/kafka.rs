@@ -56,7 +56,7 @@ use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::kafka::KafkaPartitionMetrics;
-use crate::metrics::source::SourceReaderMetrics;
+use crate::metrics::source::OffsetCommitMetrics;
 use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
@@ -415,8 +415,8 @@ impl SourceRender for KafkaSourceConnection {
             };
             let partition_ids = start_offsets.keys().copied().collect();
 
-            let source_metrics = SourceReaderMetrics::new(&config.base_metrics, config.id);
-            let offset_commit_metrics = source_metrics.offset_commit_metrics();
+            let offset_commit_metrics =
+                OffsetCommitMetrics::new(&config.base_metrics.source_defs, config.id);
 
             let mut reader = KafkaSourceReader {
                 topic_name: topic.clone(),
@@ -437,7 +437,7 @@ impl SourceRender for KafkaSourceConnection {
                     .collect(),
                 _metadata_thread_handle: metadata_thread_handle,
                 partition_metrics: KafkaPartitionMetrics::new(
-                    config.base_metrics.clone(),
+                    &config.base_metrics.kafka_partition_defs,
                     partition_ids,
                     topic.clone(),
                     config.id,

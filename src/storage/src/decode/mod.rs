@@ -42,7 +42,7 @@ use crate::decode::avro::AvroDecoderState;
 use crate::decode::csv::CsvDecoderState;
 use crate::decode::protobuf::ProtobufDecoderState;
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::metrics::decode::DecodeMetrics;
+use crate::metrics::decode::DecodeMetricDefs;
 use crate::source::types::{DecodeResult, SourceOutput};
 
 mod avro;
@@ -210,7 +210,7 @@ pub(crate) enum DataDecoderInner {
 #[derive(Debug)]
 struct DataDecoder {
     inner: DataDecoderInner,
-    metrics: DecodeMetrics,
+    metrics: DecodeMetricDefs,
 }
 
 impl DataDecoder {
@@ -285,7 +285,7 @@ async fn get_decoder(
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     is_connection_delimited: bool,
-    metrics: DecodeMetrics,
+    metrics: DecodeMetricDefs,
     connection_context: &ConnectionContext,
 ) -> Result<DataDecoder, CsrConnectError> {
     let decoder = match encoding.inner {
@@ -400,7 +400,7 @@ pub fn render_decode_delimited<G>(
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: String,
-    metrics: DecodeMetrics,
+    metrics: DecodeMetricDefs,
     connection_context: ConnectionContext,
 ) -> (
     Collection<G, DecodeResult, Diff>,

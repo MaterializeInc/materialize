@@ -620,7 +620,7 @@ where
         // The capability of the output after reclocking the source frontier
         let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
 
-        let mut source_metrics = SourceMetrics::new(&base_metrics, &name, id, &worker_id.to_string());
+        let mut source_metrics = SourceMetrics::new(&base_metrics.source_defs, &name, id, &worker_id.to_string());
 
         // Compute the overall resume upper to report for the ingestion
         let resume_upper = Antichain::from_iter(resume_uppers.values().flat_map(|f| f.iter().cloned()));

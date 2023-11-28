@@ -22,10 +22,10 @@ use mz_storage_types::connections::ConnectionContext;
 use timely::communication::initialize::WorkerGuards;
 use timely::worker::Worker as TimelyWorker;
 
-use crate::sink::SinkBaseMetrics;
+use crate::metrics::decode::DecodeMetricDefs;
+use crate::metrics::sink::SinkBaseMetrics;
 use crate::metrics::source::SourceBaseMetrics;
 use crate::storage_state::{StorageInstanceContext, Worker};
-use crate::DecodeMetrics;
 
 /// Configures a dataflow server.
 #[derive(Clone)]
@@ -42,7 +42,7 @@ pub struct Config {
     /// Metrics for sinks.
     pub sink_metrics: SinkBaseMetrics,
     /// Metrics for decoding.
-    pub decode_metrics: DecodeMetrics,
+    pub decode_metrics: DecodeMetricDefs,
     /// Shared rocksdb write buffer manager
     pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
@@ -70,7 +70,7 @@ pub fn serve(
     // Various metrics related things.
     let source_metrics = SourceBaseMetrics::register_with(&generic_config.metrics_registry);
     let sink_metrics = SinkBaseMetrics::register_with(&generic_config.metrics_registry);
-    let decode_metrics = DecodeMetrics::register_with(&generic_config.metrics_registry);
+    let decode_metrics = DecodeMetricDefs::register_with(&generic_config.metrics_registry);
     let shared_rocksdb_write_buffer_manager = Default::default();
 
     let config = Config {

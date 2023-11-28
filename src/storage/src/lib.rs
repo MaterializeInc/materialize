@@ -91,6 +91,4 @@ pub mod storage_state;
 
 pub(crate) mod healthcheck;
 
-// TODO(guswynn): this shouldn't be here
-pub use metrics::decode::DecodeMetrics;
 pub use server::{serve, Config, Server};

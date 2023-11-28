@@ -96,11 +96,11 @@ use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp, TimestampManipulation};
 use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
+use mz_storage::metrics::decode::DecodeMetricDefs;
+use mz_storage::metrics::sink::SinkBaseMetrics;
 use mz_storage::metrics::source::SourceBaseMetrics;
-use mz_storage::sink::SinkBaseMetrics;
 use mz_storage::source::testscript::ScriptCommand;
 use mz_storage::source::types::SourceRender;
-use mz_storage::DecodeMetrics;
 use mz_storage_types::sources::encoding::SourceDataEncoding;
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope, SourceTimestamp,
@@ -196,7 +196,7 @@ where
             let metrics_registry = MetricsRegistry::new();
             let source_metrics = SourceBaseMetrics::register_with(&metrics_registry);
             let sink_metrics = SinkBaseMetrics::register_with(&metrics_registry);
-            let decode_metrics = DecodeMetrics::register_with(&metrics_registry);
+            let decode_metrics = DecodeMetricDefs::register_with(&metrics_registry);
 
             let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
             persistcfg

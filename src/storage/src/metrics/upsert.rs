@@ -256,6 +256,7 @@ impl UpsertMetricDefs {
         }
     }
 
+    /// Get a shared-across-workers instance of an `UpsertSharedMetrics`.
     pub(crate) fn shared(&self, source_id: &GlobalId) -> Arc<UpsertSharedMetrics> {
         let mut shared = self.shared.lock().expect("mutex poisoned");
         if let Some(shared_metrics) = shared.get(source_id) {
@@ -265,13 +266,14 @@ impl UpsertMetricDefs {
                 assert!(shared.remove(source_id).is_some());
             }
         }
-        let shared_metrics = Arc::new(UpsertSharedMetrics::new(source_id, self));
+        let shared_metrics = Arc::new(UpsertSharedMetrics::new(self, *source_id));
         assert!(shared
             .insert(source_id.clone(), Arc::downgrade(&shared_metrics))
             .is_none());
         shared_metrics
     }
 
+    /// Get a shared-across-workers instance of an `RocksDBSharedMetrics`
     pub(crate) fn rocksdb_shared(
         &self,
         source_id: &GlobalId,
@@ -305,6 +307,7 @@ impl UpsertMetricDefs {
     }
 }
 
+/// Metrics for upsert source shared across workers.
 #[derive(Debug)]
 pub(crate) struct UpsertSharedMetrics {
     pub(crate) merge_snapshot_latency: DeleteOnDropHistogram<'static, Vec<String>>,
@@ -313,7 +316,8 @@ pub(crate) struct UpsertSharedMetrics {
 }
 
 impl UpsertSharedMetrics {
-    fn new(source_id: &GlobalId, metrics: &UpsertMetricDefs) -> Self {
+    /// Create an `UpsertSharedMetrics` from the `UpsertMetricDefs`
+    fn new(metrics: &UpsertMetricDefs, source_id: GlobalId) -> Self {
         let source_id = source_id.to_string();
         UpsertSharedMetrics {
             merge_snapshot_latency: metrics
@@ -394,6 +398,7 @@ pub struct UpsertMetrics {
 }
 
 impl UpsertMetrics {
+    /// Create an `UpsertMetrics` from the `UpsertMetricDefs`.
     pub(crate) fn new(
         defs: &UpsertMetricDefs,
         source_id: GlobalId,

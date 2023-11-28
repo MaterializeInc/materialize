@@ -115,9 +115,9 @@ use tracing::{info, trace, warn};
 use crate::internal_control::{
     self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
 };
-use crate::metrics::decode::DecodeMetrics;
+use crate::metrics::decode::DecodeMetricDefs;
+use crate::metrics::sink::SinkBaseMetrics;
 use crate::metrics::source::SourceBaseMetrics;
-use crate::sink::SinkBaseMetrics;
 use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
@@ -155,7 +155,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             ResponseSender,
             crossbeam_channel::Sender<std::thread::Thread>,
         )>,
-        decode_metrics: DecodeMetrics,
+        decode_metrics: DecodeMetricDefs,
         source_metrics: SourceBaseMetrics,
         sink_metrics: SinkBaseMetrics,
         now: NowFn,
@@ -263,7 +263,7 @@ pub struct StorageState {
     /// Handles to created sources, keyed by ID
     pub source_tokens: BTreeMap<GlobalId, Rc<dyn Any>>,
     /// Decoding metrics reported by all dataflows.
-    pub decode_metrics: DecodeMetrics,
+    pub decode_metrics: DecodeMetricDefs,
     /// Tracks the conditional write frontiers we have reported.
     pub reported_frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
     /// Descriptions of each installed ingestion.
