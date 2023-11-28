@@ -943,6 +943,7 @@ steps:
         label: "Parallel Workload (backup & restore)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
+        skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
           queue: builder-linux-x86_64
         plugins:
