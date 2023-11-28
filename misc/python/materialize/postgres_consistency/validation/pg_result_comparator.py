@@ -25,6 +25,17 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 # * 2038-01-19 03:14:18+00
 TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?")
 
+# Examples:
+# * ["1","2"]
+# * [1,2]
+# * [1, 2]
+# * [1, [1, 2]]
+SIMPLIFIED_ARRAY_PATTERN = re.compile(r"\[(.*),(.*)\]")
+
+# Examples:
+# * {"a": 1, "c": 3}
+JSON_OBJECT_PATTERN = re.compile(r"\{(.*)[:,](.*)\}")
+
 
 class PostgresResultComparator(ResultComparator):
     """Compares the outcome (result or failure) of multiple query executions"""
@@ -71,6 +82,18 @@ class PostgresResultComparator(ResultComparator):
     def is_str_equal(self, value1: str, value2: str) -> bool:
         if self.is_timestamp(value1):
             return self.is_timestamp_equal(value1, value2)
+
+        if (
+            SIMPLIFIED_ARRAY_PATTERN.search(value1)
+            or JSON_OBJECT_PATTERN.search(value1)
+        ) and (
+            SIMPLIFIED_ARRAY_PATTERN.search(value2)
+            or JSON_OBJECT_PATTERN.search(value2)
+        ):
+            # This is a rather eager pattern to also match concatenated strings.
+            # tracked with #23571
+            value1 = value1.replace(", ", ",").replace(": ", ":")
+            value2 = value2.replace(", ", ",").replace(": ", ":")
 
         # Postgres uses 'mons' instead of 'months'
         value1 = value1.replace(" mons", " months")

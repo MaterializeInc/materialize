@@ -63,6 +63,9 @@ class OperationParam:
 
         return True
 
+    def get_declared_type_category(self) -> DataTypeCategory:
+        return self._type_category
+
     def resolve_type_category(
         self, previous_args: list[Expression]
     ) -> DataTypeCategory:
