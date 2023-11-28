@@ -14,11 +14,11 @@ use std::any::Any;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
@@ -126,9 +126,10 @@ impl Coordinator {
                     schema,
                     name,
                     conn_id,
+                    received_at,
                     tx,
                 } => {
-                    self.handle_append_webhook(database, schema, name, conn_id, tx);
+                    self.handle_append_webhook(database, schema, name, conn_id, received_at, tx);
                 }
 
                 Command::GetSystemVars { conn_id, tx } => {
@@ -834,6 +835,7 @@ impl Coordinator {
         schema: String,
         name: String,
         conn_id: ConnectionId,
+        received_at: DateTime<Utc>,
         tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     ) {
         /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
@@ -846,7 +848,7 @@ impl Coordinator {
             schema: String,
             name: String,
             conn_id: ConnectionId,
-            now_fn: NowFn,
+            received_at: DateTime<Utc>,
         ) -> Result<AppendWebhookResponse, PartialItemName> {
             // Resolve our collection.
             let name = PartialItemName {
@@ -888,7 +890,7 @@ impl Coordinator {
                         AppendWebhookValidator::new(
                             validation,
                             coord.caching_secrets_reader.clone(),
-                            now_fn,
+                            received_at,
                         )
                     });
                     (body, headers.clone(), validator)
@@ -910,15 +912,14 @@ impl Coordinator {
             })
         }
 
-        // Get our current clock for any sources that might use time based validation.
-        let now_fn = self.catalog.config().now.clone();
-        let response = resolve(self, database, schema, name, conn_id, now_fn).map_err(|name| {
-            AdapterError::UnknownWebhookSource {
-                database: name.database.expect("provided"),
-                schema: name.schema.expect("provided"),
-                name: name.item,
-            }
-        });
+        let response =
+            resolve(self, database, schema, name, conn_id, received_at).map_err(|name| {
+                AdapterError::UnknownWebhookSource {
+                    database: name.database.expect("provided"),
+                    schema: name.schema.expect("provided"),
+                    name: name.item,
+                }
+            });
         let _ = tx.send(response);
     }
 }
