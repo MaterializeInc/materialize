@@ -82,7 +82,7 @@ use mz_audit_log::{
 };
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
-    persist_backed_catalog_state, test_bootstrap_args, test_stash_backed_catalog_state,
+    test_bootstrap_args, test_persist_backed_catalog_state, test_stash_backed_catalog_state,
     CatalogError, DurableCatalogError, Item, OpenableDurableCatalogState, TimelineTimestamp,
     USER_ITEM_ALLOC_KEY,
 };
@@ -114,8 +114,8 @@ async fn test_persist_confirm_leadership() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
     let openable_state1 =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let openable_state2 = persist_backed_catalog_state(persist_client, organization_id).await;
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let openable_state2 = test_persist_backed_catalog_state(persist_client, organization_id).await;
     test_confirm_leadership(openable_state1, openable_state2).await;
 }
 
@@ -169,7 +169,7 @@ async fn test_persist_get_and_prune_storage_usage() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
     let openable_state =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_get_and_prune_storage_usage(openable_state).await;
 }
 
@@ -231,7 +231,7 @@ async fn test_persist_timestamps() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
     let openable_state =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_timestamps(openable_state).await;
 }
 
@@ -281,7 +281,7 @@ async fn test_persist_allocate_id() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
     let openable_state =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_allocate_id(openable_state).await;
 }
 
@@ -328,7 +328,7 @@ async fn test_persist_audit_logs() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
     let openable_state =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_audit_logs(openable_state).await;
 }
 
@@ -396,7 +396,7 @@ async fn test_persist_items() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
     let openable_state =
-        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_items(openable_state).await;
 }
 

@@ -3690,6 +3690,7 @@ dependencies = [
  "once_cell",
  "paste",
  "postgres-openssl",
+ "prometheus",
  "proptest",
  "proptest-derive",
  "prost",
