@@ -102,9 +102,9 @@ where
         // because it relies on us continuing to hash on the sink_id, with the same hash
         // function, and for the Exchange pact to continue to distribute by modulo number
         // of workers.
-        let peers = sinked_collection.inner.scope().peers();
         let worker_index = sinked_collection.inner.scope().index();
-        let active_write_worker = (usize::cast_from(sink_id.hashed()) % peers) == worker_index;
+        // Worker 1 is our "kafka worker".
+        let active_write_worker = 1 == worker_index;
 
         // Only the active_write_worker will ever produce data so all other workers have
         // an empty frontier.  It's necessary to insert all of these into `storage_state.
@@ -686,7 +686,7 @@ impl KafkaSinkState {
                 )
                 .await;
 
-                debug!(
+                info!(
                     "{}: sending progress for gate ts: {:?}",
                     &self.name, min_frontier
                 );
@@ -706,9 +706,9 @@ impl KafkaSinkState {
             let mut write_frontier = self.write_frontier.borrow_mut();
 
             // make sure we don't regress
-            debug!(
-                "{}: downgrading write frontier to: {:?}",
-                &self.name, min_frontier
+            info!(
+                "{}: downgrading write frontier from {:?} to: {:?}",
+                &self.name, write_frontier, min_frontier
             );
             assert!(write_frontier.less_equal(&min_frontier));
             write_frontier.clear();
@@ -907,7 +907,6 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let worker_id = stream.scope().index();
-    let worker_count = stream.scope().peers();
     let mut builder = AsyncOperatorBuilder::new(name.clone(), stream.scope());
 
     // keep the latest progress updates, if any, in order to update
@@ -916,7 +915,8 @@ where
 
     // We want exactly one worker to send all the data to the sink topic.
     let hashed_id = id.hashed();
-    let is_active_worker = usize::cast_from(hashed_id) % worker_count == worker_id;
+    // Worker 1 is our "kafka worker".
+    let is_active_worker = worker_id == 1;
 
     let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
 
@@ -933,6 +933,8 @@ where
         if !is_active_worker {
             return;
         }
+
+        tracing::info!("{name}: initial write frontier {:?}", write_frontier);
 
         let mut s = KafkaSinkState::new(
             id,
@@ -1200,9 +1202,9 @@ where
         connection.format.get_format_name()
     );
     let worker_id = input_stream.scope().index();
-    let worker_count = input_stream.scope().peers();
     let hashed_id = sink_id.hashed();
-    let is_active_worker = usize::cast_from(hashed_id) % worker_count == worker_id;
+    // Worker 1 is our "kafka worker".
+    let is_active_worker = worker_id == 1;
 
     let mut builder = AsyncOperatorBuilder::new(name.clone(), input_stream.scope());
 

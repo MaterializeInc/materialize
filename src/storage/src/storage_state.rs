@@ -833,6 +833,21 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.timely_worker.peers(),
                 );
 
+                // Ensure that our "kafka worker" never drops its tokens, such
+                // that it has the opportunity to see the effect of other
+                // workers dropping their tokens.
+                if self.timely_worker.index() == 1
+                    && self
+                        .storage_state
+                        .sink_write_frontiers
+                        .contains_key(&sink_id)
+                {
+                    tracing::info!(
+                        "worker 1 skipping sink rendering to ensure it doesn't drop token"
+                    );
+                    return;
+                }
+
                 {
                     // If there is already a shared write frontier, we re-use it, to
                     // make sure that parties that are already using the shared

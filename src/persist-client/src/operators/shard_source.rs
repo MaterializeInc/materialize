@@ -110,7 +110,8 @@ where
     //    operator returns the `LeasedBatchPart` to the original worker, so it
     //    can release the SeqNo lease.
 
-    let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
+    // Worker 0 is our "persist worker".
+    let chosen_worker = 0;
 
     // we can safely pass along a zero summary from this feedback edge,
     // as the input is disconnected from the operator's output

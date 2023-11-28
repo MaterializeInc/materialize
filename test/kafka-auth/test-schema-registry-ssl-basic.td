@@ -112,8 +112,8 @@ a
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
   ENVELOPE DEBEZIUM
 
-$ kafka-verify-data format=avro sink=materialize.public.snk_backup sort-messages=true
-{"before": null, "after": {"row":{"a": 1}}}
+# $ kafka-verify-data format=avro sink=materialize.public.snk_backup sort-messages=true
+# {"before": null, "after": {"row":{"a": 1}}}
 
 ### Break sink broker connection and produce data
 
