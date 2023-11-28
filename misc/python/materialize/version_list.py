@@ -181,6 +181,7 @@ def _get_override_commit_instead_of_version(
 
 
 def get_latest_published_version() -> MzVersion:
+    """Get the latest mz version for which an image is published."""
     excluded_versions = set()
 
     while True:
@@ -198,6 +199,7 @@ def get_latest_published_version() -> MzVersion:
 
 
 def get_previous_published_version(release_version: MzVersion) -> MzVersion:
+    """Get the highest preceding mz version to the specified version for which an image is published."""
     excluded_versions = set()
 
     while True:
@@ -215,26 +217,32 @@ def get_previous_published_version(release_version: MzVersion) -> MzVersion:
 def get_published_minor_mz_versions(
     limit: int | None = None, include_filter: Callable[[MzVersion], bool] | None = None
 ) -> list[MzVersion]:
-    """Return the latest patch version for every minor version."""
+    """Get the latest patch version for every minor version in descending order."""
 
     # sorted in descending order
     all_versions = get_all_mz_versions()
     minor_versions: dict[str, MzVersion] = {}
 
+    # Note that this method must not apply limit_to_published_versions to a created list
+    # because in that case minor versions may get lost.
     for version in all_versions:
         if include_filter is not None and not include_filter(version):
+            # this version shall not be included
             continue
 
         minor_version = f"{version.major}.{version.minor}"
         if minor_version in minor_versions.keys():
+            # we already have a more recent version for this minor version
             continue
 
         if not is_valid_release_image(version):
+            # this version is not considered valid
             continue
 
         minor_versions[minor_version] = version
 
         if limit is not None and len(minor_versions.keys()) == limit:
+            # collected enough versions
             break
 
     assert len(minor_versions) > 0
@@ -242,6 +250,7 @@ def get_published_minor_mz_versions(
 
 
 def get_all_mz_versions() -> list[MzVersion]:
+    """Get all mz versions based on git tags in descending order. Versions known to be invalid are excluded."""
     return [
         version
         for version in get_version_tags(version_type=MzVersion)
@@ -250,12 +259,14 @@ def get_all_mz_versions() -> list[MzVersion]:
 
 
 def get_all_published_mz_versions(limit: int | None = None) -> list[MzVersion]:
+    """Get all mz versions based on git tags in descending order. This method ensures that images of the versions exist."""
     return limit_to_published_versions(get_all_mz_versions(), limit)
 
 
 def limit_to_published_versions(
     all_versions: list[MzVersion], limit: int | None = None
 ) -> list[MzVersion]:
+    """Remove versions for which no image is published."""
     versions = []
 
     for v in all_versions:
@@ -271,6 +282,7 @@ def limit_to_published_versions(
 def get_previous_mz_version(
     version: MzVersion, excluded_versions: set[MzVersion] | None = None
 ) -> MzVersion:
+    """Get the predecessor of the specified version based on git tags."""
     if excluded_versions is None:
         excluded_versions = set()
 
@@ -297,6 +309,10 @@ def get_previous_mz_version(
 
 
 def is_valid_release_image(version: MzVersion) -> bool:
+    """
+    Checks if a version is not known as an invalid version and has a published image.
+    Note that this method may take shortcuts on older versions.
+    """
     if version in INVALID_VERSIONS:
         return False
 
@@ -304,4 +320,5 @@ def is_valid_release_image(version: MzVersion) -> bool:
         # optimization: assume that all versions older than this one are either valid or listed in INVALID_VERSIONS
         return True
 
+    # This is a potentially expensive operation which pulls an image if it hasn't been pulled yet.
     return docker.image_of_release_version_exists(version)
