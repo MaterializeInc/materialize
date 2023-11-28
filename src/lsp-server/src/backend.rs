@@ -127,7 +127,7 @@ pub struct SchemaObjectColumn {
     pub name: String,
     /// Represents the column's type.
     #[serde(rename = "type")]
-    pub _type: String,
+    pub typ: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -146,14 +146,14 @@ pub enum ObjectType {
     Sink,
 }
 
-impl ToString for ObjectType {
-    fn to_string(&self) -> String {
-        match &self {
-            ObjectType::MaterializedView => "Materialized View".to_string(),
-            ObjectType::View => "View".to_string(),
-            ObjectType::Source => "Source".to_string(),
-            ObjectType::Table => "Table".to_string(),
-            ObjectType::Sink => "Sink".to_string(),
+impl std::fmt::Display for ObjectType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ObjectType::MaterializedView => write!(f, "Materialized View"),
+            ObjectType::View => write!(f, "View"),
+            ObjectType::Source => write!(f, "Source"),
+            ObjectType::Table => write!(f, "Table"),
+            ObjectType::Sink => write!(f, "Sink"),
         }
     }
 }
@@ -166,7 +166,7 @@ impl ToString for ObjectType {
 pub struct SchemaObject {
     /// Represents the object type.
     #[serde(rename = "type")]
-    pub _type: ObjectType,
+    pub typ: ObjectType,
     /// Represents the object name.
     pub name: String,
     /// Contains all the columns available in the object.
@@ -418,38 +418,37 @@ impl LanguageServer for Backend {
 
     /// Completion implementation.
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let _uri = params.text_document_position.text_document.uri;
-        let _position = params.text_document_position.position;
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
 
         let content = self.content.lock().await;
-        let content = content.get(&_uri);
+        let content = content.get(&uri);
 
         if let Some(content) = content {
             // Get the lex token.
             let lex_results = lexer::lex(&content.to_string())
                 .map_err(|_| build_error("Error getting lex tokens."))?;
-            let offset = position_to_offset(_position, content)
+            let offset = position_to_offset(position, content)
                 .ok_or(build_error("Error getting completion offset."))?;
-            let mut last_keyword: Option<Keyword> = None;
-            lex_results.iter().find(|x| {
-                if x.offset < offset {
-                    match x.kind {
-                        Token::Keyword(k) => match k {
-                            Keyword::Select => {
-                                last_keyword = Some(k);
-                            }
-                            Keyword::From => {
-                                last_keyword = Some(k);
-                            }
-                            _ => {}
-                        },
-                        // Skip the rest for now.
-                        _ => {}
-                    };
-                }
 
-                x.offset >= offset
-            });
+            let last_keyword = lex_results
+                .iter()
+                .filter_map(|x| {
+                    if x.offset < offset {
+                        match x.kind {
+                            Token::Keyword(k) => match k {
+                                Keyword::Select => Some(k),
+                                Keyword::From => Some(k),
+                                _ => None,
+                            },
+                            // Skip the rest for now.
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .last();
 
             if let Some(keyword) = last_keyword {
                 return match keyword {
@@ -465,8 +464,9 @@ impl LanguageServer for Backend {
                     }
                     _ => Ok(None),
                 };
+            } else {
+                return Ok(None);
             }
-            return Ok(None);
         } else {
             return Ok(None);
         }
@@ -609,14 +609,14 @@ impl Backend {
                 select_completions.push(CompletionItem {
                     label: column.name.to_string(),
                     label_details: Some(CompletionItemLabelDetails {
-                        detail: Some(column._type.to_string()),
+                        detail: Some(column.typ.to_string()),
                         description: None,
                     }),
                     kind: Some(CompletionItemKind::FIELD),
                     detail: Some(
                         format!(
                             "From {}.{}.{} ({:?})",
-                            schema.database, schema.schema, object.name, object._type
+                            schema.database, schema.schema, object.name, object.typ
                         )
                         .to_string(),
                     ),
@@ -630,10 +630,10 @@ impl Backend {
             from_completions.push(CompletionItem {
                 label: object.name.to_string(),
                 label_details: Some(CompletionItemLabelDetails {
-                    detail: Some(object._type.to_string()),
+                    detail: Some(object.typ.to_string()),
                     description: None,
                 }),
-                kind: match object._type {
+                kind: match object.typ {
                     ObjectType::View => Some(CompletionItemKind::ENUM_MEMBER),
                     ObjectType::MaterializedView => Some(CompletionItemKind::ENUM),
                     ObjectType::Source => Some(CompletionItemKind::CLASS),
@@ -643,7 +643,7 @@ impl Backend {
                 detail: Some(
                     format!(
                         "Represents {}.{}.{} ({:?})",
-                        schema.database, schema.schema, object.name, object._type
+                        schema.database, schema.schema, object.name, object.typ
                     )
                     .to_string(),
                 ),

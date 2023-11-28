@@ -79,8 +79,8 @@
 mod tests {
 
     use mz_lsp_server::backend::{
-        Completions, ExecuteCommandParseResponse, ExecuteCommandParseStatement, ObjectType, Schema,
-        SchemaObject, SchemaObjectColumn, DEFAULT_FORMATTING_WIDTH,
+        Completions, ExecuteCommandParseResponse, ExecuteCommandParseStatement,
+        DEFAULT_FORMATTING_WIDTH,
     };
     use mz_lsp_server::{PKG_NAME, PKG_VERSION};
     use mz_ore::collections::HashMap;
