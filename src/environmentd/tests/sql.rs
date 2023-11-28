@@ -1820,85 +1820,94 @@ async fn test_timeline_read_holds() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn test_linearizability() {
-    // Set the timestamp to zero for deterministic initial timestamps.
-    let now = Arc::new(Mutex::new(0));
-    let now_fn = {
-        let now = Arc::clone(&now);
-        NowFn::from(move || *now.lock().unwrap())
-    };
-    let server = test_util::TestHarness::default()
-        .with_now(now_fn)
-        .unsafe_mode()
-        .start()
-        .await;
-    let mz_client = server.connect().await.unwrap();
-
-    let view_name = "v_lin";
-    let source_name = "source_lin";
-    let (pg_client, cleanup_fn) =
-        test_util::create_postgres_source_with_table(&mz_client, view_name, "(a INT)", source_name)
+    for _ in 0..100 {
+        // Set the timestamp to zero for deterministic initial timestamps.
+        let now = Arc::new(Mutex::new(0));
+        let now_fn = {
+            let now = Arc::clone(&now);
+            NowFn::from(move || *now.lock().unwrap())
+        };
+        let server = test_util::TestHarness::default()
+            .with_now(now_fn)
+            .unsafe_mode()
+            .start()
             .await;
-    // Insert value into postgres table.
-    let _ = pg_client
-        .execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[])
-        .await
-        .unwrap();
+        let mz_client = server.connect().await.unwrap();
 
-    test_util::wait_for_view_population(&mz_client, view_name, 1).await;
+        let view_name = "v_lin";
+        let source_name = "source_lin";
+        let (pg_client, cleanup_fn) = test_util::create_postgres_source_with_table(
+            &mz_client,
+            view_name,
+            "(a INT)",
+            source_name,
+        )
+        .await;
+        // Insert value into postgres table.
+        let _ = pg_client
+            .execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[])
+            .await
+            .unwrap();
 
-    // The user table's write frontier will be close to zero because we use a deterministic
-    // now function in this test. It may be slightly higher than zero because bootstrapping
-    // and background tasks push the global timestamp forward.
-    // The materialized view's write frontier will be close to the system time because it uses
-    // the system clock to close timestamps.
-    // Therefore queries that only involve the view will normally happen at a higher timestamp
-    // than queries that involve the user table. However, we prevent this when in strict
-    // serializable mode.
+        test_util::wait_for_view_population(&mz_client, view_name, 1).await;
 
-    mz_client
-        .batch_execute("SET transaction_isolation = serializable")
-        .await
-        .unwrap();
-    let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
+        // The user table's write frontier will be close to zero because we use a deterministic
+        // now function in this test. It may be slightly higher than zero because bootstrapping
+        // and background tasks push the global timestamp forward.
+        // The materialized view's write frontier will be close to the system time because it uses
+        // the system clock to close timestamps.
+        // Therefore queries that only involve the view will normally happen at a higher timestamp
+        // than queries that involve the user table. However, we prevent this when in strict
+        // serializable mode.
 
-    // Create user table in Materialize.
-    mz_client
-        .batch_execute("DROP TABLE IF EXISTS t;")
-        .await
-        .unwrap();
-    mz_client
-        .batch_execute("CREATE TABLE t (a INT);")
-        .await
-        .unwrap();
-    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
+        mz_client
+            .batch_execute("SET transaction_isolation = serializable")
+            .await
+            .unwrap();
+        let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
 
-    // In serializable transaction isolation, read timestamps can go backwards.
-    assert!(join_ts < view_ts);
+        // Create user table in Materialize.
+        mz_client
+            .batch_execute("DROP TABLE IF EXISTS t;")
+            .await
+            .unwrap();
+        mz_client
+            .batch_execute("CREATE TABLE t (a INT);")
+            .await
+            .unwrap();
+        let join_ts =
+            test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
 
-    mz_client
-        .batch_execute("SET transaction_isolation = 'strict serializable'")
-        .await
-        .unwrap();
+        // In serializable transaction isolation, read timestamps can go backwards.
+        assert!(join_ts < view_ts);
 
-    let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
-    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
+        mz_client
+            .batch_execute("SET transaction_isolation = 'strict serializable'")
+            .await
+            .unwrap();
 
-    // Since the query on the join was done after the query on the view, it should have a higher or
-    // equal timestamp in strict serializable mode.
-    assert!(join_ts >= view_ts);
+        let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
+        let join_ts =
+            test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
 
-    mz_client
-        .batch_execute("SET transaction_isolation = serializable")
-        .await
-        .unwrap();
+        // Since the query on the join was done after the query on the view, it should have a higher or
+        // equal timestamp in strict serializable mode.
+        assert!(join_ts >= view_ts);
 
-    let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
-    let join_ts = test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
+        mz_client
+            .batch_execute("SET transaction_isolation = serializable")
+            .await
+            .unwrap();
 
-    // If we go back to serializable, then timestamps can revert again.
-    assert!(join_ts < view_ts);
+        let view_ts = test_util::get_explain_timestamp(view_name, &mz_client).await;
+        let join_ts =
+            test_util::get_explain_timestamp(&format!("{view_name}, t"), &mz_client).await;
 
-    cleanup_fn(&mz_client, &pg_client).await;
+        // If we go back to serializable, then timestamps can revert again.
+        assert!(join_ts < view_ts);
+
+        cleanup_fn(&mz_client, &pg_client).await;
+    }
 }
 
 #[mz_ore::test]
