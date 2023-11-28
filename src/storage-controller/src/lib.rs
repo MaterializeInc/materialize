@@ -529,17 +529,13 @@ where
 
         // Perform all stash writes in a single transaction, to minimize transaction overhead and
         // the time spent waiting for stash.
-        METADATA_COLLECTION
+        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
             .insert_without_overwrite(
                 &mut self.stash,
                 entries
                     .into_iter()
                     .map(|(key, val)| (key.into_proto(), val.into_proto())),
             )
-            .await?;
-
-        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
-            .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(RustType::from_proto)

@@ -60,7 +60,7 @@ where
                 entries.into_iter().map(|key| (key.into_proto(), ())),
             )
             .await
-            .expect("must be able to write to stash")
+            .expect("must be able to write to stash");
     }
 
     /// Removes the shard from the finalization register.
