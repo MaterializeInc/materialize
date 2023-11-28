@@ -921,6 +921,7 @@ steps:
         label: "Parallel Workload (cancel)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
+        skip: "TODO(def-): Reenable when #2392 is fixed"
         agents:
           queue: builder-linux-x86_64
         plugins:
