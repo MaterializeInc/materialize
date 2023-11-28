@@ -36,7 +36,6 @@ impl Metrics {
             transaction_commit_errors: registry.register(metric!(
                 name: "mz_catalog_transaction_errors",
                 help: "Total number of transaction errors.",
-                var_labels: ["cause"],
             )),
             transaction_commit_latency_duration_seconds: registry.register(metric!(
                 name: "mz_catalog_transaction_latency_seconds",
