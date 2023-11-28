@@ -22,9 +22,7 @@ use mz_storage_types::connections::ConnectionContext;
 use timely::communication::initialize::WorkerGuards;
 use timely::worker::Worker as TimelyWorker;
 
-use crate::metrics::decode::DecodeMetricDefs;
-use crate::metrics::sink::SinkBaseMetrics;
-use crate::metrics::source::SourceBaseMetrics;
+use crate::metrics::StorageMetrics;
 use crate::storage_state::{StorageInstanceContext, Worker};
 
 /// Configures a dataflow server.
@@ -37,12 +35,8 @@ pub struct Config {
     /// Other configuration for storage instances.
     pub instance_context: StorageInstanceContext,
 
-    /// Metrics for sources.
-    pub source_metrics: SourceBaseMetrics,
-    /// Metrics for sinks.
-    pub sink_metrics: SinkBaseMetrics,
-    /// Metrics for decoding.
-    pub decode_metrics: DecodeMetricDefs,
+    /// Metrics for storage
+    pub metrics: StorageMetrics,
     /// Shared rocksdb write buffer manager
     pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
@@ -68,18 +62,15 @@ pub fn serve(
     anyhow::Error,
 > {
     // Various metrics related things.
-    let source_metrics = SourceBaseMetrics::register_with(&generic_config.metrics_registry);
-    let sink_metrics = SinkBaseMetrics::register_with(&generic_config.metrics_registry);
-    let decode_metrics = DecodeMetricDefs::register_with(&generic_config.metrics_registry);
+    let metrics = StorageMetrics::register_with(&generic_config.metrics_registry);
+
     let shared_rocksdb_write_buffer_manager = Default::default();
 
     let config = Config {
         now,
         connection_context,
         instance_context,
-        source_metrics,
-        sink_metrics,
-        decode_metrics,
+        metrics,
         // The shared RocksDB `WriteBufferManager` is shared between the workers.
         // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the first worker attempts to initialize it.
         shared_rocksdb_write_buffer_manager,
@@ -116,9 +107,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
         Worker::new(
             timely_worker,
             client_rx,
-            config.decode_metrics,
-            config.source_metrics,
-            config.sink_metrics,
+            config.metrics,
             config.now.clone(),
             config.connection_context,
             config.instance_context,

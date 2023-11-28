@@ -212,7 +212,6 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::metrics::source::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
 mod debezium;
@@ -273,8 +272,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     .expect("known to exist");
                 let source_data = ok.map(Ok).concat(&err.map(Err));
 
-                let metrics = SourcePersistSinkMetrics::new(
-                    &storage_state.source_metrics.source_defs,
+                let metrics = storage_state.metrics.get_source_persist_sink_metrics(
                     export_id,
                     primary_source_id,
                     worker_id,

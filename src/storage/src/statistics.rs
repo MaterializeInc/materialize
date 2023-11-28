@@ -23,9 +23,6 @@ use prometheus::core::{AtomicI64, AtomicU64};
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
 
-use crate::metrics::sink::SinkBaseMetrics;
-use crate::metrics::source::SourceBaseMetrics;
-
 // Note(guswynn): ordinarily these metric structs would be in the `metrics` modules, but we
 // put them here so they can be near the user-facing definitions as well.
 
@@ -276,7 +273,7 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
     pub(crate) fn new(
         id: GlobalId,
         worker_id: usize,
-        metrics: &SourceBaseMetrics,
+        metrics: &SourceStatisticsMetricDefs,
         parent_source_id: GlobalId,
         shard_id: &mz_persist_client::ShardId,
     ) -> Self {
@@ -295,13 +292,7 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
                     envelope_state_records: 0,
                     rehydration_latency_ms: None,
                 },
-                SourceStatisticsMetrics::new(
-                    &metrics.source_statistics,
-                    id,
-                    worker_id,
-                    parent_source_id,
-                    shard_id,
-                ),
+                SourceStatisticsMetrics::new(metrics, id, worker_id, parent_source_id, shard_id),
             ))),
         }
     }
@@ -432,7 +423,7 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
 }
 
 impl StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics> {
-    pub(crate) fn new(id: GlobalId, worker_id: usize, metrics: &SinkBaseMetrics) -> Self {
+    pub(crate) fn new(id: GlobalId, worker_id: usize, metrics: &SinkStatisticsMetricDefs) -> Self {
         Self {
             stats: Rc::new(RefCell::new((
                 // We have no snapshot metrics for sinks as of now.
@@ -445,7 +436,7 @@ impl StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics> {
                     bytes_staged: 0,
                     bytes_committed: 0,
                 },
-                SinkStatisticsMetrics::new(&metrics.sink_statistics, id, worker_id),
+                SinkStatisticsMetrics::new(metrics, id, worker_id),
             ))),
         }
     }

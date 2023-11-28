@@ -96,9 +96,7 @@ use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp, TimestampManipulation};
 use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
-use mz_storage::metrics::decode::DecodeMetricDefs;
-use mz_storage::metrics::sink::SinkBaseMetrics;
-use mz_storage::metrics::source::SourceBaseMetrics;
+use mz_storage::metrics::StorageMetrics;
 use mz_storage::source::testscript::ScriptCommand;
 use mz_storage::source::types::SourceRender;
 use mz_storage_types::sources::encoding::SourceDataEncoding;
@@ -194,9 +192,7 @@ where
         move |timely_worker| {
             // Various required metrics and persist setup.
             let metrics_registry = MetricsRegistry::new();
-            let source_metrics = SourceBaseMetrics::register_with(&metrics_registry);
-            let sink_metrics = SinkBaseMetrics::register_with(&metrics_registry);
-            let decode_metrics = DecodeMetricDefs::register_with(&metrics_registry);
+            let metrics = StorageMetrics::register_with(&metrics_registry);
 
             let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
             persistcfg
@@ -237,9 +233,7 @@ where
                 mz_storage::storage_state::Worker::new(
                     timely_worker,
                     fake_rx,
-                    decode_metrics,
-                    source_metrics,
-                    sink_metrics,
+                    metrics,
                     SYSTEM_TIME.clone(),
                     connection_context,
                     mz_storage::storage_state::StorageInstanceContext::for_tests(

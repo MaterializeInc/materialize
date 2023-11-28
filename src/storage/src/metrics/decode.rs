@@ -23,8 +23,7 @@ pub struct DecodeMetricDefs {
 }
 
 impl DecodeMetricDefs {
-    /// Register decode metrics with the registry.
-    pub fn register_with(registry: &MetricsRegistry) -> Self {
+    pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             events_read: registry.register(metric!(
                 name: "mz_dataflow_events_read_total",

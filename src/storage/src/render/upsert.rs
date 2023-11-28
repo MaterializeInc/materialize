@@ -200,8 +200,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
 where
     G::Timestamp: TotalOrder,
 {
-    let upsert_metrics = UpsertMetrics::new(
-        &source_config.base_metrics.upsert_defs,
+    let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,
         source_config.worker_id,
         backpressure_metrics,

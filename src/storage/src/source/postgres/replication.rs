@@ -158,7 +158,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let (mut data_output, data_stream) = builder.new_output();
     let (_upper_output, upper_stream) = builder.new_output();
 
-    let metrics = PgSourceMetrics::new(&config.base_metrics.postgres_defs, config.id);
+    let metrics = config.metrics.get_postgres_metrics(config.id);
     metrics.tables.set(u64::cast_from(table_info.len()));
 
     let reader_table_info = table_info.clone();

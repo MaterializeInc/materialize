@@ -29,7 +29,6 @@ use prometheus::core::{AtomicI64, AtomicU64, GenericCounterVec};
 use super::kafka::KafkaPartitionMetricDefs;
 use super::postgres::PgSourceMetricDefs;
 use super::upsert::{UpsertBackpressureMetricDefs, UpsertMetricDefs};
-use crate::statistics::SourceStatisticsMetricDefs;
 
 /// Definitions for per-partition metrics.
 #[derive(Clone, Debug)]
@@ -241,7 +240,7 @@ impl SourceMetrics {
         defs: &GeneralSourceMetricDefs,
         source_name: &str,
         source_id: GlobalId,
-        worker_id: &str,
+        worker_id: usize,
     ) -> SourceMetrics {
         let labels = &[
             source_name.to_string(),
@@ -378,7 +377,7 @@ impl OffsetCommitMetrics {
 /// A set of base metrics that hang off a central metrics registry, labeled by the source they
 /// belong to.
 #[derive(Debug, Clone)]
-pub struct SourceBaseMetrics {
+pub(crate) struct SourceMetricDefs {
     pub(crate) source_defs: GeneralSourceMetricDefs,
     pub(crate) postgres_defs: PgSourceMetricDefs,
     pub(crate) kafka_partition_defs: KafkaPartitionMetricDefs,
@@ -386,14 +385,10 @@ pub struct SourceBaseMetrics {
     pub(crate) upsert_backpressure_defs: UpsertBackpressureMetricDefs,
     /// A cluster-wide counter shared across all sources.
     pub(crate) bytes_read: IntCounter,
-    /// Metrics that are also exposed to users. Defined in the `statistics` module because
-    /// they have mappings for table insertion.
-    pub(crate) source_statistics: SourceStatisticsMetricDefs,
 }
 
-impl SourceBaseMetrics {
-    /// Register the `SourceBaseMetrics` with the registry.
-    pub fn register_with(registry: &MetricsRegistry) -> Self {
+impl SourceMetricDefs {
+    pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             source_defs: GeneralSourceMetricDefs::register_with(registry),
             postgres_defs: PgSourceMetricDefs::register_with(registry),
@@ -404,7 +399,6 @@ impl SourceBaseMetrics {
                 name: "mz_bytes_read_total",
                 help: "Count of bytes read from sources",
             )),
-            source_statistics: SourceStatisticsMetricDefs::register_with(registry),
         }
     }
 }

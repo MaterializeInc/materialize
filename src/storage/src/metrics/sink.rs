@@ -14,10 +14,11 @@ use mz_ore::metrics::{
     CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounterVec,
     MetricsRegistry, UIntGaugeVec,
 };
+use mz_repr::GlobalId;
 use prometheus::core::AtomicU64;
 
 /// Definitions for metrics reported by each kafka sink.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SinkMetricDefs {
     pub(crate) messages_sent_counter: IntCounterVec,
     pub(crate) message_send_errors_counter: IntCounterVec,
@@ -66,8 +67,8 @@ impl SinkMetrics {
     pub(crate) fn new(
         base: &SinkMetricDefs,
         topic_name: &str,
-        sink_id: &str,
-        worker_id: &str,
+        sink_id: GlobalId,
+        worker_id: usize,
     ) -> SinkMetrics {
         let labels = vec![
             topic_name.to_string(),
@@ -85,25 +86,6 @@ impl SinkMetrics {
                 .message_delivery_errors_counter
                 .get_delete_on_drop_counter(labels.clone()),
             rows_queued: base.rows_queued.get_delete_on_drop_gauge(labels),
-        }
-    }
-}
-
-/// Definitions for sink metrics.
-#[derive(Clone)]
-pub struct SinkBaseMetrics {
-    pub(crate) sink_defs: SinkMetricDefs,
-
-    /// Metrics that are also exposed to users.
-    pub(crate) sink_statistics: crate::statistics::SinkStatisticsMetricDefs,
-}
-
-impl SinkBaseMetrics {
-    /// Register sink metrics with the registry.
-    pub fn register_with(registry: &MetricsRegistry) -> Self {
-        Self {
-            sink_defs: SinkMetricDefs::register_with(registry),
-            sink_statistics: crate::statistics::SinkStatisticsMetricDefs::register_with(registry),
         }
     }
 }

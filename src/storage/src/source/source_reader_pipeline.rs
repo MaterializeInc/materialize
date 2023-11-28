@@ -76,7 +76,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
-use crate::metrics::source::{SourceBaseMetrics, SourceMetrics};
+use crate::metrics::StorageMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
     MaybeLength, SourceMessage, SourceOutput, SourceReaderError, SourceRender,
@@ -107,7 +107,7 @@ pub struct RawSourceCreationConfig {
     /// The function to return a now time.
     pub now: NowFn,
     /// The metrics & registry that each source instantiates.
-    pub base_metrics: SourceBaseMetrics,
+    pub metrics: StorageMetrics,
     /// Storage Metadata
     pub storage_metadata: CollectionMetadata,
     /// The upper frontier this source should resume ingestion at
@@ -429,7 +429,7 @@ where
         as_of,
         resume_uppers: _,
         source_resume_uppers: _,
-        base_metrics: _,
+        metrics: _,
         now,
         persist_clients,
         source_statistics: _,
@@ -591,7 +591,7 @@ where
         as_of: _,
         resume_uppers,
         source_resume_uppers: _,
-        base_metrics,
+        metrics,
         now: _,
         persist_clients: _,
         source_statistics: _,
@@ -600,7 +600,8 @@ where
         remap_collection_id: _,
     } = config;
 
-    let bytes_read_counter = base_metrics.bytes_read.clone();
+    // TODO(guswynn): expose function
+    let bytes_read_counter = metrics.source_defs.bytes_read.clone();
 
     // TODO(petrosagg): figure out what this operator's read requirements are. The code currently
     // relies on the other handle that is present in the source operator to not over compact, which
@@ -620,7 +621,7 @@ where
         // The capability of the output after reclocking the source frontier
         let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
 
-        let mut source_metrics = SourceMetrics::new(&base_metrics.source_defs, &name, id, &worker_id.to_string());
+        let mut source_metrics = metrics.get_source_metrics(&name, id, worker_id);
 
         // Compute the overall resume upper to report for the ingestion
         let resume_upper = Antichain::from_iter(resume_uppers.values().flat_map(|f| f.iter().cloned()));
