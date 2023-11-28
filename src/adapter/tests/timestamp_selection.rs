@@ -193,10 +193,6 @@ impl TimestampProvider for Frontiers {
     ) -> &'a timely::progress::Antichain<Timestamp> {
         &self.storage.get(&id).unwrap().write
     }
-
-    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp> {
-        matches!(timeline, Timeline::EpochMilliseconds).then(|| self.oracle)
-    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -317,8 +313,15 @@ fn test_timestamp_selection() {
                         Frontiers::get_linearized_timeline(&isolation_level, &when, &timeline_ctx);
 
                     let oracle_read_ts = if let Some(timeline) = linearized_timeline {
-                        // WIP: we're reaching into the TimestampProvider here. yikes!
-                        matches!(timeline, Timeline::EpochMilliseconds).then(|| f.oracle)
+                        match timeline {
+                            Timeline::EpochMilliseconds => Some(f.oracle),
+                            timeline => {
+                                unreachable!(
+                                    "only EpochMillis is used in tests but we got {:?}",
+                                    timeline
+                                )
+                            }
+                        }
                     } else {
                         None
                     };

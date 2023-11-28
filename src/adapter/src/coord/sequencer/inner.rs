@@ -2894,13 +2894,7 @@ impl Coordinator {
         // MIR ⇒ MIR optimization (global)
         let global_mir_plan = optimizer.optimize(from)?;
         // Timestamp selection
-        let isolation_level = ctx.session.vars().transaction_isolation().clone();
-        let linearized_timeline =
-            Coordinator::get_linearized_timeline(&isolation_level, &when, &timeline);
-        let oracle_read_ts = match linearized_timeline {
-            Some(timeline) => self.oracle_read_ts(&timeline).await,
-            None => None,
-        };
+        let oracle_read_ts = self.oracle_read_ts(&ctx.session, &timeline, &when).await;
         let as_of = self
             .determine_timestamp(
                 ctx.session(),
@@ -3441,18 +3435,11 @@ impl Coordinator {
                 .sufficient_collections(&source_ids);
 
             // Acquire a timestamp (necessary for loading statistics).
-            let isolation_level = session.vars().transaction_isolation().clone();
             let when = QueryWhen::Immediately;
-            let linearized_timeline =
-                Coordinator::get_linearized_timeline(&isolation_level, &when, &timeline_context);
-            let oracle_read_ts = match linearized_timeline {
-                Some(timeline) => {
-                    self.oracle_read_ts(&timeline)
-                        .with_subscriber(root_dispatch.clone())
-                        .await
-                }
-                None => None,
-            };
+            let oracle_read_ts = self
+                .oracle_read_ts(session, &timeline_context, &when)
+                .with_subscriber(root_dispatch.clone())
+                .await;
             let timestamp_ctx = self
                 .sequence_peek_timestamp(
                     session,
@@ -3949,14 +3936,8 @@ impl Coordinator {
         let source_ids = source.depends_on();
         let timeline_context = self.validate_timeline_context(source_ids.clone())?;
 
-        let isolation_level = session.vars().transaction_isolation().clone();
         let when = QueryWhen::Immediately;
-        let linearized_timeline =
-            Coordinator::get_linearized_timeline(&isolation_level, &when, &timeline_context);
-        let oracle_read_ts = match linearized_timeline {
-            Some(timeline) => self.oracle_read_ts(&timeline).await,
-            None => None,
-        };
+        let oracle_read_ts = self.oracle_read_ts(session, &timeline_context, &when).await;
 
         let determination = self
             .sequence_peek_timestamp(

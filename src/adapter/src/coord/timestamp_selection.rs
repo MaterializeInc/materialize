@@ -128,11 +128,6 @@ impl<T: TimestampManipulation> TimestampContext<T> {
 
 #[async_trait(?Send)]
 impl TimestampProvider for Coordinator {
-    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp> {
-        let timestamp_oracle = self.get_timestamp_oracle(timeline);
-        Some(timestamp_oracle.read_ts().await)
-    }
-
     /// Reports a collection's current read frontier.
     fn compute_read_frontier<'a>(
         &'a self,
@@ -225,8 +220,6 @@ pub trait TimestampProvider {
     fn storage_implied_capability<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
     fn storage_write_frontier<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
 
-    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp>;
-
     fn get_timeline(timeline_context: &TimelineContext) -> Option<Timeline> {
         let timeline = match timeline_context {
             TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
@@ -302,6 +295,24 @@ pub trait TimestampProvider {
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
         let timeline = Self::get_timeline(timeline_context);
+        let linearized_timeline =
+            Self::get_linearized_timeline(isolation_level, when, timeline_context);
+        // TODO: We currently split out getting the oracle timestamp because
+        // it's a potentially expensive call, but a call that can be done in an
+        // async task. TimestampProvider is not Send (nor Sync), so we cannot do
+        // the call to `determine_timestamp_for` (including the oracle call) on
+        // an async task. If/when TimestampProvider can become Send, we can fold
+        // the call to the TimestampOracle back into this function.
+        //
+        // We assert here that the logic that determines the oracle timestamp
+        // matches our expectations.
+        if linearized_timeline.is_some() {
+            assert!(
+                oracle_read_ts.is_some(),
+                "should get a timestamp from the oracle for linearized timeline {:?} but didn't",
+                timeline
+            );
+        }
 
         // Initialize candidate to the minimum correct time.
         let mut candidate = Timestamp::minimum();
@@ -466,6 +477,26 @@ pub trait TimestampProvider {
 }
 
 impl Coordinator {
+    pub(crate) async fn oracle_read_ts(
+        &self,
+        session: &Session,
+        timeline_ctx: &TimelineContext,
+        when: &QueryWhen,
+    ) -> Option<Timestamp> {
+        let isolation_level = session.vars().transaction_isolation().clone();
+        let linearized_timeline =
+            Coordinator::get_linearized_timeline(&isolation_level, when, timeline_ctx);
+        let oracle_read_ts = match linearized_timeline {
+            Some(timeline) => {
+                let timestamp_oracle = self.get_timestamp_oracle(&timeline);
+                Some(timestamp_oracle.read_ts().await)
+            }
+            None => None,
+        };
+
+        oracle_read_ts
+    }
+
     /// Determines the timestamp for a query.
     pub(crate) async fn determine_timestamp(
         &self,
