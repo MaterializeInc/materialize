@@ -36,7 +36,7 @@ pub fn combine_at_timestamp<G: Scope, Tr>(
 ) -> Collection<G, (Option<Row>, Vec<DiffPair<Row>>), Diff>
 where
     G::Timestamp: Lattice + Copy,
-    Tr: Clone + TraceReader<Key = Option<Row>, Val = Row, Time = G::Timestamp, R = Diff>,
+    Tr: Clone + TraceReader<Key = Option<Row>, Val = Row, Time = G::Timestamp, Diff = Diff>,
     Tr::Batch: Batch,
 {
     let mut rows_buf = vec![];

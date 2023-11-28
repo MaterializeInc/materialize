@@ -951,7 +951,7 @@ impl IndexPeek {
         max_result_size: u32,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
-        Tr: TraceReader<Key = K, Val = V, Time = Timestamp, R = Diff>,
+        Tr: TraceReader<Key = K, Val = V, Time = Timestamp, Diff = Diff>,
         Tr::Key: Columnation + Data + FromRowByTypes + IntoRowByTypes,
         Tr::Val: Columnation + Data + IntoRowByTypes,
     {
