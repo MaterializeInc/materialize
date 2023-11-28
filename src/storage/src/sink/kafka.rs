@@ -27,7 +27,6 @@ use mz_interchange::json::JsonEncoder;
 use mz_kafka_util::client::{MzClientContext, TunnelingClientContext};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -42,7 +41,6 @@ use mz_storage_types::sinks::{
     SinkEnvelope, StorageSinkDesc,
 };
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
-use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaError, RDKafkaErrorCode};
 use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
@@ -57,8 +55,9 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::sink::SinkMetrics;
+use crate::metrics::StorageMetrics;
 use crate::render::sinks::SinkRender;
-use crate::sink::KafkaBaseMetrics;
 use crate::statistics::{SinkStatisticsMetrics, StorageStatistics};
 use crate::storage_state::StorageState;
 
@@ -123,7 +122,7 @@ where
             sink.envelope,
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
-            storage_state.sink_metrics.kafka.clone(),
+            &storage_state.metrics,
             storage_state
                 .sink_statistics
                 .get(&sink_id)
@@ -137,41 +136,6 @@ where
             .insert(sink_id, shared_frontier);
 
         (health, Some(token))
-    }
-}
-
-/// Per-Kafka sink metrics.
-pub struct SinkMetrics {
-    messages_sent_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    message_send_errors_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    message_delivery_errors_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    rows_queued: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-}
-
-impl SinkMetrics {
-    fn new(
-        base: &KafkaBaseMetrics,
-        topic_name: &str,
-        sink_id: &str,
-        worker_id: &str,
-    ) -> SinkMetrics {
-        let labels = vec![
-            topic_name.to_string(),
-            sink_id.to_string(),
-            worker_id.to_string(),
-        ];
-        SinkMetrics {
-            messages_sent_counter: base
-                .messages_sent_counter
-                .get_delete_on_drop_counter(labels.clone()),
-            message_send_errors_counter: base
-                .message_send_errors_counter
-                .get_delete_on_drop_counter(labels.clone()),
-            message_delivery_errors_counter: base
-                .message_delivery_errors_counter
-                .get_delete_on_drop_counter(labels.clone()),
-            rows_queued: base.rows_queued.get_delete_on_drop_gauge(labels),
-        }
     }
 }
 
@@ -409,19 +373,15 @@ impl KafkaSinkState {
         sink_id: GlobalId,
         connection: &KafkaSinkConnection,
         sink_name: String,
-        worker_id: String,
+        worker_id: usize,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-        metrics: &KafkaBaseMetrics,
+        metrics: &StorageMetrics,
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
         healthchecker: HealthOutputHandle,
     ) -> Self {
-        let metrics = Arc::new(SinkMetrics::new(
-            metrics,
-            &connection.topic,
-            &sink_id.to_string(),
-            &worker_id,
-        ));
+        let metrics = Arc::new(metrics.get_sink_metrics(&connection.topic, sink_id, worker_id));
+        let worker_id = worker_id.to_string();
 
         let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
 
@@ -837,7 +797,7 @@ fn kafka<G>(
     envelope: SinkEnvelope,
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-    metrics: KafkaBaseMetrics,
+    metrics: &StorageMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
 ) -> (Stream<G, HealthStatusMessage>, Rc<dyn Any>)
@@ -899,13 +859,14 @@ fn produce_to_kafka<G>(
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-    metrics: KafkaBaseMetrics,
+    metrics: &StorageMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
 ) -> (Stream<G, HealthStatusMessage>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let metrics = metrics.clone();
     let worker_id = stream.scope().index();
     let worker_count = stream.scope().peers();
     let mut builder = AsyncOperatorBuilder::new(name.clone(), stream.scope());
@@ -938,7 +899,7 @@ where
             id,
             &connection,
             name,
-            worker_id.to_string(),
+            worker_id,
             write_frontier,
             &metrics,
             &connection_context,

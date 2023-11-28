@@ -82,10 +82,9 @@ use mz_ore::metrics::DeleteOnDropGauge;
 use mz_rocksdb::RocksDBConfig;
 use prometheus::core::AtomicU64;
 
+use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
 use crate::render::upsert::rocksdb::RocksDB;
 use crate::render::upsert::{UpsertKey, UpsertValue};
-use crate::source::metrics::UpsertSharedMetrics;
-use crate::source::types::UpsertMetrics;
 use crate::source::SourceStatistics;
 
 /// The default set of `bincode` options used for consolidating

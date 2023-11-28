@@ -40,12 +40,12 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
+use crate::metrics::upsert::UpsertMetrics;
 use crate::render::sources::OutputIndex;
 use crate::render::upsert::types::{
     upsert_bincode_opts, AutoSpillBackend, InMemoryHashMap, RocksDBParams, UpsertState,
     UpsertStateBackend,
 };
-use crate::source::types::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 
 mod rocksdb;
@@ -200,8 +200,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
 where
     G::Timestamp: TotalOrder,
 {
-    let upsert_metrics = UpsertMetrics::new(
-        &source_config.base_metrics,
+    let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,
         source_config.worker_id,
         backpressure_metrics,

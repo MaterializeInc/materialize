@@ -18,13 +18,12 @@ use crate::decode::{DataDecoderInner, PreDelimitedFormat};
 
 /// Metrics specific to a single worker.
 #[derive(Clone, Debug)]
-pub struct DecodeMetrics {
+pub struct DecodeMetricDefs {
     events_read: IntCounterVec,
 }
 
-impl DecodeMetrics {
-    /// TODO(undocumented)
-    pub fn register_with(registry: &MetricsRegistry) -> Self {
+impl DecodeMetricDefs {
+    pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             events_read: registry.register(metric!(
                 name: "mz_dataflow_events_read_total",
@@ -53,10 +52,14 @@ impl DecodeMetrics {
             .inc_by(u64::cast_from(n));
     }
 
+    /// Create (if it doesn't exist yet) a success counter for the given decoder, and increment
+    /// it `n` times.
     pub(crate) fn count_successes(&self, decoder: &DataDecoderInner, n: usize) {
         self.counter_inc(decoder, true, n);
     }
 
+    /// Create (if it doesn't exist yet) an error counter for the given decoder, and increment
+    /// it `n` times.
     pub(crate) fn count_errors(&self, decoder: &DataDecoderInner, n: usize) {
         self.counter_inc(decoder, true, n);
     }

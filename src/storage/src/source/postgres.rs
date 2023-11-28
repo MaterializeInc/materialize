@@ -107,7 +107,6 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespac
 use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
-mod metrics;
 mod replication;
 mod snapshot;
 

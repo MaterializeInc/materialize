@@ -55,11 +55,9 @@ use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::kafka::metrics::KafkaPartitionMetrics;
-use crate::source::types::{SourceReaderMetrics, SourceRender};
+use crate::metrics::kafka::KafkaPartitionMetrics;
+use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
-
-mod metrics;
 
 #[derive(Default)]
 struct HealthStatus {
@@ -416,8 +414,7 @@ impl SourceRender for KafkaSourceConnection {
             };
             let partition_ids = start_offsets.keys().copied().collect();
 
-            let source_metrics = SourceReaderMetrics::new(&config.base_metrics, config.id);
-            let offset_commit_metrics = source_metrics.offset_commit_metrics();
+            let offset_commit_metrics = config.metrics.get_offset_commit_metrics(config.id);
 
             let mut reader = KafkaSourceReader {
                 topic_name: topic.clone(),
@@ -437,8 +434,7 @@ impl SourceRender for KafkaSourceConnection {
                     .map(|(_name, kind)| kind)
                     .collect(),
                 _metadata_thread_handle: metadata_thread_handle,
-                partition_metrics: KafkaPartitionMetrics::new(
-                    config.base_metrics.clone(),
+                partition_metrics: config.metrics.get_kafka_partition_metrics(
                     partition_ids,
                     topic.clone(),
                     config.id,

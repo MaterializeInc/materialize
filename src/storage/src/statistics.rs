@@ -23,11 +23,11 @@ use prometheus::core::{AtomicI64, AtomicU64};
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
 
-use crate::sink::metrics::SinkBaseMetrics;
-use crate::source::metrics::SourceBaseMetrics;
+// Note(guswynn): ordinarily these metric structs would be in the `metrics` modules, but we
+// put them here so they can be near the user-facing definitions as well.
 
 #[derive(Clone, Debug)]
-pub(crate) struct SourceStatisticsMetricsDefinitions {
+pub(crate) struct SourceStatisticsMetricDefs {
     pub(crate) snapshot_committed: UIntGaugeVec,
     pub(crate) messages_received: IntCounterVec,
     pub(crate) updates_staged: IntCounterVec,
@@ -38,7 +38,7 @@ pub(crate) struct SourceStatisticsMetricsDefinitions {
     pub(crate) rehydration_latency_ms: IntGaugeVec,
 }
 
-impl SourceStatisticsMetricsDefinitions {
+impl SourceStatisticsMetricDefs {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             snapshot_committed: registry.register(metric!(
@@ -100,98 +100,74 @@ pub struct SourceStatisticsMetrics {
 
 impl SourceStatisticsMetrics {
     pub(crate) fn new(
+        defs: &SourceStatisticsMetricDefs,
         id: GlobalId,
         worker_id: usize,
-        metrics: &SourceBaseMetrics,
         parent_source_id: GlobalId,
         shard_id: &mz_persist_client::ShardId,
     ) -> SourceStatisticsMetrics {
         let shard = shard_id.to_string();
 
         SourceStatisticsMetrics {
-            snapshot_committed: metrics
-                .source_statistics
-                .snapshot_committed
-                .get_delete_on_drop_gauge(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard.clone(),
-                ]),
-            messages_received: metrics
-                .source_statistics
-                .messages_received
-                .get_delete_on_drop_counter(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                ]),
-            updates_staged: metrics
-                .source_statistics
-                .updates_staged
-                .get_delete_on_drop_counter(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard.clone(),
-                ]),
-            updates_committed: metrics
-                .source_statistics
-                .updates_committed
-                .get_delete_on_drop_counter(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard.clone(),
-                ]),
-            bytes_received: metrics
-                .source_statistics
-                .bytes_received
-                .get_delete_on_drop_counter(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                ]),
-            envelope_state_bytes: metrics
-                .source_statistics
-                .envelope_state_bytes
-                .get_delete_on_drop_gauge(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard.clone(),
-                ]),
-            envelope_state_records: metrics
-                .source_statistics
-                .envelope_state_records
-                .get_delete_on_drop_gauge(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard.clone(),
-                ]),
-            rehydration_latency_ms: metrics
-                .source_statistics
-                .rehydration_latency_ms
-                .get_delete_on_drop_gauge(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard,
-                ]),
+            snapshot_committed: defs.snapshot_committed.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            messages_received: defs.messages_received.get_delete_on_drop_counter(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+            ]),
+            updates_staged: defs.updates_staged.get_delete_on_drop_counter(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            updates_committed: defs.updates_committed.get_delete_on_drop_counter(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            bytes_received: defs.bytes_received.get_delete_on_drop_counter(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+            ]),
+            envelope_state_bytes: defs.envelope_state_bytes.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            envelope_state_records: defs.envelope_state_records.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            rehydration_latency_ms: defs.rehydration_latency_ms.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard,
+            ]),
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SinkStatisticsMetricsDefinitions {
+pub(crate) struct SinkStatisticsMetricDefs {
     pub(crate) messages_staged: IntCounterVec,
     pub(crate) messages_committed: IntCounterVec,
     pub(crate) bytes_staged: IntCounterVec,
     pub(crate) bytes_committed: IntCounterVec,
 }
 
-impl SinkStatisticsMetricsDefinitions {
+impl SinkStatisticsMetricDefs {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             messages_staged: registry.register(metric!(
@@ -229,25 +205,21 @@ pub struct SinkStatisticsMetrics {
 
 impl SinkStatisticsMetrics {
     pub(crate) fn new(
+        defs: &SinkStatisticsMetricDefs,
         id: GlobalId,
         worker_id: usize,
-        metrics: &SinkBaseMetrics,
     ) -> SinkStatisticsMetrics {
         SinkStatisticsMetrics {
-            messages_staged: metrics
-                .sink_statistics
+            messages_staged: defs
                 .messages_staged
                 .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
-            messages_committed: metrics
-                .sink_statistics
+            messages_committed: defs
                 .messages_committed
                 .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
-            bytes_staged: metrics
-                .sink_statistics
+            bytes_staged: defs
                 .bytes_staged
                 .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
-            bytes_committed: metrics
-                .sink_statistics
+            bytes_committed: defs
                 .bytes_committed
                 .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
         }
@@ -301,7 +273,7 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
     pub(crate) fn new(
         id: GlobalId,
         worker_id: usize,
-        metrics: &SourceBaseMetrics,
+        metrics: &SourceStatisticsMetricDefs,
         parent_source_id: GlobalId,
         shard_id: &mz_persist_client::ShardId,
     ) -> Self {
@@ -320,7 +292,7 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
                     envelope_state_records: 0,
                     rehydration_latency_ms: None,
                 },
-                SourceStatisticsMetrics::new(id, worker_id, metrics, parent_source_id, shard_id),
+                SourceStatisticsMetrics::new(metrics, id, worker_id, parent_source_id, shard_id),
             ))),
         }
     }
@@ -451,7 +423,7 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
 }
 
 impl StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics> {
-    pub(crate) fn new(id: GlobalId, worker_id: usize, metrics: &SinkBaseMetrics) -> Self {
+    pub(crate) fn new(id: GlobalId, worker_id: usize, metrics: &SinkStatisticsMetricDefs) -> Self {
         Self {
             stats: Rc::new(RefCell::new((
                 // We have no snapshot metrics for sinks as of now.
@@ -464,7 +436,7 @@ impl StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics> {
                     bytes_staged: 0,
                     bytes_committed: 0,
                 },
-                SinkStatisticsMetrics::new(id, worker_id, metrics),
+                SinkStatisticsMetrics::new(metrics, id, worker_id),
             ))),
         }
     }

@@ -112,12 +112,10 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 use tracing::{info, trace, warn};
 
-use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{
     self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
 };
-use crate::sink::SinkBaseMetrics;
-use crate::source::metrics::SourceBaseMetrics;
+use crate::metrics::StorageMetrics;
 use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
@@ -155,9 +153,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             ResponseSender,
             crossbeam_channel::Sender<std::thread::Thread>,
         )>,
-        decode_metrics: DecodeMetrics,
-        source_metrics: SourceBaseMetrics,
-        sink_metrics: SinkBaseMetrics,
+        metrics: StorageMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
         instance_context: StorageInstanceContext,
@@ -209,13 +205,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let storage_state = StorageState {
             source_uppers: BTreeMap::new(),
             source_tokens: BTreeMap::new(),
-            decode_metrics,
+            metrics,
             reported_frontiers: BTreeMap::new(),
             ingestions: BTreeMap::new(),
             exports: BTreeMap::new(),
             now,
-            source_metrics,
-            sink_metrics,
             timely_worker_index: timely_worker.index(),
             timely_worker_peers: timely_worker.peers(),
             connection_context,
@@ -262,8 +256,8 @@ pub struct StorageState {
     pub source_uppers: BTreeMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
     /// Handles to created sources, keyed by ID
     pub source_tokens: BTreeMap<GlobalId, Rc<dyn Any>>,
-    /// Decoding metrics reported by all dataflows.
-    pub decode_metrics: DecodeMetrics,
+    /// Metrics for storage objects.
+    pub metrics: StorageMetrics,
     /// Tracks the conditional write frontiers we have reported.
     pub reported_frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
     /// Descriptions of each installed ingestion.
@@ -272,10 +266,6 @@ pub struct StorageState {
     pub exports: BTreeMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
-    /// Metrics for the source-specific side of dataflows.
-    pub source_metrics: SourceBaseMetrics,
-    /// Undocumented
-    pub sink_metrics: SinkBaseMetrics,
     /// Index of the associated timely dataflow worker.
     pub timely_worker_index: usize,
     /// Peers in the associated timely dataflow worker.
@@ -769,7 +759,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         StorageStatistics::<SourceStatisticsUpdate, SourceStatisticsMetrics>::new(
                             *export_id,
                             self.storage_state.timely_worker_index,
-                            &self.storage_state.source_metrics,
+                            &self.storage_state.metrics.source_statistics,
                             ingestion_id,
                             &export.storage_metadata.data_shard,
                         );
@@ -851,7 +841,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 let stats = StorageStatistics::<SinkStatisticsUpdate, SinkStatisticsMetrics>::new(
                     sink_id,
                     self.storage_state.timely_worker_index,
-                    &self.storage_state.sink_metrics,
+                    &self.storage_state.metrics.sink_statistics,
                 );
                 self.storage_state.sink_statistics.insert(sink_id, stats);
 

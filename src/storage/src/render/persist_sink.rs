@@ -119,7 +119,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::trace;
 
-use crate::source::types::SourcePersistSinkMetrics;
+use crate::metrics::source::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
 /// Metrics about batches.
