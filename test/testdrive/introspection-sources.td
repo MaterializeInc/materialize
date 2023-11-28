@@ -342,19 +342,19 @@ true true true true true
 # Commenting these out just for the revert of the new Row impl
 
 # > CREATE TABLE ten (f1 integer);
-# 
+#
 # > INSERT INTO ten VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
-# 
+#
 # > CREATE MATERIALIZED VIEW c1 AS
 #   SELECT COUNT(DISTINCT 100 * a1.f1 + 10 * a2.f1 + a3.f1)
 #   FROM ten AS a1, ten AS a2, ten AS a3;
-# 
+#
 # > CREATE MATERIALIZED VIEW c2 AS
 #   SELECT 100 * a1.f1 + 10 * a2.f1 + a3.f1, COUNT(*)
 #   FROM ten AS a1, ten AS a2, ten AS a3
 #   GROUP BY 1
 #   HAVING COUNT(*) > 1;
-# 
+#
 # > SELECT
 #     records > 2 * 1000 AND records < 1.1 * 2 * 1000,
 #     size > (84 + 84) * 1000 AND size < 1.1 * (84 + 84) * 1000,
@@ -363,7 +363,7 @@ true true true true true
 #   FROM mz_internal.mz_dataflow_arrangement_sizes
 #   WHERE name LIKE '%c1%';
 # true true true true
-# 
+#
 # > SELECT
 #     records > 2 * 1000 AND records < 1.1 * 2 * 1000,
 #     size > (188 + 88) * 1000 AND size < 1.1 * (196 + 88) * 1000,
@@ -401,7 +401,7 @@ true true true true true
 #     OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
 #   )
 #   SELECT * FROM term;
-# 
+#
 # > SELECT
 #     records > (4 * 2 + 2 * 3) * 1000 AND records < 1.1 * (4 * 2 + 2 * 3) * 1000,
 #     size > (3 * 80 * 2 + 70 * 3 + 130 * 2 + 76 * 3) * 1000
@@ -427,21 +427,21 @@ true true true true true
 # Commenting these out just for the revert of the new Row impl
 
 # > CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms') WITH (SIZE = '1');
-# 
+#
 # > CREATE MATERIALIZED VIEW input AS
 #   SELECT counter % 1000 + 1 AS f1, counter % 10 + 1 AS f2
 #   FROM counter;
-# 
+#
 # > CREATE MATERIALIZED VIEW m_minmax AS
 #   SELECT f1, MIN(f2), MAX(f2)
 #   FROM input
 #   GROUP BY f1;
-# 
+#
 # > CREATE MATERIALIZED VIEW m_top1 AS
 #   SELECT DISTINCT ON (f1) f1, f2
 #   FROM input
 #   ORDER BY f1, f2 DESC;
-# 
+#
 # > SELECT
 #     records >= 2 * 1000 AND records < 1.1 * 2 * 1000,
 #     size >= (140 + 72) * 1000 AND size < 1.1 * (140 + 72) * 1000,
