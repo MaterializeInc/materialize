@@ -23,7 +23,6 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::collections::CollectionExt;
-use mz_ore::error::ErrorExt;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
@@ -897,13 +896,9 @@ impl DurableCatalogState for PersistCatalogState {
             .wall_time()
             .inc_by(counter)
             .await;
-        self.metrics.transactions_committed.inc();
-        if let Err(e) = &res {
-            let cause = e.to_string_with_causes();
-            self.metrics
-                .transaction_commit_errors
-                .with_label_values(&[&cause])
-                .inc();
+        self.metrics.transaction_commits_initiated.inc();
+        if let Err(_) = &res {
+            self.metrics.transaction_commit_errors.inc();
         }
         res
     }
