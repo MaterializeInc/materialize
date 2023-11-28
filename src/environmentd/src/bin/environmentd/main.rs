@@ -83,10 +83,9 @@
 use std::ffi::CStr;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{cmp, env, iter, process, thread};
+use std::{env, iter, process, thread};
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
@@ -594,6 +593,13 @@ pub struct Args {
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
+
+    // === Tokio options. ===
+    /// Stack size of tokio threads in bytes.
+    ///
+    /// Defaults to the global default in `mz_ore::runtime`.
+    #[clap(long, env = "TOKIO_WORKER_THREAD_STACK_SIZE")]
+    tokio_worker_thread_stack_size: Option<usize>,
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -641,21 +647,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     sys::enable_termination_signal_cleanup()?;
 
     // Start Tokio runtime.
-
-    let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(ncpus_useful)
-            // The default thread name exceeds the Linux limit on thread name
-            // length, so pick something shorter.
-            .thread_name_fn(|| {
-                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                format!("tokio:work-{}", id)
-            })
-            .enable_all()
-            .build()?,
-    );
+    let runtime = Arc::new(mz_ore::runtime::build_tokio_runtime(
+        args.tokio_worker_thread_stack_size,
+    )?);
 
     // Configure tracing to log the service name when using the process
     // orchestrator, which intermingles log output from multiple services. Other

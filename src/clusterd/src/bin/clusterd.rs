@@ -191,18 +191,27 @@ struct Args {
     /// Optional memory limit (bytes) of the cluster replica
     #[clap(long)]
     announce_memory_limit: Option<usize>,
+
+    /// Stack size of tokio threads in bytes.
+    ///
+    /// Defaults to the global default in `mz_ore::runtime`.
+    #[clap(long, env = "TOKIO_WORKER_THREAD_STACK_SIZE")]
+    tokio_worker_thread_stack_size: Option<usize>,
 }
 
-#[tokio::main]
-async fn main() {
-    let args = cli::parse_args(CliConfig {
+fn main() {
+    let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,
     });
-    if let Err(err) = run(args).await {
-        eprintln!("clusterd: fatal: {}", err.display_with_causes());
-        process::exit(1);
-    }
+    mz_ore::runtime::build_tokio_runtime(args.tokio_worker_thread_stack_size)
+        .unwrap()
+        .block_on(async {
+            if let Err(err) = run(args).await {
+                eprintln!("clusterd: fatal: {}", err.display_with_causes());
+                process::exit(1);
+            }
+        })
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {

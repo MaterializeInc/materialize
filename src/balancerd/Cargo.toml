@@ -21,10 +21,9 @@ mz-build-info = { path = "../build-info" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-mz-ore = { path = "../ore", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 mz-server-core = { path = "../server-core" }
 mz-pgwire-common = { path = "../pgwire-common" }
-num_cpus = "1.14.0"
 openssl = { version = "0.10.48", features = ["vendored"] }
 prometheus = { version = "0.13.3", default-features = false }
 semver = "1.0.16"
