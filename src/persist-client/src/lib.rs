@@ -344,6 +344,37 @@ impl PersistClient {
             .expect("in-mem location is valid")
     }
 
+    async fn make_machine<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<Machine<K, V, T, D>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
+        let machine = Machine::<K, V, T, D>::new(
+            self.cfg.clone(),
+            shard_id,
+            Arc::clone(&self.metrics),
+            Arc::new(state_versions),
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
+        )
+        .await?;
+        Ok(machine)
+    }
+
     /// Provides capabilities for the durable TVC identified by `shard_id` at
     /// its current since and upper frontiers.
     ///
@@ -410,23 +441,7 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let state_versions = StateVersions::new(
-            self.cfg.clone(),
-            Arc::clone(&self.consensus),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.metrics),
-        );
-        let mut machine = Machine::new(
-            self.cfg.clone(),
-            shard_id,
-            Arc::clone(&self.metrics),
-            Arc::new(state_versions),
-            Arc::clone(&self.shared_states),
-            Arc::clone(&self.pubsub_sender),
-            Arc::clone(&self.isolated_runtime),
-            diagnostics.clone(),
-        )
-        .await?;
+        let mut machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let reader_id = LeasedReaderId::new();
@@ -567,23 +582,7 @@ impl PersistClient {
         D: Semigroup + Codec64 + Send + Sync,
         O: Opaque + Codec64,
     {
-        let state_versions = StateVersions::new(
-            self.cfg.clone(),
-            Arc::clone(&self.consensus),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.metrics),
-        );
-        let mut machine = Machine::new(
-            self.cfg.clone(),
-            shard_id,
-            Arc::clone(&self.metrics),
-            Arc::new(state_versions),
-            Arc::clone(&self.shared_states),
-            Arc::clone(&self.pubsub_sender),
-            Arc::clone(&self.isolated_runtime),
-            diagnostics.clone(),
-        )
-        .await?;
+        let mut machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
@@ -623,23 +622,7 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let state_versions = StateVersions::new(
-            self.cfg.clone(),
-            Arc::clone(&self.consensus),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.metrics),
-        );
-        let machine = Machine::new(
-            self.cfg.clone(),
-            shard_id,
-            Arc::clone(&self.metrics),
-            Arc::new(state_versions),
-            Arc::clone(&self.shared_states),
-            Arc::clone(&self.pubsub_sender),
-            Arc::clone(&self.isolated_runtime),
-            diagnostics.clone(),
-        )
-        .await?;
+        let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
         let writer_id = WriterId::new();
         let schemas = Schemas {
@@ -657,6 +640,25 @@ impl PersistClient {
             schemas,
         );
         Ok(writer)
+    }
+
+    /// Check if the given shard is in a finalized state; ie. it can no longer be
+    /// read and any data that was written to it is no longer accessible.
+    pub async fn is_finalized<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<bool, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        Ok(machine.is_tombstone())
     }
 
     /// If a shard is guaranteed to never be used again, finalize it to delete
@@ -681,23 +683,9 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let state_versions = StateVersions::new(
-            self.cfg.clone(),
-            Arc::clone(&self.consensus),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.metrics),
-        );
-        let mut machine = Machine::<K, V, T, D>::new(
-            self.cfg.clone(),
-            shard_id,
-            Arc::clone(&self.metrics),
-            Arc::new(state_versions),
-            Arc::clone(&self.shared_states),
-            Arc::clone(&self.pubsub_sender),
-            Arc::clone(&self.isolated_runtime),
-            diagnostics.clone(),
-        )
-        .await?;
+        let mut machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
 
         let maintenance = machine.become_tombstone().await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));

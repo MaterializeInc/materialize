@@ -2959,77 +2959,72 @@ where
             .unwrap();
 
         let persist_client = &persist_client;
+        let diagnostics = &Diagnostics::from_purpose("finalizing shards");
 
         use futures::stream::StreamExt;
         let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(shards)
             .map(|shard_id| async move {
-                // Open read handle, whose since is the global since.
-                let read_handle: ReadHandle<SourceData, (), T, Diff> = persist_client
-                    .open_leased_reader(
-                        shard_id,
-                        Arc::new(RelationDesc::empty()),
-                        Arc::new(UnitSchema),
-                        // TODO: thread the global ID into the shard finalization WAL
-                        Diagnostics::from_purpose("finalizing shards"),
-                    )
+                let persist_client = persist_client.clone();
+                let diagnostics = diagnostics.clone();
+
+                let is_finalized = persist_client
+                    .is_finalized::<SourceData, (), T, Diff>(shard_id, diagnostics)
                     .await
                     .expect("invalid persist usage");
 
-                // If global since is empty, we can close shard because no one has an outstanding
-                // read hold.
-                if read_handle.since().is_empty() {
-                    let mut write_handle: WriteHandle<SourceData, (), T, Diff> = persist_client
-                        .open_writer(
-                            shard_id,
-                            Arc::new(RelationDesc::empty()),
-                            Arc::new(UnitSchema),
-                            // TODO: thread the global ID into the shard finalization WAL
-                            Diagnostics::from_purpose("finalizing shards"),
-                        )
-                        .await
-                        .expect("invalid persist usage");
+                if is_finalized {
+                    Some(shard_id)
+                } else {
+                    // Finalizing a shard can take a long time cleaning up existing data.
+                    // Spawning a task means that we can't proactively remove this shard
+                    // from the finalization register, unfortunately... but a future run
+                    // of `finalize_shards` should notice the shard has been finalized and tidy
+                    // up.
+                    mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
+                        let finalize = || async move {
+                            let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
+                            let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
+                                persist_client
+                                    .open_writer(
+                                        shard_id,
+                                        Arc::new(RelationDesc::empty()),
+                                        Arc::new(UnitSchema),
+                                        // TODO: thread the global ID into the shard finalization WAL
+                                        Diagnostics::from_purpose("finalizing shards"),
+                                    )
+                                    .await
+                                    .expect("invalid persist usage");
 
-                    if write_handle.upper().is_empty() {
-                        // Note that finalization involves cleaning up more state than just the upper
-                        // and since, but we can't check that here yet. There is a modest chance that
-                        // this leaks a shard.
-                        // TODO: allow callers to confirm finalization.
-                        Some(shard_id)
-                    } else {
-                        // Finalizing a shard can take a long time cleaning up existing data.
-                        // Spawning a task means that we can't proactively remove this shard
-                        // from the finalization register, unfortunately... but the next run
-                        // of `finalize_shards` should notice the upper has advanced and tidy
-                        // up.
-                        let persist_client = persist_client.clone();
-                        mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
-                            let finalize = || async move {
-                                let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
+                            let upper = write_handle.upper();
+                            if !upper.is_empty() {
                                 let append = write_handle
-                                    .append(empty_batch, write_handle.upper().clone(), Antichain::new())
+                                    .append(empty_batch, upper.clone(), Antichain::new())
                                     .await?;
 
-                                if let Err(new_upper) = append {
-                                    warn!("tried to finalize a shard with an advancing upper: {new_upper:?}");
-                                    Ok(())
-                                } else {
-                                    persist_client
-                                        .finalize_shard::<SourceData, (), T, Diff>(
-                                            shard_id,
-                                            Diagnostics::from_purpose("finalizing shards"),
-                                        )
-                                        .await
+                                if let Err(e) = append {
+                                    warn!(
+                                        "tried to finalize a shard with an advancing upper: {e:?}"
+                                    );
+                                    return Ok(());
                                 }
-                            };
+                            }
 
-                            if let Err(e) = finalize().await {
+                            persist_client
+                                .finalize_shard::<SourceData, (), T, Diff>(
+                                    shard_id,
+                                    Diagnostics::from_purpose("finalizing shards"),
+                                )
+                                .await
+                        };
+
+                        match finalize().await {
+                            Err(e) => {
                                 // Rather than error, just leave this shard as one to finalize later.
                                 warn!("error during background finalization: {e:?}");
                             }
-                        });
-                        None
-                    }
-                } else {
+                            Ok(()) => {}
+                        }
+                    });
                     None
                 }
             })

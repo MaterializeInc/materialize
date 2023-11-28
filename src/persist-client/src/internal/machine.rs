@@ -640,6 +640,10 @@ where
         (seqno, maintenance)
     }
 
+    pub fn is_tombstone(&self) -> bool {
+        self.applier.is_tombstone()
+    }
+
     pub async fn become_tombstone(&mut self) -> Result<RoutineMaintenance, InvalidUsage<T>> {
         self.applier.check_since_upper_both_empty()?;
 
