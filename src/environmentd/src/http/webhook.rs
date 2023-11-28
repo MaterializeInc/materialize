@@ -185,6 +185,8 @@ pub enum WebhookError {
     ValidationFailed,
     #[error("error occurred while running validation")]
     ValidationError,
+    #[error("service unavailable")]
+    Unavailable,
     #[error("internal storage failure! {0:?}")]
     InternalStorageError(StorageError),
     #[error("internal adapter failure! {0:?}")]
@@ -200,6 +202,7 @@ impl From<StorageError> for WebhookError {
             StorageError::IdentifierMissing(id) | StorageError::IdentifierInvalid(id) => {
                 WebhookError::NotFound(id.to_string())
             }
+            StorageError::ShuttingDown(_) => WebhookError::Unavailable,
             e => WebhookError::InternalStorageError(e),
         }
     }
@@ -249,6 +252,9 @@ impl IntoResponse for WebhookError {
             }
             e @ WebhookError::InvalidHeaders(_) => {
                 (StatusCode::UNAUTHORIZED, e.to_string()).into_response()
+            }
+            e @ WebhookError::Unavailable => {
+                (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
             }
             e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {
                 (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response()
