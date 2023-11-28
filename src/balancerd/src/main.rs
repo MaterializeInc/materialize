@@ -113,7 +113,7 @@ enum Command {
 fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
-    let runtime = mz_ore::runtime::build_tokio_runtime(args.tokio_worker_thread_stack_size)
+    let runtime = mz_ore::runtime::build_tokio_runtime(args.tokio_worker_thread_stack_size, None)
         .expect("Failed building the Runtime");
 
     let (_, _tracing_guard) = runtime

@@ -649,6 +649,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // Start Tokio runtime.
     let runtime = Arc::new(mz_ore::runtime::build_tokio_runtime(
         args.tokio_worker_thread_stack_size,
+        None,
     )?);
 
     // Configure tracing to log the service name when using the process
@@ -843,7 +844,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
 
-    let persist_config = PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone());
+    let mut persist_config = PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone());
+    persist_config.isolated_runtime_thread_stack_size = args.tokio_worker_thread_stack_size;
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
 

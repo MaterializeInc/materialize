@@ -204,7 +204,7 @@ fn main() {
         env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,
     });
-    mz_ore::runtime::build_tokio_runtime(args.tokio_worker_thread_stack_size)
+    mz_ore::runtime::build_tokio_runtime(args.tokio_worker_thread_stack_size, None)
         .unwrap()
         .block_on(async {
             if let Err(err) = run(args).await {
@@ -306,8 +306,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .ok()
         .or_else(|| args.tracing.log_prefix.clone())
         .unwrap_or_default();
+    let mut persist_config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+    persist_config.isolated_runtime_thread_stack_size = args.tokio_worker_thread_stack_size;
     let persist_clients = Arc::new(PersistClientCache::new(
-        PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
+        persist_config,
         &metrics_registry,
         |persist_cfg, metrics| {
             let cfg = PersistPubSubClientConfig {

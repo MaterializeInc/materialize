@@ -572,7 +572,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     let consensus =
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-    let isolated_runtime = Arc::new(IsolatedRuntime::new());
+    let isolated_runtime = Arc::new(IsolatedRuntime::new(None));
     let state_cache = Arc::new(StateCache::new(
         &cfg,
         Arc::clone(&metrics),

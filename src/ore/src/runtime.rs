@@ -25,16 +25,21 @@ use tokio::runtime::{Builder, Runtime};
 const THREAD_STACK_SIZE_DEFAULT: usize = 2 * 1024 * 1024;
 
 /// Sets up a tokio runtime with a reasonable set of defaults.
-pub fn build_tokio_runtime(thread_stack_size: Option<usize>) -> Result<Runtime> {
+pub fn build_tokio_runtime(
+    thread_stack_size: Option<usize>,
+    thread_prefix: Option<&'static str>,
+) -> Result<Runtime> {
     let ncpus_useful = usize::max(1, cmp::min(num_cpus::get(), num_cpus::get_physical()));
     Builder::new_multi_thread()
         .worker_threads(ncpus_useful)
         // The default thread name exceeds the Linux limit on thread name
         // length, so pick something shorter.
-        .thread_name_fn(|| {
+        .thread_name_fn(move || {
             static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
             let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-            format!("tokio:work-{}", id)
+            // This will wrap around eventually, which is not ideal, but it's important that
+            // it stays small to fit within OS limits.
+            format!("{}{}", thread_prefix.unwrap_or("tokio:work-"), id % 0x10000)
         })
         .thread_stack_size(thread_stack_size.unwrap_or(THREAD_STACK_SIZE_DEFAULT))
         .enable_all()
