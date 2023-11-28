@@ -24,7 +24,9 @@ use tracing::error;
 
 use crate::catalog::Catalog;
 use crate::coord::timeline::WriteTimestamp;
-use crate::coord::timestamp_oracle::{catalog_oracle, GenericNowFn, TimestampOracle};
+use crate::coord::timestamp_oracle::{
+    catalog_oracle, GenericNowFn, ShareableTimestampOracle, TimestampOracle,
+};
 use crate::util::ResultExt;
 
 /// A type that provides write and read timestamps, reads observe exactly their
@@ -230,6 +232,14 @@ where
     async fn apply_write(&mut self, write_ts: T) {
         self.timestamp_oracle.apply_write(write_ts.clone());
         self.maybe_allocate_new_timestamps(&write_ts).await;
+    }
+
+    fn get_shared(&self) -> Option<Arc<dyn ShareableTimestampOracle<T> + Send + Sync>> {
+        // The in-memory TimestampOracle is not shareable:
+        //
+        // - we have in-memory state that we would have to share via an Arc/Mutec
+        // - we use TimestampPersistence, which is backed by Stash, which is also problematic for sharing
+        None
     }
 }
 

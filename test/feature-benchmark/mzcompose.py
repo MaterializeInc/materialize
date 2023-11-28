@@ -140,10 +140,6 @@ def run_one_scenario(
 
         additional_system_parameter_defaults = {}
 
-        # TODO(def-,aljoscha) Switch this to "postgres" before #22029 is enabled in production
-        # Also verify that there is no regression when the "other" side uses catalog ts oracle and "this" uses postgres ts oracle
-        additional_system_parameter_defaults["timestamp_oracle"] = "catalog"
-
         if params is not None:
             for param in params.split(";"):
                 param_name, param_value = param.split("=")

@@ -1469,7 +1469,10 @@ async fn test_utilization_hold() {
             // If we're not in EpochMilliseconds, the timestamp math below is invalid, so assert that here.
             assert!(matches!(
                 explain.determination.timestamp_context,
-                TimestampContext::TimelineTimestamp(Timeline::EpochMilliseconds, _)
+                TimestampContext::TimelineTimestamp {
+                    timeline: Timeline::EpochMilliseconds,
+                    ..
+                }
             ));
             let since = explain
                 .determination
