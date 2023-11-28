@@ -239,6 +239,7 @@ class SQLsmithAction(Action):
 
         if not self.queries:
             self.composition.silent = True
+            seed = self.rng.randrange(2**31)
             try:
                 result = self.composition.run(
                     "sqlsmith",
@@ -247,11 +248,16 @@ class SQLsmithAction(Action):
                     "--read-state",
                     "--dry-run",
                     "--max-queries=100",
+                    f"--seed={seed}",
                     stdin=exe.db.sqlsmith_state,
                     capture=True,
                     capture_stderr=True,
                     rm=True,
                 )
+                if result.returncode != 0:
+                    raise ValueError(
+                        f"SQLsmith failed: {result.returncode} (seed {seed})\nStderr: {result.stderr}\nState: {exe.db.sqlsmith_state}"
+                    )
                 try:
                     data = json.loads(result.stdout)
                 except:

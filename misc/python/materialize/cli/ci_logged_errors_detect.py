@@ -53,7 +53,7 @@ ERROR_RE = re.compile(
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
-    | unrecognized\ configuration\ parameter
+    | environmentd .* unrecognized\ configuration\ parameter
     )
     .* $
     """,
