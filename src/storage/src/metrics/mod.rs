@@ -8,6 +8,25 @@
 // by the Apache License, Version 2.0.
 
 //! Metrics for all things storage.
+//!
+//! The structure of this module is designed to make adding new metrics as easy as possible. The
+//! structure and naming conventions are as follows:
+//!
+//! Metrics for X end up in the `x.rs` submodule, unless X fits into one of the existing
+//! submodules. The struct `XMetricsDefs` defines the `CounterVec/GaugeVec/etc`'s that must be
+//! registered with the `MetricsRegistry` to create new metrics. `XMetricsDefs` should be a
+//! sub-field of `StorageMetrics` (or recursively a sub-field). `XMetricsDefs` has a
+//! `register_with` function to create it using a `MetricsRegistry`.
+//!
+//! `XMetrics` contains the actual gauges/counters/etc that are created using `XMetricsDefs`.
+//! Typically these are created with `new` functions that takes a `&XMetricsDefs`, a `GlobalId`,
+//! and a worker id, but sometimes more complex schemes are used, for metrics that are globally
+//! shared, or have some other shape to their labels.
+//!
+//! `StorageMetrics` is the main entry-point to this module, and for convenience, typically
+//! provides a `get_x_metrics` to obtain an `XMetrics` struct. This is to prevent users from
+//! needing to interact with metrics _definitions_ into the code that actually bumps those
+//! metrics.
 
 use std::sync::Arc;
 
