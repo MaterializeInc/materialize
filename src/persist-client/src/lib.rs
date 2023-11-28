@@ -660,10 +660,12 @@ impl PersistClient {
     }
 
     /// If a shard is guaranteed to never be used again, finalize it to delete
-    /// the associated data and release (almost) all associated resources.
+    /// the associated data and release any associated resources. (Except for a
+    /// little state in consensus we use to represent the tombstone.)
     ///
     /// The caller should ensure that both the `since` and `upper` of the shard
     /// have been advanced to `[]`: ie. the shard is no longer writable or readable.
+    /// Otherwise an error is returned.
     ///
     /// Once `finalize_shard` has been called, the result of future operations on
     /// the shard are not defined. They may return errors or succeed as a noop.

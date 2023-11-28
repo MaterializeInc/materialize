@@ -3007,6 +3007,7 @@ where
                                 .await;
 
                             if let Err(e) = result {
+                                // Rather than error, just leave this shard as one to finalize later.
                                 warn!("error during background finalization: {e:?}");
                             }
                         });
