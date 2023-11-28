@@ -38,17 +38,14 @@ If a `HOLD` exists for an index, the same is true if the index satisfies the que
 A `HOLD` on any non-index object will not also create the `HOLD` on any indexes of the object.
 An `AS OF` query will restrict the indexes or object it considers to those that are valid for the requested time.
 
-Because this may be surprising to users, if an `AS OF` query whose plan uses an index errors because the `AS OF` is less than the index's read frontier and a `HOLD` exists on the index's object,
-a helpful error message will be produced telling the user that their `HOLD` must be on the index, not the underlying object.
-
 The objects the `HOLD` is created on do not need to be in the same schema or database.
 The `HOLD` can be created in any schema on which the user has a `CREATE` privilege (see (Alternatives)[#Alternatives] for other takes on this).
-The user must have a `SELECT` privilege on all objects.
+The user must have a `SELECT` privilege on all objects and a `USAGE` privilege on all affected clusters.
 
 Terminology side note:
 Both the compute and storage controllers expose a `CollectionState` with `read_capabilities` and `implied_capability`.
 Although reading these are both exposed in the API, `read_capabilities` should never be read by the adapter, which should limit itself to reading only `implied_capability`.
-When this document uses the terms "read frontier" or "since", it is referring to the `implied_capability`.
+When this document uses the term "read frontier", it is referring to the `implied_capability`.
 
 If `AT <time>` is specified, the read hold is created at that time.
 For each object in the `HOLD`, the time must be in advance of that object's read frontier *or* any other `HOLD`'s time on that object, otherwise an error occurs.
@@ -76,13 +73,14 @@ ALTER HOLD <name> ADVANCE [TO <time>]
 ```
 
 If `TO <time>` is specified, the new time will be created at that time.
-It is an error if that time is less than any object's logical read frontier or less than the existing `HOLD`'s time.
+For each object of the `HOLD`, the new time must be greater or equal to the lowest of all `HOLD`s (including this one) and the `implied_capability`.
+(This implies that a `HOLD` can go backward in time if another `HOLD` satisfies the above condition.)
 If `TO <time>` is not specified, the new time is the least common physical read frontier of all objects named in the `HOLD`.
 The `HOLD` releases its current read hold and aquires a new read hold at the new time.
 
 The `MAX LAG` option (required, but defaults to `'3h'`) is a duration.
 Its upper bound is limited by a LD-configured setting.
-If difference between the write frontier (TODO: maybe another frontier?) of the objects and the `HOLD` time is greater than `MAX LAG`, the `HOLD`'s time is automatically advanced to `write frontier - MAX HOLD`.
+If difference between the write frontier of the objects and the `HOLD` time is greater than `MAX LAG`, the `HOLD`'s time is automatically advanced to `write frontier - MAX HOLD`.
 (Transactions and `SUBSCRIBE` are not affected, as in the `ALTER HOLD ADVANCE` case.)
 `SELECT` and `SUBSCRIBE` `AS OF` a time that is before a `HOLD`'s time will return a helpful error message that a `HOLD` exists but is in advance of the `AS OF` time.
 
@@ -97,7 +95,7 @@ In order to specify a `HOLD` on a new index or materialized view whose underlyin
 ```
 BEGIN;
 CREATE INDEX i ...;
-CREATE READ HOLD ON i;
+CREATE HOLD ON i;
 COMMIT;
 ```
 
@@ -110,7 +108,6 @@ To monitor `HOLD`s, a new `mz_catalog.mz_holds` table will be maintained with st
 - `id text`: the `HOLD`'s id
 - `schema_id text`
 - `name text`
-- `on text[]`: an array of the object ids in the `HOLD`
 - `at uint8`: the `HOLD`'s time
 
 A `mz_catalog.mz_hold_objects` describes objects belonging to a `HOLD`
