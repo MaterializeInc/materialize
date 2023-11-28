@@ -46,7 +46,7 @@ We highly recommend using dbt to manage deployments, but this workflow can be re
         cluster: prod_deploy
         sslmode: require
   
-  target: deploy
+  target: prod_deploy
   ```
 
 3. Leave your sources in the public schema and don't touch them. Instead, define them as `sources` in a `schema.yml` file. Since the same source can be shared across your production views and clusters, you won’t need to recreate them.
