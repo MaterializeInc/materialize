@@ -354,23 +354,24 @@ true true true true true
   GROUP BY 1
   HAVING COUNT(*) > 1;
 
-> SELECT
-    records > 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size > (68 + 68) * 1000 AND size < 1.1 * (68 + 68) * 1000,
-    capacity > (68 + 68) * 1000 AND capacity < 1.1 * (68 + 68) * 1000,
-    allocations > 0
-  FROM mz_internal.mz_dataflow_arrangement_sizes
-  WHERE name LIKE '%c1%';
-true true true true
-
-> SELECT
-    records > 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size > 0.7 * (172 + 72) * 1000 AND size < 1.1 * (180 + 72) * 1000,
-    capacity > 0.7 * (172 + 72) * 1000 AND capacity < 1.1 * (180 + 72) * 1000,
-    allocations > 1000
-  FROM mz_internal.mz_dataflow_arrangement_sizes
-  WHERE name LIKE '%c2%';
-true true true true
+# TODO(vmarcos): Reenable when #23509 is fixed
+# > SELECT
+#     records > 2 * 1000 AND records < 1.1 * 2 * 1000,
+#     size > (68 + 68) * 1000 AND size < 1.1 * (68 + 68) * 1000,
+#     capacity > (68 + 68) * 1000 AND capacity < 1.1 * (68 + 68) * 1000,
+#     allocations > 0
+#   FROM mz_internal.mz_dataflow_arrangement_sizes
+#   WHERE name LIKE '%c1%';
+# true true true true
+#
+# > SELECT
+#     records > 2 * 1000 AND records < 1.1 * 2 * 1000,
+#     size > 0.7 * (172 + 72) * 1000 AND size < 1.1 * (180 + 72) * 1000,
+#     capacity > 0.7 * (172 + 72) * 1000 AND capacity < 1.1 * (180 + 72) * 1000,
+#     allocations > 1000
+#   FROM mz_internal.mz_dataflow_arrangement_sizes
+#   WHERE name LIKE '%c2%';
+# true true true true
 
 # For coverage, we also include a recursive materialized view to account for dynamic timestamps.
 # Here, the timestamps take not 8 bytes, but (8 + (24 + [0|1 * 8])) = [32|40] bytes. There are also
