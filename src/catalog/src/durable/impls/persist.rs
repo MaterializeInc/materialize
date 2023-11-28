@@ -318,7 +318,7 @@ impl PersistHandle {
         match &self.snapshot_cache {
             Some((cached_as_of, _)) if as_of == *cached_as_of => {}
             _ => {
-                let snapshot: Vec<_> = snapshot_binary(&mut self.read_handle, as_of)
+                let snapshot: Vec<_> = snapshot_binary(&mut self.read_handle, as_of, &self.metrics)
                     .await
                     .collect();
                 self.snapshot_cache = Some((as_of, snapshot));
@@ -1100,30 +1100,13 @@ async fn compare_and_append<T: IntoStateUpdateKindBinary>(
         })
 }
 
-/// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
-/// state up to, and including, `as_of`.
-///
-/// The output is consolidated and sorted by timestamp in ascending order.
-#[tracing::instrument(level = "debug", skip(read_handle, metrics))]
+#[tracing::instrument(level = "debug", skip(read_handle))]
 async fn snapshot(
     read_handle: &mut ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
     as_of: Timestamp,
     metrics: &Arc<Metrics>,
-) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-    metrics.snapshots_taken.inc();
-    let counter = metrics.snapshot_latency_duration_seconds.clone();
-    snapshot_inner(read_handle, as_of)
-        .wall_time()
-        .inc_by(counter)
-        .await
-}
-
-#[tracing::instrument(level = "debug", skip(read_handle))]
-async fn snapshot_inner(
-    read_handle: &mut ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
-    as_of: Timestamp,
 ) -> impl Iterator<Item = StateUpdate<StateUpdateKind>> + DoubleEndedIterator {
-    snapshot_binary(read_handle, as_of)
+    snapshot_binary(read_handle, as_of, metrics)
         .await
         .map(|update| update.try_into().expect("kind decoding error"))
 }
@@ -1132,8 +1115,26 @@ async fn snapshot_inner(
 /// state up to, and including, `as_of`.
 ///
 /// The output is consolidated and sorted by timestamp in ascending order.
-#[tracing::instrument(level = "debug", skip(read_handle))]
+#[tracing::instrument(level = "debug", skip(read_handle, metrics))]
 async fn snapshot_binary(
+    read_handle: &mut ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    as_of: Timestamp,
+    metrics: &Arc<Metrics>,
+) -> impl Iterator<Item = StateUpdate<StateUpdateKindBinary>> + DoubleEndedIterator {
+    metrics.snapshots_taken.inc();
+    let counter = metrics.snapshot_latency_duration_seconds.clone();
+    snapshot_binary_inner(read_handle, as_of)
+        .wall_time()
+        .inc_by(counter)
+        .await
+}
+
+/// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
+/// state up to, and including, `as_of`.
+///
+/// The output is consolidated and sorted by timestamp in ascending order.
+#[tracing::instrument(level = "debug", skip(read_handle))]
+async fn snapshot_binary_inner(
     read_handle: &mut ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
     as_of: Timestamp,
 ) -> impl Iterator<Item = StateUpdate<StateUpdateKindBinary>> + DoubleEndedIterator {
