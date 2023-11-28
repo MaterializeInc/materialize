@@ -208,7 +208,8 @@ impl TryFrom<&KafkaConfigOptionExtracted> for Option<KafkaStartOffsetType> {
 ///   before now (e.g. `-10` means 10 millis ago)
 ///
 /// If `START TIMESTAMP` has not been configured, an empty Option is
-/// returned.
+/// returned, but we also validate that partitions for offsets in
+/// `offsets` do actually exist.
 pub async fn lookup_start_offsets<C>(
     consumer: Arc<BaseConsumer<C>>,
     topic: &str,
@@ -218,21 +219,24 @@ pub async fn lookup_start_offsets<C>(
 where
     C: ConsumerContext + 'static,
 {
-    let time_offset = match offsets {
-        KafkaStartOffsetType::StartTimestamp(time) => time,
-        _ => return Ok(None),
-    };
+    let (requested_offsets, time_offset) = match offsets {
+        KafkaStartOffsetType::StartTimestamp(time_offset) => {
+            (
+                None,
+                Some(if time_offset < 0 {
+                    let now: i64 = now.try_into()?;
+                    let ts = now - time_offset.abs();
 
-    let time_offset = if time_offset < 0 {
-        let now: i64 = now.try_into()?;
-        let ts = now - time_offset.abs();
-
-        if ts <= 0 {
-            sql_bail!("Relative START TIMESTAMP must be smaller than current system timestamp")
+                    if ts <= 0 {
+                        sql_bail!("Relative START TIMESTAMP must be smaller than current system timestamp")
+                    }
+                    ts
+                } else {
+                    time_offset
+                }),
+            )
         }
-        ts
-    } else {
-        time_offset
+        KafkaStartOffsetType::StartOffset(offsets) => (Some(offsets.len()), None),
     };
 
     // Lookup offsets
@@ -240,7 +244,6 @@ where
     task::spawn_blocking(|| format!("kafka_lookup_start_offsets:{topic}"), {
         let topic = topic.to_string();
         move || {
-            // There cannot be more than i32 partitions
             let num_partitions = mz_kafka_util::client::get_partitions(
                 consumer.as_ref().client(),
                 &topic,
@@ -249,42 +252,61 @@ where
             .map_err(|e| sql_err!("{}", e))?
             .len();
 
-            let num_partitions_i32 = i32::try_from(num_partitions)
-                .map_err(|_| sql_err!("kafka topic had more than {} partitions", i32::MAX))?;
+            match (requested_offsets, time_offset) {
+                (Some(requested_offsets), _) => {
+                    if requested_offsets > num_partitions {
+                        return Err(sql_err!(
+                        "START OFFSET specified more partitions ({}) than topic ({}) contains ({})",
+                        requested_offsets,
+                        topic,
+                        num_partitions
+                    ));
+                    }
 
-            let mut tpl = TopicPartitionList::with_capacity(1);
-            tpl.add_partition_range(&topic, 0, num_partitions_i32 - 1);
-            tpl.set_all_offsets(Offset::Offset(time_offset))
-                .map_err(|e| sql_err!("{}", e))?;
+                    Ok(None)
+                }
+                (_, Some(time_offset)) => {
+                    // There cannot be more than i32 partitions
+                    let num_partitions_i32 = i32::try_from(num_partitions).map_err(|_| {
+                        sql_err!("kafka topic had more than {} partitions", i32::MAX)
+                    })?;
 
-            let offsets_for_times = consumer
-                .offsets_for_times(tpl, Duration::from_secs(10))
-                .map_err(|e| sql_err!("{}", e))?;
+                    let mut tpl = TopicPartitionList::with_capacity(1);
+                    tpl.add_partition_range(&topic, 0, num_partitions_i32 - 1);
+                    tpl.set_all_offsets(Offset::Offset(time_offset))
+                        .map_err(|e| sql_err!("{}", e))?;
 
-            // Translate to `start_offsets`
-            let start_offsets = offsets_for_times
-                .elements()
-                .iter()
-                .map(|elem| match elem.offset() {
-                    Offset::Offset(offset) => Ok(offset),
-                    Offset::End => fetch_end_offset(&consumer, &topic, elem.partition()),
-                    _ => sql_bail!(
-                        "Unexpected offset {:?} for partition {}",
-                        elem.offset(),
-                        elem.partition()
-                    ),
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+                    let offsets_for_times = consumer
+                        .offsets_for_times(tpl, Duration::from_secs(10))
+                        .map_err(|e| sql_err!("{}", e))?;
 
-            if start_offsets.len() != num_partitions {
-                sql_bail!(
-                    "Expected offsets for {} partitions, but received {}",
-                    num_partitions,
-                    start_offsets.len(),
-                );
+                    // Translate to `start_offsets`
+                    let start_offsets = offsets_for_times
+                        .elements()
+                        .iter()
+                        .map(|elem| match elem.offset() {
+                            Offset::Offset(offset) => Ok(offset),
+                            Offset::End => fetch_end_offset(&consumer, &topic, elem.partition()),
+                            _ => sql_bail!(
+                                "Unexpected offset {:?} for partition {}",
+                                elem.offset(),
+                                elem.partition()
+                            ),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    if start_offsets.len() != num_partitions {
+                        sql_bail!(
+                            "Expected offsets for {} partitions, but received {}",
+                            num_partitions,
+                            start_offsets.len(),
+                        );
+                    }
+
+                    Ok(Some(start_offsets))
+                }
+                _ => unreachable!(),
             }
-
-            Ok(Some(start_offsets))
         }
     })
     .await

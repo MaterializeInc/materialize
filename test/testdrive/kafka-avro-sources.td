@@ -255,21 +255,6 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 
 > SELECT * FROM non_dbz_data_varying_partition
 
-# Erroneously adds START OFFSET for non-existent partitions.
-> CREATE SOURCE non_dbz_data_varying_partition_2
-  FROM KAFKA CONNECTION kafka_conn (
-    TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL MS=10,
-    START OFFSET=[0,1]
-  )
-  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
-  ENVELOPE NONE
-
-> SELECT * FROM non_dbz_data_varying_partition_2
-a  b
-----
-5  6
-
 $ kafka-add-partitions topic=non-dbz-data-varying-partition total-partitions=2
 
 # Reading data that's ingested to a new partition takes longer than the default timeout.
@@ -287,15 +272,7 @@ a  b
 7  8
 9  10
 
-# Because the start offsets erronously included an offset for partition 1 (which didn't exist at the time),
-# the first record ingested into partition 1 will be ignored.
-> SELECT * FROM non_dbz_data_varying_partition_2
-a  b
------
-5  6
-9  10
-
-> CREATE SOURCE non_dbz_data_varying_partition_3
+> CREATE SOURCE non_dbz_data_varying_partition_2
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL MS=10,
@@ -311,7 +288,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 
 # Because the start offset for any new partitions will be 0, the first record sent to the new
 # partition will be included.
-> SELECT * FROM non_dbz_data_varying_partition_3
+> SELECT * FROM non_dbz_data_varying_partition_2
 a  b
 -----
 9  10
