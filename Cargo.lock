@@ -4749,6 +4749,7 @@ dependencies = [
  "mz-timely-util",
  "prost",
  "rand",
+ "serde",
  "timely",
  "tokio",
  "tracing",
