@@ -25,6 +25,20 @@ from materialize.buildkite_insights.util.data_io import (
 OUTPUT_TYPE_TXT = "txt"
 OUTPUT_TYPE_CSV = "csv"
 
+BUILDKITE_BUILD_STATES = [
+    "running",
+    "scheduled",
+    "passed",
+    "failing",
+    "failed",
+    "blocked",
+    "canceled",
+    "canceling",
+    "skipped",
+    "not_run",
+    "finished",
+]
+
 
 @dataclass
 class StepData:
@@ -39,12 +53,24 @@ def get_file_name(pipeline_slug: str) -> str:
     return f"{pipeline_slug}_builds.json"
 
 
-def get_data(pipeline_slug: str, no_fetch: bool, max_fetches: int | None) -> list[Any]:
+def get_data(
+    pipeline_slug: str,
+    no_fetch: bool,
+    max_fetches: int | None,
+    branch: str | None,
+    build_state: str | None,
+) -> list[Any]:
     if no_fetch:
         return read_results_from_file(get_file_name(pipeline_slug))
 
     request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
-    params = {"branch": "main", "include_retried_jobs": "true", "per_page": "100"}
+    params = {"include_retried_jobs": "true", "per_page": "100"}
+
+    if branch is not None:
+        params["branch"] = branch
+
+    if build_state is not None:
+        params["state"] = build_state
 
     result = buildkite_api.get(request_path, params, max_fetches=max_fetches)
     write_results_to_file(result, get_file_name(pipeline_slug))
@@ -159,9 +185,11 @@ def main(
     build_step_key: str,
     no_fetch: bool,
     max_fetches: int | None,
+    branch: str | None,
+    build_state: str | None,
     output_type: str,
 ) -> None:
-    data = get_data(pipeline_slug, no_fetch, max_fetches)
+    data = get_data(pipeline_slug, no_fetch, max_fetches, branch, build_state)
     step_infos = collect_data(data, build_step_key)
     print_data(step_infos, build_step_key, output_type)
 
@@ -176,6 +204,13 @@ if __name__ == "__main__":
     parser.add_argument("--build-step-key", default=None, type=str)
     parser.add_argument("--no-fetch", action="store_true")
     parser.add_argument("--max-fetches", default=5, type=int)
+    parser.add_argument("--branch", default="main", type=str)
+    parser.add_argument(
+        "--build-state",
+        default=None,
+        type=str,
+        choices=BUILDKITE_BUILD_STATES,
+    )
     parser.add_argument(
         "--output-type",
         choices=[OUTPUT_TYPE_TXT, OUTPUT_TYPE_CSV],
@@ -189,5 +224,7 @@ if __name__ == "__main__":
         args.build_step_key,
         args.no_fetch,
         args.max_fetches,
+        args.branch,
+        args.build_state,
         args.output_type,
     )
