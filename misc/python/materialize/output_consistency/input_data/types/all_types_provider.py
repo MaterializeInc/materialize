@@ -15,6 +15,9 @@ from materialize.output_consistency.input_data.types.boolean_type_provider impor
 from materialize.output_consistency.input_data.types.date_time_types_provider import (
     DATE_TIME_DATA_TYPES,
 )
+from materialize.output_consistency.input_data.types.jsonb_type_provider import (
+    JSONB_DATA_TYPE,
+)
 from materialize.output_consistency.input_data.types.number_types_provider import (
     NUMERIC_DATA_TYPES,
 )
@@ -24,6 +27,10 @@ from materialize.output_consistency.input_data.types.text_type_provider import (
 
 DATA_TYPES: list[DataType] = list(
     itertools.chain(
-        NUMERIC_DATA_TYPES, [BOOLEAN_DATA_TYPE], DATE_TIME_DATA_TYPES, [TEXT_DATA_TYPE]
+        NUMERIC_DATA_TYPES,
+        [BOOLEAN_DATA_TYPE],
+        DATE_TIME_DATA_TYPES,
+        [TEXT_DATA_TYPE],
+        [JSONB_DATA_TYPE],
     )
 )
