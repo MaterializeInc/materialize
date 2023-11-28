@@ -29,7 +29,7 @@ use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{arb_datum, ColumnType, Datum, GlobalId, Row, RowArena, ScalarType};
+use mz_repr::{arb_datum, ColumnType, Datum, Row, RowArena, ScalarType};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -1898,40 +1898,6 @@ impl MirScalarExpr {
             size += 1;
         })?;
         Ok(size)
-    }
-
-    /// Extract all dependencies of `self`.
-    pub fn depends_on(&self) -> BTreeSet<GlobalId> {
-        let mut dependencies = BTreeSet::new();
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| {
-            // TODO(jkosh44) There's no way to extract the dependencies from functions that may be used.
-            match e {
-                MirScalarExpr::Column(_) => {}
-                MirScalarExpr::Literal(_, _) => {}
-                MirScalarExpr::CallUnmaterializable(_) => {}
-                MirScalarExpr::CallUnary { func: _, expr } => {
-                    dependencies.extend(expr.depends_on());
-                }
-                MirScalarExpr::CallBinary {
-                    func: _,
-                    expr1,
-                    expr2,
-                } => {
-                    dependencies.extend(expr1.depends_on());
-                    dependencies.extend(expr2.depends_on());
-                }
-                MirScalarExpr::CallVariadic { func: _, exprs } => {
-                    dependencies.extend(exprs.iter().flat_map(|expr| expr.depends_on()));
-                }
-                MirScalarExpr::If { cond, then, els } => {
-                    dependencies.extend(cond.depends_on());
-                    dependencies.extend(then.depends_on());
-                    dependencies.extend(els.depends_on());
-                }
-            }
-        });
-        dependencies
     }
 }
 

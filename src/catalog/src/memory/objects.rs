@@ -829,39 +829,23 @@ impl CatalogItem {
     /// referenced. For example this will include any catalog objects used to implement functions
     /// and casts in the item.
     pub fn uses(&self) -> BTreeSet<GlobalId> {
+        let mut uses = self.references().0.clone();
         match self {
             // TODO(jkosh44) This isn't really correct for functions. They may use other objects in
             // their implementation. However, currently there's no way to get that information.
-            CatalogItem::Func(_) => BTreeSet::new(),
-            CatalogItem::Index(idx) => idx
-                .resolved_ids
-                .0
-                .clone()
-                .into_iter()
-                .chain(idx.keys.iter().flat_map(|key| key.depends_on().into_iter()))
-                .collect(),
-            CatalogItem::Sink(sink) => sink.resolved_ids.0.clone(),
-            CatalogItem::Source(source) => source.resolved_ids.0.clone(),
-            CatalogItem::Log(_) => BTreeSet::new(),
-            CatalogItem::Table(table) => table.resolved_ids.0.clone(),
-            CatalogItem::Type(typ) => typ.resolved_ids.0.clone(),
-            CatalogItem::View(view) => view
-                .resolved_ids
-                .0
-                .clone()
-                .into_iter()
-                .chain(view.raw_expr.depends_on())
-                .collect(),
-            CatalogItem::MaterializedView(mview) => mview
-                .resolved_ids
-                .0
-                .clone()
-                .into_iter()
-                .chain(mview.raw_expr.depends_on())
-                .collect(),
-            CatalogItem::Secret(_) => BTreeSet::new(),
-            CatalogItem::Connection(connection) => connection.resolved_ids.0.clone(),
+            CatalogItem::Func(_) => {}
+            CatalogItem::Index(_) => {}
+            CatalogItem::Sink(_) => {}
+            CatalogItem::Source(_) => {}
+            CatalogItem::Log(_) => {}
+            CatalogItem::Table(_) => {}
+            CatalogItem::Type(_) => {}
+            CatalogItem::View(view) => uses.extend(view.raw_expr.depends_on()),
+            CatalogItem::MaterializedView(mview) => uses.extend(mview.raw_expr.depends_on()),
+            CatalogItem::Secret(_) => {}
+            CatalogItem::Connection(_) => {}
         }
+        uses
     }
 
     /// Returns the connection ID that this item belongs to, if this item is
