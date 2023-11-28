@@ -21,6 +21,9 @@ from materialize.output_consistency.input_data.operations.date_time_operations_p
 from materialize.output_consistency.input_data.operations.generic_operations_provider import (
     GENERIC_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
+    JSONB_OPERATION_TYPES,
+)
 from materialize.output_consistency.input_data.operations.number_operations_provider import (
     NUMERIC_OPERATION_TYPES,
 )
@@ -41,5 +44,6 @@ ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
         TRIGONOMETRIC_OPERATION_TYPES,
         DATE_TIME_OPERATION_TYPES,
         TEXT_OPERATION_TYPES,
+        JSONB_OPERATION_TYPES,
     )
 )
