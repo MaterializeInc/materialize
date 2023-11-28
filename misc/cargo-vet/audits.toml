@@ -8,6 +8,7 @@ Certification of this crate means the reviewer has confirmed the crate is:
 - necessary and useful to Materialize
 - well-documented
 '''
+implies = "safe-to-deploy"
 
 [[audits.array-concat]]
 who = "Matt Arthur <matthewleearthur@gmail.com>"
