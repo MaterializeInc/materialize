@@ -8,7 +8,7 @@ Materialize is a **data warehouse** purpose-built for **operational workloads**
 where an analytical data warehouse would be too slow, and a stream processor
 would be too complicated.
 
-Using SQL and common tools in the wider data ecosystem, Materialize allows you
+Using SQL bla bla bla  and common tools in the wider data ecosystem, Materialize allows you
 to build real-time automation, engaging customer experiences, and interactive
 data products that drive value for your business while reducing the cost of
 [data freshness](https://materialize.com/blog/decouple-cost-and-freshness/).
