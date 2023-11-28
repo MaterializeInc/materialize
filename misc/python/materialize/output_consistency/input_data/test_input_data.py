@@ -74,3 +74,10 @@ class ConsistencyTestInputData:
             len(type_with_values.raw_values)
             for type_with_values in self.all_data_types_with_values
         )
+
+    def get_stats(self) -> str:
+        count_data_types = len(self.all_data_types_with_values)
+        count_ops = len(self.all_operation_types)
+        return (
+            f"Input stats: count_data_types={count_data_types}, count_ops={count_ops}"
+        )
