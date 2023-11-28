@@ -641,12 +641,7 @@ where
     }
 
     pub async fn become_tombstone(&mut self) -> Result<RoutineMaintenance, InvalidUsage<T>> {
-        if !self.applier.since_upper_both_empty() {
-            return Err(InvalidUsage::FinalizationError {
-                since: self.applier.since(),
-                upper: self.applier.clone_upper(),
-            });
-        }
+        self.applier.check_since_upper_both_empty()?;
 
         let metrics = Arc::clone(&self.applier.metrics);
         let mut retry = self

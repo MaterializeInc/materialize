@@ -23,7 +23,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::cache::{LockingTypedState, StateCache};
-use crate::error::CodecMismatch;
+use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::gc::GcReq;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
@@ -154,6 +154,7 @@ where
     /// see a different version of state, even if this Applier has not explicitly fetched and
     /// updated to the latest state. Successive calls will always return values such that
     /// `PartialOrder::less_equal(call1, call2)` hold true.
+    #[cfg(test)]
     pub fn since(&self) -> Antichain<T> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
@@ -204,10 +205,17 @@ where
     /// Due to sharing state with other handles, successive reads to this fn or any other may
     /// see a different version of state, even if this Applier has not explicitly fetched and
     /// updated to the latest state. Once this fn returns true, it will always return true.
-    pub fn since_upper_both_empty(&self) -> bool {
+    pub fn check_since_upper_both_empty(&self) -> Result<(), InvalidUsage<T>> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
-                state.since().is_empty() && state.upper().is_empty()
+                if state.since().is_empty() && state.upper().is_empty() {
+                    Ok(())
+                } else {
+                    Err(InvalidUsage::FinalizationError {
+                        since: state.since().clone(),
+                        upper: state.upper().clone(),
+                    })
+                }
             })
     }
 

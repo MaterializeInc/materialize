@@ -2978,7 +2978,7 @@ where
                 // If global since is empty, we can close shard because no one has an outstanding
                 // read hold.
                 if read_handle.since().is_empty() {
-                    let write_handle: WriteHandle<SourceData, (), T, Diff> = persist_client
+                    let mut write_handle: WriteHandle<SourceData, (), T, Diff> = persist_client
                         .open_writer(
                             shard_id,
                             Arc::new(RelationDesc::empty()),
@@ -2990,6 +2990,10 @@ where
                         .expect("invalid persist usage");
 
                     if write_handle.upper().is_empty() {
+                        // Note that finalization involves cleaning up more state than just the upper
+                        // and since, but we can't check that here yet. There is a modest chance that
+                        // this leaks a shard.
+                        // TODO: allow callers to confirm finalization.
                         Some(shard_id)
                     } else {
                         // Finalizing a shard can take a long time cleaning up existing data.
@@ -2999,14 +3003,26 @@ where
                         // up.
                         let persist_client = persist_client.clone();
                         mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
-                            let result = persist_client
-                                .finalize_shard::<SourceData, (), T, Diff>(
-                                    shard_id,
-                                    Diagnostics::from_purpose("finalizing shards"),
-                                )
-                                .await;
+                            let finalize = || async move {
+                                let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
+                                let append = write_handle
+                                    .append(empty_batch, write_handle.upper().clone(), Antichain::new())
+                                    .await?;
 
-                            if let Err(e) = result {
+                                if let Err(new_upper) = append {
+                                    warn!("tried to finalize a shard with an advancing upper: {new_upper:?}");
+                                    Ok(())
+                                } else {
+                                    persist_client
+                                        .finalize_shard::<SourceData, (), T, Diff>(
+                                            shard_id,
+                                            Diagnostics::from_purpose("finalizing shards"),
+                                        )
+                                        .await
+                                }
+                            };
+
+                            if let Err(e) = finalize().await {
                                 // Rather than error, just leave this shard as one to finalize later.
                                 warn!("error during background finalization: {e:?}");
                             }
