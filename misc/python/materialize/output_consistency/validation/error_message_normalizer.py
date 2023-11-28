@@ -27,8 +27,12 @@ class ErrorMessageNormalizer:
             normalized_message,
         )
 
-        if normalized_message.__contains__("mz_timestamp out of range ("):
+        if "mz_timestamp out of range (" in normalized_message:
             # tracked with https://github.com/MaterializeInc/materialize/issues/19822
+            normalized_message = normalized_message[0 : normalized_message.index(" (")]
+
+        if "invalid base64 end sequence (" in normalized_message:
+            # tracked with https://github.com/MaterializeInc/materialize/issues/23497
             normalized_message = normalized_message[0 : normalized_message.index(" (")]
 
         return normalized_message
