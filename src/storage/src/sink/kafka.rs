@@ -33,6 +33,7 @@ use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_client::client::SinkStatisticsUpdate;
+use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_client::sink::ProgressRecord;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
@@ -383,7 +384,7 @@ struct KafkaSinkState {
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
 
     progress_topic: String,
-    progress_key: String,
+    progress_key: ProgressKey,
 
     healthchecker: HealthOutputHandle,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
@@ -518,7 +519,7 @@ impl KafkaSinkState {
             progress_topic: match &connection.consistency_config {
                 KafkaConsistencyConfig::Progress { topic } => topic.clone(),
             },
-            progress_key: mz_storage_client::sink::ProgressKey::new(sink_id),
+            progress_key: ProgressKey::new(sink_id),
             healthchecker,
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),

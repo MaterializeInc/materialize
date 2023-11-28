@@ -369,6 +369,7 @@ Operation type  | Resource type    | Resource name
 Read, Write     | Topic            | Consult `mz_kafka_connections.sink_progress_topic` for the sink's connection
 Write           | Topic            | The specified `TOPIC` option
 Write           | Transactional ID | `mz-producer-{SINK ID}-*`
+Read            | Group            | `materialize-bootstrap-sink-{SINK ID}`
 
 When using [automatic topic creation](#automatic-topic-creation), Materialize
 additionally requires access to the following operations:
