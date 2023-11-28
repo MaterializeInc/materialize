@@ -112,11 +112,14 @@ class DfTotalsExtended(DfTotalsBase):
     def __init__(self, data: pd.DataFrame = pd.DataFrame()):
         super().__init__(data)
 
-    def to_filtered_with_threshold(self, max_deviation: float) -> DfTotalsExtended:
+    def to_filtered_with_threshold(
+        self, max_deviation: float, match_results_better_than_baseline: bool
+    ) -> DfTotalsExtended:
         tps_per_endpoint = self.data
         filtered_data = tps_per_endpoint.loc[
             # keep entries exceeding the baseline by x%
             tps_per_endpoint[df_totals_ext_cols.TPS_DIFF_PERC]
+            * (+1 if match_results_better_than_baseline else -1)
             > max_deviation
         ]
 

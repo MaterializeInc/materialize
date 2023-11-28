@@ -39,11 +39,13 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             baseline_endpoint.try_load_version(), other_endpoint.try_load_version()
         )
         entries_worse_than_threshold = tps_per_endpoint_data.to_filtered_with_threshold(
-            self.max_deviation_as_percent_decimal * (-1)
+            self.max_deviation_as_percent_decimal,
+            match_results_better_than_baseline=False,
         )
         entries_better_than_threshold = (
             tps_per_endpoint_data.to_filtered_with_threshold(
-                self.max_deviation_as_percent_decimal
+                self.max_deviation_as_percent_decimal,
+                match_results_better_than_baseline=True,
             )
         )
 
