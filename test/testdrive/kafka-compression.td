@@ -51,7 +51,7 @@ world
 hello
 world
 
-$ kafka-create-topic topic=zstd compression=zstd
+$ kafka-create-topic topic=zstd compression=zstd partitions=1
 
 $ kafka-ingest format=bytes topic=zstd timestamp=1
 hello
