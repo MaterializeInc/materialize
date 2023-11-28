@@ -34,7 +34,7 @@ We highly recommend using dbt to manage deployments, but this workflow can be re
         schema: prod
         cluster: prod
         sslmode: require
-      deploy:
+      prod_deploy:
         type: materialize
         threads: 1
         host: <host>
