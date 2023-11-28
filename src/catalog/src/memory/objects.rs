@@ -850,14 +850,14 @@ impl CatalogItem {
                 .0
                 .clone()
                 .into_iter()
-                .chain(view.raw_expr.depends_on().into_iter())
+                .chain(view.raw_expr.depends_on())
                 .collect(),
             CatalogItem::MaterializedView(mview) => mview
                 .resolved_ids
                 .0
                 .clone()
                 .into_iter()
-                .chain(mview.raw_expr.depends_on().into_iter())
+                .chain(mview.raw_expr.depends_on())
                 .collect(),
             CatalogItem::Secret(_) => BTreeSet::new(),
             CatalogItem::Connection(connection) => connection.resolved_ids.0.clone(),
