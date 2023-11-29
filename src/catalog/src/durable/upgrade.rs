@@ -324,7 +324,7 @@ pub(crate) mod persist {
         current_version: u64,
         migration_logic: impl FnOnce(Vec<V1>) -> Vec<MigrationAction<V1, V2>>,
     ) -> Result<(u64, Timestamp), CatalogError> {
-        // 1. Get a snapshot of the current catalog, using the current version to deserialize the
+        // 1. Get a snapshot of the current catalog, using the V1 to deserialize the
         // contents.
         let as_of = persist_handle.as_of(upper);
         let snapshot = persist_handle.snapshot_binary(as_of).await;
