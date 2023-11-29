@@ -762,8 +762,8 @@ impl Coordinator {
             })
             .await;
 
-        match result {
-            Ok(()) => {}
+        let builtin_table_notify = match result {
+            Ok(((), table_updates)) => table_updates,
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -780,13 +780,18 @@ impl Coordinator {
                 ctx.retire(Err(e));
                 return;
             }
-        }
+        };
 
         self.maybe_create_linked_cluster(id).await;
 
         self.create_storage_export(id, &catalog_sink)
             .await
             .unwrap_or_terminate("cannot fail to create exports");
+
+        // Block on the builtin table updates completing.
+        //
+        // Note: these are run in a separate task, so they're run concurrently to everything else.
+        builtin_table_notify.await;
 
         ctx.retire(Ok(ExecuteResponse::CreatedSink))
     }
@@ -2960,11 +2965,17 @@ impl Coordinator {
             output,
         };
         active_subscribe.initialize();
-        self.add_active_subscribe(sink_id, active_subscribe).await;
 
+        // Add metadata for the new SUBSCRIBE.
+        let write_notify_fut = self.add_active_subscribe(sink_id, active_subscribe).await;
+
+        // Ship the underlying dataflow.
         let (df_desc, _df_meta) = global_lir_plan.unapply();
+        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
 
-        self.ship_dataflow(df_desc, cluster_id).await;
+        // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
+        // requests to external services, which can take time, so we run them concurrently.
+        let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
 
         if let Some(target) = target_replica {
             self.controller
