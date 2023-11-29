@@ -4,11 +4,12 @@ This repository contains an LSP implementation for Materialize. It is written in
 
 ## Features
 
-Currently supported:
+Supported:
 
 * **Diagnostics**: Parsing and detecting errors in SQL code.
+* **Completion**: Suggestions objects and their columns.
 
 On the roadmap:
 
-* **Completion**: Snippets and suggestions (functions, table names, column names, etc.).
+* **Completion**: Snippets and suggestions (functions, keywords etc.).
 * **CodeLens**: Detecting statements and providing an inline **Run** command.
