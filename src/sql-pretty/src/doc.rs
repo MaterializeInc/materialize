@@ -36,6 +36,94 @@ fn doc_display_pass<'a, T: AstDisplay>(v: &T) -> RcDoc<'a, ()> {
     RcDoc::text(v.to_ast_string())
 }
 
+pub(crate) fn doc_copy<T: AstInfo>(v: &CopyStatement<T>) -> RcDoc {
+    let relation = match &v.relation {
+        CopyRelation::Table { name, columns } => {
+            let mut relation = doc_display_pass(name);
+            if !columns.is_empty() {
+                relation = bracket_doc(
+                    nest(relation, RcDoc::text("(")),
+                    comma_separate(doc_display_pass, columns),
+                    RcDoc::text(")"),
+                    RcDoc::line_(),
+                );
+            }
+            RcDoc::concat([RcDoc::text("COPY "), relation])
+        }
+        CopyRelation::Select(query) => bracket("COPY (", doc_select_statement(query), ")"),
+        CopyRelation::Subscribe(query) => bracket("COPY (", doc_subscribe(query), ")"),
+    };
+    let mut docs = vec![
+        relation,
+        RcDoc::concat([
+            doc_display_pass(&v.direction),
+            RcDoc::text(" "),
+            doc_display_pass(&v.target),
+        ]),
+    ];
+    if !v.options.is_empty() {
+        docs.push(bracket(
+            "WITH (",
+            comma_separate(doc_display_pass, &v.options),
+            ")",
+        ));
+    }
+    RcDoc::intersperse(docs, Doc::line()).group()
+}
+
+pub(crate) fn doc_subscribe<T: AstInfo>(v: &SubscribeStatement<T>) -> RcDoc {
+    let doc = match &v.relation {
+        SubscribeRelation::Name(name) => nest_title("SUBSCRIBE", doc_display_pass(name)),
+        SubscribeRelation::Query(query) => bracket("SUBSCRIBE (", doc_query(query), ")"),
+    };
+    let mut docs = vec![doc];
+    if !v.options.is_empty() {
+        docs.push(bracket(
+            "WITH (",
+            comma_separate(doc_display_pass, &v.options),
+            ")",
+        ));
+    }
+    if let Some(as_of) = &v.as_of {
+        docs.push(doc_as_of(as_of));
+    }
+    if let Some(up_to) = &v.up_to {
+        docs.push(nest_title("UP TO", doc_expr(up_to)));
+    }
+    match &v.output {
+        SubscribeOutput::Diffs => {}
+        SubscribeOutput::WithinTimestampOrderBy { order_by } => {
+            docs.push(nest_title(
+                "WITHIN TIMESTAMP ORDER BY ",
+                comma_separate(doc_order_by_expr, order_by),
+            ));
+        }
+        SubscribeOutput::EnvelopeUpsert { key_columns } => {
+            docs.push(bracket(
+                "ENVELOPE UPSERT (KEY (",
+                comma_separate(doc_display_pass, key_columns),
+                "))",
+            ));
+        }
+        SubscribeOutput::EnvelopeDebezium { key_columns } => {
+            docs.push(bracket(
+                "ENVELOPE DEBEZIUM (KEY (",
+                comma_separate(doc_display_pass, key_columns),
+                "))",
+            ));
+        }
+    }
+    RcDoc::intersperse(docs, Doc::line()).group()
+}
+
+fn doc_as_of<T: AstInfo>(v: &AsOf<T>) -> RcDoc {
+    let (title, expr) = match v {
+        AsOf::At(expr) => ("AS OF", expr),
+        AsOf::AtLeast(expr) => ("AS OFAT LEAST", expr),
+    };
+    nest_title(title, doc_expr(expr))
+}
+
 pub(crate) fn doc_create_view<T: AstInfo>(v: &CreateViewStatement<T>) -> RcDoc {
     let mut docs = vec![];
     docs.push(RcDoc::text(format!(

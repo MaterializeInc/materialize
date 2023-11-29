@@ -84,7 +84,8 @@ use pretty::RcDoc;
 use thiserror::Error;
 
 use crate::doc::{
-    doc_create_materialized_view, doc_create_view, doc_display, doc_insert, doc_select_statement,
+    doc_copy, doc_create_materialized_view, doc_create_view, doc_display, doc_insert,
+    doc_select_statement, doc_subscribe,
 };
 
 const TAB: isize = 4;
@@ -95,6 +96,8 @@ fn to_doc<T: AstInfo>(v: &Statement<T>) -> RcDoc {
         Statement::Insert(v) => doc_insert(v),
         Statement::CreateView(v) => doc_create_view(v),
         Statement::CreateMaterializedView(v) => doc_create_materialized_view(v),
+        Statement::Copy(v) => doc_copy(v),
+        Statement::Subscribe(v) => doc_subscribe(v),
         _ => doc_display(v, "statement"),
     }
 }
