@@ -46,6 +46,7 @@ use crate::internal::watch::StateWatch;
 use crate::iter::Consolidator;
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
+pub use crate::internal::encoding::LazyPartStats;
 pub use crate::internal::state::Since;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -1069,7 +1070,7 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
-        let mut cursor = self.snapshot_cursor(as_of).await?;
+        let mut cursor = self.snapshot_cursor(as_of, |_| true).await?;
         let mut contents = Vec::new();
         while let Some(iter) = cursor.next().await {
             contents.extend(iter);
@@ -1100,6 +1101,7 @@ where
     pub async fn snapshot_cursor(
         &mut self,
         as_of: Antichain<T>,
+        should_fetch_part: impl for<'a> Fn(&'a Option<LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
@@ -1122,6 +1124,7 @@ where
                     .map(|part| {
                         self.lease_batch_part(batch.desc.clone(), part.clone(), metadata.clone())
                     })
+                    .filter(|p| should_fetch_part(&p.stats))
                     .collect();
                 consolidator.enqueue_leased_run(
                     &self.blob,

@@ -161,7 +161,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
         data_read
-            .snapshot_cursor(Antichain::from_elem(self.as_of.clone()))
+            .snapshot_cursor(Antichain::from_elem(self.as_of.clone()), |_| true)
             .await
     }
 

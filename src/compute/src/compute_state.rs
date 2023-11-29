@@ -794,7 +794,7 @@ impl PersistPeek {
             .map_err(|e| e.to_string())?;
 
         let mut cursor = reader
-            .snapshot_cursor(Antichain::from_elem(as_of))
+            .snapshot_cursor(Antichain::from_elem(as_of), |_| true)
             .await
             .map_err(|since| {
                 format!("attempted to peek at {as_of}, but the since has advanced to {since:?}")
