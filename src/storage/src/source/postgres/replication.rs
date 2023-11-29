@@ -69,7 +69,6 @@
 //! [1]: https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION
 //! [2]: https://www.postgresql.org/message-id/CAFPTHDZS9O9WG02EfayBd6oONzK%2BqfUxS6AbVLJ7W%2BKECza2gg%40mail.gmail.com
 
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::pin::pin;
@@ -103,7 +102,9 @@ use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 
 use crate::metrics::postgres::PgSourceMetrics;
@@ -149,7 +150,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
     Stream<G, Rc<TransientError>>,
-    Rc<dyn Any>,
+    PressOnDropButton,
 ) {
     let op_name = format!("ReplicationReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
@@ -364,7 +365,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         replication_updates,
         upper_stream,
         errors,
-        Rc::new(button.press_on_drop()),
+        button.press_on_drop(),
     )
 }
 

@@ -9,7 +9,6 @@
 
 //! A source that reads from a persist shard.
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Debug;
@@ -26,7 +25,9 @@ use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::{Codec, Codec64};
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
 use timely::dataflow::scopes::Child;
@@ -72,7 +73,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
 ) -> (
     Stream<Child<'g, G, T>, FetchedPart<K, V, G::Timestamp, D>>,
-    Rc<dyn Any>,
+    Vec<PressOnDropButton>,
 )
 where
     K: Debug + Codec,
@@ -89,7 +90,7 @@ where
         usize,
     ) -> (
         Stream<Child<'g, G, T>, (usize, SerdeLeasedBatchPart)>,
-        Rc<dyn Any>,
+        Vec<PressOnDropButton>,
     ),
     C: Future<Output = PersistClient> + Send + 'static,
 {
@@ -110,6 +111,8 @@ where
 
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
 
+    let mut tokens = vec![];
+
     // we can safely pass along a zero summary from this feedback edge,
     // as the input is disconnected from the operator's output
     let (completed_fetches_feedback_handle, completed_fetches_feedback_stream) =
@@ -129,23 +132,24 @@ where
         should_fetch_part,
         listen_sleep,
     );
+    tokens.push(descs_token);
+
     let descs = descs.enter(scope);
-    let (descs, backpressure_token) = match desc_transformer {
-        Some(desc_transformer) => desc_transformer(scope.clone(), &descs, chosen_worker),
-        None => {
-            let token: Rc<dyn Any> = Rc::new(());
-            (descs, token)
+    let descs = match desc_transformer {
+        Some(desc_transformer) => {
+            let (descs, extra_tokens) = desc_transformer(scope.clone(), &descs, chosen_worker);
+            tokens.extend(extra_tokens);
+            descs
         }
+        None => descs,
     };
 
     let (parts, completed_fetches_stream, fetch_token) =
         shard_source_fetch(&descs, name, client(), shard_id, key_schema, val_schema);
     completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
+    tokens.push(fetch_token);
 
-    (
-        parts,
-        Rc::new((descs_token, fetch_token, backpressure_token)),
-    )
+    (parts, tokens)
 }
 
 #[derive(Debug)]
@@ -175,7 +179,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     mut should_fetch_part: F,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
-) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, Rc<dyn Any>)
+) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, PressOnDropButton)
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -407,7 +411,7 @@ where
         }
     });
 
-    (descs_stream, Rc::new(shutdown_button.press_on_drop()))
+    (descs_stream, shutdown_button.press_on_drop())
 }
 
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
@@ -420,7 +424,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
 ) -> (
     Stream<G, FetchedPart<K, V, T, D>>,
     Stream<G, SerdeLeasedBatchPart>,
-    Rc<dyn Any>,
+    PressOnDropButton,
 )
 where
     K: Debug + Codec,
@@ -485,7 +489,7 @@ where
     (
         fetched_stream,
         completed_fetches_stream,
-        Rc::new(shutdown_button.press_on_drop()),
+        shutdown_button.press_on_drop(),
     )
 }
 
@@ -529,11 +533,8 @@ mod tests {
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
-                    let transformer = move |_, descs: &Stream<_, _>, _| {
-                        let token: Rc<dyn Any> = Rc::new(());
-                        (descs.clone(), token)
-                    };
-                    let (stream, token) = shard_source::<String, String, u64, u64, _, _, _, _>(
+                    let transformer = move |_, descs: &Stream<_, _>, _| (descs.clone(), vec![]);
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _, _>(
                         scope,
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
@@ -550,7 +551,7 @@ mod tests {
                         |_fetch, _frontier| true,
                         false.then_some(|| unreachable!()),
                     );
-                    (stream.leave(), token)
+                    (stream.leave(), tokens)
                 });
 
                 let probe = stream.probe();
@@ -598,11 +599,8 @@ mod tests {
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
-                    let transformer = move |_, descs: &Stream<_, _>, _| {
-                        let token: Rc<dyn Any> = Rc::new(());
-                        (descs.clone(), token)
-                    };
-                    let (stream, token) = shard_source::<String, String, u64, u64, _, _, _, _>(
+                    let transformer = move |_, descs: &Stream<_, _>, _| (descs.clone(), vec![]);
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _, _>(
                         scope,
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
@@ -619,7 +617,7 @@ mod tests {
                         |_fetch, _frontier| true,
                         false.then_some(|| unreachable!()),
                     );
-                    (stream.leave(), token)
+                    (stream.leave(), tokens)
                 });
 
                 let probe = stream.probe();

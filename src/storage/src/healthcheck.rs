@@ -9,7 +9,6 @@
 
 //! Healthcheck common
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,7 +23,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_repr::GlobalId;
 use mz_storage_client::client::StatusUpdate;
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Enter, Map};
 use timely::dataflow::scopes::Child;
@@ -325,7 +326,7 @@ pub(crate) fn health_operator<'g, G, P>(
     health_operator_impl: P,
     // Whether or not we should actually write namespaced errors in the `details` column.
     write_namespaced_map: bool,
-) -> Rc<dyn Any>
+) -> PressOnDropButton
 where
     G: Scope<Timestamp = ()>,
     P: HealthOperator + 'static,
@@ -501,7 +502,7 @@ where
         }
     });
 
-    Rc::new(button.press_on_drop())
+    button.press_on_drop()
 }
 
 use serde::{Deserialize, Serialize};
