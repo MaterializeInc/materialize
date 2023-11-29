@@ -277,6 +277,21 @@ I'm still thinking about how exactly to tie a `REFRESH EVERY` MV to the cluster 
 To prevent users from accidentally keeping their expensive refresh replica running, we could produce a notice when one creates a `REFRESH EVERY` MV on a cluster with other dataflows, or vice versa.
 - (from Nikhil) You don't specify `REFRESH EVERY` on materialized views. You instead specify a `MATERIALIZED VIEW REFRESH INTERVAL` on clusters, and that option automatically applies to all materialized views installed on that cluster.
 
+### System Catalog Updates
+
+Some updates and additions to the system catalog will ensure users can monitor and understand their materialized views with refresh modifiers. They include:
+
+* **A new table `mz_materialized_view_refresh_history`.** 
+    - Refresh ID determined by the scheduled timestamp. 
+    - [Nikhil recommends] writing the next pending refresh for each materialized view. We can use this later for auto-scheduled clusters to derive `next_scheduled_create` on the cluster level.
+    - Open question for how this table will be cleaned up.
+* **Changes to `mz_materialized_views`.** 
+    - A new column for `REFRESH` capturing refresh parameters e.g. `on-commit`, etc. 
+    - [From Nikhil] The REFRESH option can be specified multiple times. That needs to be captured somehow. Possibly via type text list and possibly via a separate table that you join in (if we wanted to keep things more normalized).
+    - [From Nikhil] Plausibly the right answer here is mz_materialized_view_refreshes (materialized_view_id text, interval interval, interval_aligned_to timestamptz, at timestamp, on_schedule text), with the idea that EVERY … ALIGNED TO fills in the interval and interval_aligned_to columns and NULLs out the rest, AT fills in the AT column and nulls out the rest, and ON SCHEDULE fills out the on_schedule column and nulls out the rest, and there is one such row per REFRESH option specified. The absence of any rows for a given matview in mz_materialized_view_refreshes implies REFRESH ON COMMIT.
+
+To give full visibility into the resources used to update a view, additional changes may be needed to `mz_clusters` and other cluster/cluster replica tables once [`SCHEDULE = AUTO` is in place for clusters](https://github.com/MaterializeInc/materialize/issues/23132), but we'll table those for a separate design doc.
+
 ## Rollout
 
 I plan to first implement the feature without automatically turning replicas on and off, and release the feature in this half-finished state behind a feature flag. At this point, we can already show the feature to the customer whose needs prompted this work, and they can validate it to some degree. At this point, the user will need to manually manage the replicas, but hopefully a full implementation with automatic replica management can follow in 1-2 weeks.
