@@ -3315,6 +3315,7 @@ fn concurrent_cluster_drop() {
         .execute("SELECT * FROM t", &[])
         .expect_err("error");
 
+
     assert_eq!(
         err.as_db_error().unwrap().message(),
         "the transaction's active cluster has been dropped"

@@ -25,12 +25,7 @@ name: Slack QA Risky Notifications
 
 on:
   pull_request_target:
-    types:
-      - opened
-      - reopened
-      - ready_for_review
     paths:
-      - src/environmentd/tests/server.rs
       - src/pgwire/src/message.rs
       - src/sql/src/plan/statement.rs
       - src/catalog/src/builtin.rs
@@ -42,7 +37,6 @@ on:
       - src/sql-parser/src/ast/defs/statement.rs
       - src/adapter/src/catalog.rs
       - src/sql/src/catalog.rs
-      - src/environmentd/tests/sql.rs
       - src/pgwire/src/protocol.rs
       - src/expr/src/scalar/mod.rs
       - src/adapter/src/coord/sequencer.rs
@@ -60,7 +54,6 @@ jobs:
   notify:
     name: "Notify about risky PRs"
     runs-on: ubuntu-latest
-    if: ${{ !github.event.pull_request.draft }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,7 +63,7 @@ jobs:
         id: long
         run: |
           num_lines=$(git diff --diff-filter=AM ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} -- '*.rs' | grep "^+" | grep -v "^+++" | wc -l)
-          if [[ $num_lines -gt 300 ]]; then
+          if [[ $num_lines -gt 0 ]]; then
             echo "long=true" >> $GITHUB_OUTPUT
           fi
       - name: "Push to Slack"
