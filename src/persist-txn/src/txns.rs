@@ -415,7 +415,7 @@ where
             };
             let updates = registered
                 .iter()
-                .map(|data_id| C::encode(crate::TxnsEntry::Register(*data_id)))
+                .map(|data_id| C::encode(TxnsEntry::Register(*data_id, T::encode(&forget_ts))))
                 .collect::<Vec<_>>();
             let updates = updates
                 .iter()
