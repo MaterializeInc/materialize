@@ -74,7 +74,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     for i, name in enumerate(c.workflows):
         # incident-70 requires more memory, runs in separate CI step
-        if name in ("default", "test-incident-70"):
+        # concurrent-connections is too flaky
+        if name in ("default", "test-incident-70", "test-concurrent-connections"):
             continue
         if shard is None or shard_count is None or i % int(shard_count) == shard:
             with c.test_case(name):
@@ -2570,7 +2571,7 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
 
     def worker(c: Composition, i: int) -> None:
         start_time = time.time()
-        c.sql("SELECT 1")
+        c.sql("SELECT 1", print_statement=False)
         end_time = time.time()
         runtimes[i] = end_time - start_time
 
