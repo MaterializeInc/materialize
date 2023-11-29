@@ -37,7 +37,7 @@ def workflow_with_otel(c: Composition) -> None:
 
     # Start with fastpath
     info = requests.get(f"http://localhost:{port}/api/tracing").json()
-    assert info["current_level_filter"] == "info"
+    assert info["current_level_filter"] == "debug"
 
     # update the stderr config
     c.sql(

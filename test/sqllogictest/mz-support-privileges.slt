@@ -10,6 +10,13 @@
 # Tests that assert the privileges that are assumed to be always granted to
 # the mz_support user.
 
+# This can be removed once #18628 is resolved and we no longer need debug logging
+# in Kafka sinks
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET log_filter
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t (a INT)
 

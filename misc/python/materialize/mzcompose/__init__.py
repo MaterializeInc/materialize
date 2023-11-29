@@ -79,6 +79,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "timestamp_oracle": "postgres",
     "default_idle_arrangement_merge_effort": "0",
     "default_arrangement_exert_proportionality": "16",
+    # TODO: remove this once #18628 is resolved
+    "log_filter": "mz_storage::sink::kafka=debug,info",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
