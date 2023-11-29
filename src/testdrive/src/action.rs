@@ -297,7 +297,7 @@ impl State {
 
         Ok(())
     }
-    /// Makes of copy of the stash's catalog and runs a function on its
+    /// Makes of copy of the durable catalog and runs a function on its
     /// state. Returns `None` if there's no catalog information in the State.
     pub async fn with_catalog_copy<F, T>(&self, f: F) -> Result<Option<T>, anyhow::Error>
     where

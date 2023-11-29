@@ -1169,7 +1169,7 @@ impl Catalog {
 
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
-        // indeterminate stash state, which we only reconcile during catalog
+        // indeterminate catalog state, which we only reconcile during catalog
         // init.
         tx.commit()
             .await
@@ -2793,7 +2793,7 @@ impl Catalog {
                                 }))
                             })?;
 
-                        // Update the Stash and Builtin Tables.
+                        // Update the catalog storage and Builtin Tables.
                         if !new_entry.item().is_temporary() {
                             tx.update_item(*id, new_entry.clone().into())?;
                         }
@@ -3252,7 +3252,7 @@ impl Catalog {
         let var = state.get_system_configuration(name)?;
         tx.upsert_system_config(name, var.value())?;
         // This mirrors the `enabled_persist_txn_tables` "system var" into the
-        // catalog stash "config" collection so that we can toggle the flag with
+        // catalog storage "config" collection so that we can toggle the flag with
         // Launch Darkly, but use it in boot before Launch Darkly is available.
         if name == ENABLE_PERSIST_TXN_TABLES.name() {
             tx.set_enable_persist_txn_tables(
@@ -4497,7 +4497,7 @@ mod tests {
             )
             .await
             .expect("unable to open debug catalog");
-            // Re-opening the same stash resets the transient_revision to 1.
+            // Re-opening the same catalog resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
         }

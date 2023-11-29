@@ -856,7 +856,7 @@ impl RustType<proto::AclMode> for AclMode {
 
     fn from_proto(proto: proto::AclMode) -> Result<Self, TryFromProtoError> {
         AclMode::from_bits(proto.bitflags).ok_or_else(|| {
-            TryFromProtoError::InvalidBitFlags(format!("Invalid AclMode from Stash {proto:?}"))
+            TryFromProtoError::InvalidBitFlags(format!("Invalid AclMode from catalog {proto:?}"))
         })
     }
 }
@@ -2155,7 +2155,7 @@ mod tests {
         // Assert there aren't any extra snapshots.
         assert!(
             filenames.is_empty(),
-            "Found snapshots for unsupported Stash versions {filenames:?}.\nIf you just increased `MIN_CATALOG_VERSION`, then please delete the old snapshots. If you created a new snapshot, please bump `CATALOG_VERSION`."
+            "Found snapshots for unsupported catalog versions {filenames:?}.\nIf you just increased `MIN_CATALOG_VERSION`, then please delete the old snapshots. If you created a new snapshot, please bump `CATALOG_VERSION`."
         );
     }
 
@@ -2186,7 +2186,7 @@ mod tests {
             .collect();
 
         // Note: objects.proto and objects_v<CATALOG_VERSION>.proto should be exactly the same. The
-        // reason being, when bumping the Stash to the next version, CATALOG_VERSION + 1, we need a
+        // reason being, when bumping the catalog to the next version, CATALOG_VERSION + 1, we need a
         // snapshot to migrate _from_, which should be a snapshot of how the protos are today.
         // Hence why the two files should be exactly the same.
         similar_asserts::assert_eq!(current, snapshot);
