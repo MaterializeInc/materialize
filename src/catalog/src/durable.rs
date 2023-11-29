@@ -12,6 +12,7 @@
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::num::NonZeroI64;
+use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -19,6 +20,7 @@ use mz_stash::DebugStashFactory;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
+pub use crate::durable::impls::persist::metrics::Metrics;
 use crate::durable::impls::persist::PersistHandle;
 use crate::durable::impls::shadow::OpenableShadowCatalogState;
 use crate::durable::impls::stash::{OpenableConnection, TestOpenableConnection};
@@ -276,9 +278,9 @@ pub fn test_stash_backed_catalog_state(
 pub async fn persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
-    registry: &MetricsRegistry,
+    metrics: Arc<Metrics>,
 ) -> PersistHandle {
-    PersistHandle::new(persist_client, organization_id, registry).await
+    PersistHandle::new(persist_client, organization_id, metrics).await
 }
 
 /// Creates an openable durable catalog state implemented using persist that is meant to be used in
@@ -287,7 +289,8 @@ pub async fn test_persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
 ) -> PersistHandle {
-    persist_backed_catalog_state(persist_client, organization_id, &MetricsRegistry::new()).await
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    persist_backed_catalog_state(persist_client, organization_id, metrics).await
 }
 
 /// Creates an openable durable catalog state implemented using both the stash and persist, that
