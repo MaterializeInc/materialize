@@ -436,6 +436,17 @@ pulling responsibilities out of the Coordinator event loop. In line with our
 milestones, we will start with Peeks, move on to table writes, and then finally
 decouple the controllers from the event loop.
 
+- Isolated Peeks: Processing of Peeks will no longer interfere with other
+  responsibilities of the Coordinator, for example processing of controller
+  responses or other (potentially blocking things). Controllers will send Peek
+  Responses back to `pgwire` proactively, bypassing the event loop. And, most
+  importantly other responsibilities will not negatively aspect processing
+  Peeks.
+- Isolated Writes: What we have above for Peeks, but for Writes, basically!
+- Isolated Controller Control Loops: A single cluster (and it's controller),
+  that is, for example, sending back a lot of responses no longer negatively
+  interferes with the rest of the Coordinator responsibilities.
+
 TODO: More exciting details about what the benefits of the individual steps
 will be!
 
