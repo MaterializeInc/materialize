@@ -1416,7 +1416,7 @@ where
             None => {
                 let mut handle = self.read_handle_for_snapshot(id).await?;
                 let cursor = handle
-                    .snapshot_cursor(Antichain::from_elem(as_of))
+                    .snapshot_cursor(Antichain::from_elem(as_of), |_| true)
                     .await
                     .map_err(|_| StorageError::ReadBeforeSince(id))?;
                 SnapshotCursor {
