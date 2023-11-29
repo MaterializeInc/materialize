@@ -13,6 +13,15 @@ import subprocess
 from materialize import buildkite, git
 from materialize.mz_version import MzVersion
 
+"""
+Git revisions that are based on commits listed as keys require at least the version specified in the value.
+Note that specified versions do not necessarily need to be already published.
+Commits must be ordered descending by their date.
+"""
+MIN_ANCESTOR_MZ_VERSION_PER_COMMIT: dict[str, MzVersion] = {
+    # insert newer commits at the top
+}
+
 
 def resolve_ancestor_image_tag() -> str:
     image_tag, context = _resolve_ancestor_image_tag()
@@ -53,9 +62,21 @@ def _resolve_ancestor_image_tag_when_in_buildkite() -> tuple[str, str]:
             f"previous release because on release branch {tagged_release_version}",
         )
     else:
+        latest_published_version = get_latest_published_version()
+        override_commit = _get_override_commit_instead_of_version(
+            latest_published_version
+        )
+
+        if override_commit is not None:
+            # use the commit instead of the latest release
+            return (
+                _commit_to_image_tag(override_commit),
+                f"commit override instead of latest release ({latest_published_version})",
+            )
+
         # return the latest release
         return (
-            _version_to_image_tag(get_latest_published_version()),
+            _version_to_image_tag(latest_published_version),
             "latest release because not in a pull request and not on a release branch",
         )
 
@@ -74,8 +95,20 @@ def _resolve_ancestor_image_tag_when_running_locally() -> tuple[str, str]:
         )
     elif git.is_on_main_branch():
         # return the latest release
+        latest_published_version = get_latest_published_version()
+        override_commit = _get_override_commit_instead_of_version(
+            latest_published_version
+        )
+
+        if override_commit is not None:
+            # use the commit instead of the latest release
+            return (
+                _commit_to_image_tag(override_commit),
+                f"commit override instead of latest release ({latest_published_version})",
+            )
+
         return (
-            _version_to_image_tag(get_latest_published_version()),
+            _version_to_image_tag(latest_published_version),
             "latest release because on local main branch",
         )
     else:
@@ -123,6 +156,29 @@ def get_previous_published_version(release_version: MzVersion) -> MzVersion:
         else:
             print(f"Skipping version {previous_published_version} (image not found)")
             excluded_versions.add(previous_published_version)
+
+
+def _get_override_commit_instead_of_version(
+    latest_published_version: MzVersion,
+) -> str | None:
+    """
+    If a commit specifies a mz version as prerequisite (to avoid regressions) that is newer than the
+    provided latest version (i.e., prerequisite not satisfied by the latest version), then return
+    that commit's hash if the commit contained in the current state.
+    Otherwise, return none.
+    """
+    for (
+        commit_hash,
+        min_required_mz_version,
+    ) in MIN_ANCESTOR_MZ_VERSION_PER_COMMIT.items():
+        if latest_published_version >= min_required_mz_version:
+            continue
+
+        if git.contains_commit(commit_hash):
+            # commit would require at least min_required_mz_version
+            return commit_hash
+
+    return None
 
 
 def _image_of_release_version_exists(version: MzVersion) -> bool:
