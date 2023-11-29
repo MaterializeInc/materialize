@@ -24,12 +24,14 @@ use http::StatusCode;
 use itertools::izip;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
+use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary,
-    SessionClient,
+    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, ExecuteResponseKind,
+    PeekResponseUnary, SessionClient,
 };
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
+use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
@@ -313,6 +315,7 @@ enum StatementResult {
         desc: RelationDesc,
         tag: String,
         rx: RecordFirstRowStream,
+        ctx_extra: ExecuteContextExtra,
     },
 }
 
@@ -517,15 +520,21 @@ pub struct CommandStarting {
 #[async_trait]
 trait ResultSender: Send {
     /// Adds a result to the client. `canceled` is a function that returns a future that resolves if
-    /// a cancellation request was issued for this connection. Returns Err if sending to the client
-    /// produced an error and the server should disconnect. Returns Ok(Err) if the statement
-    /// produced an error and should error the transaction, but remain connected. Returns Ok(Ok(()))
+    /// a cancellation request was issued for this connection. The first component of the return value is
+    /// Err if sending to the client
+    /// produced an error and the server should disconnect. It is Ok(Err) if the statement
+    /// produced an error and should error the transaction, but remain connected. It is Ok(Ok(()))
     /// if the statement succeeded.
+    /// The second component of the return value is `Some` if execution still
+    /// needs to be retired for statement logging purposes.
     async fn add_result<C, F>(
         &mut self,
         canceled: C,
         res: StatementResult,
-    ) -> Result<Result<(), ()>, anyhow::Error>
+    ) -> (
+        Result<Result<(), ()>, anyhow::Error>,
+        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+    )
     where
         C: Fn() -> F + Send + Sync,
         F: Future<Output = ()> + Send;
@@ -553,29 +562,39 @@ impl ResultSender for SqlResponse {
         &mut self,
         _canceled: C,
         res: StatementResult,
-    ) -> Result<Result<(), ()>, anyhow::Error>
+    ) -> (
+        Result<Result<(), ()>, anyhow::Error>,
+        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+    )
     where
         C: Fn() -> F + Send + Sync,
         F: Future<Output = ()> + Send,
     {
-        Ok(match res {
+        let (res, stmt_logging) = match res {
             StatementResult::SqlResult(res) => {
                 let is_err = matches!(res, SqlResult::Err { .. });
                 self.results.push(res);
-                if is_err {
-                    Err(())
-                } else {
-                    Ok(())
-                }
+                let res = if is_err { Err(()) } else { Ok(()) };
+                (res, None)
             }
-            StatementResult::Subscribe { .. } => {
+            StatementResult::Subscribe { ctx_extra, .. } => {
+                let message = "SUBSCRIBE only supported over websocket";
                 self.results.push(SqlResult::Err {
-                    error: "SUBSCRIBE only supported over websocket".into(),
+                    error: message.into(),
                     notices: Vec::new(),
                 });
-                Err(())
+                (
+                    Err(()),
+                    Some((
+                        StatementEndedExecutionReason::Errored {
+                            error: message.into(),
+                        },
+                        ctx_extra,
+                    )),
+                )
             }
-        })
+        };
+        (Ok(res), stmt_logging)
     }
 
     fn connection_error(&mut self) -> BoxFuture<anyhow::Error> {
@@ -593,7 +612,10 @@ impl ResultSender for WebSocket {
         &mut self,
         canceled: C,
         res: StatementResult,
-    ) -> Result<Result<(), ()>, anyhow::Error>
+    ) -> (
+        Result<Result<(), ()>, anyhow::Error>,
+        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+    )
     where
         C: Fn() -> F + Send + Sync,
         F: Future<Output = ()> + Send,
@@ -609,16 +631,19 @@ impl ResultSender for WebSocket {
             StatementResult::SqlResult(SqlResult::Rows { .. }) => (true, false),
             StatementResult::Subscribe { .. } => (true, true),
         };
-        send(
+        if let Err(e) = send(
             self,
             WebSocketResponse::CommandStarting(CommandStarting {
                 has_rows,
                 is_streaming,
             }),
         )
-        .await?;
+        .await
+        {
+            return (Err(e), None);
+        }
 
-        let (is_err, msgs) = match res {
+        let (is_err, msgs, stmt_logging) = match res {
             StatementResult::SqlResult(SqlResult::Rows {
                 tag,
                 rows,
@@ -629,7 +654,7 @@ impl ResultSender for WebSocket {
                 msgs.extend(rows.into_iter().map(WebSocketResponse::Row));
                 msgs.push(WebSocketResponse::CommandComplete(tag));
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
-                (false, msgs)
+                (false, msgs, None)
             }
             StatementResult::SqlResult(SqlResult::Ok {
                 ok,
@@ -643,28 +668,49 @@ impl ResultSender for WebSocket {
                         .into_iter()
                         .map(WebSocketResponse::ParameterStatus),
                 );
-                (false, msgs)
+                (false, msgs, None)
             }
             StatementResult::SqlResult(SqlResult::Err { error, notices }) => {
                 let mut msgs = vec![WebSocketResponse::Error(error)];
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
-                (true, msgs)
+                (true, msgs, None)
             }
             StatementResult::Subscribe {
                 ref desc,
                 tag,
                 mut rx,
+                ctx_extra,
             } => {
-                send(self, WebSocketResponse::Rows(desc.into())).await?;
+                if let Err(e) = send(self, WebSocketResponse::Rows(desc.into())).await {
+                    // We consider the remote breaking the connection to be a cancellation,
+                    // matching the behavior for pgwire
+                    return (
+                        Err(e),
+                        Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
+                    );
+                }
 
                 let mut datum_vec = mz_repr::DatumVec::new();
+                let mut rows_returned = 0;
                 loop {
-                    match self.await_rows(canceled(), rx.recv()).await? {
+                    let res = match self.await_rows(canceled(), rx.recv()).await {
+                        Ok(res) => res,
+                        Err(e) => {
+                            // We consider the remote breaking the connection to be a cancellation,
+                            // matching the behavior for pgwire
+                            return (
+                                Err(e),
+                                Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
+                            );
+                        }
+                    };
+                    match res {
                         Some(PeekResponseUnary::Rows(rows)) => {
+                            rows_returned += rows.len();
                             for row in rows {
                                 let datums = datum_vec.borrow_with(&row);
                                 let types = &desc.typ().column_types;
-                                send(
+                                if let Err(e) = send(
                                     self,
                                     WebSocketResponse::Row(
                                         datums
@@ -677,27 +723,61 @@ impl ResultSender for WebSocket {
                                             .collect(),
                                     ),
                                 )
-                                .await?;
+                                .await
+                                {
+                                    // We consider the remote breaking the connection to be a cancellation,
+                                    // matching the behavior for pgwire
+                                    return (
+                                        Err(e),
+                                        Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
+                                    );
+                                }
                             }
                         }
-                        Some(PeekResponseUnary::Error(err)) => {
-                            break (true, vec![WebSocketResponse::Error(err.into())])
+                        Some(PeekResponseUnary::Error(error)) => {
+                            break (
+                                true,
+                                vec![WebSocketResponse::Error(error.clone().into())],
+                                Some((StatementEndedExecutionReason::Errored { error }, ctx_extra)),
+                            )
                         }
                         Some(PeekResponseUnary::Canceled) => {
                             break (
                                 true,
                                 vec![WebSocketResponse::Error("query canceled".into())],
+                                Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
                             )
                         }
-                        None => break (false, vec![WebSocketResponse::CommandComplete(tag)]),
+                        None => {
+                            break (
+                                false,
+                                vec![WebSocketResponse::CommandComplete(tag)],
+                                Some((
+                                    StatementEndedExecutionReason::Success {
+                                        rows_returned: Some(u64::cast_from(rows_returned)),
+                                        execution_strategy: Some(
+                                            StatementExecutionStrategy::Standard,
+                                        ),
+                                    },
+                                    ctx_extra,
+                                )),
+                            )
+                        }
                     }
                 }
             }
         };
         for msg in msgs {
-            send(self, msg).await?;
+            if let Err(e) = send(self, msg).await {
+                return (
+                    Err(e),
+                    stmt_logging.map(|(_old_reason, ctx_extra)| {
+                        (StatementEndedExecutionReason::Canceled, ctx_extra)
+                    }),
+                );
+            }
         }
-        Ok(if is_err { Err(()) } else { Ok(()) })
+        (Ok(if is_err { Err(()) } else { Ok(()) }), stmt_logging)
     }
 
     // Send a websocket Ping every second to verify the client is still
@@ -720,6 +800,18 @@ impl ResultSender for WebSocket {
     }
 }
 
+async fn send_and_retire<S: ResultSender>(
+    res: StatementResult,
+    client: &mut SessionClient,
+    sender: &mut S,
+) -> Result<Result<(), ()>, anyhow::Error> {
+    let (res, stmt_logging) = sender.add_result(|| client.canceled(), res).await;
+    if let Some((reason, ctx_extra)) = stmt_logging {
+        client.retire_execute(ctx_extra, reason);
+    }
+    res
+}
+
 /// Returns Ok(Err) if any statement error'd during execution.
 async fn execute_stmt_group<S: ResultSender>(
     client: &mut SessionClient,
@@ -738,7 +830,7 @@ async fn execute_stmt_group<S: ResultSender>(
                 client,
                 "current transaction is aborted, commands ignored until end of transaction block",
             );
-            let _ = sender.add_result(|| client.canceled(), err.into()).await?;
+            let _ = send_and_retire(err.into(), client, sender).await?;
             return Ok(Err(()));
         }
 
@@ -746,11 +838,12 @@ async fn execute_stmt_group<S: ResultSender>(
         // See the pgwire::protocol::StateMachine::query method for details.
         if let Err(e) = client.start_transaction(Some(num_stmts)) {
             let err = SqlResult::err(client, e);
-            let _ = sender.add_result(|| client.canceled(), err.into()).await?;
+            let _ = send_and_retire(err.into(), client, sender).await?;
             return Ok(Err(()));
         }
         let res = execute_stmt(client, sender, stmt, sql, params).await?;
-        let is_err = sender.add_result(|| client.canceled(), res).await?;
+        let is_err = send_and_retire(res, client, sender).await?;
+
         if is_err.is_err() {
             // Mirror StateMachine::error, which sometimes will clean up the
             // transaction state instead of always leaving it in Failed.
@@ -763,7 +856,7 @@ async fn execute_stmt_group<S: ResultSender>(
                 TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_) => {
                     if let Err(err) = client.end_transaction(EndTransactionAction::Rollback).await {
                         let err = SqlResult::err(client, err.to_string());
-                        let _ = sender.add_result(|| client.canceled(), err.into()).await?;
+                        let _ = send_and_retire(err.into(), client, sender).await?;
                     }
                 }
                 // Explicit transactions move to failed.
@@ -872,9 +965,7 @@ async fn execute_request<S: ResultSender>(
             let ended = client.end_transaction(EndTransactionAction::Commit).await;
             if let Err(err) = ended {
                 let err = SqlResult::err(client, err);
-                let _ = sender
-                    .add_result(|| client.canceled(), StatementResult::SqlResult(err))
-                    .await?;
+                let _ = send_and_retire(StatementResult::SqlResult(err), client, sender).await?;
             }
         }
         if executed?.is_err() {
@@ -1090,11 +1181,12 @@ async fn execute_stmt<S: ResultSender>(
             let tag = format!("SELECT {}", sql_rows.len());
             SqlResult::rows(client, tag, sql_rows, desc).into()
         }
-        ExecuteResponse::Subscribing { rx, ctx_extra: _ }  => {
+        ExecuteResponse::Subscribing { rx, ctx_extra }  => {
             StatementResult::Subscribe {
                 tag:"SUBSCRIBE".into(),
                 desc: desc.relation_desc.unwrap(),
-                rx: RecordFirstRowStream::new(Box::new(UnboundedReceiverStream::new(rx)), execute_started, client)
+                rx: RecordFirstRowStream::new(Box::new(UnboundedReceiverStream::new(rx)), execute_started, client),
+                ctx_extra,
             }
         },
         res @ (ExecuteResponse::Fetch { .. }
