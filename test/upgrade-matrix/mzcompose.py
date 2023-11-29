@@ -145,19 +145,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     executor = MzcomposeExecutor(composition=c)
 
-    versions = get_published_minor_mz_versions(
-        include_filter=lambda v: v >= args.min_version
+    versions_in_ascending_order = get_published_minor_mz_versions(
+        newest_first=False, include_filter=lambda v: v >= args.min_version
     )
-    # sort versions in ascending order
-    versions.sort(reverse=False)
+
     print(
         "--- Testing upgrade scenarios involving the following versions: "
-        + " ".join([str(v) for v in versions])
+        + " ".join([str(v) for v in versions_in_ascending_order])
     )
 
     for id, upgrade_scenario in enumerate(
         get_upgrade_scenarios(
-            versions=versions,
+            versions=versions_in_ascending_order,
             num_scenarios=args.num_scenarios,
         )
     ):

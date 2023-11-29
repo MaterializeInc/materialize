@@ -89,7 +89,7 @@ def expand_globs(root: Path, *specs: Path | str) -> set[str]:
 
 
 def get_version_tags(
-    *, version_type: type[VERSION_TYPE], fetch: bool = True
+    *, version_type: type[VERSION_TYPE], newest_first: bool = True, fetch: bool = True
 ) -> list[VERSION_TYPE]:
     """List all the version-like tags in the repo
 
@@ -111,7 +111,7 @@ def get_version_tags(
         except ValueError as e:
             print(f"WARN: {e}", file=sys.stderr)
 
-    return sorted(tags, reverse=True)
+    return sorted(tags, reverse=newest_first)
 
 
 def get_latest_version(

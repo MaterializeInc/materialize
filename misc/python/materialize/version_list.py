@@ -215,12 +215,14 @@ def get_previous_published_version(release_version: MzVersion) -> MzVersion:
 
 
 def get_published_minor_mz_versions(
-    limit: int | None = None, include_filter: Callable[[MzVersion], bool] | None = None
+    newest_first: bool = True,
+    limit: int | None = None,
+    include_filter: Callable[[MzVersion], bool] | None = None,
 ) -> list[MzVersion]:
-    """Get the latest patch version for every minor version in descending order."""
+    """Get the latest patch version for every minor version."""
 
     # sorted in descending order
-    all_versions = get_all_mz_versions()
+    all_versions = get_all_mz_versions(newest_first=True)
     minor_versions: dict[str, MzVersion] = {}
 
     # Note that this method must not apply limit_to_published_versions to a created list
@@ -246,21 +248,29 @@ def get_published_minor_mz_versions(
             break
 
     assert len(minor_versions) > 0
-    return sorted(minor_versions.values(), reverse=True)
+    return sorted(minor_versions.values(), reverse=newest_first)
 
 
-def get_all_mz_versions() -> list[MzVersion]:
-    """Get all mz versions based on git tags in descending order. Versions known to be invalid are excluded."""
+def get_all_mz_versions(
+    newest_first: bool = True,
+) -> list[MzVersion]:
+    """Get all mz versions based on git tags. Versions known to be invalid are excluded."""
     return [
         version
-        for version in get_version_tags(version_type=MzVersion)
+        for version in get_version_tags(
+            version_type=MzVersion, newest_first=newest_first
+        )
         if version not in INVALID_VERSIONS
     ]
 
 
-def get_all_published_mz_versions(limit: int | None = None) -> list[MzVersion]:
-    """Get all mz versions based on git tags in descending order. This method ensures that images of the versions exist."""
-    return limit_to_published_versions(get_all_mz_versions(), limit)
+def get_all_published_mz_versions(
+    newest_first: bool = True, limit: int | None = None
+) -> list[MzVersion]:
+    """Get all mz versions based on git tags. This method ensures that images of the versions exist."""
+    return limit_to_published_versions(
+        get_all_mz_versions(newest_first=newest_first), limit
+    )
 
 
 def limit_to_published_versions(
