@@ -23,7 +23,7 @@ use crate::durable::transaction::TransactionBatch;
 use crate::durable::Epoch;
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKindBinary`].
-pub(crate) trait IntoStateUpdateKindBinary:
+pub trait IntoStateUpdateKindBinary:
     Into<StateUpdateKindBinary>
     + TryFrom<StateUpdateKindBinary>
     + PartialEq
@@ -541,7 +541,7 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
 
 /// Binary version of [`StateUpdateKind`] to allow reading/writing raw binary from/to persist.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
-pub(crate) struct StateUpdateKindBinary(Vec<u8>);
+pub struct StateUpdateKindBinary(Vec<u8>);
 
 #[derive(Debug, Clone, Default)]
 pub struct StateUpdateKindSchema;

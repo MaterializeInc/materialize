@@ -63,7 +63,6 @@ def main() -> None:
             "--no-strip",
             "--deb-version",
             MZ_CLI_VERSION.str_without_prefix(),
-            '--deb-revision=""',
             "-p",
             "mz",
             "-o",
