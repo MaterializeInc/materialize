@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-mod metrics;
+pub(crate) mod metrics;
 pub(crate) mod state_update;
 
 use std::collections::BTreeMap;
@@ -23,7 +23,7 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::collections::CollectionExt;
-use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
+use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{soft_assert, soft_assert_eq, soft_assert_ne};
@@ -103,7 +103,7 @@ impl PersistHandle {
     pub(crate) async fn new(
         persist_client: PersistClient,
         organization_id: Uuid,
-        registry: &MetricsRegistry,
+        metrics: Arc<Metrics>,
     ) -> PersistHandle {
         const SEED: usize = 1;
         let shard_id = Self::shard_id(organization_id, SEED);
@@ -117,7 +117,6 @@ impl PersistHandle {
             )
             .await
             .expect("invalid usage");
-        let metrics = Arc::new(Metrics::new(registry));
         PersistHandle {
             write_handle,
             read_handle,

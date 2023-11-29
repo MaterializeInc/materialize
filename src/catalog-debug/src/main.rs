@@ -242,10 +242,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             };
             let persist_client = persist_clients.open(persist_location).await?;
             let organization_id = args.organization_id.expect("required for persist");
-            Box::new(
-                persist_backed_catalog_state(persist_client, organization_id, &metrics_registry)
-                    .await,
-            )
+            let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
+            Box::new(persist_backed_catalog_state(persist_client, organization_id, metrics).await)
         }
     };
 

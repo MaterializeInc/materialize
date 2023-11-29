@@ -261,8 +261,8 @@ pub enum CatalogConfig {
     Persist {
         /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
         persist_clients: Arc<PersistClientCache>,
-        /// Metrics registry.
-        metrics_registry: MetricsRegistry,
+        /// Persist catalog metrics.
+        metrics: Arc<mz_catalog::durable::Metrics>,
     },
     /// The catalog contents are stored in both persist and the stash and their contents are
     /// compared. This is mostly used for testing purposes.
@@ -728,7 +728,7 @@ async fn catalog_opener(
         }
         CatalogConfig::Persist {
             persist_clients,
-            metrics_registry,
+            metrics,
         } => {
             info!("Using persist backed catalog");
             let persist_client = persist_clients
@@ -739,7 +739,7 @@ async fn catalog_opener(
                 mz_catalog::durable::persist_backed_catalog_state(
                     persist_client,
                     environment_id.organization_id(),
-                    metrics_registry,
+                    Arc::clone(metrics),
                 )
                 .await,
             )
