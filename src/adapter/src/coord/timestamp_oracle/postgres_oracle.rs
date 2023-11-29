@@ -629,8 +629,6 @@ mod tests {
             }
         };
 
-        cleanup(config.clone()).await?;
-
         timestamp_oracle::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
             let oracle =
                 PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
@@ -638,8 +636,6 @@ mod tests {
             oracle
         })
         .await?;
-
-        cleanup(config).await?;
 
         Ok(())
     }
@@ -658,8 +654,6 @@ mod tests {
             }
         };
 
-        cleanup(config.clone()).await?;
-
         timestamp_oracle::tests::shareable_timestamp_oracle_impl_test(
             |timeline, now_fn, initial_ts| {
                 let oracle =
@@ -674,20 +668,6 @@ mod tests {
             },
         )
         .await?;
-
-        cleanup(config).await?;
-
-        Ok(())
-    }
-
-    // Best-effort cleanup!
-    async fn cleanup(config: PostgresTimestampOracleConfig) -> Result<(), anyhow::Error> {
-        let postgres_client = PostgresClient::open(config.into())?;
-        let client = postgres_client.get_connection().await?;
-
-        client
-            .execute("DROP TABLE IF EXISTS timestamp_oracle", &[])
-            .await?;
 
         Ok(())
     }

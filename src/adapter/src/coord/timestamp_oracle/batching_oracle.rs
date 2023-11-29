@@ -170,7 +170,6 @@ mod tests {
 
     use futures::FutureExt;
     use mz_ore::metrics::MetricsRegistry;
-    use mz_postgres_client::PostgresClient;
     use tracing::info;
 
     use crate::coord::timestamp_oracle;
@@ -195,8 +194,6 @@ mod tests {
         };
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
-        cleanup(config.clone()).await?;
-
         timestamp_oracle::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
             // We use the postgres oracle as the backing oracle because it's
             // the only shareable oracle we have.
@@ -215,8 +212,6 @@ mod tests {
         })
         .await?;
 
-        cleanup(config).await?;
-
         Ok(())
     }
 
@@ -234,8 +229,6 @@ mod tests {
             }
         };
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-
-        cleanup(config.clone()).await?;
 
         timestamp_oracle::tests::shareable_timestamp_oracle_impl_test(
             |timeline, now_fn, initial_ts| {
@@ -258,20 +251,6 @@ mod tests {
             },
         )
         .await?;
-
-        cleanup(config).await?;
-
-        Ok(())
-    }
-
-    // Best-effort cleanup!
-    async fn cleanup(config: PostgresTimestampOracleConfig) -> Result<(), anyhow::Error> {
-        let postgres_client = PostgresClient::open(config.into())?;
-        let client = postgres_client.get_connection().await?;
-
-        client
-            .execute("DROP TABLE IF EXISTS timestamp_oracle", &[])
-            .await?;
 
         Ok(())
     }
