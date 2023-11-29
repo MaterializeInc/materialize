@@ -30,7 +30,6 @@ on:
       - reopened
       - ready_for_review
     paths:
-      - src/environmentd/tests/server.rs
       - src/pgwire/src/message.rs
       - src/sql/src/plan/statement.rs
       - src/catalog/src/builtin.rs
@@ -42,7 +41,6 @@ on:
       - src/sql-parser/src/ast/defs/statement.rs
       - src/adapter/src/catalog.rs
       - src/sql/src/catalog.rs
-      - src/environmentd/tests/sql.rs
       - src/pgwire/src/protocol.rs
       - src/expr/src/scalar/mod.rs
       - src/adapter/src/coord/sequencer.rs
@@ -69,12 +67,11 @@ jobs:
       - name: "Long change filter"
         id: long
         run: |
-          num_lines=$(git diff --diff-filter=AM ${{ github.event.before }} ${{ github.event.after }} -- '*.rs' | grep "^+" | grep -v "^+++" | wc -l)
+          num_lines=$(git diff --diff-filter=AM ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} -- '*.rs' | grep "^+" | grep -v "^+++" | wc -l)
           if [[ $num_lines -gt 300 ]]; then
             echo "long=true" >> $GITHUB_OUTPUT
           fi
       - name: "Push to Slack"
-        if: steps.long.outputs.long == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
