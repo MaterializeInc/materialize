@@ -269,7 +269,7 @@ def get_baseline_and_other_endpoints(
 
 
 def get_workload_classes(args: argparse.Namespace) -> list[type[Workload]]:
-    return (
+    workload_classes = (
         [globals()[workload] for workload in args.workload]
         if args.workload
         else [
@@ -278,6 +278,11 @@ def get_workload_classes(args: argparse.Namespace) -> list[type[Workload]]:
             if not issubclass(workload_cls, WorkloadSelfTest)
         ]
     )
+
+    # sort classes to ensure a stable order
+    workload_classes.sort(key=lambda cls: cls.__name__)
+
+    return workload_classes
 
 
 def report_regression_result(
