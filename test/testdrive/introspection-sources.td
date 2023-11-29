@@ -337,8 +337,9 @@ true true true true true
 # (24 + 4) + (24 + 4) + (8 + 8) = 72 bytes per element. Note that the range for c2 comes from
 # different alignments for the enum Accum in ARM vs. x86 (namely, 16 vs. 8). Otherwise, the numbers
 # come from row keys and values taking 24 bytes, offsets 4 bytes, timestamps 8 bytes, regular diffs
-# 8 bytes, and reduce accumulable diffs [136|144] bytes. We also allow for comfortable
-# multiplicative margins when necessary due to deduplication in arrangements.
+# 8 bytes, and reduce accumulable diffs [136|144] bytes. Due to deduplication in arrangements and
+# fragmentation in allocations, we allow for a half (times a fudge factor) to twice (times a fudge
+# factor) interval in sizes and capacities in the tests below.
 
 > CREATE TABLE ten (f1 integer);
 
@@ -354,24 +355,27 @@ true true true true true
   GROUP BY 1
   HAVING COUNT(*) > 1;
 
-# TODO(vmarcos): Reenable when #23509 is fixed
-# > SELECT
-#     records > 2 * 1000 AND records < 1.1 * 2 * 1000,
-#     size > (68 + 68) * 1000 AND size < 1.1 * (68 + 68) * 1000,
-#     capacity > (68 + 68) * 1000 AND capacity < 1.1 * (68 + 68) * 1000,
-#     allocations > 0
-#   FROM mz_internal.mz_dataflow_arrangement_sizes
-#   WHERE name LIKE '%c1%';
-# true true true true
-#
-# > SELECT
-#     records > 2 * 1000 AND records < 1.1 * 2 * 1000,
-#     size > 0.7 * (172 + 72) * 1000 AND size < 1.1 * (180 + 72) * 1000,
-#     capacity > 0.7 * (172 + 72) * 1000 AND capacity < 1.1 * (180 + 72) * 1000,
-#     allocations > 1000
-#   FROM mz_internal.mz_dataflow_arrangement_sizes
-#   WHERE name LIKE '%c2%';
-# true true true true
+> SELECT
+    records > 2 * 1000 AND records < 1.1 * 2 * 1000,
+    size > 0.5 * 0.9 * (68 + 68) * 1000,
+    size < 2 * 1.1 * (68 + 68) * 1000,
+    capacity > 0.5 * 0.9 * (68 + 68) * 1000,
+    capacity < 2 * 1.1 * (68 + 68) * 1000,
+    allocations > 0
+  FROM mz_internal.mz_dataflow_arrangement_sizes
+  WHERE name LIKE '%c1%';
+true true true true true true
+
+> SELECT
+    records > 2 * 1000 AND records < 1.1 * 2 * 1000,
+    size > 0.5 * 0.9 * (172 + 72) * 1000,
+    size < 2 * 1.1 * (180 + 72) * 1000,
+    capacity > 0.5 * 0.9 * (172 + 72) * 1000,
+    capacity < 2 * 1.1 * (180 + 72) * 1000,
+    allocations > 1000
+  FROM mz_internal.mz_dataflow_arrangement_sizes
+  WHERE name LIKE '%c2%';
+true true true true true true
 
 # For coverage, we also include a recursive materialized view to account for dynamic timestamps.
 # Here, the timestamps take not 8 bytes, but (8 + (24 + [0|1 * 8])) = [32|40] bytes. There are also
@@ -401,14 +405,14 @@ true true true true true
 
 > SELECT
     records > (4 * 2 + 2 * 3) * 1000 AND records < 1.1 * (4 * 2 + 2 * 3) * 1000,
-    size > 0.7 * (3 * 68 * 2 + 59 * 3 + 106 * 2 + 68 * 3) * 1000
-      AND size < 1.1 * (3 * 76 * 2 + 67 * 3 + 114 * 2 + 76 * 3) * 1000,
-    capacity > 0.7 * (3 * 68 * 2 + 59 * 3 + 106 * 2 + 68 * 3) * 1000
-      AND capacity < 1.5 * (3 * 76 * 2 + 67 * 3 + 114 * 2 + 76 * 3) * 1000,
+    size > 0.5 * 0.9 * (3 * 68 * 2 + 59 * 3 + 106 * 2 + 68 * 3) * 1000,
+    size < 2 * 1.1 * (3 * 76 * 2 + 67 * 3 + 114 * 2 + 76 * 3) * 1000,
+    capacity > 0.5 * 0.9 * (3 * 68 * 2 + 59 * 3 + 106 * 2 + 68 * 3) * 1000,
+    capacity < 2 * 1.1 * (3 * 76 * 2 + 67 * 3 + 114 * 2 + 76 * 3) * 1000,
     allocations > 0
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%rec%';
-true true true true
+true true true true true true
 
 > DROP TABLE ten CASCADE;
 
@@ -439,21 +443,25 @@ true true true true
 
 > SELECT
     records >= 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size >= 0.7 * (124 + 72) * 1000 AND size < 1.1 * (124 + 72) * 1000,
-    capacity >= 0.7 * (124 + 72) * 1000 AND capacity < 1.1 * (124 + 72) * 1000,
+    size > 0.5 * 0.9 * (124 + 72) * 1000,
+    size < 2 * 1.1 * (124 + 72) * 1000,
+    capacity > 0.5 * 0.9 * (124 + 72) * 1000,
+    capacity < 2 * 1.1 * (124 + 72) * 1000,
     allocations > 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_minmax%';
-true true true true
+true true true true true true
 
 > SELECT
     records >= 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size >= 0.7 * (100 + 72) * 1000 AND size < 1.1 * (100 + 72) * 1000,
-    capacity >= 0.7 * (100 + 72) * 1000 AND capacity < 1.5 * (100 + 72) * 1000,
+    size > 0.5 * 0.9 * (100 + 72) * 1000,
+    size < 2 * 1.1 * (100 + 72) * 1000,
+    capacity > 0.5 * 0.9 * (100 + 72) * 1000,
+    capacity < 2 * 1.1 * (100 + 72) * 1000,
     allocations > 100
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_top1%';
-true true true true
+true true true true true true
 
 > DROP SOURCE counter CASCADE;
 
