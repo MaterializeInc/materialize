@@ -22,71 +22,75 @@ def resolve_ancestor_image_tag() -> str:
 
 def _resolve_ancestor_image_tag() -> tuple[str, str]:
     if buildkite.is_in_buildkite():
-        if buildkite.is_in_pull_request():
-            # return the merge base
-            common_ancestor_commit = buildkite.get_merge_base()
-            if _image_of_commit_exists(common_ancestor_commit):
-                return (
-                    _commit_to_image_tag(common_ancestor_commit),
-                    "merge base of pull request",
-                )
-            else:
-                return (
-                    _version_to_image_tag(get_latest_published_version()),
-                    "latest release because image of merge base of pull request not available",
-                )
-        elif git.is_on_release_version():
-            # return the previous release
-            tagged_release_version = git.get_tagged_release_version(
-                version_type=MzVersion
-            )
-            assert tagged_release_version is not None
-            previous_release_version = get_previous_published_version(
-                tagged_release_version
-            )
-            return (
-                _version_to_image_tag(previous_release_version),
-                f"previous release because on release branch {tagged_release_version}",
-            )
-        else:
-            # return the latest release
-            return (
-                _version_to_image_tag(get_latest_published_version()),
-                "latest release because not in a pull request and not on a release branch",
-            )
+        return _resolve_ancestor_image_tag_when_in_buildkite()
     else:
-        if git.is_on_release_version():
-            # return the previous release
-            tagged_release_version = git.get_tagged_release_version(
-                version_type=MzVersion
-            )
-            assert tagged_release_version is not None
-            previous_release_version = get_previous_published_version(
-                tagged_release_version
-            )
+        return _resolve_ancestor_image_tag_when_running_locally()
+
+
+def _resolve_ancestor_image_tag_when_in_buildkite() -> tuple[str, str]:
+    if buildkite.is_in_pull_request():
+        # return the merge base
+        common_ancestor_commit = buildkite.get_merge_base()
+        if _image_of_commit_exists(common_ancestor_commit):
             return (
-                _version_to_image_tag(previous_release_version),
-                f"previous release because on local release branch {tagged_release_version}",
-            )
-        elif git.is_on_main_branch():
-            # return the latest release
-            return (
-                _version_to_image_tag(get_latest_published_version()),
-                "latest release because on local main branch",
+                _commit_to_image_tag(common_ancestor_commit),
+                "merge base of pull request",
             )
         else:
-            # return the merge base
-            common_ancestor_commit = buildkite.get_merge_base()
-            if _image_of_commit_exists(common_ancestor_commit):
-                return (
-                    _commit_to_image_tag(common_ancestor_commit),
-                    "merge base of local non-main branch",
-                )
-            else:
-                return (
-                    _version_to_image_tag(get_latest_published_version()),
-                    "latest release because image of merge base of local non-main branch not available",
-                )
+            return (
+                _version_to_image_tag(get_latest_published_version()),
+                "latest release because image of merge base of pull request not available",
+            )
+    elif git.is_on_release_version():
+        # return the previous release
+        tagged_release_version = git.get_tagged_release_version(version_type=MzVersion)
+        assert tagged_release_version is not None
+        previous_release_version = get_previous_published_version(
+            tagged_release_version
+        )
+        return (
+            _version_to_image_tag(previous_release_version),
+            f"previous release because on release branch {tagged_release_version}",
+        )
+    else:
+        # return the latest release
+        return (
+            _version_to_image_tag(get_latest_published_version()),
+            "latest release because not in a pull request and not on a release branch",
+        )
+
+
+def _resolve_ancestor_image_tag_when_running_locally() -> tuple[str, str]:
+    if git.is_on_release_version():
+        # return the previous release
+        tagged_release_version = git.get_tagged_release_version(version_type=MzVersion)
+        assert tagged_release_version is not None
+        previous_release_version = get_previous_published_version(
+            tagged_release_version
+        )
+        return (
+            _version_to_image_tag(previous_release_version),
+            f"previous release because on local release branch {tagged_release_version}",
+        )
+    elif git.is_on_main_branch():
+        # return the latest release
+        return (
+            _version_to_image_tag(get_latest_published_version()),
+            "latest release because on local main branch",
+        )
+    else:
+        # return the merge base
+        common_ancestor_commit = buildkite.get_merge_base()
+        if _image_of_commit_exists(common_ancestor_commit):
+            return (
+                _commit_to_image_tag(common_ancestor_commit),
+                "merge base of local non-main branch",
+            )
+        else:
+            return (
+                _version_to_image_tag(get_latest_published_version()),
+                "latest release because image of merge base of local non-main branch not available",
+            )
 
 
 def get_latest_published_version() -> MzVersion:
