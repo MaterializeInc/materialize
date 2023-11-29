@@ -102,6 +102,8 @@ async fn main() {
         completions: Mutex::new(Completions {
             select: Vec::new(),
             from: Vec::new(),
+            create: Vec::new(),
+            drop: Vec::new(),
         }),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
