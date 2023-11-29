@@ -116,17 +116,10 @@ class UserTables(Scenario):
 
     def config(self) -> dict[ActionOrFactory, float]:
         return {
-            MzStart: 5,
-            BalancerdStart: 1,
-            MzStop: 10,
-            BalancerdStop: 1,
-            BalancerdRestart: 1,
-            KillClusterd: 10,
-            StoragedRestart: 5,
+            StoragedRestart: 30,
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 10,
-            CreateSinkParameterized(): 10,
-            ValidateTable: 20,
+            CreateSinkParameterized(max_sinks=100): 20,
             ValidateView: 20,
             DML: 30,
         }

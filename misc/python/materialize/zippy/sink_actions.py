@@ -27,7 +27,7 @@ class CreateSinkParameterized(ActionFactory):
     def requires(cls) -> list[set[type[Capability]]]:
         return [{BalancerdIsRunning, MzIsRunning, StoragedRunning, ViewExists}]
 
-    def __init__(self, max_sinks: int = 10) -> None:
+    def __init__(self, max_sinks: int = 100) -> None:
         self.max_sinks = max_sinks
 
     def new(self, capabilities: Capabilities) -> list[Action]:
@@ -101,7 +101,7 @@ class CreateSink(Action):
         c.testdrive(
             dedent(
                 f"""
-                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', PROGRESS TOPIC 'zippy-{self.sink.name}-${{testdrive.seed}}', SECURITY PROTOCOL PLAINTEXT);
+                > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', PROGRESS TOPIC 'zippy-${{testdrive.seed}}', SECURITY PROTOCOL PLAINTEXT);
                 > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
                 > CREATE SINK {self.sink.name}
