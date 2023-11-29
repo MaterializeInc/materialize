@@ -91,7 +91,9 @@ pub const DEFAULT_KEEPALIVE_RETRIES: u32 = 5;
 // + DEFAULT_KEEPALIVE_RETRIES * DEFAULT_KEEPALIVE_INTERVAL
 pub const DEFAULT_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Configurable timeouts that apply only when using [`Config::connect_replication`].
+/// Configurable timeouts for Postgres connections.
+///
+/// Currently only apply to non-ssh/privatelink connections.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TcpTimeoutConfig {
     pub connect_timeout: Option<Duration>,
