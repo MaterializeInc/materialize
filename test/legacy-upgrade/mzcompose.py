@@ -70,10 +70,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     tested_versions = get_published_minor_mz_versions(limit=2)
-    all_versions = get_all_published_mz_versions()
+    all_versions_ascending = get_all_published_mz_versions(newest_first=False)
 
     for tested_version in tested_versions:
-        priors = [v for v in all_versions if v <= tested_version]
+        priors = [v for v in all_versions_ascending if v <= tested_version]
         test_upgrade_from_version(c, f"{tested_version}", priors, filter=args.filter)
 
     test_upgrade_from_version(c, "current_source", priors=[], filter=args.filter)
