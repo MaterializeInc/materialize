@@ -149,9 +149,17 @@ v19 ok
 v19 ok
 
 # Explicit finalization should fail when the shard isn't fully advanced.
+is-finalized
+----
+v19 false
+
 finalize
 ----
 error: finalized without fully advancing since Antichain { elements: [] } and upper Antichain { elements: [3] }
+
+is-finalized
+----
+v19 false
 
 # Now compare_and_append to the empty antichain, closing the shard to writes as
 # well.
@@ -172,9 +180,17 @@ since=[] upper=[]
 
 # Explicitly finalize the shard. This can be an expensive operation, so we only
 # perform it on demand.
+is-finalized
+----
+v20 false
+
 finalize
 ----
 v21 ok
+
+is-finalized
+----
+v21 true
 
 # Run maintenance a few times to make sure it converges (because maintenance
 # like GC can result in followup maintenance)
