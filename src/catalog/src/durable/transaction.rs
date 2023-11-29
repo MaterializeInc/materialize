@@ -71,8 +71,8 @@ pub struct Transaction<'a> {
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
-    // Don't make this a table transaction so that it's not read into the stash
-    // memory cache.
+    // Don't make this a table transaction so that it's not read into the
+    // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
     storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
     connection_timeout: Option<Duration>,
@@ -648,7 +648,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of items in the stash.
+    /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
     pub fn remove_item(&mut self, id: GlobalId) -> Result<(), CatalogError> {
         let prev = self.items.set(ItemKey { gid: id }, None)?;
@@ -680,7 +680,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of items in the stash.
+    /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
     pub fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), CatalogError> {
         let n = self.items.update(|k, v| {
@@ -735,7 +735,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of items in the stash.
+    /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
     pub fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), CatalogError> {
@@ -785,7 +785,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of clusters in the stash.
+    /// Runtime is linear with respect to the total number of clusters in the catalog.
     /// DO NOT call this function in a loop.
     pub fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), CatalogError> {
         let n = self.clusters.update(|k, _v| {
@@ -808,7 +808,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `replica_id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of cluster replicas in the stash.
+    /// Runtime is linear with respect to the total number of cluster replicas in the catalog.
     /// DO NOT call this function in a loop.
     pub fn update_cluster_replica(
         &mut self,
@@ -835,7 +835,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of databases in the stash.
+    /// Runtime is linear with respect to the total number of databases in the catalog.
     /// DO NOT call this function in a loop.
     pub fn update_database(
         &mut self,
@@ -862,7 +862,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `schema_id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of schemas in the stash.
+    /// Runtime is linear with respect to the total number of schemas in the catalog.
     /// DO NOT call this function in a loop.
     pub fn update_schema(
         &mut self,
@@ -1032,7 +1032,7 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    /// Updates the catalog stash `enable_persist_txn_tables` "config" value to
+    /// Updates the catalog `enable_persist_txn_tables` "config" value to
     /// match the `enable_persist_txn_tables` "system var" value.
     ///
     /// These are mirrored so that we can toggle the flag with Launch Darkly,
@@ -1243,7 +1243,7 @@ impl<'a> Transaction<'a> {
         (txn_batch, self.durable_catalog)
     }
 
-    /// Commits the storage transaction to the stash. Any error returned indicates the stash may be
+    /// Commits the storage transaction to durable storage. Any error returned indicates the catalog may be
     /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
     /// must be fatal to the calling process. We do not panic/halt inside this function itself so
     /// that errors can bubble up during initialization.

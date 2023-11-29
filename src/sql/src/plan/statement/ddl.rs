@@ -5390,7 +5390,7 @@ pub fn plan_comment(
         }
     };
 
-    // Note: the `mz_comments` table uses an `Int4` for the column position, but in the Stash we
+    // Note: the `mz_comments` table uses an `Int4` for the column position, but in the catalog storage we
     // store a `usize` which would be a `Uint8`. We guard against a safe conversion here because
     // it's the easiest place to raise an error.
     //

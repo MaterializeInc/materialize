@@ -39,7 +39,7 @@ use crate::durable::{
 
 /// The key used within the "config" collection stores the deploy generation.
 pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
-/// The key within the "config" Collection that stores the version of the Stash.
+/// The key within the "config" Collection that stores the version of the catalog.
 pub(crate) const USER_VERSION_KEY: &str = "user_version";
 
 /// The key used within the "config" collection where we store a mirror of the

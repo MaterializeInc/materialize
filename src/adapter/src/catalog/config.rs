@@ -31,7 +31,7 @@ use crate::config::SystemParameterSyncConfig;
 /// Configures a catalog.
 #[derive(Debug)]
 pub struct Config<'a> {
-    /// The connection to the stash.
+    /// The connection to the catalog storage.
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
     /// The registry that catalog uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
