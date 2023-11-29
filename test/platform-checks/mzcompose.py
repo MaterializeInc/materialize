@@ -17,13 +17,13 @@ from materialize.checks.scenarios import Scenario
 from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
+from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
@@ -101,10 +101,7 @@ SERVICES = [
         ],
         volumes_extra=["secrets:/share/secrets"],
     ),
-    Service(
-        name="persistcli",
-        config={"mzbuild": "jobs"},
-    ),
+    Persistcli(),
     SshBastionHost(),
 ]
 
@@ -132,19 +129,8 @@ def setup(c: Composition) -> None:
         "minio",
         "ssh-bastion-host",
     )
-    c.up("mc", persistent=True)
-    c.exec(
-        "mc",
-        "mc",
-        "alias",
-        "set",
-        "persist",
-        "http://minio:9000/",
-        "minioadmin",
-        "minioadmin",
-    )
 
-    c.exec("mc", "mc", "version", "enable", "persist/persist")
+    c.enable_minio_versioning()
 
     # Add `materialize` SCRAM user to Kafka.
     c.exec(

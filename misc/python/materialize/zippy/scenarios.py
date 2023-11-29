@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 
+from materialize.zippy.all_actions import ValidateAll
+from materialize.zippy.backup_and_restore_actions import BackupAndRestore
 from materialize.zippy.balancerd_actions import (
     BalancerdRestart,
     BalancerdStart,
@@ -15,7 +17,7 @@ from materialize.zippy.balancerd_actions import (
 )
 from materialize.zippy.crdb_actions import CockroachRestart, CockroachStart
 from materialize.zippy.debezium_actions import CreateDebeziumSource, DebeziumStart
-from materialize.zippy.framework import ActionOrFactory, Scenario
+from materialize.zippy.framework import ActionOrFactory
 from materialize.zippy.kafka_actions import (
     CreateTopicParameterized,
     Ingest,
@@ -51,21 +53,27 @@ from materialize.zippy.storaged_actions import (
 from materialize.zippy.table_actions import DML, CreateTableParameterized, ValidateTable
 from materialize.zippy.view_actions import CreateViewParameterized, ValidateView
 
-DEFAULT_BOOTSTRAP: list[ActionOrFactory] = [
-    KafkaStart,
-    CockroachStart,
-    MinioStart,
-    MzStart,
-    StoragedStart,
-    BalancerdStart,
-]
+
+class Scenario:
+    def bootstrap(self) -> list[ActionOrFactory]:
+        return [
+            KafkaStart,
+            CockroachStart,
+            MinioStart,
+            MzStart,
+            StoragedStart,
+            BalancerdStart,
+        ]
+
+    def config(self) -> dict[ActionOrFactory, float]:
+        assert False
+
+    def finalization(self) -> list[ActionOrFactory]:
+        return [ValidateAll(), BackupAndRestore, ValidateAll()]
 
 
 class KafkaSources(Scenario):
     """A Zippy test using Kafka sources exclusively."""
-
-    def bootstrap(self) -> list[ActionOrFactory]:
-        return DEFAULT_BOOTSTRAP
 
     def config(self) -> dict[ActionOrFactory, float]:
         return {
@@ -86,9 +94,6 @@ class KafkaSources(Scenario):
 
 class AlterConnectionWithKafkaSources(Scenario):
     """A Zippy test using Kafka sources and alter connections."""
-
-    def bootstrap(self) -> list[ActionOrFactory]:
-        return DEFAULT_BOOTSTRAP
 
     def config(self) -> dict[ActionOrFactory, float]:
         return {
@@ -111,9 +116,6 @@ class AlterConnectionWithKafkaSources(Scenario):
 class UserTables(Scenario):
     """A Zippy test using user tables exclusively."""
 
-    def bootstrap(self) -> list[ActionOrFactory]:
-        return DEFAULT_BOOTSTRAP
-
     def config(self) -> dict[ActionOrFactory, float]:
         return {
             MzStart: 5,
@@ -121,6 +123,7 @@ class UserTables(Scenario):
             MzStop: 10,
             BalancerdStop: 1,
             BalancerdRestart: 1,
+            BackupAndRestore: 1,
             KillClusterd: 10,
             StoragedRestart: 5,
             CreateTableParameterized(): 10,
@@ -136,8 +139,7 @@ class DebeziumPostgres(Scenario):
     """A Zippy test using Debezium Postgres exclusively."""
 
     def bootstrap(self) -> list[ActionOrFactory]:
-        return [
-            *DEFAULT_BOOTSTRAP,
+        return super().bootstrap() + [
             DebeziumStart,
             PostgresStart,
         ]
@@ -159,7 +161,7 @@ class PostgresCdc(Scenario):
     """A Zippy test using Postgres CDC exclusively."""
 
     def bootstrap(self) -> list[ActionOrFactory]:
-        return [*DEFAULT_BOOTSTRAP, PostgresStart]
+        return super().bootstrap() + [PostgresStart]
 
     def config(self) -> dict[ActionOrFactory, float]:
         return {
@@ -179,8 +181,7 @@ class ClusterReplicas(Scenario):
     """A Zippy test that uses CREATE / DROP REPLICA and random killing."""
 
     def bootstrap(self) -> list[ActionOrFactory]:
-        return [
-            *DEFAULT_BOOTSTRAP,
+        return super().bootstrap() + [
             DropDefaultReplica,
             CreateReplica,
         ]
@@ -207,9 +208,6 @@ class ClusterReplicas(Scenario):
 class KafkaParallelInsert(Scenario):
     """A Zippy test using simple views over Kafka sources with parallel insertion."""
 
-    def bootstrap(self) -> list[ActionOrFactory]:
-        return DEFAULT_BOOTSTRAP
-
     def config(self) -> dict[ActionOrFactory, float]:
         return {
             KillClusterd: 5,
@@ -225,9 +223,6 @@ class KafkaParallelInsert(Scenario):
 
 class CrdbMinioRestart(Scenario):
     """A Zippy test that restarts CRDB and Minio."""
-
-    def bootstrap(self) -> list[ActionOrFactory]:
-        return DEFAULT_BOOTSTRAP
 
     def config(self) -> dict[ActionOrFactory, float]:
         return {
@@ -250,9 +245,6 @@ class CrdbMinioRestart(Scenario):
 class CrdbRestart(Scenario):
     """A Zippy test that restarts Cockroach."""
 
-    def bootstrap(self) -> list[ActionOrFactory]:
-        return DEFAULT_BOOTSTRAP
-
     def config(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTopicParameterized(): 5,
@@ -273,9 +265,6 @@ class CrdbRestart(Scenario):
 class KafkaSourcesLarge(Scenario):
     """A Zippy test using a large number of Kafka sources, views and sinks (no killings)."""
 
-    def bootstrap(self) -> list[ActionOrFactory]:
-        return DEFAULT_BOOTSTRAP
-
     def config(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTopicParameterized(max_topics=5): 10,
@@ -292,9 +281,6 @@ class KafkaSourcesLarge(Scenario):
 
 class DataflowsLarge(Scenario):
     """A Zippy test using a smaller number but more complex dataflows."""
-
-    def bootstrap(self) -> list[ActionOrFactory]:
-        return DEFAULT_BOOTSTRAP
 
     def config(self) -> dict[ActionOrFactory, float]:
         return {
@@ -315,9 +301,6 @@ class DataflowsLarge(Scenario):
 class UserTablesLarge(Scenario):
     """A Zippy scenario over tables (no killing)."""
 
-    def bootstrap(self) -> list[ActionOrFactory]:
-        return DEFAULT_BOOTSTRAP
-
     def config(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTableParameterized(max_tables=2): 10,
@@ -330,11 +313,27 @@ class UserTablesLarge(Scenario):
         }
 
 
+class BackupAndRestoreLarge(Scenario):
+    """A Zippy scenario with the occasional Backup+Restore."""
+
+    def config(self) -> dict[ActionOrFactory, float]:
+        return {
+            CreateTableParameterized(max_tables=2): 10,
+            CreateViewParameterized(
+                max_views=5, expensive_aggregates=True, max_inputs=5
+            ): 10,
+            CreateSinkParameterized(max_sinks=10): 10,
+            ValidateView: 10,
+            DML: 50,
+            BackupAndRestore: 0.1,
+        }
+
+
 class PostgresCdcLarge(Scenario):
     """A Zippy test using Postgres CDC exclusively (Pg not killed)."""
 
     def bootstrap(self) -> list[ActionOrFactory]:
-        return [*DEFAULT_BOOTSTRAP, PostgresStart]
+        return super().bootstrap() + [PostgresStart]
 
     def config(self) -> dict[ActionOrFactory, float]:
         return {
