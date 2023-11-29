@@ -1051,7 +1051,7 @@ impl<'a> RunnerInner<'a> {
             deploy_generation: None,
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
-            // TODO(txn): Get this flipped to true before turning anything on in prod.
+            // TODO(txn): Get this flipped on before turning anything on in prod.
             enable_persist_txn_tables_cli: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn

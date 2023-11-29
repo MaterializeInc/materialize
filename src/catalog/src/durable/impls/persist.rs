@@ -31,8 +31,9 @@ use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_proto::{ProtoType, RustType};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Diff;
+use mz_storage_types::controller::EnablePersistTxnTables;
 use mz_storage_types::sources::Timeline;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -515,9 +516,17 @@ impl OpenableDurableCatalogState for PersistHandle {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+    async fn get_enable_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
         let value = self.get_current_config(ENABLE_PERSIST_TXN_TABLES).await;
-        Ok(value.map(|value| value > 0))
+        value
+            .map(EnablePersistTxnTables::try_from)
+            .transpose()
+            .map_err(|err| {
+                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
+                    .into()
+            })
     }
 
     #[tracing::instrument(level = "info", skip_all)]

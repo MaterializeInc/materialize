@@ -315,11 +315,13 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     pub(crate) fn new_txns(
         frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
+        lazy_persist_txn_tables: bool,
     ) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
         mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
             let mut worker = TxnsTableWorker {
+                lazy_persist_txn_tables,
                 frontier_responses,
                 txns,
                 write_handles: BTreeMap::new(),
@@ -509,6 +511,7 @@ async fn legacy_table_worker<T: Timestamp + Lattice + Codec64 + TimestampManipul
 }
 
 struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
+    lazy_persist_txn_tables: bool,
     frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
@@ -581,6 +584,19 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         let res = self.txns.register(register_ts.clone(), handles).await;
         match res {
             Ok(_ts) => {
+                // If we using eager uppers, make sure to advance the physical
+                // upper of the newly registered data shard past the
+                // register_ts. This protects against something like:
+                //
+                // - Upper of some shard s is at 5.
+                // - Apply txns at 10.
+                // - Crash.
+                // - Reboot.
+                // - Try and read s at 10.
+                if !self.lazy_persist_txn_tables {
+                    self.tidy
+                        .merge(self.txns.apply_eager_le(&register_ts).await);
+                }
                 self.send_new_uppers(new_uppers);
             }
             Err(current) => {
@@ -670,7 +686,12 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 // TODO: Do the applying in a background task. This will be a
                 // significant INSERT latency performance win.
                 debug!("applying {:?}", apply);
-                self.tidy.merge(apply.apply(&mut self.txns).await);
+                let tidy = if self.lazy_persist_txn_tables {
+                    apply.apply(&mut self.txns).await
+                } else {
+                    apply.apply_eager(&mut self.txns).await
+                };
+                self.tidy.merge(tidy);
                 // Committing a txn advances the logical upper of _every_ data
                 // shard in the txns set, not just the ones that were written
                 // to, so send new upper information for all registered data

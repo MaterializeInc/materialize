@@ -22,7 +22,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, instrument};
 
 use crate::txn_cache::TxnsCache;
@@ -548,6 +548,39 @@ where
 
         debug!("apply_le {:?} success", ts);
         Tidy { retractions }
+    }
+
+    /// [Self::apply_le] but also advances the physical upper of every data
+    /// shard registered at the timestamp past the timestamp.
+    #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
+    pub async fn apply_eager_le(&mut self, ts: &T) -> Tidy {
+        // TODO: Ideally the upper advancements would be done concurrently with
+        // this apply_le.
+        let tidy = self.apply_le(ts).await;
+
+        let data_writes = FuturesUnordered::new();
+        for data_id in self.txns_cache.all_registered_at(ts) {
+            let mut data_write = self.datas.take_write(&data_id).await;
+            let advance_to = ts.step_forward();
+            data_writes.push(async move {
+                let empty: &[((K, V), T, D)] = &[];
+                let () = data_write
+                    .append(
+                        empty,
+                        Antichain::from_elem(T::minimum()),
+                        Antichain::from_elem(advance_to),
+                    )
+                    .await
+                    .expect("usage was valid")
+                    .expect("nothing before minimum timestamp");
+                data_write
+            });
+        }
+        for data_write in data_writes.collect::<Vec<_>>().await {
+            self.datas.put_write(data_write);
+        }
+
+        tidy
     }
 
     /// Commits the tidy work at the given time.
@@ -1312,5 +1345,47 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn advance_physical_uppers_past() {
+        let client = PersistClient::new_for_tests().await;
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns.new_log();
+        let d0 = txns.expect_register(1).await;
+        let mut d0_write = writer(&client, d0).await;
+        let d1 = txns.expect_register(2).await;
+        let mut d1_write = writer(&client, d1).await;
+
+        assert_eq!(d0_write.fetch_recent_upper().await.elements(), &[0]);
+        assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[0]);
+
+        // Normal `apply` (used by expect_commit_at) does not advance the
+        // physical upper of data shards that were not involved in the txn (lazy
+        // upper). d1 is not involved in this txn so stays where it is.
+        txns.expect_commit_at(3, d0, &["0-2"], &log).await;
+        assert_eq!(d0_write.fetch_recent_upper().await.elements(), &[4]);
+        assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[0]);
+
+        // d0 is not involved in this txn so stays where it is.
+        txns.expect_commit_at(4, d1, &["1-3"], &log).await;
+        assert_eq!(d0_write.fetch_recent_upper().await.elements(), &[4]);
+        assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[5]);
+
+        // But we if use the "eager upper" version of apply, it advances the
+        // physical upper of every registered data shard.
+        txns.apply_eager_le(&4).await;
+        assert_eq!(d0_write.fetch_recent_upper().await.elements(), &[5]);
+        assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[5]);
+
+        // This also works even if the txn is empty.
+        let apply = txns.begin().commit_at(&mut txns, 5).await.unwrap();
+        apply.apply_eager(&mut txns).await;
+        assert_eq!(d0_write.fetch_recent_upper().await.elements(), &[6]);
+        assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[6]);
+
+        log.assert_snapshot(d0, 5).await;
+        log.assert_snapshot(d1, 5).await;
     }
 }

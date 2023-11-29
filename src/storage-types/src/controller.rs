@@ -304,6 +304,37 @@ impl From<DataflowError> for StorageError {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, num_enum::TryFromPrimitive, num_enum::IntoPrimitive)]
+#[repr(u64)]
+pub enum EnablePersistTxnTables {
+    Off = 0,
+    Eager = 1,
+    Lazy = 2,
+}
+
+impl std::fmt::Display for EnablePersistTxnTables {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EnablePersistTxnTables::Off => f.write_str("off"),
+            EnablePersistTxnTables::Eager => f.write_str("eager"),
+            EnablePersistTxnTables::Lazy => f.write_str("lazy"),
+        }
+    }
+}
+
+impl std::str::FromStr for EnablePersistTxnTables {
+    type Err = Box<(dyn std::error::Error + Send + Sync + 'static)>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "off" => Ok(EnablePersistTxnTables::Off),
+            "eager" => Ok(EnablePersistTxnTables::Eager),
+            "lazy" => Ok(EnablePersistTxnTables::Lazy),
+            _ => Err(s.into()),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TxnsCodecRow;
 

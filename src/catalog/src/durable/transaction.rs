@@ -23,6 +23,7 @@ use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::TableTransaction;
+use mz_storage_types::controller::EnablePersistTxnTables;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -1037,9 +1038,11 @@ impl<'a> Transaction<'a> {
     ///
     /// These are mirrored so that we can toggle the flag with Launch Darkly,
     /// but use it in boot before Launch Darkly is available.
-    pub fn set_enable_persist_txn_tables(&mut self, value: bool) -> Result<(), CatalogError> {
-        let value = if value { 1 } else { 0 };
-        self.set_config(ENABLE_PERSIST_TXN_TABLES.into(), value)?;
+    pub fn set_enable_persist_txn_tables(
+        &mut self,
+        value: EnablePersistTxnTables,
+    ) -> Result<(), CatalogError> {
+        self.set_config(ENABLE_PERSIST_TXN_TABLES.into(), u64::from(value))?;
         Ok(())
     }
 
