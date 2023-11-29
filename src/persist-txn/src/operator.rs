@@ -18,14 +18,21 @@ use std::sync::{mpsc, Arc};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::Hashable;
+use mz_ore::cast::CastFrom;
 use mz_persist_client::operators::shard_source::shard_source;
+use mz_persist_client::read::ListenEvent;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::{Codec, Codec64, StepForward};
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    AsyncInputHandle, Button, Event, OperatorBuilder as AsyncOperatorBuilder,
+};
+use timely::communication::Pull;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::BundleCore;
 use timely::dataflow::operators::capture::EventCore;
-use timely::dataflow::operators::{Capture, Leave, Map, Probe};
+use timely::dataflow::operators::{Broadcast, Capture, Leave, Map, Probe};
 use timely::dataflow::{ProbeHandle, Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -34,8 +41,9 @@ use timely::worker::Worker;
 use timely::{Data, WorkerConfig};
 use tracing::{debug, trace};
 
-use crate::txn_read::{DataListenNext, TxnsRead};
-use crate::{TxnsCodec, TxnsCodecDefault};
+use crate::txn_cache::{TxnsCache, TxnsCacheState};
+use crate::txn_read::DataListenNext;
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
 /// An operator for translating physical data shard frontiers into logical ones.
 ///
@@ -79,10 +87,10 @@ use crate::{TxnsCodec, TxnsCodecDefault};
 ///   10). It knows that the data shard _WAS_ involved in this, so it forwards
 ///   on data from its input until the input has progressed to 10, at which
 ///   point it can itself downgrade to 10.
-pub fn txns_progress<K, V, T, D, P, C, G>(
+pub fn txns_progress<K, V, T, D, P, C, F, G>(
     passthrough: Stream<G, P>,
     name: &str,
-    client: impl Future<Output = PersistClient> + 'static,
+    client_fn: impl Fn() -> F,
     txns_id: ShardId,
     data_id: ShardId,
     as_of: T,
@@ -97,23 +105,144 @@ where
     D: Data + Semigroup + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec,
+    F: Future<Output = PersistClient> + Send + 'static,
     G: Scope<Timestamp = T>,
 {
-    let mut builder =
-        AsyncOperatorBuilder::new(format!("txns_progress({})", name), passthrough.scope());
+    let (txns, source_button) = txns_progress_source::<K, V, T, D, P, C, G>(
+        passthrough.scope(),
+        name,
+        client_fn(),
+        txns_id,
+        data_id,
+    );
+    // Each of the `txns_frontiers` workers wants the full copy of the txns
+    // shard (modulo filtered for data_id).
+    let txns = txns.broadcast();
+    let (passthrough, frontiers_button) = txns_progress_frontiers::<K, V, T, D, P, C, G>(
+        txns,
+        passthrough,
+        name,
+        client_fn(),
+        txns_id,
+        data_id,
+        as_of,
+        data_key_schema,
+        data_val_schema,
+    );
+    let token: Rc<dyn Any> = Rc::new((
+        source_button.press_on_drop(),
+        frontiers_button.press_on_drop(),
+    ));
+    (passthrough, token)
+}
+
+fn txns_progress_source<K, V, T, D, P, C, G>(
+    scope: G,
+    name: &str,
+    client: impl Future<Output = PersistClient> + 'static,
+    txns_id: ShardId,
+    data_id: ShardId,
+) -> (Stream<G, (TxnsEntry, T, i64)>, Button)
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    D: Data + Semigroup + Codec64 + Send + Sync,
+    P: Debug + Data,
+    C: TxnsCodec,
+    G: Scope<Timestamp = T>,
+{
+    let worker_idx = scope.index();
+    let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
+    let name = format!("txns_progress_source({})", name);
+    let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
+    let (mut txns_output, txns_stream) = builder.new_output();
+
+    let shutdown_button = builder.build(move |capabilities| async move {
+        if worker_idx != chosen_worker {
+            return;
+        }
+
+        let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+        let client = client.await;
+        let mut txns_subscribe = {
+            let cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
+            assert!(cache.buf.is_empty());
+            cache.txns_subscribe
+        };
+        loop {
+            let events = txns_subscribe.next(None).await;
+            for event in events {
+                let parts = match event {
+                    ListenEvent::Progress(frontier) => {
+                        let progress = frontier
+                            .into_option()
+                            .expect("nothing should close the txns shard");
+                        debug!("{} emitting progress {:?}", name, progress);
+                        cap.downgrade(&progress);
+                        continue;
+                    }
+                    ListenEvent::Updates(parts) => parts,
+                };
+                let mut updates = Vec::new();
+                TxnsCache::<T, C>::fetch_parts(
+                    Some(data_id),
+                    &mut txns_subscribe,
+                    parts,
+                    &mut updates,
+                )
+                .await;
+                if !updates.is_empty() {
+                    debug!("{} emitting updates {:?}", name, updates);
+                    txns_output.give_container(&cap, &mut updates).await;
+                }
+            }
+        }
+    });
+    (txns_stream, shutdown_button)
+}
+
+fn txns_progress_frontiers<K, V, T, D, P, C, G>(
+    txns: Stream<G, (TxnsEntry, T, i64)>,
+    passthrough: Stream<G, P>,
+    name: &str,
+    client: impl Future<Output = PersistClient> + 'static,
+    txns_id: ShardId,
+    data_id: ShardId,
+    as_of: T,
+    // TODO(txn): Get rid of these when we have a schemaless WriteHandle.
+    data_key_schema: Arc<K::Schema>,
+    data_val_schema: Arc<V::Schema>,
+) -> (Stream<G, P>, Button)
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    D: Data + Semigroup + Codec64 + Send + Sync,
+    P: Debug + Data,
+    C: TxnsCodec,
+    G: Scope<Timestamp = T>,
+{
+    let name = format!("txns_progress_frontiers({})", name);
+    let mut builder = AsyncOperatorBuilder::new(name.clone(), passthrough.scope());
     let (mut passthrough_output, passthrough_stream) = builder.new_output();
+    let txns_input = builder.new_input_connection(&txns, Pipeline, vec![Antichain::new()]);
     let mut passthrough_input =
         builder.new_input_connection(&passthrough, Pipeline, vec![Antichain::new()]);
 
-    let name = name.to_owned();
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        // TODO(txn): Share a single TxnsRead process-wide.
-        let txns_read = TxnsRead::start::<C>(client.clone(), txns_id);
+        let state = TxnsCacheState::new(txns_id, T::minimum(), Some(data_id));
+        let mut txns_cache = TxnsCacheTimely {
+            name: name.clone(),
+            state,
+            input: txns_input,
+            buf: Vec::new(),
+        };
 
-        txns_read.update_gt(as_of.clone()).await;
-        let snap = txns_read.data_snapshot(data_id, as_of.clone()).await;
+        txns_cache.update_gt(&as_of).await;
+        let snap = txns_cache.state.data_snapshot(data_id, as_of.clone());
         let data_write = client
             .open_writer::<K, V, T, D>(
                 data_id,
@@ -125,7 +254,7 @@ where
             .expect("schema shouldn't change");
         let empty_to = snap.unblock_read(data_write).await;
         debug!(
-            "txns_progress({}) {:.9} starting as_of={:?} empty_to={:?}",
+            "{} {:.9} starting as_of={:?} empty_to={:?}",
             name,
             data_id.to_string(),
             as_of,
@@ -149,8 +278,8 @@ where
                     // disconnected.
                     Event::Data(_data_cap, data) => {
                         for data in data.drain(..) {
-                            trace!(
-                                "txns_progress({}) {:.9} emitting data {:?}",
+                            debug!(
+                                "{} {:.9} emitting data {:?}",
                                 name,
                                 data_id.to_string(),
                                 data
@@ -170,8 +299,8 @@ where
                         // frontier updates too.
                         if &output_progress_exclusive < input_progress_exclusive {
                             output_progress_exclusive.clone_from(input_progress_exclusive);
-                            trace!(
-                                "txns_progress({}) {:.9} downgrading cap to {:?}",
+                            debug!(
+                                "{} {:.9} downgrading cap to {:?}",
                                 name,
                                 data_id.to_string(),
                                 output_progress_exclusive
@@ -189,19 +318,17 @@ where
             // physically written to the data shard. Query the txns shard to
             // find out what to do next given our current progress.
             loop {
-                txns_read.update_ge(output_progress_exclusive.clone()).await;
-                // TODO(txn): Hook compaction up TxnsRead, probably a
-                // capabilities based system.
-                //
-                // txns_read.compact_to(&output_progress_exclusive);
-                let data_listen_next = txns_read
-                    .data_listen_next(data_id, output_progress_exclusive.clone())
-                    .await;
+                txns_cache.update_ge(&output_progress_exclusive).await;
+                txns_cache.compact_to(&output_progress_exclusive);
+                let data_listen_next = txns_cache
+                    .state
+                    .data_listen_next(&data_id, output_progress_exclusive.clone());
                 debug!(
-                    "txns_progress({}) {:.9} data_listen_next at {:?}: {:?}",
+                    "{} {:.9} data_listen_next at {:?}({:?}): {:?}",
                     name,
                     data_id.to_string(),
-                    read_data_to,
+                    read_data_to.elements(),
+                    output_progress_exclusive,
                     data_listen_next,
                 );
                 match data_listen_next {
@@ -213,7 +340,7 @@ where
                     // after this update_gt call), we're guaranteed to get an
                     // answer.
                     DataListenNext::WaitForTxnsProgress => {
-                        txns_read.update_gt(output_progress_exclusive.clone()).await;
+                        txns_cache.update_gt(&output_progress_exclusive).await;
                         continue;
                     }
                     // The data shard got a write! Loop back above and pass
@@ -239,7 +366,7 @@ where
                         assert!(output_progress_exclusive < new_progress);
                         output_progress_exclusive = new_progress;
                         trace!(
-                            "txns_progress({}) {:.9} downgrading cap to {:?}",
+                            "{} {:.9} downgrading cap to {:?}",
                             name,
                             data_id.to_string(),
                             output_progress_exclusive
@@ -257,7 +384,79 @@ where
             }
         }
     });
-    (passthrough_stream, Rc::new(shutdown_button.press_on_drop()))
+    (passthrough_stream, shutdown_button)
+}
+
+// NB: The API of this intentionally mirrors TxnsCache and TxnsRead. Consider
+// making them all implement the same trait?
+struct TxnsCacheTimely<
+    T: Timestamp + Lattice + Codec64,
+    P: Pull<BundleCore<T, Vec<(TxnsEntry, T, i64)>>> + 'static,
+> {
+    name: String,
+    state: TxnsCacheState<T>,
+    input: AsyncInputHandle<T, Vec<(TxnsEntry, T, i64)>, P>,
+    buf: Vec<(TxnsEntry, T, i64)>,
+}
+
+impl<T, P> TxnsCacheTimely<T, P>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    P: Pull<BundleCore<T, Vec<(TxnsEntry, T, i64)>>> + 'static,
+{
+    /// See [TxnsCacheState::compact_to].
+    fn compact_to(&mut self, since_ts: &T) {
+        self.state.compact_to(since_ts)
+    }
+
+    /// See [TxnsCache::update_gt].
+    async fn update_gt(&mut self, ts: &T) {
+        debug!("{} update_gt {:?}", self.name, ts);
+        self.update(|progress_exclusive| progress_exclusive > ts)
+            .await;
+        debug_assert!(&self.state.progress_exclusive > ts);
+        debug_assert_eq!(self.state.validate(), Ok(()));
+    }
+
+    /// See [TxnsCache::update_ge].
+    async fn update_ge(&mut self, ts: &T) {
+        debug!("{} update_ge {:?}", self.name, ts);
+        self.update(|progress_exclusive| progress_exclusive >= ts)
+            .await;
+        debug_assert!(&self.state.progress_exclusive >= ts);
+        debug_assert_eq!(self.state.validate(), Ok(()));
+    }
+
+    async fn update<F: Fn(&T) -> bool>(&mut self, done: F) {
+        while !done(&self.state.progress_exclusive) {
+            let Some(event) = self.input.next_mut().await else {
+                unreachable!("txns shard unexpectedly closed")
+            };
+            match event {
+                Event::Progress(frontier) => {
+                    let progress = frontier
+                        .into_option()
+                        .expect("nothing should close the txns shard");
+                    debug!("{} got progress {:?}", self.name, progress);
+                    self.state
+                        .push_entries(std::mem::take(&mut self.buf), progress);
+                }
+                Event::Data(_cap, entries) => {
+                    debug!("{} got updates {:?}", self.name, entries);
+                    self.buf.append(entries);
+                }
+            }
+        }
+        debug!(
+            "cache correct before {:?} len={} least_ts={:?}",
+            self.state.progress_exclusive,
+            self.state.unapplied_batches.len(),
+            self.state
+                .unapplied_batches
+                .first_key_value()
+                .map(|(_, (_, _, ts))| ts),
+        );
+    }
 }
 
 /// A helper for subscribing to a data shard using the timely operators.
@@ -338,10 +537,10 @@ impl DataSubscribe {
             });
             let data_stream = data_stream.probe_with(&mut data);
             let (data_stream, txns_progress_token) =
-                txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _>(
+                txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _, _>(
                     data_stream,
                     name,
-                    std::future::ready(client.clone()),
+                    || std::future::ready(client.clone()),
                     txns_id,
                     data_id,
                     as_of,

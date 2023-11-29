@@ -226,12 +226,14 @@ pub enum DataListenNext<T> {
 /// A shared [TxnsCache] running in a task and communicated with over a channel.
 #[derive(Debug, Clone)]
 pub struct TxnsRead<T> {
+    txns_id: ShardId,
     tx: mpsc::Sender<TxnsReadCmd<T>>,
     _task: Arc<AbortOnDropHandle<()>>,
 }
 
 impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
-    pub(crate) fn start<C>(client: PersistClient, txns_id: ShardId) -> Self
+    /// Starts the task worker and returns a handle for communicating with it.
+    pub fn start<C>(client: PersistClient, txns_id: ShardId) -> Self
     where
         T: TotalOrder + StepForward,
         C: TxnsCodec,
@@ -243,9 +245,15 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
             task.run().await
         });
         TxnsRead {
+            txns_id,
             tx,
             _task: Arc::new(task.abort_on_drop()),
         }
+    }
+
+    /// Returns the [ShardId] of the txns shard.
+    pub fn txns_id(&self) -> &ShardId {
+        &self.txns_id
     }
 
     /// See [crate::txn_cache::TxnsCacheState::data_snapshot].
@@ -261,7 +269,7 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
     }
 
     /// See [TxnsCache::update_ge].
-    pub(crate) async fn update_ge(&self, ts: T) {
+    pub async fn update_ge(&self, ts: T) {
         let ts = WaitTs::GreaterEqual(ts);
         self.send(|tx| TxnsReadCmd::Wait { ts, tx }).await
     }

@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use maplit::btreemap;
@@ -27,23 +27,21 @@ use mz_interchange::json::JsonEncoder;
 use mz_kafka_util::client::{MzClientContext, TunnelingClientContext};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_client::client::SinkStatisticsUpdate;
+use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_client::sink::ProgressRecord;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::errors::{ContextCreationError, DataflowError};
+use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat,
-    MetadataFilled, SinkAsOf, SinkEnvelope, StorageSinkDesc,
+    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkAsOf,
+    SinkEnvelope, StorageSinkDesc,
 };
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
-use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
-use rdkafka::consumer::BaseConsumer;
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaError, RDKafkaErrorCode};
 use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
 use rdkafka::producer::{BaseRecord, DeliveryResult, Producer, ProducerContext, ThreadedProducer};
@@ -57,8 +55,9 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::sink::SinkMetrics;
+use crate::metrics::StorageMetrics;
 use crate::render::sinks::SinkRender;
-use crate::sink::KafkaBaseMetrics;
 use crate::statistics::{SinkStatisticsMetrics, StorageStatistics};
 use crate::storage_state::StorageState;
 
@@ -123,7 +122,7 @@ where
             sink.envelope,
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
-            storage_state.sink_metrics.kafka.clone(),
+            &storage_state.metrics,
             storage_state
                 .sink_statistics
                 .get(&sink_id)
@@ -137,41 +136,6 @@ where
             .insert(sink_id, shared_frontier);
 
         (health, Some(token))
-    }
-}
-
-/// Per-Kafka sink metrics.
-pub struct SinkMetrics {
-    messages_sent_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    message_send_errors_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    message_delivery_errors_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    rows_queued: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-}
-
-impl SinkMetrics {
-    fn new(
-        base: &KafkaBaseMetrics,
-        topic_name: &str,
-        sink_id: &str,
-        worker_id: &str,
-    ) -> SinkMetrics {
-        let labels = vec![
-            topic_name.to_string(),
-            sink_id.to_string(),
-            worker_id.to_string(),
-        ];
-        SinkMetrics {
-            messages_sent_counter: base
-                .messages_sent_counter
-                .get_delete_on_drop_counter(labels.clone()),
-            message_send_errors_counter: base
-                .message_send_errors_counter
-                .get_delete_on_drop_counter(labels.clone()),
-            message_delivery_errors_counter: base
-                .message_delivery_errors_counter
-                .get_delete_on_drop_counter(labels.clone()),
-            rows_queued: base.rows_queued.get_delete_on_drop_gauge(labels),
-        }
     }
 }
 
@@ -384,8 +348,7 @@ struct KafkaSinkState {
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
 
     progress_topic: String,
-    progress_key: String,
-    progress_client: Option<Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>>,
+    progress_key: ProgressKey,
 
     healthchecker: HealthOutputHandle,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
@@ -408,21 +371,17 @@ impl KafkaSinkState {
     // Until `try` blocks, we need this for using `fail_point!` correctly.
     async fn new(
         sink_id: GlobalId,
-        connection: KafkaSinkConnection,
+        connection: &KafkaSinkConnection,
         sink_name: String,
-        worker_id: String,
+        worker_id: usize,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-        metrics: &KafkaBaseMetrics,
+        metrics: &StorageMetrics,
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
         healthchecker: HealthOutputHandle,
     ) -> Self {
-        let metrics = Arc::new(SinkMetrics::new(
-            metrics,
-            &connection.topic,
-            &sink_id.to_string(),
-            &worker_id,
-        ));
+        let metrics = Arc::new(metrics.get_sink_metrics(&connection.topic, sink_id, worker_id));
+        let worker_id = worker_id.to_string();
 
         let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
 
@@ -439,6 +398,29 @@ impl KafkaSinkState {
                 fail::fail_point!("kafka_sink_creation_error", |_| Err(
                     ContextCreationError::Other(anyhow::anyhow!("synthetic error"))
                 ));
+
+                // Create a producer with the old transactional id to fence out writers from older
+                // versions, if any. This section should be removed after it has been running in
+                // production for a week or two.
+                let fence_producer: ThreadedProducer<_> = connection
+                    .connection
+                    .create_with_context(
+                        connection_context,
+                        MzClientContext::default(),
+                        &btreemap! {
+                            "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
+                        },
+                    )
+                    .await?;
+                let fence_producer = Arc::new(fence_producer);
+
+                task::spawn_blocking(|| format!("init_transactions:{sink_name}"), {
+                    let fence_producer = Arc::clone(&fence_producer);
+                    move || fence_producer.init_transactions(Duration::from_secs(5))
+                })
+                .unwrap_or_else(|_| Err(KafkaError::Canceled))
+                .await
+                .check_ssh_status(fence_producer.context())?;
 
                 connection
                     .connection
@@ -470,7 +452,7 @@ impl KafkaSinkState {
                             // different settings for this value to see if it makes a
                             // big difference.
                             "queue.buffering.max.ms" => format!("{}", 10),
-                            "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
+                            "transactional.id" => format!("mz-producer-{sink_id}-0"),
                         },
                     )
                     .await
@@ -486,39 +468,18 @@ impl KafkaSinkState {
             timeout: Duration::from_secs(5),
         };
 
-        let progress_client = halt_on_err(
-            &healthchecker,
-            connection
-                .connection
-                .create_with_context(
-                    connection_context,
-                    MzClientContext::default(),
-                    &btreemap! {
-                        "group.id" => mz_storage_client::sink::SinkGroupId::new(sink_id),
-                        "isolation.level" => "read_committed".into(),
-                        "enable.auto.commit" => "false".into(),
-                        "auto.offset.reset" => "earliest".into(),
-                        "enable.partition.eof" => "true".into(),
-                    },
-                )
-                .await,
-            None,
-        )
-        .await;
-
         KafkaSinkState {
             name: sink_name,
-            topic: connection.topic,
+            topic: connection.topic.clone(),
             metrics,
             producer,
             pending_rows: BTreeMap::new(),
             ready_rows: VecDeque::new(),
             retry_manager,
-            progress_topic: match connection.consistency_config {
-                KafkaConsistencyConfig::Progress { topic } => topic,
+            progress_topic: match &connection.consistency_config {
+                KafkaConsistencyConfig::Progress { topic } => topic.clone(),
             },
-            progress_key: mz_storage_client::sink::ProgressKey::new(sink_id),
-            progress_client: Some(Arc::new(progress_client)),
+            progress_key: ProgressKey::new(sink_id),
             healthchecker,
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
@@ -773,26 +734,24 @@ async fn halt_on_err<T>(
     match result {
         Ok(t) => t,
         Err(error) => {
-            let hint: Option<String> = if let ContextCreationError::Other(error) = &error {
-                error
-                    .downcast_ref::<RDKafkaError>()
-                    .and_then(|kafka_error| {
-                        if kafka_error.is_retriable()
-                            && kafka_error.code() == RDKafkaErrorCode::OperationTimedOut
-                        {
-                            Some(
-                                "If you're running a single Kafka broker, ensure \
-                                    that the configs transaction.state.log.replication.factor, \
-                                    transaction.state.log.min.isr, and \
-                                    offsets.topic.replication.factor are set to 1 on the broker"
-                                    .to_string(),
-                            )
-                        } else {
-                            None
-                        }
-                    })
-            } else {
-                None
+            let kafka_error = match error {
+                ContextCreationError::KafkaError(KafkaError::Transaction(ref e)) => Some(e),
+                ContextCreationError::Other(ref err) => err.downcast_ref::<RDKafkaError>(),
+                ContextCreationError::KafkaError(_) | ContextCreationError::Ssh(_) => None,
+            };
+            let hint = match kafka_error {
+                Some(e) => {
+                    if e.is_retriable() && e.code() == RDKafkaErrorCode::OperationTimedOut {
+                        let hint =
+                            "If you're running a single Kafka broker, ensure that the configs \
+                        transaction.state.log.replication.factor, transaction.state.log.min.isr, \
+                        and offsets.topic.replication.factor are set to 1 on the broker";
+                        Some(hint.to_owned())
+                    } else {
+                        None
+                    }
+                }
+                None => None,
             };
 
             // Update the ssh status. This could be overridden below, but this ensures the
@@ -838,7 +797,7 @@ fn kafka<G>(
     envelope: SinkEnvelope,
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-    metrics: KafkaBaseMetrics,
+    metrics: &StorageMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
 ) -> (Stream<G, HealthStatusMessage>, Rc<dyn Any>)
@@ -900,13 +859,14 @@ fn produce_to_kafka<G>(
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-    metrics: KafkaBaseMetrics,
+    metrics: &StorageMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
 ) -> (Stream<G, HealthStatusMessage>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let metrics = metrics.clone();
     let worker_id = stream.scope().index();
     let worker_count = stream.scope().peers();
     let mut builder = AsyncOperatorBuilder::new(name.clone(), stream.scope());
@@ -937,9 +897,9 @@ where
 
         let mut s = KafkaSinkState::new(
             id,
-            connection,
+            &connection,
             name,
-            worker_id.to_string(),
+            worker_id,
             write_frontier,
             &metrics,
             &connection_context,
@@ -958,17 +918,13 @@ where
         )
         .await;
 
-        let latest_ts = mz_storage_client::sink::determine_latest_progress_record(
-            s.name.clone(),
-            s.progress_topic.clone(),
-            s.progress_key.clone(),
-            s.progress_client
-                .take()
-                .expect("Claiming just-created progress client"),
+        let latest_ts = halt_on_err(
+            &s.healthchecker,
+            mz_storage_client::sink::build_kafka(id, &connection, &connection_context).await,
+            None,
         )
         .await;
 
-        let latest_ts = s.halt_on_err(latest_ts).await;
         info!(
             "{}: initial as_of: {:?}, latest progress record: {:?}",
             s.name, as_of.frontier, latest_ts
@@ -1188,8 +1144,8 @@ fn encode_stream<G>(
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     name_prefix: &str,
-    mut connection: KafkaSinkConnection,
-    connection_context: ConnectionContext,
+    connection: KafkaSinkConnection,
+    connection_cx: ConnectionContext,
     envelope: SinkEnvelope,
 ) -> (
     Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>,
@@ -1226,25 +1182,10 @@ where
             return;
         }
 
-        // Ensure that Kafka collateral exists. While this looks somewhat
-        // innocuous, this step is why this must be an async operator.
-        //
-        // Also note that where this lies in the rendering cycle means that we
-        // might create the collateral topics each time the sink is rendered,
-        // e.g. if the broker's admin deleted the progress and data topics. For
-        // more details, see `mz_storage_client::sink::build_kafka`.
         let healthchecker = HealthOutputHandle {
             health_cap,
             handle: Mutex::new(health_output),
         };
-
-        let _ = halt_on_err(
-            &healthchecker,
-            mz_storage_client::sink::build_kafka(sink_id, &mut connection, &connection_context)
-                .await,
-            None,
-        )
-        .await;
 
         let key_desc = connection
             .key_desc_and_indices
@@ -1253,10 +1194,39 @@ where
         let value_desc = connection.value_desc.clone();
 
         let encoder: Box<dyn Encode> = match connection.format {
-            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::Published {
-                key_schema_id,
-                value_schema_id,
-            }) => {
+            KafkaSinkFormat::Avro {
+                key_schema,
+                value_schema,
+                csr_connection,
+            } => {
+                // Ensure that schemas are registered with the schema registry.
+                // While this looks somewhat innocuous, this step is why this
+                // must be an async operator.
+                //
+                // Also note that where this lies in the rendering cycle means
+                // that we will publish the schemas each time the sink is
+                // rendered.
+                let (key_schema_id, value_schema_id) = halt_on_err(
+                    &healthchecker,
+                    async {
+                        let ccsr = csr_connection.connect(&connection_cx).await?;
+                        let ids = mz_storage_client::sink::publish_kafka_schemas(
+                            &ccsr,
+                            &connection.topic,
+                            key_schema.as_deref(),
+                            Some(mz_ccsr::SchemaType::Avro),
+                            &value_schema,
+                            mz_ccsr::SchemaType::Avro,
+                        )
+                        .await
+                        .context("error publishing kafka schemas for sink")?;
+                        Ok(ids)
+                    }
+                    .await,
+                    None,
+                )
+                .await;
+
                 let options = AvroSchemaOptions {
                     is_debezium: matches!(envelope, SinkEnvelope::Debezium),
                     ..Default::default()
@@ -1269,9 +1239,6 @@ where
                     key_schema_id,
                     value_schema_id,
                 ))
-            }
-            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe { .. }) => {
-                unreachable!("must have communicated with CSR")
             }
             KafkaSinkFormat::Json => Box::new(JsonEncoder::new(
                 key_desc,

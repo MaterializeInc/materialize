@@ -433,7 +433,7 @@ impl Catalog {
         let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let environmentd_id = Uuid::new_v4();
-        let catalog = Self::open_debug_catalog(
+        let catalog = match Self::open_debug_catalog(
             &debug_stash_factory,
             persist_client,
             environmentd_id,
@@ -441,7 +441,13 @@ impl Catalog {
             None,
         )
         .await
-        .expect("unable to open debug stash");
+        {
+            Ok(catalog) => catalog,
+            Err(err) => {
+                debug_stash_factory.drop().await;
+                panic!("unable to open debug stash: {err}");
+            }
+        };
         let res = f(catalog).await;
         debug_stash_factory.drop().await;
         res
@@ -530,7 +536,7 @@ impl Catalog {
         environment_id: EnvironmentId,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(
-            mz_catalog::durable::persist_backed_catalog_state(
+            mz_catalog::durable::test_persist_backed_catalog_state(
                 persist_client,
                 environment_id.organization_id(),
             )

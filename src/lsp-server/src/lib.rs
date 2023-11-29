@@ -89,5 +89,3 @@ pub static PKG_NAME: Lazy<String> = Lazy::new(|| env!("CARGO_PKG_NAME").to_strin
 
 /// Contains the structure and implementation of the Language Server Protocol.
 pub mod backend;
-/// Provides SQL snippets for Materialize.
-pub mod snippets;

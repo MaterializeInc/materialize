@@ -482,7 +482,12 @@ class KafkaSource(DBObject):
             KafkaColumn(field.name, field.data_type, False, self) for field in fields
         ]
         self.executor = KafkaExecutor(
-            self.source_id, ports, fields, schema.db.name(), schema.name()
+            self.source_id,
+            ports,
+            fields,
+            schema.db.name(),
+            schema.name(),
+            cluster.name(),
         )
         workload = rng.choice(list(WORKLOADS))(None)
         for transaction_def in workload.cycle:
@@ -606,7 +611,12 @@ class PostgresSource(DBObject):
             PostgresColumn(field.name, field.data_type, False, self) for field in fields
         ]
         self.executor = PgExecutor(
-            self.source_id, ports, fields, schema.db.name(), schema.name()
+            self.source_id,
+            ports,
+            fields,
+            schema.db.name(),
+            schema.name(),
+            cluster.name(),
         )
         self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
         self.lock = threading.Lock()

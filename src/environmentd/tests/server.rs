@@ -95,7 +95,7 @@ use itertools::Itertools;
 use mz_environmentd::http::{
     BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
 };
-use mz_environmentd::test_util::{self, Listeners, PostgresErrorExt, KAFKA_ADDRS};
+use mz_environmentd::test_util::{self, PostgresErrorExt, KAFKA_ADDRS};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
@@ -103,10 +103,7 @@ use mz_ore::cast::TryCastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, NowFn};
 use mz_ore::retry::Retry;
-use mz_ore::{
-    assert_contains,
-    task::{self, RuntimeExt},
-};
+use mz_ore::{assert_contains, task::RuntimeExt};
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -125,12 +122,12 @@ use tungstenite::{Error, Message};
 #[mz_ore::test]
 fn test_persistence() {
     let data_dir = tempfile::tempdir().unwrap();
-    let config = test_util::Config::default()
+    let harness = test_util::TestHarness::default()
         .data_directory(data_dir.path())
         .unsafe_mode();
 
     {
-        let server = test_util::start_server(config.clone()).unwrap();
+        let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client
             .batch_execute(&format!(
@@ -157,7 +154,7 @@ fn test_persistence() {
             .unwrap();
     }
 
-    let server = test_util::start_server(config).unwrap();
+    let server = harness.start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     assert_eq!(
         client
@@ -203,20 +200,18 @@ fn test_persistence() {
 fn setup_statement_logging_core(
     max_sample_rate: f64,
     sample_rate: f64,
-    extra_config: test_util::Config,
-) -> (test_util::Server, postgres::Client) {
-    let server = test_util::start_server(
-        extra_config
-            .with_system_parameter_default(
-                "statement_logging_max_sample_rate".to_string(),
-                max_sample_rate.to_string(),
-            )
-            .with_system_parameter_default(
-                "statement_logging_use_reproducible_rng".to_string(),
-                "true".to_string(),
-            ),
-    )
-    .unwrap();
+    test_harness: test_util::TestHarness,
+) -> (test_util::TestServerWithRuntime, postgres::Client) {
+    let server = test_harness
+        .with_system_parameter_default(
+            "statement_logging_max_sample_rate".to_string(),
+            max_sample_rate.to_string(),
+        )
+        .with_system_parameter_default(
+            "statement_logging_use_reproducible_rng".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
         .execute(
@@ -230,8 +225,12 @@ fn setup_statement_logging_core(
 fn setup_statement_logging(
     max_sample_rate: f64,
     sample_rate: f64,
-) -> (test_util::Server, postgres::Client) {
-    setup_statement_logging_core(max_sample_rate, sample_rate, test_util::Config::default())
+) -> (test_util::TestServerWithRuntime, postgres::Client) {
+    setup_statement_logging_core(
+        max_sample_rate,
+        sample_rate,
+        test_util::TestHarness::default(),
+    )
 }
 
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
@@ -573,7 +572,10 @@ ORDER BY mseh.began_at",
 /// Relies on two assumptions:
 /// (1) that the effective sampling rate for the session is 50%,
 /// (2) that we are using the deterministic testing RNG.
-fn test_statement_logging_sampling_inner(server: test_util::Server, mut client: postgres::Client) {
+fn test_statement_logging_sampling_inner(
+    server: test_util::TestServerWithRuntime,
+    mut client: postgres::Client,
+) {
     for i in 0..50 {
         client.execute(&format!("SELECT {i}"), &[]).unwrap();
     }
@@ -620,10 +622,10 @@ fn test_statement_logging_sampling_constrained() {
     test_statement_logging_sampling_inner(server, client);
 }
 
-#[mz_ore::test]
-fn test_statement_logging_unsampled_metrics() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
-    let mut client = server.connect(postgres::NoTls).unwrap();
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_statement_logging_unsampled_metrics() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
 
     // TODO[btv]
     //
@@ -660,22 +662,25 @@ fn test_statement_logging_unsampled_metrics() {
         .count();
 
     for q in batch_queries {
-        client.batch_execute(q).unwrap();
+        client.batch_execute(q).await.unwrap();
     }
 
     for q in single_queries {
-        client.execute(q, &[]).unwrap();
+        client.execute(q, &[]).await.unwrap();
     }
 
     for q in prepared_queries {
-        let s = client.prepare(q).unwrap();
-        client.execute(&s, &[]).unwrap();
+        let s = client.prepare(q).await.unwrap();
+        client.execute(&s, &[]).await.unwrap();
     }
 
-    client.batch_execute(&named_prepared_outer).unwrap();
+    client.batch_execute(&named_prepared_outer).await.unwrap();
 
     // This should NOT be logged, since we never actually execute it.
-    client.prepare("SELECT 'Hello, not counted!'").unwrap();
+    client
+        .prepare("SELECT 'Hello, not counted!'")
+        .await
+        .unwrap();
 
     let expected_total = batch_total + single_total + prepared_total + named_prepared_outer_len;
     let metric_value = server
@@ -698,13 +703,13 @@ fn test_statement_logging_unsampled_metrics() {
 fn test_statement_logging_persistence() {
     let data_dir = tempfile::tempdir().unwrap();
 
-    let cfg = test_util::Config::default()
+    let harness = test_util::TestHarness::default()
         .data_directory(data_dir.path())
         .with_system_parameter_default(
             "statement_logging_retention".to_string(),
             "30s".to_string(),
         );
-    let (server, mut client) = setup_statement_logging_core(1.0, 1.0, cfg.clone());
+    let (server, mut client) = setup_statement_logging_core(1.0, 1.0, harness.clone());
 
     // Issue one statement, then wait long enough for it to surely not be retained on reboot,
     // then issue another statement. After reboot, check that only the second statement remains.
@@ -716,7 +721,7 @@ fn test_statement_logging_persistence() {
     std::mem::drop(client);
     std::mem::drop(server);
 
-    let server = test_util::start_server(cfg).unwrap();
+    let server = harness.start_blocking();
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
     // Check that we only retained the second query.
     let result = client
@@ -759,7 +764,7 @@ WHERE
 // unsafe mode.
 #[mz_ore::test]
 fn test_source_sink_size_required() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Sources bail without an explicit size.
@@ -825,7 +830,7 @@ fn test_http_sql() {
     let fixtimestamp_replace = "<TIMESTAMP>";
 
     datadriven::walk("tests/testdata/http", |f| {
-        let server = test_util::start_server(test_util::Config::default()).unwrap();
+        let server = test_util::TestHarness::default().start_blocking();
 
         // Grant all privileges to default http user.
         // TODO(jkosh44) The HTTP endpoint has a special default user while the WS endpoint just
@@ -870,7 +875,7 @@ fn test_http_sql() {
         let ws_url = server.ws_addr();
         let http_url = Url::parse(&format!(
             "http://{}/api/sql",
-            server.inner.http_local_addr()
+            server.inner().http_local_addr()
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
@@ -949,8 +954,9 @@ fn test_http_sql() {
 // Test that the server properly handles cancellation requests.
 #[mz_ore::test]
 fn test_cancel_long_running_query() {
-    let config = test_util::Config::default().unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     let cancel_token = client.cancel_token();
@@ -989,8 +995,9 @@ fn test_cancel_long_running_query() {
 }
 
 fn test_cancellation_cancels_dataflows(query: &str) {
-    let config = test_util::Config::default().unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut client1 = server.connect(postgres::NoTls).unwrap();
     let mut client2 = server.connect(postgres::NoTls).unwrap();
@@ -1073,8 +1080,9 @@ fn test_cancel_insert_select() {
 }
 
 fn test_closing_connection_cancels_dataflows(query: String) {
-    let config = test_util::Config::default().unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut cmd = Command::new("psql");
     let cmd = cmd
@@ -1085,7 +1093,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
             &format!(
                 "postgres://{}:{}/materialize",
                 Ipv4Addr::LOCALHOST,
-                server.inner.sql_local_addr().port()
+                server.inner().sql_local_addr().port()
             ),
         ])
         .stdin(Stdio::piped());
@@ -1235,9 +1243,9 @@ fn test_storage_usage_collection_interval() {
         row.get::<_, UInt8>("size").0
     }
 
-    let config =
-        test_util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .with_storage_usage_collection_interval(Duration::from_secs(1))
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Wait for the initial storage usage collection to occur.
@@ -1295,13 +1303,13 @@ fn test_storage_usage_collection_interval() {
 fn test_storage_usage_updates_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(3);
-    let config = test_util::Config::default()
+    let harness = test_util::TestHarness::default()
         .with_storage_usage_collection_interval(storage_usage_collection_interval)
         .data_directory(data_dir.path());
 
     // Wait for initial storage usage collection.
     let initial_timestamp: f64 = {
-        let server = test_util::start_server(config.clone()).unwrap();
+        let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
         // Retry because it may take some time for the initial snapshot to be taken.
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
@@ -1320,7 +1328,7 @@ fn test_storage_usage_updates_between_restarts() {
 
     // Another storage usage collection should be scheduled immediately.
     {
-        let server = test_util::start_server(config).unwrap();
+        let server = harness.start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         // Retry until storage usage is updated.
@@ -1345,13 +1353,13 @@ fn test_storage_usage_updates_between_restarts() {
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(10);
-    let config = test_util::Config::default()
+    let harness = test_util::TestHarness::default()
         .with_storage_usage_collection_interval(storage_usage_collection_interval)
         .data_directory(data_dir.path());
 
     // Wait for initial storage usage collection.
     let initial_timestamp = {
-        let server = test_util::start_server(config.clone()).unwrap();
+        let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
         // Retry because it may take some time for the initial snapshot to be taken.
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
@@ -1369,8 +1377,9 @@ fn test_storage_usage_doesnt_update_between_restarts() {
     // Another storage usage collection should not be scheduled immediately.
     {
         // Give plenty of time so we don't accidentally do another collection if this test is slow.
-        let config = config.with_storage_usage_collection_interval(Duration::from_secs(60 * 1000));
-        let server = test_util::start_server(config).unwrap();
+        let server = harness
+            .with_storage_usage_collection_interval(Duration::from_secs(60 * 1000))
+            .start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         let collection_timestamps = client
@@ -1403,9 +1412,9 @@ fn test_storage_usage_doesnt_update_between_restarts() {
 #[mz_ore::test]
 fn test_storage_usage_collection_interval_timestamps() {
     let storage_interval_s = 2;
-    let config = test_util::Config::default()
-        .with_storage_usage_collection_interval(Duration::from_secs(storage_interval_s));
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .with_storage_usage_collection_interval(Duration::from_secs(storage_interval_s))
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Retry because it may take some time for the initial snapshot to be taken.
@@ -1466,14 +1475,14 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     let data_dir = tempfile::tempdir().unwrap();
     let collection_interval = Duration::from_secs(1);
     let retention_period = Duration::from_millis(1100);
-    let config = test_util::Config::default()
+    let harness = test_util::TestHarness::default()
         .with_now(now_fn)
         .with_storage_usage_collection_interval(collection_interval)
         .with_storage_usage_retention_period(retention_period)
         .data_directory(data_dir.path());
 
     let initial_timestamp = {
-        let server = test_util::start_server(config.clone()).unwrap();
+        let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
         // Create a table with no data, which should have some overhead and therefore some storage usage
         client
@@ -1521,7 +1530,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         + 1;
 
     {
-        let server = test_util::start_server(config).unwrap();
+        let server = harness.start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         *now.lock().expect("lock poisoned") +=
@@ -1548,10 +1557,10 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
 
 #[mz_ore::test]
 fn test_default_cluster_sizes() {
-    let config = test_util::Config::default()
+    let server = test_util::TestHarness::default()
         .with_builtin_cluster_replica_size("1".to_string())
-        .with_default_cluster_replica_size("2".to_string());
-    let server = test_util::start_server(config).unwrap();
+        .with_default_cluster_replica_size("2".to_string())
+        .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     let builtin_size: String = client
@@ -1581,7 +1590,7 @@ fn test_default_cluster_sizes() {
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // pgwire
     {
@@ -1600,7 +1609,7 @@ fn test_max_request_size() {
         let param = std::iter::repeat("1").take(param_size).join("");
         let http_url = Url::parse(&format!(
             "http://{}/api/sql",
-            server.inner.http_local_addr()
+            server.inner().http_local_addr()
         ))
         .unwrap();
         let json = format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[{param}]}}]}}");
@@ -1638,7 +1647,7 @@ fn test_max_statement_batch_size() {
     let max_statement_size = mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
     let max_statement_count = max_statement_size / statement_size + 1;
     let statements = iter::repeat(statement).take(max_statement_count).join("");
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // pgwire
     {
@@ -1660,7 +1669,7 @@ fn test_max_statement_batch_size() {
     {
         let http_url = Url::parse(&format!(
             "http://{}/api/sql",
-            server.inner.http_local_addr()
+            server.inner().http_local_addr()
         ))
         .unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
@@ -1706,8 +1715,7 @@ fn test_max_statement_batch_size() {
 
 #[mz_ore::test]
 fn test_mz_system_user_admin() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server
         .pg_config_internal()
         .user(&SYSTEM_USER.name)
@@ -1725,7 +1733,7 @@ fn test_mz_system_user_admin() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_passes_options() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // Create our WebSocket.
     let ws_url = server.ws_addr();
@@ -1773,7 +1781,7 @@ fn test_ws_passes_options() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_notifies_for_bad_options() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // Create our WebSocket.
     let ws_url = server.ws_addr();
@@ -1829,7 +1837,7 @@ struct Notice {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_http_options_param() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     #[derive(Debug, Serialize)]
     struct Params {
@@ -1839,7 +1847,7 @@ fn test_http_options_param() {
     let make_request = |params| {
         let http_url = Url::parse(&format!(
             "http://{}/api/sql?{}",
-            server.inner.http_local_addr(),
+            server.inner().http_local_addr(),
             params
         ))
         .unwrap();
@@ -1902,7 +1910,9 @@ fn test_http_options_param() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_max_connections_on_all_interfaces() {
     let query = "SELECT 1";
-    let server = test_util::start_server(test_util::Config::default().unsafe_mode()).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
 
     let mut mz_client = server
         .pg_config_internal()
@@ -1918,7 +1928,7 @@ fn test_max_connections_on_all_interfaces() {
     let ws_url = server.ws_addr();
     let http_url = Url::parse(&format!(
         "http://{}/api/sql",
-        server.inner.http_local_addr()
+        server.inner().http_local_addr()
     ))
     .unwrap();
     let json = format!("{{\"query\":\"{query}\"}}");
@@ -2000,72 +2010,66 @@ fn test_max_connections_on_all_interfaces() {
     assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
-fn test_concurrent_id_reuse() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+async fn test_concurrent_id_reuse() {
+    let server = test_util::TestHarness::default().start().await;
 
-    server.runtime.block_on(async {
-        {
-            let (client, conn) = server.connect_async(postgres::NoTls).await.unwrap();
-            task::spawn(|| "conn await", async {
-                conn.await.unwrap();
-            });
-            client
-                .batch_execute("CREATE TABLE t (a INT);")
+    {
+        let client = server.connect().await.unwrap();
+        client
+            .batch_execute("CREATE TABLE t (a INT);")
+            .await
+            .unwrap();
+    }
+
+    let http_url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.http_local_addr()
+    ))
+    .unwrap();
+    let select_json = "{\"queries\":[{\"query\":\"SELECT * FROM t;\",\"params\":[]}]}";
+    let select_json: serde_json::Value = serde_json::from_str(select_json).unwrap();
+
+    let insert_json = "{\"queries\":[{\"query\":\"INSERT INTO t VALUES (1);\",\"params\":[]}]}";
+    let insert_json: serde_json::Value = serde_json::from_str(insert_json).unwrap();
+
+    // The goal here is to start some connection `B`, after another connection `A` has
+    // terminated, but while connection `A` still has some asynchronous work in flight. Then
+    // connection `A` will terminate it's session after connection `B` has started it's own
+    // session. If they use the same connection ID, then `A` will accidentally tear down `B`'s
+    // state and `B` will panic at any point it tries to access it's state. If they don't use
+    // the same connection ID, then everything will be fine.
+    fail::cfg("async_prepare", "return(true)").unwrap();
+    for i in 0..100 {
+        let http_url = http_url.clone();
+        if i % 2 == 0 {
+            let fut = reqwest::Client::new()
+                .post(http_url)
+                .json(&select_json)
+                .send();
+            let time = tokio::time::sleep(Duration::from_millis(500));
+            futures::select! {
+                _ = fut.fuse() => {},
+                _ = time.fuse() => {},
+            }
+        } else {
+            reqwest::Client::new()
+                .post(http_url)
+                .json(&insert_json)
+                .send()
                 .await
                 .unwrap();
         }
+    }
 
-        let http_url = Url::parse(&format!(
-            "http://{}/api/sql",
-            server.inner.http_local_addr()
-        ))
-        .unwrap();
-        let select_json = "{\"queries\":[{\"query\":\"SELECT * FROM t;\",\"params\":[]}]}";
-        let select_json: serde_json::Value = serde_json::from_str(select_json).unwrap();
-
-        let insert_json = "{\"queries\":[{\"query\":\"INSERT INTO t VALUES (1);\",\"params\":[]}]}";
-        let insert_json: serde_json::Value = serde_json::from_str(insert_json).unwrap();
-
-        // The goal here is to start some connection `B`, after another connection `A` has
-        // terminated, but while connection `A` still has some asynchronous work in flight. Then
-        // connection `A` will terminate it's session after connection `B` has started it's own
-        // session. If they use the same connection ID, then `A` will accidentally tear down `B`'s
-        // state and `B` will panic at any point it tries to access it's state. If they don't use
-        // the same connection ID, then everything will be fine.
-        fail::cfg("async_prepare", "return(true)").unwrap();
-        for i in 0..100 {
-            let http_url = http_url.clone();
-            if i % 2 == 0 {
-                let fut = reqwest::Client::new()
-                    .post(http_url)
-                    .json(&select_json)
-                    .send();
-                let time = tokio::time::sleep(Duration::from_millis(500));
-                futures::select! {
-                    _ = fut.fuse() => {},
-                    _ = time.fuse() => {},
-                }
-            } else {
-                reqwest::Client::new()
-                    .post(http_url)
-                    .json(&insert_json)
-                    .send()
-                    .await
-                    .unwrap();
-            }
-        }
-    });
-
-    let mut client = server.connect(postgres::NoTls).unwrap();
-    client.batch_execute("SELECT 1").unwrap();
+    let client = server.connect().await.unwrap();
+    client.batch_execute("SELECT 1").await.unwrap();
 }
 
 #[mz_ore::test]
 fn test_internal_console_proxy() {
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config.clone()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let res = Client::builder()
         .build()
@@ -2073,7 +2077,7 @@ fn test_internal_console_proxy() {
         .get(
             Url::parse(&format!(
                 "http://{}/internal-console/styles.css",
-                server.inner.internal_http_local_addr()
+                server.inner().internal_http_local_addr()
             ))
             .unwrap(),
         )
@@ -2090,11 +2094,11 @@ fn test_internal_console_proxy() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_internal_http_auth() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let json = serde_json::json!({"query": "SELECT current_user;"});
     let url = Url::parse(&format!(
         "http://{}/api/sql",
-        server.inner.internal_http_local_addr()
+        server.inner().internal_http_local_addr()
     ))
     .unwrap();
 
@@ -2160,7 +2164,7 @@ fn test_internal_http_auth() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_internal_ws_auth() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // Create our WebSocket.
     let ws_url = server.internal_ws_addr();
@@ -2180,10 +2184,13 @@ fn test_internal_ws_auth() {
     };
 
     let (mut ws, _resp) = tungstenite::connect(make_req()).unwrap();
-    let options = BTreeMap::from([(
-        "application_name".to_string(),
-        "billion_dollar_idea".to_string(),
-    )]);
+    let options = BTreeMap::from([
+        (
+            "application_name".to_string(),
+            "billion_dollar_idea".to_string(),
+        ),
+        ("welcome_message".to_string(), "off".to_string()),
+    ]);
     // We should receive error if sending the standard bearer auth, since that is unexpected
     // for the Internal HTTP API
     assert_eq!(
@@ -2238,18 +2245,18 @@ fn test_internal_ws_auth() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_leader_promotion() {
     let tmpdir = TempDir::new().unwrap();
-    let config = test_util::Config::default()
+    let harness = test_util::TestHarness::default()
         .unsafe_mode()
         .data_directory(tmpdir.path());
     {
         // start with a stash with no deploy generation to match current production
-        let server = test_util::start_server(config.clone()).unwrap();
+        let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client.simple_query("SELECT 1").unwrap();
     }
     {
         // propose a deploy generation for the first time
-        let server = test_util::start_server(config.clone()).unwrap();
+        let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client.simple_query("SELECT 1").unwrap();
 
@@ -2258,7 +2265,7 @@ fn test_leader_promotion() {
             .get(
                 Url::parse(&format!(
                     "http://{}/api/leader/status",
-                    server.inner.internal_http_local_addr()
+                    server.inner().internal_http_local_addr()
                 ))
                 .unwrap(),
             )
@@ -2276,7 +2283,7 @@ fn test_leader_promotion() {
             .post(
                 Url::parse(&format!(
                     "http://{}/api/leader/promote",
-                    server.inner.internal_http_local_addr()
+                    server.inner().internal_http_local_addr()
                 ))
                 .unwrap(),
             )
@@ -2290,15 +2297,13 @@ fn test_leader_promotion() {
             res.json::<serde_json::Value>()
         );
     }
-    let config = config.with_deploy_generation(Some(2));
+    let harness = harness.with_deploy_generation(Some(2));
     {
         // start with different deploy generation
-        let config = config.with_deploy_generation(Some(3));
-        thread::scope(|s| {
-            let listeners = Listeners::new().unwrap();
-            let internal_http_addr = listeners.inner.internal_http_local_addr();
-            let server_handle = s.spawn(|| listeners.serve(config).unwrap());
-
+        let harness = harness.with_deploy_generation(Some(3));
+        std::thread::spawn(move || {
+            let server = harness.start_blocking();
+            let internal_http_addr = server.inner().internal_http_local_addr();
             let status_http_url =
                 Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
 
@@ -2330,7 +2335,6 @@ fn test_leader_promotion() {
                 }
             );
 
-            let server = server_handle.join().unwrap();
             let mut client = server.connect(postgres::NoTls).unwrap();
             client.simple_query("SELECT 1").unwrap();
 
@@ -2353,41 +2357,47 @@ fn test_leader_promotion() {
     }
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
-fn test_leader_promotion_always_using_deploy_generation() {
+async fn test_leader_promotion_always_using_deploy_generation() {
     let tmpdir = TempDir::new().unwrap();
-    let config = test_util::Config::default()
+    let harness = test_util::TestHarness::default()
         .unsafe_mode()
         .data_directory(tmpdir.path())
         .with_deploy_generation(Some(2));
     {
         // propose a deploy generation for the first time
-        let server = test_util::start_server(config.clone()).unwrap();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-        client.simple_query("SELECT 1").unwrap();
+        let server = harness.clone().start().await;
+        let client = server.connect().await.unwrap();
+        client.simple_query("SELECT 1").await.unwrap();
     }
     {
         // keep it the same, no need to promote the leader
-        let listeners = Listeners::new().unwrap();
-        let internal_http_addr = listeners.inner.internal_http_local_addr();
-        let server = listeners.serve(config).unwrap();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-        client.simple_query("SELECT 1").unwrap();
+        let server = harness.start().await;
+        let client = server.connect().await.unwrap();
+        client.simple_query("SELECT 1").await.unwrap();
+
+        let http_client = reqwest::Client::new();
 
         // check that we're the leader and promotion doesn't do anything
-        let status_http_url =
-            Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
-        let res = Client::new().get(status_http_url).send().unwrap();
+        let status_http_url = Url::parse(&format!(
+            "http://{}/api/leader/status",
+            server.inner.internal_http_local_addr()
+        ))
+        .unwrap();
+        let res = http_client.get(status_http_url).send().await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: LeaderStatusResponse = res.json().unwrap();
+        let response: LeaderStatusResponse = res.json().await.unwrap();
         assert_eq!(response.status, LeaderStatus::IsLeader);
 
-        let promote_http_url =
-            Url::parse(&format!("http://{}/api/leader/promote", internal_http_addr)).unwrap();
-        let res = Client::new().post(promote_http_url).send().unwrap();
+        let promote_http_url = Url::parse(&format!(
+            "http://{}/api/leader/promote",
+            server.inner.internal_http_local_addr()
+        ))
+        .unwrap();
+        let res = http_client.post(promote_http_url).send().await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response: BecomeLeaderResponse = res.json().unwrap();
+        let response: BecomeLeaderResponse = res.json().await.unwrap();
         assert_eq!(
             response,
             BecomeLeaderResponse {
@@ -2401,7 +2411,7 @@ fn test_leader_promotion_always_using_deploy_generation() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_ws() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("CREATE TABLE t (i INT);").unwrap();
 
@@ -2442,12 +2452,11 @@ fn test_cancel_ws() {
     handle.join().unwrap();
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
-fn smoketest_webhook_source() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
-
-    let mut client = server.connect(postgres::NoTls).unwrap();
+async fn smoketest_webhook_source() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
 
     #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Clone)]
     struct WebhookEvent {
@@ -2462,12 +2471,14 @@ fn smoketest_webhook_source() {
             "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
             &[],
         )
+        .await
         .expect("failed to create cluster");
     client
         .execute(
             "CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON",
             &[],
         )
+        .await
         .expect("failed to create source");
 
     let now = || {
@@ -2487,6 +2498,7 @@ fn smoketest_webhook_source() {
         })
         .collect();
 
+    let http_client = reqwest::Client::new();
     let webhook_url = Arc::new(format!(
         "http://{}/api/webhook/materialize/public/webhook_json",
         server.inner.http_local_addr()
@@ -2496,20 +2508,19 @@ fn smoketest_webhook_source() {
     for event in &events {
         let webhook_url = Arc::clone(&webhook_url);
         let event = event.clone();
-        let handle = thread::spawn(move || {
-            let http_client = Client::new();
-            let resp = http_client
+        let http_client_ = http_client.clone();
+        let handle = mz_ore::task::spawn(|| "smoketest_webhook_source_event", async move {
+            let resp = http_client_
                 .post(&*webhook_url)
                 .json(&event)
                 .send()
+                .await
                 .expect("failed to POST event");
             assert!(resp.status().is_success());
         });
         handles.push(handle);
     }
-    for handle in handles {
-        handle.join().unwrap();
-    }
+    futures::future::join_all(handles).await;
 
     let total_requests_metric = server
         .metrics_registry
@@ -2527,25 +2538,28 @@ fn smoketest_webhook_source() {
     assert_eq!(status_label.get_value(), "200");
 
     // Wait for the events to be persisted.
-    mz_ore::retry::Retry::default()
+    let (client, result) = mz_ore::retry::Retry::default()
         .max_tries(10)
-        .retry(|_| {
+        .retry_async_with_state(client, |_, client| async move {
             let cnt: i64 = client
                 .query_one("SELECT COUNT(*) FROM webhook_json", &[])
+                .await
                 .expect("failed to get count")
                 .get(0);
 
             if cnt != 100 {
-                Err(anyhow::anyhow!("not all rows present"))
+                (client, Err(anyhow::anyhow!("not all rows present")))
             } else {
-                Ok(())
+                (client, Ok(()))
             }
         })
-        .expect("failed to read events!");
+        .await;
+    result.expect("failed to read events");
 
     // Read all of our events back.
     let events_roundtrip: BTreeSet<WebhookEvent> = client
         .query("SELECT * FROM webhook_json", &[])
+        .await
         .expect("failed to query source")
         .into_iter()
         .map(|row| serde_json::from_value(row.get("body")).expect("failed to deserialize"))
@@ -2557,7 +2571,7 @@ fn smoketest_webhook_source() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_invalid_webhook_body() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     let http_client = Client::new();
@@ -2579,7 +2593,7 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner.http_local_addr()
+        server.inner().http_local_addr()
     );
 
     // Send non-UTF8 text which will fail to get deserialized.
@@ -2602,7 +2616,7 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_json",
-        server.inner.http_local_addr()
+        server.inner().http_local_addr()
     );
 
     // Send invalid JSON which will fail to get deserialized.
@@ -2622,7 +2636,7 @@ fn test_invalid_webhook_body() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_bytes",
-        server.inner.http_local_addr()
+        server.inner().http_local_addr()
     );
 
     // No matter what is in the body, we should always succeed.
@@ -2640,7 +2654,7 @@ fn test_invalid_webhook_body() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_webhook_duplicate_headers() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     let http_client = Client::new();
@@ -2660,7 +2674,7 @@ fn test_webhook_duplicate_headers() {
         .expect("failed to create source");
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner.http_local_addr()
+        server.inner().http_local_addr()
     );
 
     // Send a request with duplicate headers.
@@ -2680,7 +2694,7 @@ fn test_webhook_duplicate_headers() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_github_20262() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("CREATE TABLE t (i INT);").unwrap();
 
@@ -2747,8 +2761,9 @@ fn test_github_20262() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_read_then_write() {
-    let config = test_util::Config::default().unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
     server.enable_feature_flags(&["enable_dangerous_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2800,10 +2815,10 @@ fn test_cancel_read_then_write() {
         .unwrap();
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
-fn test_http_metrics() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+async fn test_http_metrics() {
+    let server = test_util::TestHarness::default().start().await;
 
     let http_url = Url::parse(&format!(
         "http://{}/api/sql",
@@ -2813,16 +2828,22 @@ fn test_http_metrics() {
 
     let json = r#"{ "query": "SHOW application_name;" }"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    let response = Client::new()
+    let response = reqwest::Client::new()
         .post(http_url.clone())
         .json(&json)
         .send()
+        .await
         .unwrap();
     assert!(response.status().is_success());
 
     let json = r#"{ "query": "invalid sql 123;" }"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    let response = Client::new().post(http_url).json(&json).send().unwrap();
+    let response = reqwest::Client::new()
+        .post(http_url)
+        .json(&json)
+        .send()
+        .await
+        .unwrap();
     assert!(response.status().is_client_error());
 
     let metrics = server.metrics_registry.gather();
@@ -2863,12 +2884,11 @@ fn test_http_metrics() {
     assert_eq!(failure_metric.get_label()[1].get_value(), "400");
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[cfg_attr(miri, ignore)] // too slow
-fn webhook_concurrent_actions() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
-
-    let mut client = server.connect(postgres::NoTls).unwrap();
+async fn webhook_concurrent_actions() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
 
     #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
     struct WebhookEvent {
@@ -2884,12 +2904,14 @@ fn webhook_concurrent_actions() {
             "CREATE CLUSTER webhook_cluster_concurrent REPLICAS (r1 (SIZE '1'));",
             &[],
         )
+        .await
         .expect("failed to create cluster");
     client
         .execute(
             &format!("CREATE SOURCE {src_name} IN CLUSTER webhook_cluster_concurrent FROM WEBHOOK BODY FORMAT JSON"),
             &[],
         )
+        .await
         .expect("failed to create source");
 
     fn now() -> u128 {
@@ -2904,13 +2926,12 @@ fn webhook_concurrent_actions() {
     // Track how many requests were resolved before we dropped the collection.
     let num_requests_before_drop = Arc::new(AtomicUsize::new(0));
 
-    // Spin up a thread that will contiously push data to the webhook.
+    // Spin up tasks that will contiously push data to the webhook.
     let keep_sending_ = Arc::clone(&keep_sending);
-    let runtime_handle = Arc::clone(&server.runtime);
     let num_requests_before_drop_ = Arc::clone(&num_requests_before_drop);
     let addr = server.inner.http_local_addr();
 
-    let poster = std::thread::spawn(move || {
+    let poster = mz_ore::task::spawn(|| "webhook_concurrent_actions-poster", async move {
         let mut i = 0;
 
         let http_client = reqwest::Client::new();
@@ -2926,7 +2947,7 @@ fn webhook_concurrent_actions() {
             let http_client_ = http_client.clone();
             let num_requests_before_drop__ = Arc::clone(&num_requests_before_drop_);
             let handle =
-                runtime_handle.spawn_named(|| "webhook_concurrent_actions-appender", async move {
+                mz_ore::task::spawn(|| "webhook_concurrent_actions-appender", async move {
                     // Create an event.
                     let event = WebhookEvent {
                         ts: now(),
@@ -2949,16 +2970,15 @@ fn webhook_concurrent_actions() {
             i += 1;
 
             // Wait before sending another request.
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         // Wait on all of the tasks to finish, then return the results.
-        let all_tasks = futures::future::join_all(tasks);
-        runtime_handle.block_on(all_tasks)
+        futures::future::join_all(tasks).await
     });
 
     // Let the posting threads run for a bit.
-    std::thread::sleep(std::time::Duration::from_secs(5));
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     // We should see at least this many successes.
     let num_requests_before_drop =
@@ -2966,13 +2986,14 @@ fn webhook_concurrent_actions() {
     // Drop the source
     client
         .execute(&format!("DROP SOURCE {src_name};"), &[])
+        .await
         .expect("failed to drop source");
 
     // Keep sending for a bit.
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     // Stop the threads.
     keep_sending.store(false, std::sync::atomic::Ordering::Relaxed);
-    let results = poster.join().expect("thread panicked!");
+    let results = poster.await.expect("thread panicked!");
 
     // Inspect the results.
     let mut results = results
@@ -3008,6 +3029,7 @@ fn webhook_concurrent_actions() {
     // Note: this doubles as a check to make sure nothing internally panicked.
     let sources: Vec<String> = client
         .query("SELECT name FROM mz_sources", &[])
+        .await
         .expect("success")
         .into_iter()
         .map(|row| row.get(0))
@@ -3015,15 +3037,16 @@ fn webhook_concurrent_actions() {
     assert!(!sources.iter().any(|name| name == src_name));
 
     // Best effort cleanup.
-    let _ = client.execute("DROP CLUSTER webhook_cluster_concurrent CASCADE", &[]);
+    let _ = client
+        .execute("DROP CLUSTER webhook_cluster_concurrent CASCADE", &[])
+        .await;
 }
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_concurrency_limit() {
     let concurrency_limit = 15;
-    let config = test_util::Config::default();
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // Note: we need enable_unstable_dependencies to use mz_sleep.
     server.enable_feature_flags(&["enable_unstable_dependencies", "enable_dangerous_functions"]);
@@ -3061,7 +3084,7 @@ fn webhook_concurrency_limit() {
     let http_client = reqwest::Client::new();
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_text",
-        server.inner.http_local_addr().clone(),
+        server.inner().http_local_addr().clone(),
     );
     let mut handles = Vec::with_capacity(concurrency_limit + 5);
 
@@ -3069,7 +3092,7 @@ fn webhook_concurrency_limit() {
         let http_client_ = http_client.clone();
         let webhook_url_ = webhook_url.clone();
 
-        let handle = server.runtime.spawn_named(
+        let handle = server.runtime().spawn_named(
             || "webhook-concurrency-limit-test".to_string(),
             async move {
                 let resp = http_client_
@@ -3084,7 +3107,7 @@ fn webhook_concurrency_limit() {
         handles.push(handle);
     }
     let results = server
-        .runtime
+        .runtime()
         .block_on(futures::future::try_join_all(handles))
         .expect("failed to wait for requests");
 
@@ -3108,8 +3131,7 @@ fn webhook_concurrency_limit() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_too_large_request() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
-
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Create a webhook source.
@@ -3129,7 +3151,7 @@ fn webhook_too_large_request() {
     let http_client = Client::new();
     let webhook_url = format!(
         "http://{}/api/webhook/materialize/public/webhook_bytes",
-        server.inner.http_local_addr(),
+        server.inner().http_local_addr(),
     );
 
     // Send an event with a body larger that is exactly our max size.
@@ -3157,7 +3179,7 @@ fn webhook_too_large_request() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_webhook_url_notice() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
     let mut client = server
@@ -3220,7 +3242,7 @@ fn test_webhook_url_notice() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn copy_from() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     let mut system_client = server
@@ -3270,7 +3292,7 @@ fn copy_from() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn concurrent_cluster_drop() {
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start_blocking();
     let mut txn_client = server.connect(postgres::NoTls).unwrap();
     let mut drop_client = server.connect(postgres::NoTls).unwrap();
 

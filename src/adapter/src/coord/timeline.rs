@@ -31,6 +31,7 @@ use tracing::{debug, error, info};
 use crate::catalog::CatalogItem;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
+use crate::coord::timestamp_oracle::batching_oracle::BatchingTimestampOracle;
 use crate::coord::timestamp_oracle::catalog_oracle::{
     CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
     TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
@@ -38,7 +39,7 @@ use crate::coord::timestamp_oracle::catalog_oracle::{
 use crate::coord::timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
-use crate::coord::timestamp_oracle::{self, TimestampOracle};
+use crate::coord::timestamp_oracle::{self, ShareableTimestampOracle, TimestampOracle};
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
 use crate::AdapterError;
@@ -116,6 +117,18 @@ impl Coordinator {
             .expect("all timelines have a timestamp oracle")
             .oracle
             .as_ref()
+    }
+
+    #[allow(unused)]
+    pub(crate) fn get_shared_timestamp_oracle(
+        &self,
+        timeline: &Timeline,
+    ) -> Option<Arc<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
+        self.global_timelines
+            .get(timeline)
+            .expect("all timelines have a timestamp oracle")
+            .oracle
+            .get_shared()
     }
 
     /// Returns a reference to the timestamp oracle used for reads and writes
@@ -244,6 +257,16 @@ impl Coordinator {
                         )
                         .await,
                     );
+
+                    let shared_oracle = oracle
+                        .get_shared()
+                        .expect("postgres timestamp oracle is shareable");
+
+                    let batching_oracle =
+                        BatchingTimestampOracle::new(Arc::clone(metrics), shared_oracle);
+
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> =
+                        Box::new(batching_oracle);
 
                     oracle
                 }

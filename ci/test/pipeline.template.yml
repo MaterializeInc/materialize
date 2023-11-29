@@ -388,6 +388,7 @@ steps:
       - id: kafka-auth
         label: Kafka auth test
         depends_on: build-x86_64
+        skip: "TODO(def-) Reenable when #23469 is fixed"
         timeout_in_minutes: 30
         inputs: [test/kafka-auth/smoketest.td]
         artifact_paths: junit_*.xml
@@ -428,7 +429,7 @@ steps:
         label: "Checks + restart of environmentd & storage clusterd"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -441,7 +442,7 @@ steps:
         label: "Checks + DROP/CREATE replica"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -454,7 +455,7 @@ steps:
         label: "Checks without restart or upgrade"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -467,7 +468,7 @@ steps:
         label: "Checks + restart clusterd compute"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -480,7 +481,7 @@ steps:
         label: "Checks + kill storage clusterd"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -493,7 +494,7 @@ steps:
         label: "Checks + restart source Postgres"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -542,7 +543,7 @@ steps:
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
     depends_on: build-x86_64
-    timeout_in_minutes: 30
+    timeout_in_minutes: 45
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -811,6 +812,7 @@ steps:
 
   - id: coverage-pr-analyze
     label: Analyze code coverage for PR
+    timeout_in_minutes: 20
     command: bin/ci-builder run stable ci/test/coverage_report.sh
     inputs: ["*"]
     priority: 1
@@ -823,6 +825,7 @@ steps:
 
   - id: analyze
     label: Analyze tests
+    timeout_in_minutes: 15
     inputs: ["*"]
     plugins:
       - junit-annotate#v2.0.2:

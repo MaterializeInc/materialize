@@ -27,7 +27,7 @@ use tracing::{debug, info};
 use crate::coord::timeline::WriteTimestamp;
 use crate::coord::timestamp_oracle::metrics::{Metrics, RetryMetrics};
 use crate::coord::timestamp_oracle::retry::Retry;
-use crate::coord::timestamp_oracle::{GenericNowFn, TimestampOracle};
+use crate::coord::timestamp_oracle::{GenericNowFn, ShareableTimestampOracle, TimestampOracle};
 
 // The timestamp columns are a `DECIMAL` that is big enough to hold
 // `18446744073709551615`, the maximum value of `u64` which is our underlying
@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS timestamp_oracle (
 ";
 
 /// A [`TimestampOracle`] backed by "Postgres".
+#[derive(Debug)]
 pub struct PostgresTimestampOracle<N>
 where
     N: GenericNowFn<Timestamp>,
@@ -104,7 +105,7 @@ impl From<PostgresTimestampOracleConfig> for PostgresClientConfig {
 }
 
 impl PostgresTimestampOracleConfig {
-    const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "COCKROACH_URL";
+    pub(crate) const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "COCKROACH_URL";
 
     /// Returns a new instance of [`PostgresTimestampOracleConfig`] with default tuning.
     pub fn new(url: &str, metrics: Arc<Metrics>) -> Self {
@@ -187,7 +188,7 @@ impl PostgresClientKnobs for PostgresTimestampOracleConfig {
 
 impl<N> PostgresTimestampOracle<N>
 where
-    N: GenericNowFn<Timestamp> + 'static,
+    N: GenericNowFn<Timestamp> + std::fmt::Debug + 'static,
 {
     /// Open a Postgres [`TimestampOracle`] instance with `config`, for the
     /// timeline named `timeline`. `next` generates new timestamps when invoked.
@@ -223,7 +224,7 @@ where
                 ))
                 .await?;
 
-            let mut oracle = PostgresTimestampOracle {
+            let oracle = PostgresTimestampOracle {
                 timeline: timeline.clone(),
                 next: next.clone(),
                 postgres_client: Arc::new(postgres_client),
@@ -253,7 +254,7 @@ where
             // Forward timestamps to what we're given from outside. Remember,
             // the above query will only create the row at the initial timestamp
             // if it didn't exist before.
-            oracle.apply_write(initially).await;
+            ShareableTimestampOracle::apply_write(&oracle, initially).await;
 
             Result::<_, anyhow::Error>::Ok(oracle)
         };
@@ -448,12 +449,12 @@ where
 // that, and also make the types we store in the backing "Postgres" table
 // generic. But in practice we only use oracles for [`mz_repr::Timestamp`] so
 // don't do that extra work for now.
-#[async_trait(?Send)]
-impl<N> TimestampOracle<Timestamp> for PostgresTimestampOracle<N>
+#[async_trait]
+impl<N> ShareableTimestampOracle<Timestamp> for PostgresTimestampOracle<N>
 where
-    N: GenericNowFn<Timestamp> + 'static,
+    N: GenericNowFn<Timestamp> + std::fmt::Debug + 'static,
 {
-    async fn write_ts(&mut self) -> WriteTimestamp<Timestamp> {
+    async fn write_ts(&self) -> WriteTimestamp<Timestamp> {
         let metrics = &self.metrics.retries.write_ts;
 
         let res = retry_fallible(metrics, || {
@@ -495,7 +496,7 @@ where
         res
     }
 
-    async fn apply_write(&mut self, write_ts: Timestamp) {
+    async fn apply_write(&self, write_ts: Timestamp) {
         let metrics = &self.metrics.retries.apply_write;
 
         let res = retry_fallible(metrics, || {
@@ -570,6 +571,43 @@ where
     }
 }
 
+#[async_trait(?Send)]
+impl<N> TimestampOracle<Timestamp> for PostgresTimestampOracle<N>
+where
+    N: GenericNowFn<Timestamp> + std::fmt::Debug + 'static,
+{
+    #[tracing::instrument(name = "oracle::write_ts", level = "debug", skip_all)]
+    async fn write_ts(&mut self) -> WriteTimestamp<Timestamp> {
+        ShareableTimestampOracle::write_ts(self).await
+    }
+
+    #[tracing::instrument(name = "oracle::peek_write_ts", level = "debug", skip_all)]
+    async fn peek_write_ts(&self) -> Timestamp {
+        ShareableTimestampOracle::peek_write_ts(self).await
+    }
+
+    #[tracing::instrument(name = "oracle::read_ts", level = "debug", skip_all)]
+    async fn read_ts(&self) -> Timestamp {
+        ShareableTimestampOracle::read_ts(self).await
+    }
+
+    #[tracing::instrument(name = "oracle::apply_write", level = "debug", skip_all)]
+    async fn apply_write(&mut self, write_ts: Timestamp) {
+        ShareableTimestampOracle::apply_write(self, write_ts).await
+    }
+
+    fn get_shared(&self) -> Option<Arc<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
+        let shallow_clone = Self {
+            timeline: self.timeline.clone(),
+            next: self.next.clone(),
+            postgres_client: Arc::clone(&self.postgres_client),
+            metrics: Arc::clone(&self.metrics),
+        };
+
+        Some(Arc::new(shallow_clone))
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -599,6 +637,42 @@ mod tests {
 
             oracle
         })
+        .await?;
+
+        cleanup(config).await?;
+
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_shareable_postgres_timestamp_oracle() -> Result<(), anyhow::Error> {
+        let config = match PostgresTimestampOracleConfig::new_for_test() {
+            Some(config) => config,
+            None => {
+                info!(
+                    "{} env not set: skipping test that uses external service",
+                    PostgresTimestampOracleConfig::EXTERNAL_TESTS_POSTGRES_URL
+                );
+                return Ok(());
+            }
+        };
+
+        cleanup(config.clone()).await?;
+
+        timestamp_oracle::tests::shareable_timestamp_oracle_impl_test(
+            |timeline, now_fn, initial_ts| {
+                let oracle =
+                    PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
+
+                async {
+                    oracle
+                        .await
+                        .get_shared()
+                        .expect("postgres oracle is shareable")
+                }
+            },
+        )
         .await?;
 
         cleanup(config).await?;

@@ -82,10 +82,9 @@ use mz_ore::metrics::DeleteOnDropGauge;
 use mz_rocksdb::RocksDBConfig;
 use prometheus::core::AtomicU64;
 
+use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
 use crate::render::upsert::rocksdb::RocksDB;
 use crate::render::upsert::{UpsertKey, UpsertValue};
-use crate::source::metrics::UpsertSharedMetrics;
-use crate::source::types::UpsertMetrics;
 use crate::source::SourceStatistics;
 
 /// The default set of `bincode` options used for consolidating
@@ -859,7 +858,7 @@ where
         self.stats
             .set_envelope_state_bytes(self.snapshot_stats.size_diff);
         self.stats
-            .set_envelope_state_count(self.snapshot_stats.values_diff);
+            .set_envelope_state_records(self.snapshot_stats.values_diff);
 
         if completed {
             if self.shrink_upsert_unused_buffers_by_ratio > 0 {
@@ -913,7 +912,8 @@ where
         self.worker_metrics.upsert_deletes.inc_by(stats.deletes);
 
         self.stats.update_envelope_state_bytes_by(stats.size_diff);
-        self.stats.update_envelope_state_count_by(stats.values_diff);
+        self.stats
+            .update_envelope_state_records_by(stats.values_diff);
 
         Ok(())
     }

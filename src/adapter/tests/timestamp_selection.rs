@@ -193,10 +193,6 @@ impl TimestampProvider for Frontiers {
     ) -> &'a timely::progress::Antichain<Timestamp> {
         &self.storage.get(&id).unwrap().write
     }
-
-    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp> {
-        matches!(timeline, Timeline::EpochMilliseconds).then(|| self.oracle)
-    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -309,6 +305,27 @@ fn test_timestamp_selection() {
                         Some(isolation),
                     );
 
+                    // TODO: Factor out into method, or somesuch!
+                    let timeline_ctx = TimelineContext::TimestampDependent;
+                    let isolation_level = IsolationLevel::from(isolation);
+                    let when = parse_query_when(&det.when);
+                    let linearized_timeline =
+                        Frontiers::get_linearized_timeline(&isolation_level, &when, &timeline_ctx);
+
+                    let oracle_read_ts = if let Some(timeline) = linearized_timeline {
+                        match timeline {
+                            Timeline::EpochMilliseconds => Some(f.oracle),
+                            timeline => {
+                                unreachable!(
+                                    "only EpochMillis is used in tests but we got {:?}",
+                                    timeline
+                                )
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
                     let ts = block_on(f.determine_timestamp_for(
                         &catalog,
                         &session,
@@ -316,7 +333,8 @@ fn test_timestamp_selection() {
                         &parse_query_when(&det.when),
                         det.instance.parse().unwrap(),
                         &TimelineContext::TimestampDependent,
-                        None,
+                        oracle_read_ts,
+                        None, /* real_time_recency_ts */
                         &IsolationLevel::from(isolation),
                     ))
                     .unwrap();

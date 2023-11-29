@@ -74,13 +74,16 @@ class Capabilities:
         ]
         return matches
 
+    def get_capability_names(self, capability: type[T]) -> list[str]:
+        return [t.name for t in self.get(capability)]
+
     def get_free_capability_name(
         self, capability: type[T], max_objects: int
     ) -> str | None:
         all_object_names = [
             capability.format_str().format(i) for i in range(0, max_objects)
         ]
-        existing_object_names = [t.name for t in self.get(capability)]
+        existing_object_names = self.get_capability_names(capability)
         remaining_object_names = set(all_object_names) - set(existing_object_names)
         return (
             random.choice(list(remaining_object_names))

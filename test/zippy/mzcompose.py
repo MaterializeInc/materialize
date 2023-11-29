@@ -24,6 +24,10 @@ from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.prometheus import Prometheus
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.ssh_bastion_host import (
+    SshBastionHost,
+    setup_default_ssh_test_connection,
+)
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.zippy.framework import Test
@@ -44,6 +48,7 @@ SERVICES = [
     Testdrive(),
     Grafana(),
     Prometheus(),
+    SshBastionHost(),
 ]
 
 
@@ -128,7 +133,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
-    c.up("zookeeper", "kafka", "schema-registry")
+    c.up("zookeeper", "kafka", "schema-registry", "ssh-bastion-host")
 
     if args.observability:
         c.up("prometheus", "grafana")
@@ -178,6 +183,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ))
         """
         )
+
+        setup_default_ssh_test_connection(c, "zippy_ssh")
+
         c.rm("materialized")
 
         c.up("testdrive", persistent=True)

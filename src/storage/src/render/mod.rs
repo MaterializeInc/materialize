@@ -199,7 +199,6 @@
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use mz_ore::error::ErrorExt;
 use mz_repr::{GlobalId, Row};
@@ -213,7 +212,6 @@ use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
 mod debezium;
@@ -274,8 +272,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     .expect("known to exist");
                 let source_data = ok.map(Ok).concat(&err.map(Err));
 
-                let metrics = SourcePersistSinkMetrics::new(
-                    &storage_state.source_metrics,
+                let metrics = storage_state.metrics.get_source_persist_sink_metrics(
                     export_id,
                     primary_source_id,
                     worker_id,
@@ -308,16 +305,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     }
                 });
                 health_streams.push(sink_health.leave());
-                use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
-                health_configs.insert(
-                    export.output_index,
-                    crate::healthcheck::ObjectHealthConfig {
-                        id: export_id,
-                        schema: &*MZ_SOURCE_STATUS_HISTORY_DESC,
-                        status_shard: export.storage_metadata.status_shard,
-                        persist_location: export.storage_metadata.persist_location.clone(),
-                    },
-                );
+                health_configs.insert(export.output_index, export_id);
             }
 
             into_time_scope
@@ -327,7 +315,6 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let health_stream = root_scope.concatenate(health_streams);
             let health_token = crate::healthcheck::health_operator(
                 into_time_scope,
-                Arc::clone(&storage_state.persist_clients),
                 storage_state.now.clone(),
                 resume_uppers
                     .iter()
@@ -341,7 +328,10 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 "source",
                 &health_stream,
                 health_configs,
-                crate::healthcheck::DefaultWriter(Rc::clone(&storage_state.internal_cmd_tx)),
+                crate::healthcheck::DefaultWriter {
+                    command_tx: Rc::clone(&storage_state.internal_cmd_tx),
+                    updates: Rc::clone(&storage_state.object_status_updates),
+                },
                 storage_state.dataflow_parameters.record_namespaced_errors,
             );
             tokens.push(health_token);
@@ -365,7 +355,7 @@ pub fn build_export_dataflow<A: Allocate>(
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
         // The scope.clone() occurs to allow import in the region.
-        // We build a region here to establish a pattern of a scope inside the dataflow,
+        // We build a region here to establish a pattern of a scope inside the dataflow
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         root_scope.clone().scoped(&name, |scope| {
@@ -383,32 +373,27 @@ pub fn build_export_dataflow<A: Allocate>(
                 &description,
             );
 
-            use mz_storage_client::healthcheck::MZ_SINK_STATUS_HISTORY_DESC;
             let mut health_configs = BTreeMap::new();
             health_configs.insert(
                 // There is only 1 sink (as opposed to many sub-sources), so we just use a single
                 // index.
-                0,
-                crate::healthcheck::ObjectHealthConfig {
-                    id,
-                    schema: &*MZ_SINK_STATUS_HISTORY_DESC,
-                    status_shard: description.status_id,
-                    persist_location: description.from_storage_metadata.persist_location.clone(),
-                },
+                0, id,
             );
 
             // Note that sinks also have only 1 active worker, which simplifies the work that
             // `health_operator` has to do internally.
             let health_token = crate::healthcheck::health_operator(
                 scope,
-                Arc::clone(&storage_state.persist_clients),
                 storage_state.now.clone(),
                 [id].into_iter().collect(),
                 id,
                 "sink",
                 &health_stream,
                 health_configs,
-                crate::healthcheck::DefaultWriter(Rc::clone(&storage_state.internal_cmd_tx)),
+                crate::healthcheck::DefaultWriter {
+                    command_tx: Rc::clone(&storage_state.internal_cmd_tx),
+                    updates: Rc::clone(&storage_state.object_status_updates),
+                },
                 storage_state.dataflow_parameters.record_namespaced_errors,
             );
             tokens.push(health_token);

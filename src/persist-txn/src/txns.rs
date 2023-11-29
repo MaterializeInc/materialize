@@ -382,7 +382,7 @@ where
         // won't get around to telling the caller that it's safe to use this
         // shard directly again. Presumably it will retry at some point.
         let () = crate::empty_caa(
-            || format!("txns {:.9} forget fill", data_id.to_string()),
+            || format!("data {:.9} forget fill", data_id.to_string()),
             self.datas.get_write(&data_id).await,
             forget_ts,
         )
@@ -811,19 +811,19 @@ mod tests {
         // timestamp.
         let mut ts = 0;
         while ts < 32 {
-            info!("{} direct", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
+            info!("{} direct", ts);
+            txns.begin().commit_at(&mut txns, ts).await.unwrap();
             write_directly(ts, &mut d0_write, &[&format!("d{}", ts)], &log).await;
             step_some_past(&mut subs, ts).await;
             if ts % 11 == 0 {
-                // ts - 1 because we just wrote directly, which doesn't advance txns
-                txns.compact_to(ts - 1).await;
+                txns.compact_to(ts).await;
             }
 
-            info!("{} register", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
+            info!("{} register", ts);
             txns.register(ts, [writer(&client, d0).await])
                 .await
                 .unwrap();
@@ -832,9 +832,9 @@ mod tests {
                 txns.compact_to(ts).await;
             }
 
-            info!("{} txns", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
+            info!("{} txns", ts);
             txns.expect_commit_at(ts, d0, &[&format!("t{}", ts)], &log)
                 .await;
             step_some_past(&mut subs, ts).await;
@@ -842,9 +842,9 @@ mod tests {
                 txns.compact_to(ts).await;
             }
 
-            info!("{} forget", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
+            info!("{} forget", ts);
             txns.forget(ts, d0).await.unwrap();
             step_some_past(&mut subs, ts).await;
             if ts % 11 == 0 {

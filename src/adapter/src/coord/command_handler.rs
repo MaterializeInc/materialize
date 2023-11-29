@@ -10,6 +10,7 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use std::any::Any;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -69,7 +70,6 @@ impl Coordinator {
                 Command::Startup {
                     cancel_tx,
                     tx,
-                    set_setting_keys,
                     user,
                     conn_id,
                     secret_key,
@@ -82,7 +82,6 @@ impl Coordinator {
                     self.handle_startup(
                         cancel_tx,
                         tx,
-                        set_setting_keys,
                         user,
                         conn_id,
                         secret_key,
@@ -235,7 +234,6 @@ impl Coordinator {
         &mut self,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
-        set_setting_keys: Vec<String>,
         user: User,
         conn_id: ConnectionId,
         secret_key: u32,
@@ -246,22 +244,17 @@ impl Coordinator {
         // Early return if successful, otherwise cleanup any possible state.
         match self.handle_startup_inner(&user, &conn_id).await {
             Ok(role_id) => {
-                let mut session_vars = Vec::new();
-                if !set_setting_keys
-                    .iter()
-                    .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
-                {
-                    let default = self
-                        .catalog()
-                        .state()
-                        .system_config()
-                        .statement_logging_default_sample_rate();
-                    session_vars.push((
-                        STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
-                        OwnedVarInput::Flat(default.to_string()),
-                    ));
-                }
-                let role_vars = self
+                let mut session_defaults: Vec<(_, Box<dyn Any + Send + Sync>)> = Vec::new();
+                let default = self
+                    .catalog()
+                    .state()
+                    .system_config()
+                    .statement_logging_default_sample_rate();
+                session_defaults.push((
+                    STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
+                    Box::new(default),
+                ));
+                let role_defaults = self
                     .catalog()
                     .get_role(&role_id)
                     .vars()
@@ -296,8 +289,8 @@ impl Coordinator {
                 let resp = Ok(StartupResponse {
                     role_id,
                     write_notify: notify,
-                    session_vars,
-                    role_vars,
+                    session_defaults,
+                    role_defaults,
                     catalog: self.owned_catalog(),
                 });
                 if tx.send(resp).is_err() {

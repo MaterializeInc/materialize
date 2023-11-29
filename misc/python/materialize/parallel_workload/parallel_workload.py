@@ -59,28 +59,16 @@ def run(
     ports: dict[str, int],
     seed: str,
     runtime: int,
-    complexity_str: str,
-    scenario_str: str,
+    complexity: Complexity,
+    scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
     fast_startup: bool,
     composition: Composition | None,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
-    random.seed(seed)
 
     rng = random.Random(random.randrange(SEED_RANGE))
-
-    complexity = (
-        Complexity(rng.choice([elem.value for elem in Complexity]))
-        if complexity_str == "random"
-        else Complexity(complexity_str)
-    )
-    scenario = (
-        Scenario(rng.choice([elem.value for elem in Scenario]))
-        if scenario_str == "random"
-        else Scenario(scenario_str)
-    )
 
     print(
         f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} {'--fast-startup' if fast_startup else ''}(--host={host})"
@@ -102,30 +90,31 @@ def run(
     with system_conn.cursor() as system_cur:
         system_exe = Executor(rng, system_cur, database)
         system_exe.execute(
-            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 10 + num_threads}"
         )
         # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
         system_exe.execute(
-            f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 10 + num_threads}"
         )
+        system_exe.execute("ALTER SYSTEM SET max_secrets = 1000000")
         # Most queries should not fail because of privileges
         for object_type in [
             "TABLES",
@@ -435,13 +424,15 @@ def main() -> int:
             cur.execute(f"ALTER SYSTEM SET {key} = '{value}'")
     system_conn.close()
 
+    random.seed(args.seed)
+
     run(
         args.host,
         ports,
         args.seed,
         args.runtime,
-        args.complexity,
-        args.scenario,
+        Complexity(args.complexity),
+        Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
         args.fast_startup,

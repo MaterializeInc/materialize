@@ -111,8 +111,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--min-version",
         metavar="VERSION",
-        type=MzVersion.parse,
-        default=MzVersion.parse("0.39.0"),
+        type=MzVersion.parse_without_prefix,
+        default=MzVersion.parse_without_prefix("0.39.0"),
         help="Minimum Mz version to involve.",
     )
 

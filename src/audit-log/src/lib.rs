@@ -560,6 +560,14 @@ impl VersionedStorageUsage {
             }) => *collection_timestamp,
         }
     }
+
+    /// Returns a globally sortable event order. All event versions must have this
+    /// field.
+    pub fn sortable_id(&self) -> u64 {
+        match self {
+            VersionedStorageUsage::V1(usage) => usage.id,
+        }
+    }
 }
 
 #[cfg(test)]

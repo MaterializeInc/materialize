@@ -107,7 +107,6 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespac
 use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
-mod metrics;
 mod replication;
 mod snapshot;
 
@@ -278,6 +277,8 @@ pub enum DefiniteError {
     TableDropped,
     #[error("publication {0:?} does not exist")]
     PublicationDropped(String),
+    #[error("replication slot has been invalidated because it exceeded the maximum reserved size")]
+    InvalidReplicationSlot,
     #[error("unexpected number of columns while parsing COPY output")]
     MissingColumn,
     #[error("failed to parse COPY protocol")]

@@ -41,6 +41,7 @@ use crate::durable::transaction::TransactionBatch;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
@@ -163,6 +164,8 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError>;
 
     /// Get all audit log events.
+    ///
+    /// Results are guaranteed to be sorted by ID.
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError>;
 
     /// Get the next ID of `id_type`, without allocating it.
@@ -202,6 +205,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Gets all storage usage events and permanently deletes from the catalog those
     /// that happened more than the retention period ago from boot_ts.
+    ///
+    /// Results are guaranteed to be sorted by ID.
     async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
@@ -271,8 +276,18 @@ pub fn test_stash_backed_catalog_state(
 pub async fn persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
+    registry: &MetricsRegistry,
 ) -> PersistHandle {
-    PersistHandle::new(persist_client, organization_id).await
+    PersistHandle::new(persist_client, organization_id, registry).await
+}
+
+/// Creates an openable durable catalog state implemented using persist that is meant to be used in
+/// tests.
+pub async fn test_persist_backed_catalog_state(
+    persist_client: PersistClient,
+    organization_id: Uuid,
+) -> PersistHandle {
+    persist_backed_catalog_state(persist_client, organization_id, &MetricsRegistry::new()).await
 }
 
 /// Creates an openable durable catalog state implemented using both the stash and persist, that
@@ -284,7 +299,9 @@ pub async fn shadow_catalog_state(
     organization_id: Uuid,
 ) -> impl OpenableDurableCatalogState {
     let stash = Box::new(stash_backed_catalog_state(stash_config));
-    let persist = Box::new(persist_backed_catalog_state(persist_client, organization_id).await);
+    // Shadow catalog is only used for tests, so it's OK to get a test persist catalog state.
+    let persist =
+        Box::new(test_persist_backed_catalog_state(persist_client, organization_id).await);
     OpenableShadowCatalogState { stash, persist }
 }
 

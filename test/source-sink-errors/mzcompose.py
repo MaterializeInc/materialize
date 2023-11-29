@@ -82,9 +82,7 @@ class KafkaTransactionLogGreaterThan1:
         ):
             c.up("zookeeper", "badkafka", "schema-registry", "materialized")
             self.populate(c)
-            self.assert_error(
-                c, "retriable transaction error", "running a single Kafka broker"
-            )
+            self.assert_error(c, "transaction error", "running a single Kafka broker")
             c.down(sanity_restart_mz=False)
 
     def populate(self, c: Composition) -> None:
@@ -109,8 +107,6 @@ class KafkaTransactionLogGreaterThan1:
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
-
-                $ kafka-verify-topic sink=materialize.public.kafka_sink
                 """
             ),
         )

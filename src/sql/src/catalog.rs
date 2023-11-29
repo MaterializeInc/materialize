@@ -933,6 +933,14 @@ impl EnvironmentId {
         &self.cloud_provider_region
     }
 
+    /// Returns the name of the region associted with this environment ID.
+    ///
+    /// A region is a combination of [`EnvironmentId::cloud_provider`] and
+    /// [`EnvironmentId::cloud_provider_region`].
+    pub fn region(&self) -> String {
+        format!("{}/{}", self.cloud_provider, self.cloud_provider_region)
+    }
+
     /// Returns the organization ID associated with this environment ID.
     pub fn organization_id(&self) -> Uuid {
         self.organization_id

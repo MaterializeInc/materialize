@@ -27,7 +27,7 @@ use timely::progress::timestamp::Refines;
 use crate::logging::compute::{LogImportFrontiers, Logger};
 use crate::metrics::TraceMetrics;
 use crate::render::context::SpecializedArrangementImport;
-use crate::typedefs::{ErrsHandle, TraceRowHandle};
+use crate::typedefs::{ErrsHandle, TraceKeyHandle, TraceRowHandle};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
@@ -111,7 +111,7 @@ impl TraceManager {
 /// arrangements.
 #[derive(Clone)]
 pub enum SpecializedTraceHandle {
-    RowUnit(TraceRowHandle<Row, (), Timestamp, Diff>),
+    RowUnit(TraceKeyHandle<Row, Timestamp, Diff>),
     RowRow(TraceRowHandle<Row, Row, Timestamp, Diff>),
 }
 

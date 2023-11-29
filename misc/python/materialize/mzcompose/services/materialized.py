@@ -124,7 +124,7 @@ class Materialized(Service):
             and "latest" not in image
             and "devel" not in image
             and "unstable" not in image
-            and MzVersion.parse_mz(image.split(":")[1]) < MzVersion.parse("0.41.0")
+            and MzVersion.parse_mz(image.split(":")[1]) < MzVersion.parse_mz("v0.41.0")
             else "1"
             if default_size == 1
             else f"{default_size}-1"

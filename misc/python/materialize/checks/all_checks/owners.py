@@ -116,7 +116,7 @@ class Owners(Check):
 
     def _can_run(self, e: Executor) -> bool:
         # Object owner changes weren't persisted in some cases earlier than 0.63.0.
-        return self.base_version >= MzVersion.parse("0.63.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.63.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -205,7 +205,7 @@ class Owners(Check):
                     + self._drop_objects("materialize", 7, success=False)
                     + self._drop_objects("materialize", 8, success=False)
                 )
-                if self.base_version >= MzVersion.parse("0.51.0-dev")
+                if self.base_version >= MzVersion.parse_mz("v0.51.0-dev")
                 else ""
             )
             + self._create_objects("owner_role_01", 9)

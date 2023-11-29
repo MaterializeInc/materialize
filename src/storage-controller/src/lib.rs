@@ -84,6 +84,7 @@ use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -104,7 +105,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
-use mz_persist_txn::txn_cache::TxnsCache;
+use mz_persist_txn::txn_read::TxnsRead;
 use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
@@ -114,17 +115,13 @@ use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand,
-    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
+    SinkStatisticsUpdate, SourceStatisticsUpdate, StatusUpdate, StorageCommand, StorageResponse,
     TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
     ExportState, IntrospectionType, MonotonicAppender, ReadPolicy, SnapshotCursor,
     StorageController,
-};
-use mz_storage_client::healthcheck::{
-    self, MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC,
-    MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
@@ -147,10 +144,15 @@ use tokio_stream::StreamMap;
 use tracing::{debug, error, info, warn};
 
 use crate::command_wals::ProtoShardId;
+use crate::healthcheck::{
+    MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC,
+    MZ_STATEMENT_EXECUTION_HISTORY_DESC,
+};
 use crate::rehydration::RehydratingStorageClient;
 
 mod collection_mgmt;
 mod command_wals;
+mod healthcheck;
 mod persist_handles;
 mod rehydration;
 mod statistics;
@@ -298,11 +300,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
-    /// The shard id of the persist-txn txns shard or None if persist-txn is not
+    /// A handle for reading persist-txn managed shards or None if persist-txn is not
     /// enabled.
-    txns_id: Option<ShardId>,
-    /// A PersistClient usable for opening txns_id.
-    txns_client: PersistClient,
+    txns_read: Option<TxnsRead<T>>,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
@@ -310,8 +310,11 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
+
+    /// Facility for appending status updates for sources/sinks
+    pub(crate) collection_status_manager: healthcheck::CollectionStatusManager<T>,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
-    pub(crate) introspection_ids: BTreeMap<IntrospectionType, GlobalId>,
+    pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
     /// this will make sure that any tasks (or other resources) will stop when
     /// needed.
@@ -320,13 +323,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    source_statistics: Arc<
-        std::sync::Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SourceStatisticsUpdate>>>,
-    >,
+    source_statistics:
+        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SourceStatisticsUpdate>>>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics:
-        Arc<std::sync::Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SinkStatisticsUpdate>>>>,
+        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SinkStatisticsUpdate>>>>,
 
     /// Clients for all known storage instances.
     clients: BTreeMap<StorageInstanceId, RehydratingStorageClient<T>>,
@@ -419,6 +421,7 @@ where
             self.metrics.for_instance(id),
             self.envd_epoch,
             self.config.grpc_client.clone(),
+            self.now.clone(),
         );
         if self.initialized {
             client.send(StorageCommand::InitializationComplete);
@@ -526,17 +529,13 @@ where
 
         // Perform all stash writes in a single transaction, to minimize transaction overhead and
         // the time spent waiting for stash.
-        METADATA_COLLECTION
+        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
             .insert_without_overwrite(
                 &mut self.stash,
                 entries
                     .into_iter()
                     .map(|(key, val)| (key.into_proto(), val.into_proto())),
             )
-            .await?;
-
-        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
-            .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(RustType::from_proto)
@@ -584,9 +583,9 @@ where
                 // pass along the shard id for the txns shard to dataflow rendering.
                 let txns_shard = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) => {
-                        // `self.txns_id` is None if persist-txn is not enabled, which makes this
+                        // `self.txns_read` is None if persist-txn is not enabled, which makes this
                         // do the right thing.
-                        self.txns_id.clone()
+                        self.txns_read.as_ref().map(|x| *x.txns_id())
                     }
                     DataSource::Ingestion(_)
                     | DataSource::Introspection(_)
@@ -822,7 +821,11 @@ where
                     client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
                 DataSource::Introspection(i) => {
-                    let prev = self.introspection_ids.insert(i, id);
+                    let prev = self
+                        .introspection_ids
+                        .lock()
+                        .expect("poisoned lock")
+                        .insert(i, id);
                     assert!(
                         prev.is_none(),
                         "cannot have multiple IDs for introspection type"
@@ -1340,14 +1343,12 @@ where
                 // never come (worse, it's tricky to keep it making progress, which results in a
                 // stuck since). Replace this with the shared TxnsCache thing we'll have to do
                 // anyway for the dataflow operators.
-                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
-                    &self.txns_client,
-                    *txns_id,
-                    Some(metadata.data_shard),
-                )
-                .await;
-                txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let txns_read = self.txns_read.as_ref().expect("set if txns are enabled");
+                assert_eq!(txns_id, txns_read.txns_id());
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
                 data_snapshot.snapshot_and_fetch(&mut read_handle).await
             }
@@ -1390,16 +1391,12 @@ where
                 }
             }
             Some(txns_id) => {
-                // TODO(txn): Replace this with the shared TxnsCache thing
-                // we'll have to do anyway for the dataflow operators.
-                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
-                    &self.txns_client,
-                    *txns_id,
-                    Some(metadata.data_shard),
-                )
-                .await;
-                txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let txns_read = self.txns_read.as_ref().expect("set if txns are enabled");
+                assert_eq!(txns_id, txns_read.txns_id());
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
                 let mut handle = self.read_handle_for_snapshot(id).await?;
                 let cursor = data_snapshot
                     .snapshot_cursor(&mut handle)
@@ -1736,6 +1733,9 @@ where
                     }
                 }
             }
+            Some(StorageResponse::StatusUpdates(updates)) => {
+                self.record_status_updates(updates).await;
+            }
         }
 
         // IDs of sources that were dropped whose statuses should be updated.
@@ -1812,22 +1812,13 @@ where
         //
         // The locks are held for a short time, only while we do some hash map removals.
 
-        let source_status_history_id =
-            self.introspection_ids[&IntrospectionType::SourceStatusHistory];
         let mut updates = vec![];
         for id in pending_source_drops.drain(..) {
-            let status_row = healthcheck::pack_status_row(
-                id,
-                "dropped",
-                None,
-                &Default::default(),
-                &Default::default(),
-                (self.now)(),
-            );
-            updates.push((status_row, 1));
+            updates.push(id);
         }
 
-        self.append_to_managed_collection(source_status_history_id, updates)
+        self.collection_status_manager
+            .drop_sources(updates, mz_ore::now::to_datetime((self.now)()))
             .await;
 
         {
@@ -1838,25 +1829,16 @@ where
         }
 
         // Record the drop status for all pending sink drops.
-        let sink_status_history_id = self.introspection_ids[&IntrospectionType::SinkStatusHistory];
         let mut updates = vec![];
         {
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in pending_sink_drops.drain(..) {
-                let status_row = healthcheck::pack_status_row(
-                    id,
-                    "dropped",
-                    None,
-                    &Default::default(),
-                    &Default::default(),
-                    (self.now)(),
-                );
-                updates.push((status_row, 1));
-
+                updates.push(id);
                 sink_statistics.remove(&id);
             }
         }
-        self.append_to_managed_collection(sink_status_history_id, updates)
+        self.collection_status_manager
+            .drop_sinks(updates, mz_ore::now::to_datetime((self.now)()))
             .await;
 
         Ok(())
@@ -1938,11 +1920,8 @@ where
             push_update(id, old, -1);
         }
 
-        self.append_to_managed_collection(
-            self.introspection_ids[&IntrospectionType::Frontiers],
-            updates,
-        )
-        .await;
+        let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
+        self.append_to_managed_collection(id, updates).await;
     }
 
     async fn record_replica_frontiers(
@@ -2001,11 +1980,9 @@ where
             push_update(key, old, -1);
         }
 
-        self.append_to_managed_collection(
-            self.introspection_ids[&IntrospectionType::ReplicaFrontiers],
-            updates,
-        )
-        .await;
+        let id =
+            self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
+        self.append_to_managed_collection(id, updates).await;
     }
 
     async fn record_introspection_updates(
@@ -2013,7 +1990,7 @@ where
         type_: IntrospectionType,
         updates: Vec<(Row, Diff)>,
     ) {
-        let id = self.introspection_ids[&type_];
+        let id = self.introspection_ids.lock().expect("poisoned")[&type_];
         self.append_to_managed_collection(id, updates).await;
     }
 }
@@ -2139,11 +2116,11 @@ where
             .await
             .expect("stash operation must succeed");
 
-        let txns_client = persist_clients
-            .open(persist_location.clone())
-            .await
-            .expect("location should be valid");
-        let (persist_table_worker, txns_id) = if enable_persist_txn_tables {
+        let (persist_table_worker, txns_read) = if enable_persist_txn_tables {
+            let txns_client = persist_clients
+                .open(persist_location.clone())
+                .await
+                .expect("location should be valid");
             let txns_id = PERSIST_TXNS_SHARD
                 .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
                 .await
@@ -2159,7 +2136,8 @@ where
             )
             .await;
             let worker = persist_handles::PersistTableWriteWorker::new_txns(tx.clone(), txns);
-            (worker, Some(txns_id))
+            let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client, txns_id);
+            (worker, Some(txns_read))
         } else {
             let worker = persist_handles::PersistTableWriteWorker::new_legacy(tx.clone());
             (worker, None)
@@ -2171,6 +2149,13 @@ where
         let collection_manager =
             collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
 
+        let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
+
+        let collection_status_manager = crate::healthcheck::CollectionStatusManager::new(
+            collection_manager.clone(),
+            Arc::clone(&introspection_ids),
+        );
+
         Self {
             build_info,
             collections: BTreeMap::default(),
@@ -2179,17 +2164,17 @@ where
             persist_table_worker,
             persist_monotonic_worker,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
-            txns_id,
-            txns_client,
+            txns_read,
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
-            introspection_ids: BTreeMap::new(),
+            collection_status_manager,
+            introspection_ids,
             introspection_tokens: BTreeMap::new(),
             now,
             envd_epoch,
-            source_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
-            sink_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            source_statistics: Arc::new(Mutex::new(BTreeMap::new())),
+            sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             clients: BTreeMap::new(),
             replicas: BTreeMap::new(),
             initialized: false,
@@ -2433,7 +2418,8 @@ where
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     async fn initialize_shard_mapping(&mut self) {
-        let id = self.introspection_ids[&IntrospectionType::ShardMapping];
+        let id =
+            self.introspection_ids.lock().expect("poisoned lock")[&IntrospectionType::ShardMapping];
 
         let mut row_buf = Row::default();
         let mut updates = Vec::with_capacity(self.collections.len());
@@ -2492,9 +2478,13 @@ where
                     .try_into()
                     .expect("sane config value"),
             );
-        let mseh_id = self.introspection_ids[&IntrospectionType::StatementExecutionHistory];
-        let mpsh_id = self.introspection_ids[&IntrospectionType::PreparedStatementHistory];
-        let msh_id = self.introspection_ids[&IntrospectionType::SessionHistory];
+
+        let mseh_id = self.introspection_ids.lock().expect("poisoned")
+            [&IntrospectionType::StatementExecutionHistory];
+        let mpsh_id = self.introspection_ids.lock().expect("poisoned")
+            [&IntrospectionType::PreparedStatementHistory];
+        let msh_id =
+            self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::SessionHistory];
         let mseh_ts = match self.collections[&mseh_id]
             .write_frontier
             .elements()
@@ -2679,7 +2669,7 @@ where
             _ => unreachable!(),
         };
 
-        let id = self.introspection_ids[&collection];
+        let id = self.introspection_ids.lock().expect("poisoned")[&collection];
 
         let mut rows = match self.collections[&id].write_frontier.as_option() {
             Some(f) if f > &T::minimum() => {
@@ -2779,7 +2769,12 @@ where
     {
         mz_ore::soft_assert!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
 
-        let id = match self.introspection_ids.get(&IntrospectionType::ShardMapping) {
+        let id = match self
+            .introspection_ids
+            .lock()
+            .expect("poisoned")
+            .get(&IntrospectionType::ShardMapping)
+        {
             Some(id) => *id,
             _ => return,
         };
@@ -3334,16 +3329,12 @@ where
                 }
             }
             Some(txns_id) => {
-                // TODO(txn): Replace this with the shared TxnsCache thing
-                // we'll have to do anyway for the dataflow operators.
-                let mut txns_cache = TxnsCache::<T, TxnsCodecRow>::open(
-                    &self.txns_client,
-                    *txns_id,
-                    Some(metadata.data_shard),
-                )
-                .await;
-                txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let txns_read = self.txns_read.as_ref().expect("set if txns are enabled");
+                assert_eq!(txns_id, txns_read.txns_id());
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
                 let mut handle = self.read_handle_for_snapshot(id).await?;
                 let contents = data_snapshot.snapshot_and_stream(&mut handle).await;
                 match contents {
@@ -3358,5 +3349,36 @@ where
                 }
             }
         }
+    }
+    /// Handles writing of status updates for sources/sinks to the appropriate
+    /// status relation
+    async fn record_status_updates(&mut self, updates: Vec<StatusUpdate>) {
+        let mut sink_status_updates = vec![];
+        let mut source_status_updates = vec![];
+
+        for update in updates {
+            let id = update.id;
+            let update = healthcheck::RawStatusUpdate {
+                id,
+                ts: update.timestamp,
+                status_name: update.status,
+                error: update.error,
+                hints: update.hints,
+                namespaced_errors: update.namespaced_errors,
+            };
+
+            if self.exports.contains_key(&id) {
+                sink_status_updates.push(update);
+            } else if self.collections.contains_key(&id) {
+                source_status_updates.push(update);
+            }
+        }
+
+        self.collection_status_manager
+            .append_source_updates(source_status_updates)
+            .await;
+        self.collection_status_manager
+            .append_sink_updates(sink_status_updates)
+            .await;
     }
 }

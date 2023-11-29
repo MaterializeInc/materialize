@@ -79,7 +79,8 @@
 mod tests {
 
     use mz_lsp_server::backend::{
-        ExecuteCommandParseResponse, ExecuteCommandParseStatement, DEFAULT_FORMATTING_WIDTH,
+        Completions, ExecuteCommandParseResponse, ExecuteCommandParseStatement,
+        DEFAULT_FORMATTING_WIDTH,
     };
     use mz_lsp_server::{PKG_NAME, PKG_VERSION};
     use mz_ore::collections::HashMap;
@@ -148,8 +149,9 @@ mod tests {
         .await;
         test_formatting(&mut req_client, &mut resp_client).await;
         test_simple_query(&mut req_client, &mut resp_client).await;
-        test_jinja_query(&mut req_client, &mut resp_client).await;
         test_execute_command(&mut req_client, &mut resp_client).await;
+        test_completion(&mut req_client, &mut resp_client).await;
+        test_jinja_query(&mut req_client, &mut resp_client).await;
     }
 
     /// Builds the file containing a simple query
@@ -190,6 +192,62 @@ mod tests {
         test_query(query, None, req_client, resp_client).await;
     }
 
+    /// Asserts the the server can return completions varying the context
+    async fn test_completion(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
+        let request = format!(
+            r#"{{
+            "jsonrpc":"2.0",
+            "id": 2,
+            "method":"textDocument/completion",
+            "params": {{
+                "textDocument": {{
+                    "uri": "{}"
+                }},
+                "position": {{
+                    "line": 0,
+                    "character": 11
+                }}
+            }}
+        }}"#,
+            get_file_uri()
+        );
+
+        let expected_response = vec![LspMessage::<(), Vec<CompletionItem>> {
+            jsonrpc: "2.0".to_string(),
+            id: Some(2),
+            result: Some(vec![CompletionItem {
+                label: "amount".to_string(),
+                label_details: Some(CompletionItemLabelDetails {
+                    detail: Some("int8".to_string()),
+                    description: None,
+                }),
+                kind: Some(CompletionItemKind::FIELD),
+                detail: Some(
+                    format!(
+                        "From {}.{}.{} ({})",
+                        "materialize", "public", "clicks", "View"
+                    )
+                    .to_string(),
+                ),
+                documentation: None,
+                deprecated: Some(false),
+                ..Default::default()
+            }]),
+            method: None,
+            params: None,
+            error: None,
+        }];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 2048],
+            &request,
+            expected_response,
+        )
+        .await;
+    }
+
     /// Asserts that the server can parse a sql text file by using "workspace/executeCommand".
     async fn test_execute_command(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
         let request = r#"{
@@ -228,7 +286,7 @@ mod tests {
         write_and_assert(
             req_client,
             resp_client,
-            &mut [0; 1024],
+            &mut [0; 2048],
             request,
             expected_response,
         )
@@ -260,7 +318,7 @@ mod tests {
         write_and_assert(
             req_client,
             resp_client,
-            &mut [0; 1024],
+            &mut [0; 2048],
             request,
             expected_response,
         )
@@ -292,7 +350,7 @@ mod tests {
         write_and_assert(
             req_client,
             resp_client,
-            &mut [0; 1024],
+            &mut [0; 2048],
             request,
             expected_response,
         )
@@ -313,10 +371,24 @@ mod tests {
         let request = r#"{
             "jsonrpc":"2.0",
             "method":"initialize",
-            "params":{
-                "capabilities":{
+            "params": {
+                "capabilities": {
                     "textDocumentSync": 1,
                     "documentFormattingProvider": 1
+                },
+                "initializationOptions": {
+                    "schema": {
+                        "schema": "public",
+                        "database": "materialize",
+                        "objects": [{
+                            "name": "clicks",
+                            "type": "view",
+                            "columns": [{
+                                "name": "amount",
+                                "type": "int8"
+                            }]
+                        }]
+                    }
                 }
             },
             "id":1
@@ -350,6 +422,13 @@ mod tests {
                         }),
                         file_operations: None,
                     }),
+                    completion_provider: Some(CompletionOptions {
+                        resolve_provider: Some(false),
+                        trigger_characters: Some(vec![".".to_string()]),
+                        work_done_progress_options: Default::default(),
+                        all_commit_characters: None,
+                        completion_item: None,
+                    }),
                     ..ServerCapabilities::default()
                 },
             }),
@@ -359,7 +438,7 @@ mod tests {
         write_and_assert(
             req_client,
             resp_client,
-            &mut [0; 1024],
+            &mut [0; 2048],
             request,
             expected_response,
         )
@@ -434,7 +513,7 @@ mod tests {
         write_and_assert(
             req_client,
             resp_client,
-            &mut [0; 1024],
+            &mut [0; 2048],
             &request,
             formatting_response,
         )
@@ -454,7 +533,7 @@ mod tests {
         write_and_assert(
             req_client,
             resp_client,
-            &mut [0; 1024],
+            &mut [0; 2048],
             request.as_str(),
             expected_response,
         )
@@ -493,6 +572,7 @@ mod tests {
             // Extract the message body using content length
             let str_slice: &str =
                 std::str::from_utf8(&slices[headers_len..headers_len + content_length]).unwrap();
+            println!("Response (str_slice): {}", str_slice);
             messages.push(serde_json::from_str::<LspMessage<T, R>>(str_slice).unwrap());
 
             // Move the slice pointer past the current message (header + content length)
@@ -506,13 +586,19 @@ mod tests {
     /// Returns the two clients to send and read request to and from the
     /// server.
     fn start_server() -> (tokio::io::DuplexStream, tokio::io::DuplexStream) {
-        let (req_client, req_server) = tokio::io::duplex(1024);
-        let (resp_server, resp_client) = tokio::io::duplex(1024);
+        let (req_client, req_server) = tokio::io::duplex(2048);
+        let (resp_server, resp_client) = tokio::io::duplex(2048);
 
         let (service, socket) = LspService::new(|client| mz_lsp_server::backend::Backend {
             client,
             parse_results: Mutex::new(HashMap::new()),
             formatting_width: DEFAULT_FORMATTING_WIDTH.into(),
+            schema: Mutex::new(None),
+            content: Mutex::new(HashMap::new()),
+            completions: Mutex::new(Completions {
+                from: Vec::new(),
+                select: Vec::new(),
+            }),
         });
 
         mz_ore::task::spawn(

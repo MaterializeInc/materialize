@@ -79,6 +79,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
+use std::future::IntoFuture;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpStream};
 use std::sync::atomic::Ordering;
@@ -102,7 +103,6 @@ use mz_ore::assert_contains;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
-use mz_ore::task::RuntimeExt;
 use mz_sql::names::PUBLIC_ROLE_NAME;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use openssl::error::ErrorStack;
@@ -111,7 +111,6 @@ use postgres::config::SslMode;
 use postgres::error::SqlState;
 use serde::Deserialize;
 use serde_json::json;
-use tokio::runtime::Runtime;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::Message;
 use uuid::Uuid;
@@ -205,9 +204,8 @@ fn assert_http_rejected() -> Assert<Box<dyn Fn(Option<StatusCode>, String)>> {
     }))
 }
 
-fn run_tests<'a>(header: &str, server: &test_util::Server, tests: &[TestCase<'a>]) {
+async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[TestCase<'a>]) {
     println!("==> {}", header);
-    let runtime = Runtime::new().unwrap();
     for test in tests {
         match test {
             TestCase::Pgwire {
@@ -224,23 +222,30 @@ fn run_tests<'a>(header: &str, server: &test_util::Server, tests: &[TestCase<'a>
                 );
 
                 let tls = make_pg_tls(configure);
-                let mut pg_client = server.pg_config();
-                pg_client
+                let conn_config = server
+                    .connect()
                     .ssl_mode(*ssl_mode)
                     .user(user_to_auth_as)
                     .password(password.unwrap_or(""));
 
                 match assert {
                     Assert::Success => {
-                        let mut pg_client = pg_client.connect(tls).unwrap();
-                        let row = pg_client.query_one("SELECT current_user", &[]).unwrap();
+                        let pg_client = conn_config.with_tls(tls).await.unwrap();
+                        let row = pg_client
+                            .query_one("SELECT current_user", &[])
+                            .await
+                            .unwrap();
                         assert_eq!(row.get::<_, String>(0), *user_reported_by_system);
                     }
                     Assert::SuccessSuperuserCheck(is_superuser) => {
-                        let mut pg_client = pg_client.connect(tls.clone()).unwrap();
-                        let row = pg_client.query_one("SELECT current_user", &[]).unwrap();
+                        let pg_client = conn_config.with_tls(tls).await.unwrap();
+                        let row = pg_client
+                            .query_one("SELECT current_user", &[])
+                            .await
+                            .unwrap();
                         assert_eq!(row.get::<_, String>(0), *user_reported_by_system);
-                        let row = pg_client.query_one("SHOW is_superuser", &[]).unwrap();
+
+                        let row = pg_client.query_one("SHOW is_superuser", &[]).await.unwrap();
                         let expected = if *is_superuser { "on" } else { "off" };
                         assert_eq!(row.get::<_, String>(0), *expected);
                     }
@@ -248,14 +253,14 @@ fn run_tests<'a>(header: &str, server: &test_util::Server, tests: &[TestCase<'a>
                         // This sometimes returns a network error, so retry until we get a db error.
                         Retry::default()
                             .max_duration(Duration::from_secs(10))
-                            .retry(|_| {
-                                // Due to delayed startup, we must attempt a query to
-                                // check if there was a login error.
-                                let err = match pg_client.connect(tls.clone()) {
-                                    Ok(mut pg_client) => {
-                                        pg_client.query_one("SELECT 1", &[]).unwrap_err()
-                                    }
-                                    Err(err) => err,
+                            .retry_async(|_| async {
+                                let Err(err) = server
+                                    .connect()
+                                    .with_config(conn_config.as_pg_config().clone())
+                                    .with_tls(tls.clone())
+                                    .await
+                                else {
+                                    return Err(());
                                 };
                                 let Some(err) = err.as_db_error() else {
                                     return Err(());
@@ -263,13 +268,13 @@ fn run_tests<'a>(header: &str, server: &test_util::Server, tests: &[TestCase<'a>
                                 check(err);
                                 Ok(())
                             })
+                            .await
                             .unwrap();
                     }
                     Assert::Err(check) => {
-                        // Due to delayed startup, we must attempt a query to
-                        // check if there was a login error.
-                        let err = match pg_client.connect(tls.clone()) {
-                            Ok(mut pg_client) => pg_client.query_one("SELECT 1", &[]).unwrap_err(),
+                        let pg_client = conn_config.with_tls(tls.clone()).await;
+                        let err = match pg_client {
+                            Ok(_) => panic!("connection unexpectedly succeeded"),
                             Err(err) => err,
                         };
                         check(&err);
@@ -284,37 +289,34 @@ fn run_tests<'a>(header: &str, server: &test_util::Server, tests: &[TestCase<'a>
                 configure,
                 assert,
             } => {
-                fn query_http_api<'a>(
+                async fn query_http_api<'a>(
                     query: &str,
                     uri: &Uri,
                     headers: &'a HeaderMap,
                     configure: &Box<
                         dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a,
                     >,
-                    runtime: &Runtime,
                 ) -> hyper::Result<Response<Body>> {
-                    runtime.block_on(
-                        hyper::Client::builder()
-                            .build::<_, Body>(make_http_tls(configure))
-                            .request({
-                                let mut req = Request::post(uri);
-                                for (k, v) in headers.iter() {
-                                    req.headers_mut().unwrap().insert(k, v.clone());
-                                }
-                                req.headers_mut().unwrap().insert(
-                                    "Content-Type",
-                                    HeaderValue::from_static("application/json"),
-                                );
-                                req.body(Body::from(json!({ "query": query }).to_string()))
-                                    .unwrap()
-                            }),
-                    )
+                    hyper::Client::builder()
+                        .build::<_, Body>(make_http_tls(configure))
+                        .request({
+                            let mut req = Request::post(uri);
+                            for (k, v) in headers.iter() {
+                                req.headers_mut().unwrap().insert(k, v.clone());
+                            }
+                            req.headers_mut().unwrap().insert(
+                                "Content-Type",
+                                HeaderValue::from_static("application/json"),
+                            );
+                            req.body(Body::from(json!({ "query": query }).to_string()))
+                                .unwrap()
+                        })
+                        .await
                 }
 
-                fn assert_success_response(
+                async fn assert_success_response(
                     res: hyper::Result<Response<Body>>,
                     expected_rows: Vec<Vec<String>>,
-                    runtime: &Runtime,
                 ) {
                     #[derive(Deserialize)]
                     struct Result {
@@ -324,9 +326,7 @@ fn run_tests<'a>(header: &str, server: &test_util::Server, tests: &[TestCase<'a>
                     struct Response {
                         results: Vec<Result>,
                     }
-                    let body = runtime
-                        .block_on(body::to_bytes(res.unwrap().into_body()))
-                        .unwrap();
+                    let body = body::to_bytes(res.unwrap().into_body()).await.unwrap();
                     let res: Response = serde_json::from_slice(&body).unwrap();
                     assert_eq!(res.results[0].rows, expected_rows)
                 }
@@ -343,40 +343,34 @@ fn run_tests<'a>(header: &str, server: &test_util::Server, tests: &[TestCase<'a>
                     .path_and_query("/api/sql")
                     .build()
                     .unwrap();
-                let res = query_http_api(
-                    "SELECT pg_catalog.current_user()",
-                    &uri,
-                    headers,
-                    configure,
-                    &runtime,
-                );
+                let res =
+                    query_http_api("SELECT pg_catalog.current_user()", &uri, headers, configure)
+                        .await;
 
                 match assert {
                     Assert::Success => {
                         assert_success_response(
                             res,
                             vec![vec![user_reported_by_system.to_string()]],
-                            &runtime,
-                        );
+                        )
+                        .await;
                     }
                     Assert::SuccessSuperuserCheck(is_superuser) => {
                         assert_success_response(
                             res,
                             vec![vec![user_reported_by_system.to_string()]],
-                            &runtime,
-                        );
+                        )
+                        .await;
                         let res =
-                            query_http_api("SHOW is_superuser", &uri, headers, configure, &runtime);
+                            query_http_api("SHOW is_superuser", &uri, headers, configure).await;
                         let expected = if *is_superuser { "on" } else { "off" };
-                        assert_success_response(res, vec![vec![expected.to_string()]], &runtime);
+                        assert_success_response(res, vec![vec![expected.to_string()]]).await;
                     }
                     Assert::Err(check) => {
                         let (code, message) = match res {
                             Ok(mut res) => {
-                                let body = String::from_utf8_lossy(
-                                    &runtime.block_on(body::to_bytes(res.body_mut())).unwrap(),
-                                )
-                                .into_owned();
+                                let body = body::to_bytes(res.body_mut()).await.unwrap();
+                                let body = String::from_utf8_lossy(&body[..]).into_owned();
                                 (Some(res.status()), body)
                             }
                             Err(e) => (None, e.to_string()),
@@ -405,7 +399,7 @@ fn run_tests<'a>(header: &str, server: &test_util::Server, tests: &[TestCase<'a>
                     .unwrap();
                 let stream = make_ws_tls(&uri, configure);
                 let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
-                //  let (mut ws, _resp) = tungstenite::connect(uri).unwrap();
+
                 ws.send(Message::Text(serde_json::to_string(&auth).unwrap()))
                     .unwrap();
 
@@ -477,9 +471,9 @@ fn run_tests<'a>(header: &str, server: &test_util::Server, tests: &[TestCase<'a>
     }
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_expiry() {
+async fn test_auth_expiry() {
     // This function verifies that the background expiry refresh task runs. This
     // is done by starting a web server that awaits the refresh request, which the
     // test waits for.
@@ -512,6 +506,7 @@ fn test_auth_expiry() {
         None,
     )
     .unwrap();
+
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.url.clone(),
@@ -526,25 +521,28 @@ fn test_auth_expiry() {
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzp_{client_id}{secret}");
 
-    let config = test_util::Config::default()
+    let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
-        .with_metrics_registry(metrics_registry);
-    let server = test_util::start_server(config).unwrap();
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
 
-    let mut pg_client = server
-        .pg_config()
+    let pg_client = server
+        .connect()
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
             Ok(b.set_verify(SslVerifyMode::NONE))
         })))
+        .await
         .unwrap();
 
     assert_eq!(
         pg_client
             .query_one("SELECT current_user", &[])
+            .await
             .unwrap()
             .get::<_, String>(0),
         frontegg_user
@@ -556,6 +554,7 @@ fn test_auth_expiry() {
     assert_eq!(
         pg_client
             .query_one("SELECT current_user", &[])
+            .await
             .unwrap()
             .get::<_, String>(0),
         frontegg_user
@@ -567,14 +566,17 @@ fn test_auth_expiry() {
         .store(false, Ordering::Relaxed);
     frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
     // Sleep until the expiry future should resolve.
-    std::thread::sleep(Duration::from_secs(EXPIRES_IN_SECS + 1));
-    assert!(pg_client.query_one("SELECT current_user", &[]).is_err());
+    tokio::time::sleep(Duration::from_secs(EXPIRES_IN_SECS + 1)).await;
+    assert!(pg_client
+        .query_one("SELECT current_user", &[])
+        .await
+        .is_err());
 }
 
 #[allow(clippy::unit_arg)]
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_base_require_tls_frontegg() {
+async fn test_auth_base_require_tls_frontegg() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -655,6 +657,7 @@ fn test_auth_base_require_tls_frontegg() {
         None,
     )
     .unwrap();
+
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.url,
@@ -684,11 +687,13 @@ fn test_auth_base_require_tls_frontegg() {
 
     // Test connecting to a server that requires TLS and uses Materialize Cloud for
     // authentication.
-    let config = test_util::Config::default()
+    let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
-        .with_metrics_registry(metrics_registry);
-    let server = test_util::start_server(config).unwrap();
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
     run_tests(
         "TlsMode::Require, MzCloud",
         &server,
@@ -1048,17 +1053,18 @@ fn test_auth_base_require_tls_frontegg() {
                 })),
             },
         ],
-    );
+    )
+    .await;
 }
 
 #[allow(clippy::unit_arg)]
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_base_disable_tls() {
+async fn test_auth_base_disable_tls() {
     let no_headers = HeaderMap::new();
 
     // Test TLS modes with a server that does not support TLS.
-    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let server = test_util::TestHarness::default().start().await;
     run_tests(
         "TlsMode::Disable",
         &server,
@@ -1129,13 +1135,14 @@ fn test_auth_base_disable_tls() {
                 })),
             },
         ],
-    );
+    )
+    .await;
 }
 
 #[allow(clippy::unit_arg)]
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_base_require_tls() {
+async fn test_auth_base_require_tls() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1151,8 +1158,11 @@ fn test_auth_base_require_tls() {
     let no_headers = HeaderMap::new();
 
     // Test TLS modes with a server that requires TLS.
-    let config = test_util::Config::default().with_tls(server_cert, server_key);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .start()
+        .await;
+
     run_tests(
         "TlsMode::Require",
         &server,
@@ -1237,13 +1247,13 @@ fn test_auth_base_require_tls() {
                 })),
             },
         ],
-    );
-    drop(server);
+    )
+    .await;
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_intermediate_ca_no_intermediary() {
+async fn test_auth_intermediate_ca_no_intermediary() {
     // Create a CA, an intermediate CA, and a server key pair signed by the
     // intermediate CA.
     let ca = Ca::new_root("test ca").unwrap();
@@ -1254,8 +1264,11 @@ fn test_auth_intermediate_ca_no_intermediary() {
 
     // When the server presents only its own certificate, without the
     // intermediary, the client should fail to verify the chain.
-    let config = test_util::Config::default().with_tls(server_cert, server_key);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .start()
+        .await;
+
     run_tests(
         "TlsMode::Require",
         &server,
@@ -1282,12 +1295,13 @@ fn test_auth_intermediate_ca_no_intermediary() {
                 })),
             },
         ],
-    );
+    )
+    .await;
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_intermediate_ca() {
+async fn test_auth_intermediate_ca() {
     // Create a CA, an intermediate CA, and a server key pair signed by the
     // intermediate CA.
     let ca = Ca::new_root("test ca").unwrap();
@@ -1316,8 +1330,11 @@ fn test_auth_intermediate_ca() {
     // When the server is configured to present the entire certificate chain,
     // the client should be able to verify the chain even though it only knows
     // about the root CA.
-    let config = test_util::Config::default().with_tls(server_cert_chain, server_key);
-    let server = test_util::start_server(config).unwrap();
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert_chain, server_key)
+        .start()
+        .await;
+
     run_tests(
         "TlsMode::Require",
         &server,
@@ -1339,12 +1356,13 @@ fn test_auth_intermediate_ca() {
                 assert: Assert::Success,
             },
         ],
-    );
+    )
+    .await;
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_admin_non_superuser() {
+async fn test_auth_admin_non_superuser() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1394,6 +1412,7 @@ fn test_auth_admin_non_superuser() {
         None,
     )
     .unwrap();
+
     let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
@@ -1411,11 +1430,12 @@ fn test_auth_admin_non_superuser() {
     let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
     let frontegg_header_basic = make_header(frontegg_basic);
 
-    let config = test_util::Config::default()
+    let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
-        .with_metrics_registry(metrics_registry);
-    let server = test_util::start_server(config).unwrap();
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
 
     run_tests(
         "Non-superuser",
@@ -1447,12 +1467,13 @@ fn test_auth_admin_non_superuser() {
                 assert: Assert::SuccessSuperuserCheck(false),
             },
         ],
-    );
+    )
+    .await;
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_admin_superuser() {
+async fn test_auth_admin_superuser() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1502,6 +1523,7 @@ fn test_auth_admin_superuser() {
         None,
     )
     .unwrap();
+
     let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
@@ -1519,11 +1541,12 @@ fn test_auth_admin_superuser() {
     let admin_frontegg_basic = Authorization::basic(admin_frontegg_user, admin_frontegg_password);
     let admin_frontegg_header_basic = make_header(admin_frontegg_basic);
 
-    let config = test_util::Config::default()
+    let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
-        .with_metrics_registry(metrics_registry);
-    let server = test_util::start_server(config).unwrap();
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
 
     run_tests(
         "Superuser",
@@ -1555,12 +1578,13 @@ fn test_auth_admin_superuser() {
                 assert: Assert::SuccessSuperuserCheck(true),
             },
         ],
-    );
+    )
+    .await;
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_admin_superuser_revoked() {
+async fn test_auth_admin_superuser_revoked() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1610,6 +1634,7 @@ fn test_auth_admin_superuser_revoked() {
         None,
     )
     .unwrap();
+
     let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
@@ -1625,25 +1650,28 @@ fn test_auth_admin_superuser_revoked() {
 
     let frontegg_password = &format!("{password_prefix}{client_id}{secret}");
 
-    let config = test_util::Config::default()
+    let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
-        .with_metrics_registry(metrics_registry);
-    let server = test_util::start_server(config).unwrap();
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
 
-    let mut pg_client = server
-        .pg_config()
+    let pg_client = server
+        .connect()
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
             Ok(b.set_verify(SslVerifyMode::NONE))
         })))
+        .await
         .unwrap();
 
     assert_eq!(
         pg_client
             .query_one("SHOW is_superuser", &[])
+            .await
             .unwrap()
             .get::<_, String>(0),
         "off"
@@ -1658,6 +1686,7 @@ fn test_auth_admin_superuser_revoked() {
     assert_eq!(
         pg_client
             .query_one("SHOW is_superuser", &[])
+            .await
             .unwrap()
             .get::<_, String>(0),
         "on"
@@ -1672,15 +1701,16 @@ fn test_auth_admin_superuser_revoked() {
     assert_eq!(
         pg_client
             .query_one("SHOW is_superuser", &[])
+            .await
             .unwrap()
             .get::<_, String>(0),
         "off"
     );
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_deduplication() {
+async fn test_auth_deduplication() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1709,6 +1739,7 @@ fn test_auth_deduplication() {
         Some(2),
     )
     .unwrap();
+
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.url.clone(),
@@ -1723,54 +1754,50 @@ fn test_auth_deduplication() {
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzp_{client_id}{secret}");
 
-    let config = test_util::Config::default()
+    let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
-        .with_metrics_registry(metrics_registry);
-    let server = test_util::start_server(config).unwrap();
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
 
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 0);
 
-    let mut pg_client_1_config = server.pg_config_async();
-    let pg_client_1_fut = pg_client_1_config
+    let pg_client_1_fut = server
+        .connect()
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
             Ok(b.set_verify(SslVerifyMode::NONE))
-        })));
+        })))
+        .into_future();
 
-    let mut pg_client_2_config = server.pg_config_async();
-    let pg_client_2_fut = pg_client_2_config
+    let pg_client_2_fut = server
+        .connect()
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
             Ok(b.set_verify(SslVerifyMode::NONE))
-        })));
-    let client_fut = futures::future::join(pg_client_1_fut, pg_client_2_fut);
-    let (client_1_result, client_2_result) = server.runtime.block_on(client_fut);
+        })))
+        .into_future();
 
-    let (pg_client_1, pg_client_1_conn) = client_1_result.unwrap();
-    let (pg_client_2, pg_client_2_conn) = client_2_result.unwrap();
+    let (client_1_result, client_2_result) =
+        futures::future::join(pg_client_1_fut, pg_client_2_fut).await;
+    let pg_client_1 = client_1_result.unwrap();
+    let pg_client_2 = client_2_result.unwrap();
 
-    server.runtime.spawn_named(|| "pg-client-1", async move {
-        pg_client_1_conn.await.expect("connection 1 failed");
-    });
-    server.runtime.spawn_named(|| "pg-client-2", async move {
-        pg_client_2_conn.await.expect("connection 2 failed");
-    });
-
-    let frontegg_user_client_1 = server
-        .runtime
-        .block_on(pg_client_1.query_one("SELECT current_user", &[]))
+    let frontegg_user_client_1 = pg_client_1
+        .query_one("SELECT current_user", &[])
+        .await
         .unwrap()
         .get::<_, String>(0);
     assert_eq!(frontegg_user_client_1, frontegg_user);
 
-    let frontegg_user_client_2 = server
-        .runtime
-        .block_on(pg_client_2.query_one("SELECT current_user", &[]))
+    let frontegg_user_client_2 = pg_client_2
+        .query_one("SELECT current_user", &[])
+        .await
         .unwrap()
         .get::<_, String>(0);
     assert_eq!(frontegg_user_client_2, frontegg_user);
@@ -1783,24 +1810,24 @@ fn test_auth_deduplication() {
     assert_eq!(*frontegg_server.refreshes.lock().unwrap(), 1);
 
     // Both clients should still be queryable.
-    let frontegg_user_client_1_post_refresh = server
-        .runtime
-        .block_on(pg_client_1.query_one("SELECT current_user", &[]))
+    let frontegg_user_client_1_post_refresh = pg_client_1
+        .query_one("SELECT current_user", &[])
+        .await
         .unwrap()
         .get::<_, String>(0);
     assert_eq!(frontegg_user_client_1_post_refresh, frontegg_user);
 
-    let frontegg_user_client_2_post_refresh = server
-        .runtime
-        .block_on(pg_client_2.query_one("SELECT current_user", &[]))
+    let frontegg_user_client_2_post_refresh = pg_client_2
+        .query_one("SELECT current_user", &[])
+        .await
         .unwrap()
         .get::<_, String>(0);
     assert_eq!(frontegg_user_client_2_post_refresh, frontegg_user);
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_refresh_task_metrics() {
+async fn test_refresh_task_metrics() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1829,6 +1856,7 @@ fn test_refresh_task_metrics() {
         None,
     )
     .unwrap();
+
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.url.clone(),
@@ -1843,25 +1871,28 @@ fn test_refresh_task_metrics() {
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzp_{client_id}{secret}");
 
-    let config = test_util::Config::default()
+    let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
-        .with_metrics_registry(metrics_registry);
-    let server = test_util::start_server(config).unwrap();
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
 
-    let mut pg_client = server
-        .pg_config()
+    let pg_client = server
+        .connect()
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
             Ok(b.set_verify(SslVerifyMode::NONE))
         })))
+        .await
         .unwrap();
 
     assert_eq!(
         pg_client
             .query_one("SELECT current_user", &[])
+            .await
             .unwrap()
             .get::<_, String>(0),
         frontegg_user

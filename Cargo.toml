@@ -116,9 +116,7 @@ edition = "2021"
 rust-version = "1.74.0"
 
 [profile.dev]
-# TODO(gusywnn|benesch): incremental is still not reliable as of rust 1.72
-# in our workspace.
-incremental = false
+split-debuginfo = "unpacked"
 
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even

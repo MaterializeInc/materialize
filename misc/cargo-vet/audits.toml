@@ -1,6 +1,15 @@
 
 # cargo-vet audits file
 
+[criteria.maintained-and-necessary]
+description = """
+Certification of this crate means the reviewer has confirmed the crate is:
+- actively maintained
+- necessary and useful to Materialize
+- well-documented
+"""
+implies = "safe-to-deploy"
+
 [[audits.array-concat]]
 who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
@@ -14,32 +23,32 @@ version = "0.26.0"
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:b55e5b6256ad94bb9047890704a1eaf912a0c2d1"
-
-[[audits.differential-dataflow]]
-who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "0.12.0 -> 0.12.0@git:d9896ce1f322fb89c3e6955441fb2d2c2e07bc1d"
+version = "0.12.0@git:fca940b40e7827a9a639f99af45806100ef14954"
 
 [[audits.timely]]
-who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-delta = "0.12.0 -> 0.12.0@git:9adb32c061330b5a82876606141121362c7c659a"
+version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
+
+[[audits.timely]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
 
 [[audits.timely_bytes]]
-who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-delta = "0.12.0 -> 0.12.0@git:9adb32c061330b5a82876606141121362c7c659a"
+version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
 
 [[audits.timely_communication]]
-who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-delta = "0.12.0 -> 0.12.0@git:9adb32c061330b5a82876606141121362c7c659a"
+version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
 
 [[audits.timely_logging]]
-who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-delta = "0.12.0 -> 0.12.0@git:9adb32c061330b5a82876606141121362c7c659a"
+version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
 
 [[trusted.abomonation]]
 criteria = "safe-to-deploy"

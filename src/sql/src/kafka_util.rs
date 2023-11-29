@@ -45,6 +45,7 @@ pub fn validate_options_for_context<T: AstInfo>(
         let limited_to_context = match name {
             Acks => None,
             ClientId => None,
+            CompressionType => Some(Sink),
             EnableIdempotence => None,
             FetchMessageMaxBytes => None,
             GroupIdPrefix => None,
@@ -78,6 +79,7 @@ generate_extracted_config!(
     KafkaConfigOption,
     (Acks, String),
     (ClientId, String),
+    (CompressionType, String),
     (EnableIdempotence, bool),
     (FetchMessageMaxBytes, i32),
     (GroupIdPrefix, String),
@@ -113,6 +115,7 @@ impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
         KafkaConfigOptionExtracted {
             acks,
             client_id,
+            compression_type,
             enable_idempotence,
             fetch_message_max_bytes,
             isolation_level,
@@ -142,6 +145,7 @@ impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
 
         fill_options!(acks, "acks");
         fill_options!(client_id, "client.id");
+        fill_options!(compression_type, "compression.type");
         fill_options!(
             topic_metadata_refresh_interval_ms,
             "topic.metadata.refresh.interval.ms",

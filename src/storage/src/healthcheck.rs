@@ -16,125 +16,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::Debug;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::lattice::Lattice;
+use chrono::{DateTime, Utc};
 use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::PersistLocation;
-use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{GlobalId, RelationDesc, Timestamp};
-use mz_storage_types::sources::SourceData;
+use mz_repr::GlobalId;
+use mz_storage_client::client::StatusUpdate;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Enter, Map};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use tracing::{error, info, trace};
+use tracing::{error, info};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
-
-pub async fn write_to_persist(
-    collection_id: GlobalId,
-    new_status: &str,
-    new_error: Option<&str>,
-    hints: &BTreeSet<String>,
-    namespaced_errors: &BTreeMap<StatusNamespace, String>,
-    now: NowFn,
-    client: &PersistClient,
-    status_shard: ShardId,
-    relation_desc: &RelationDesc,
-    write_namespaced_map: bool,
-) {
-    let now_ms = now();
-    let row = mz_storage_client::healthcheck::pack_status_row(
-        collection_id,
-        new_status,
-        new_error,
-        hints,
-        // `pack_status_row` requires keys sorted by their string representation.
-        // This is technically an few extra allocations, but its relatively rare so
-        // we don't worry about it. Sorting it in a vec like with `Itertools::sorted`
-        // would also cost allocations.
-        &if write_namespaced_map {
-            namespaced_errors
-                .iter()
-                .map(|(ns, val)| (ns.to_string(), val))
-                .collect()
-        } else {
-            BTreeMap::new()
-        },
-        now_ms,
-    );
-
-    let mut handle = client
-        .open_writer(
-            status_shard,
-            Arc::new(relation_desc.clone()),
-            Arc::new(UnitSchema),
-            Diagnostics {
-                // TODO: plumb through the GlobalId of the status collection
-                shard_name: format!("status({})", collection_id),
-                handle_purpose: format!("healthcheck::write_to_persist {}", collection_id),
-            },
-        )
-        .await
-        .expect(
-            "Invalid usage of the persist \
-            client for collection {collection_id} status history shard",
-        );
-
-    let mut recent_upper = handle.upper().clone();
-    let mut append_ts = Timestamp::from(now_ms);
-    'retry_loop: loop {
-        // We don't actually care so much about the timestamp we append at; it's best-effort.
-        // Ensure that the append timestamp is not less than the current upper, and the new upper
-        // is past that timestamp. (Unless we've advanced to the empty antichain, but in
-        // that case we're already in trouble.)
-        for t in recent_upper.elements() {
-            append_ts.join_assign(t);
-        }
-        let mut new_upper = Antichain::from_elem(append_ts.step_forward());
-        new_upper.join_assign(&recent_upper);
-
-        let updates = vec![((SourceData(Ok(row.clone())), ()), append_ts, 1i64)];
-        let cas_result = handle
-            .compare_and_append(updates, recent_upper.clone(), new_upper)
-            .await;
-        match cas_result {
-            Ok(Ok(())) => break 'retry_loop,
-            Ok(Err(mismatch)) => {
-                recent_upper = mismatch.current;
-            }
-            Err(e) => {
-                panic!("Invalid usage of the persist client for collection {collection_id} status history shard: {e:?}");
-            }
-        }
-    }
-
-    handle.expire().await
-}
 
 /// How long to wait before initiating a `SuspendAndRestart` command, to
 /// prevent hot restart loops.
 const SUSPEND_AND_RESTART_DELAY: Duration = Duration::from_secs(30);
-
-/// Configuration for a specific index in an indexed health stream.
-pub(crate) struct ObjectHealthConfig {
-    /// The id of the object.
-    pub(crate) id: GlobalId,
-    /// The status schema for the object.
-    pub(crate) schema: &'static RelationDesc,
-    /// The (optional) location to write status updates.
-    pub(crate) status_shard: Option<ShardId>,
-    /// The location of `status_shard`.
-    pub(crate) persist_location: PersistLocation,
-}
 
 /// The namespace of the update. The `Ord` impl matter here, later variants are
 /// displayed over earlier ones.
@@ -290,36 +191,20 @@ impl OverallStatus {
     }
 }
 
-struct HealthState<'a> {
+struct HealthState {
     id: GlobalId,
-    persist_details: Option<(ShardId, &'a PersistClient)>,
     healths: PerWorkerHealthStatus,
-    schema: &'static RelationDesc,
     last_reported_status: Option<OverallStatus>,
     halt_with: Option<(StatusNamespace, HealthStatusUpdate)>,
 }
 
-impl<'a> HealthState<'a> {
-    fn new(
-        id: GlobalId,
-        status_shard: Option<ShardId>,
-        persist_location: PersistLocation,
-        persist_clients: &'a BTreeMap<PersistLocation, PersistClient>,
-        schema: &'static RelationDesc,
-        worker_count: usize,
-    ) -> HealthState<'a> {
-        let persist_details = match (status_shard, persist_clients.get(&persist_location)) {
-            (Some(shard), Some(persist_client)) => Some((shard, persist_client)),
-            _ => None,
-        };
-
+impl HealthState {
+    fn new(id: GlobalId, worker_count: usize) -> HealthState {
         HealthState {
             id,
-            persist_details,
             healths: PerWorkerHealthStatus {
                 errors_by_worker: vec![Default::default(); worker_count],
             },
-            schema,
             last_reported_status: None,
             halt_with: None,
         }
@@ -335,18 +220,15 @@ pub trait HealthOperator {
     async fn record_new_status(
         &self,
         collection_id: GlobalId,
+        ts: DateTime<Utc>,
         new_status: &str,
         new_error: Option<&str>,
         hints: &BTreeSet<String>,
         namespaced_errors: &BTreeMap<StatusNamespace, String>,
-        now: NowFn,
         // TODO(guswynn): not urgent:
         // Ideally this would be entirely included in the `DefaultWriter`, but that
         // requires a fairly heavy change to the `health_operator`, which hardcodes
         // some use of persist. For now we just leave it and ignore it in tests.
-        client: &PersistClient,
-        status_shard: ShardId,
-        relation_desc: &RelationDesc,
         write_namespaced_map: bool,
     );
     async fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>);
@@ -359,40 +241,42 @@ pub trait HealthOperator {
 }
 
 /// A default `HealthOperator` for use in normal cases.
-pub struct DefaultWriter(pub Rc<RefCell<dyn InternalCommandSender>>);
+pub struct DefaultWriter {
+    pub command_tx: Rc<RefCell<dyn InternalCommandSender>>,
+    pub updates: Rc<RefCell<Vec<StatusUpdate>>>,
+}
 
 #[async_trait::async_trait(?Send)]
 impl HealthOperator for DefaultWriter {
     async fn record_new_status(
         &self,
         collection_id: GlobalId,
+        ts: DateTime<Utc>,
         new_status: &str,
         new_error: Option<&str>,
         hints: &BTreeSet<String>,
         namespaced_errors: &BTreeMap<StatusNamespace, String>,
-        now: NowFn,
-        client: &PersistClient,
-        status_shard: ShardId,
-        relation_desc: &RelationDesc,
         write_namespaced_map: bool,
     ) {
-        write_to_persist(
-            collection_id,
-            new_status,
-            new_error,
-            hints,
-            namespaced_errors,
-            now,
-            client,
-            status_shard,
-            relation_desc,
-            write_namespaced_map,
-        )
-        .await
+        self.updates.borrow_mut().push(StatusUpdate {
+            id: collection_id,
+            timestamp: ts,
+            status: new_status.to_string(),
+            error: new_error.map(|e| e.to_string()),
+            hints: hints.clone(),
+            namespaced_errors: if write_namespaced_map {
+                namespaced_errors
+                    .iter()
+                    .map(|(ns, val)| (ns.to_string(), val.clone()))
+                    .collect()
+            } else {
+                BTreeMap::new()
+            },
+        });
     }
 
     async fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>) {
-        self.0
+        self.command_tx
             .borrow_mut()
             .broadcast(InternalStorageCommand::SuspendAndRestart {
                 // Suspend and restart is expected to operate on the primary object and
@@ -425,7 +309,6 @@ pub struct HealthStatusMessage {
 /// `configs`'s keys.
 pub(crate) fn health_operator<'g, G, P>(
     scope: &Child<'g, G, mz_repr::Timestamp>,
-    persist_clients: Arc<PersistClientCache>,
     now: NowFn,
     // A set of id's that should be marked as `HealthStatusUpdate::starting()` during startup.
     mark_starting: BTreeSet<GlobalId>,
@@ -436,10 +319,8 @@ pub(crate) fn health_operator<'g, G, P>(
     object_type: &'static str,
     // An indexed stream of health updates. Indexes are configured in `configs`.
     health_stream: &Stream<G, HealthStatusMessage>,
-    // A configuration per _index_. Indexes support things like subsources, and allow the
-    // `health_operator` to understand where each sub-object should have its status written down
-    // at.
-    configs: BTreeMap<usize, ObjectHealthConfig>,
+    // A map of index to collection id that we intend to report on.
+    configs: BTreeMap<usize, GlobalId>,
     // An impl of `HealthOperator` that configures the output behavior of this operator.
     health_operator_impl: P,
     // Whether or not we should actually write namespaced errors in the `details` column.
@@ -476,100 +357,31 @@ where
         Exchange::new(move |_| u64::cast_from(chosen_worker_id)),
     );
 
-    // Construct a minimal number of persist clients
-    let persist_locations: BTreeSet<_> = configs
-        .values()
-        .filter_map(
-            |ObjectHealthConfig {
-                 id,
-                 status_shard,
-                 persist_location,
-                 ..
-             }| {
-                if is_active_worker {
-                    match &status_shard {
-                        Some(status_shard) => {
-                            info!("Health for {object_type} {id} being written to {status_shard}");
-                            Some(persist_location.clone())
-                        }
-                        None => {
-                            trace!(
-                                "Health for {object_type} {id} not being written to status shard"
-                            );
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            },
-        )
-        .collect();
-
     let button = health_op.build(move |mut _capabilities| async move {
-        // Convert the persist locations into persist clients
-        let mut persist_clients_per_location = BTreeMap::new();
-        for persist_location in persist_locations {
-            persist_clients_per_location.insert(
-                persist_location.clone(),
-                persist_clients.open(persist_location).await.expect(
-                    "error creating persist \
-                            client for Healthchecker",
-                ),
-            );
-        }
-
         let mut health_states: BTreeMap<_, _> = configs
             .into_iter()
-            .map(
-                |(
-                    output_idx,
-                    ObjectHealthConfig {
-                        id,
-                        status_shard,
-                        persist_location,
-                        schema,
-                        ..
-                    },
-                )| {
-                    (
-                        output_idx,
-                        HealthState::new(
-                            id,
-                            status_shard,
-                            persist_location,
-                            &persist_clients_per_location,
-                            schema,
-                            worker_count,
-                        ),
-                    )
-                },
-            )
+            .map(|(output_idx, id)| (output_idx, HealthState::new(id, worker_count)))
             .collect();
 
         // Write the initial starting state to the status shard for all managed objects
         if is_active_worker {
             for state in health_states.values_mut() {
                 if mark_starting.contains(&state.id) {
-                    if let Some((status_shard, persist_client)) = state.persist_details {
-                        let status = OverallStatus::Starting;
-                        health_operator_impl
-                            .record_new_status(
-                                state.id,
-                                status.name(),
-                                status.error(),
-                                status.hints().unwrap_or(&BTreeSet::new()),
-                                status.errors().unwrap_or(&BTreeMap::new()),
-                                now.clone(),
-                                persist_client,
-                                status_shard,
-                                state.schema,
-                                write_namespaced_map,
-                            )
-                            .await;
+                    let status = OverallStatus::Starting;
+                    let timestamp = mz_ore::now::to_datetime(now());
+                    health_operator_impl
+                        .record_new_status(
+                            state.id,
+                            timestamp,
+                            status.name(),
+                            status.error(),
+                            status.hints().unwrap_or(&BTreeSet::new()),
+                            status.errors().unwrap_or(&BTreeMap::new()),
+                            write_namespaced_map,
+                        )
+                        .await;
 
-                        state.last_reported_status = Some(status);
-                    }
+                    state.last_reported_status = Some(status);
                 }
             }
         }
@@ -626,8 +438,6 @@ where
                     let HealthState {
                         id,
                         healths,
-                        persist_details,
-                        schema,
                         last_reported_status,
                         halt_with,
                     } = health_states
@@ -642,22 +452,19 @@ where
                                   {last_reported_status:?} -> {:?}",
                             Some(&new_status)
                         );
-                        if let Some((status_shard, persist_client)) = persist_details {
-                            health_operator_impl
-                                .record_new_status(
-                                    *id,
-                                    new_status.name(),
-                                    new_status.error(),
-                                    new_status.hints().unwrap_or(&BTreeSet::new()),
-                                    new_status.errors().unwrap_or(&BTreeMap::new()),
-                                    now.clone(),
-                                    persist_client,
-                                    *status_shard,
-                                    schema,
-                                    write_namespaced_map,
-                                )
-                                .await;
-                        }
+
+                        let timestamp = mz_ore::now::to_datetime(now());
+                        health_operator_impl
+                            .record_new_status(
+                                *id,
+                                timestamp,
+                                new_status.name(),
+                                new_status.error(),
+                                new_status.hints().unwrap_or(&BTreeSet::new()),
+                                new_status.errors().unwrap_or(&BTreeMap::new()),
+                                write_namespaced_map,
+                            )
+                            .await;
 
                         *last_reported_status = Some(new_status.clone());
                     }
@@ -1132,8 +939,6 @@ mod tests {
     use timely::dataflow::operators::exchange::Exchange;
     use timely::dataflow::Scope;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-    // Doesn't really matter which we use
-    use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
 
     /// A status to assert.
     #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1174,14 +979,11 @@ mod tests {
         async fn record_new_status(
             &self,
             collection_id: GlobalId,
+            _ts: DateTime<Utc>,
             new_status: &str,
             new_error: Option<&str>,
             hints: &BTreeSet<String>,
             namespaced_errors: &BTreeMap<StatusNamespace, String>,
-            _now: NowFn,
-            _client: &PersistClient,
-            _status_shard: ShardId,
-            _relation_desc: &RelationDesc,
             write_namespaced_map: bool,
         ) {
             let _ = self.sender.send(StatusToAssert {
@@ -1256,26 +1058,12 @@ mod tests {
                             let input = producer(root_scope.clone(), in_rx);
                             Box::leak(Box::new(health_operator(
                                 scope,
-                                Arc::new(PersistClientCache::new_no_metrics()),
                                 mz_ore::now::SYSTEM_TIME.clone(),
                                 inputs.keys().copied().collect(),
                                 *inputs.first_key_value().unwrap().0,
                                 "source_test",
                                 &input,
-                                inputs
-                                    .iter()
-                                    .map(|(id, index)| {
-                                        (
-                                            *index,
-                                            ObjectHealthConfig {
-                                                id: *id,
-                                                schema: &*MZ_SOURCE_STATUS_HISTORY_DESC,
-                                                status_shard: Some(ShardId::new()),
-                                                persist_location: PersistLocation::new_in_mem(),
-                                            },
-                                        )
-                                    })
-                                    .collect(),
+                                inputs.iter().map(|(id, index)| (*index, *id)).collect(),
                                 TestWriter {
                                     sender: out_tx,
                                     input_mapping: inputs,

@@ -14,31 +14,31 @@ use std::rc::Rc;
 
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounterVec,
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounterVec, IntGaugeVec,
     MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::GlobalId;
 use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
-use prometheus::core::AtomicU64;
+use prometheus::core::{AtomicI64, AtomicU64};
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
 
-use crate::sink::metrics::SinkBaseMetrics;
-use crate::source::metrics::SourceBaseMetrics;
+// Note(guswynn): ordinarily these metric structs would be in the `metrics` modules, but we
+// put them here so they can be near the user-facing definitions as well.
 
 #[derive(Clone, Debug)]
-pub(crate) struct SourceStatisticsMetricsDefinitions {
+pub(crate) struct SourceStatisticsMetricDefs {
     pub(crate) snapshot_committed: UIntGaugeVec,
     pub(crate) messages_received: IntCounterVec,
     pub(crate) updates_staged: IntCounterVec,
     pub(crate) updates_committed: IntCounterVec,
     pub(crate) bytes_received: IntCounterVec,
     pub(crate) envelope_state_bytes: UIntGaugeVec,
-    pub(crate) envelope_state_count: UIntGaugeVec,
-    pub(crate) rehydration_latency_ms: UIntGaugeVec,
+    pub(crate) envelope_state_records: UIntGaugeVec,
+    pub(crate) rehydration_latency_ms: IntGaugeVec,
 }
 
-impl SourceStatisticsMetricsDefinitions {
+impl SourceStatisticsMetricDefs {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             snapshot_committed: registry.register(metric!(
@@ -71,8 +71,8 @@ impl SourceStatisticsMetricsDefinitions {
                 help: "The number of bytes of the source envelope state kept. This will be specific to the envelope in use.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
             )),
-            envelope_state_count: registry.register(metric!(
-                name: "mz_source_envelope_state_count",
+            envelope_state_records: registry.register(metric!(
+                name: "mz_source_envelope_state_records",
                 help: "The number of records in the source envelope state. This will be specific to the envelope in use",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
             )),
@@ -94,104 +94,80 @@ pub struct SourceStatisticsMetrics {
     pub(crate) updates_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) bytes_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) envelope_state_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) envelope_state_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) rehydration_latency_ms: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) envelope_state_records: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) rehydration_latency_ms: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
     pub(crate) fn new(
+        defs: &SourceStatisticsMetricDefs,
         id: GlobalId,
         worker_id: usize,
-        metrics: &SourceBaseMetrics,
         parent_source_id: GlobalId,
         shard_id: &mz_persist_client::ShardId,
     ) -> SourceStatisticsMetrics {
         let shard = shard_id.to_string();
 
         SourceStatisticsMetrics {
-            snapshot_committed: metrics
-                .source_statistics
-                .snapshot_committed
-                .get_delete_on_drop_gauge(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard.clone(),
-                ]),
-            messages_received: metrics
-                .source_statistics
-                .messages_received
-                .get_delete_on_drop_counter(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                ]),
-            updates_staged: metrics
-                .source_statistics
-                .updates_staged
-                .get_delete_on_drop_counter(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard.clone(),
-                ]),
-            updates_committed: metrics
-                .source_statistics
-                .updates_committed
-                .get_delete_on_drop_counter(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard.clone(),
-                ]),
-            bytes_received: metrics
-                .source_statistics
-                .bytes_received
-                .get_delete_on_drop_counter(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                ]),
-            envelope_state_bytes: metrics
-                .source_statistics
-                .envelope_state_bytes
-                .get_delete_on_drop_gauge(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard.clone(),
-                ]),
-            envelope_state_count: metrics
-                .source_statistics
-                .envelope_state_count
-                .get_delete_on_drop_gauge(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard.clone(),
-                ]),
-            rehydration_latency_ms: metrics
-                .source_statistics
-                .rehydration_latency_ms
-                .get_delete_on_drop_gauge(vec![
-                    id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    shard,
-                ]),
+            snapshot_committed: defs.snapshot_committed.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            messages_received: defs.messages_received.get_delete_on_drop_counter(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+            ]),
+            updates_staged: defs.updates_staged.get_delete_on_drop_counter(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            updates_committed: defs.updates_committed.get_delete_on_drop_counter(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            bytes_received: defs.bytes_received.get_delete_on_drop_counter(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+            ]),
+            envelope_state_bytes: defs.envelope_state_bytes.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            envelope_state_records: defs.envelope_state_records.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard.clone(),
+            ]),
+            rehydration_latency_ms: defs.rehydration_latency_ms.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+                shard,
+            ]),
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SinkStatisticsMetricsDefinitions {
+pub(crate) struct SinkStatisticsMetricDefs {
     pub(crate) messages_staged: IntCounterVec,
     pub(crate) messages_committed: IntCounterVec,
     pub(crate) bytes_staged: IntCounterVec,
     pub(crate) bytes_committed: IntCounterVec,
 }
 
-impl SinkStatisticsMetricsDefinitions {
+impl SinkStatisticsMetricDefs {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             messages_staged: registry.register(metric!(
@@ -229,25 +205,21 @@ pub struct SinkStatisticsMetrics {
 
 impl SinkStatisticsMetrics {
     pub(crate) fn new(
+        defs: &SinkStatisticsMetricDefs,
         id: GlobalId,
         worker_id: usize,
-        metrics: &SinkBaseMetrics,
     ) -> SinkStatisticsMetrics {
         SinkStatisticsMetrics {
-            messages_staged: metrics
-                .sink_statistics
+            messages_staged: defs
                 .messages_staged
                 .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
-            messages_committed: metrics
-                .sink_statistics
+            messages_committed: defs
                 .messages_committed
                 .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
-            bytes_staged: metrics
-                .sink_statistics
+            bytes_staged: defs
                 .bytes_staged
                 .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
-            bytes_committed: metrics
-                .sink_statistics
+            bytes_committed: defs
                 .bytes_committed
                 .get_delete_on_drop_counter(vec![id.to_string(), worker_id.to_string()]),
         }
@@ -301,7 +273,7 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
     pub(crate) fn new(
         id: GlobalId,
         worker_id: usize,
-        metrics: &SourceBaseMetrics,
+        metrics: &SourceStatisticsMetricDefs,
         parent_source_id: GlobalId,
         shard_id: &mz_persist_client::ShardId,
     ) -> Self {
@@ -317,10 +289,10 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
                     updates_committed: 0,
                     bytes_received: 0,
                     envelope_state_bytes: 0,
-                    envelope_state_count: 0,
+                    envelope_state_records: 0,
                     rehydration_latency_ms: None,
                 },
-                SourceStatisticsMetrics::new(id, worker_id, metrics, parent_source_id, shard_id),
+                SourceStatisticsMetrics::new(metrics, id, worker_id, parent_source_id, shard_id),
             ))),
         }
     }
@@ -407,43 +379,43 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
         cur.2.envelope_state_bytes.set(value);
     }
 
-    /// Update the `envelope_state_count` stat.
+    /// Update the `envelope_state_records` stat.
     /// A positive value will add and a negative value will subtract.
-    pub fn update_envelope_state_count_by(&self, value: i64) {
+    pub fn update_envelope_state_records_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
-        if let Some(updated) = cur.1.envelope_state_count.checked_add_signed(value) {
-            cur.1.envelope_state_count = updated;
-            cur.2.envelope_state_count.set(updated);
+        if let Some(updated) = cur.1.envelope_state_records.checked_add_signed(value) {
+            cur.1.envelope_state_records = updated;
+            cur.2.envelope_state_records.set(updated);
         } else {
-            let envelope_state_count = cur.1.envelope_state_count;
+            let envelope_state_records = cur.1.envelope_state_records;
             tracing::warn!(
-                "Unexpected u64 overflow while updating envelope_state_count value {} with {}",
-                envelope_state_count,
+                "Unexpected u64 overflow while updating envelope_state_records value {} with {}",
+                envelope_state_records,
                 value
             );
-            cur.1.envelope_state_count = 0;
-            cur.2.envelope_state_count.set(0);
+            cur.1.envelope_state_records = 0;
+            cur.2.envelope_state_records.set(0);
         }
     }
 
-    /// Set the `envelope_state_count` to the given value
-    pub fn set_envelope_state_count(&self, value: i64) {
+    /// Set the `envelope_state_records` to the given value
+    pub fn set_envelope_state_records(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         let value = if value < 0 {
             tracing::warn!(
-                "Unexpected negative value for envelope_state_count {}",
+                "Unexpected negative value for envelope_state_records {}",
                 value
             );
             0
         } else {
             value.unsigned_abs()
         };
-        cur.1.envelope_state_count = value;
-        cur.2.envelope_state_count.set(value);
+        cur.1.envelope_state_records = value;
+        cur.2.envelope_state_records.set(value);
     }
 
     /// Set the `rehydration_latency_ms` to the given value.
-    pub fn set_rehydration_latency_ms(&self, value: u64) {
+    pub fn set_rehydration_latency_ms(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         cur.1.rehydration_latency_ms = Some(value);
         cur.2.rehydration_latency_ms.set(value);
@@ -451,7 +423,7 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
 }
 
 impl StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics> {
-    pub(crate) fn new(id: GlobalId, worker_id: usize, metrics: &SinkBaseMetrics) -> Self {
+    pub(crate) fn new(id: GlobalId, worker_id: usize, metrics: &SinkStatisticsMetricDefs) -> Self {
         Self {
             stats: Rc::new(RefCell::new((
                 // We have no snapshot metrics for sinks as of now.
@@ -464,7 +436,7 @@ impl StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics> {
                     bytes_staged: 0,
                     bytes_committed: 0,
                 },
-                SinkStatisticsMetrics::new(id, worker_id, metrics),
+                SinkStatisticsMetrics::new(metrics, id, worker_id),
             ))),
         }
     }

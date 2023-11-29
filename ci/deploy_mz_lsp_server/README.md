@@ -5,7 +5,7 @@ You can try the process by running the following commands:
 
 ```bash
 # Set a tag version.
-export BUILDKITE_TAG=x.y.z
+export BUILDKITE_TAG=mz-lsp-server-vx.y.z
 
 # macOS
 bin/pyactivate -m ci.deploy_mz_lsp_server.macos

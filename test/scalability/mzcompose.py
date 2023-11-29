@@ -22,6 +22,8 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.benchmark_executor import BenchmarkExecutor
 from materialize.scalability.benchmark_result import BenchmarkResult
+from materialize.scalability.comparison_outcome import ComparisonOutcome
+from materialize.scalability.df.df_totals import DfTotalsExtended
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
     MaterializeContainer,
@@ -36,7 +38,6 @@ from materialize.scalability.plot.plot import (
     plot_duration_by_endpoints_for_workload,
     plot_tps_per_connections,
 )
-from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
@@ -50,9 +51,6 @@ SERVICES = [
         image="materialize/materialized:latest",
         sanity_restart=False,
         catalog_store="stash",
-        # TODO(def-,aljoscha) Switch this to "postgres" before #22029 is enabled in production
-        # Also verify that there is no regression when the "other" side uses catalog ts oracle and "this" uses postgres ts oracle
-        additional_system_parameter_defaults={"timestamp_oracle": "catalog"},
     ),
     Postgres(),
 ]
@@ -179,7 +177,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         object_count=args.object_count,
     )
 
-    result_analyzer = create_result_analyzer(args)
+    regression_threshold = args.regression_threshold
+    result_analyzer = create_result_analyzer(regression_threshold)
 
     workload_names = [workload_cls.__name__ for workload_cls in workload_classes]
     df_workloads = pd.DataFrame(data={"workload": workload_names})
@@ -205,8 +204,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     upload_plots_to_buildkite()
 
     report_regression_result(
-        baseline_endpoint, benchmark_result.overall_regression_outcome
+        baseline_endpoint,
+        regression_threshold,
+        benchmark_result.overall_comparison_outcome,
     )
+
+    if benchmark_result.overall_comparison_outcome.has_regressions():
+        sys.exit(1)
 
 
 def validate_and_adjust_targets(
@@ -278,7 +282,8 @@ def get_workload_classes(args: argparse.Namespace) -> list[type[Workload]]:
 
 def report_regression_result(
     baseline_endpoint: Endpoint | None,
-    outcome: RegressionOutcome,
+    regression_threshold: float,
+    outcome: ComparisonOutcome,
 ) -> None:
     if baseline_endpoint is None:
         print("No regression detection because '--regression-against' param is not set")
@@ -286,23 +291,24 @@ def report_regression_result(
 
     baseline_desc = endpoint_name_to_description(baseline_endpoint.try_load_version())
 
-    if outcome.has_regressions():
+    if outcome.has_regressions() or outcome.has_significant_improvements():
         print(
-            f"ERROR: The following regressions were detected (baseline: {baseline_desc}):\n{outcome}"
+            f"{'ERROR' if outcome.has_regressions() else 'INFO'}: "
+            f"The following scalability changes were detected "
+            f"(threshold: {regression_threshold}, baseline: {baseline_desc}):\n"
+            f"{outcome.to_description()}"
         )
 
         if buildkite.is_in_buildkite():
             upload_regressions_to_buildkite(outcome)
+            upload_significant_improvements_to_buildkite(outcome)
 
-        sys.exit(1)
     else:
-        print("No regressions were detected.")
+        print("No scalability changes were detected.")
 
 
-def create_result_analyzer(args: argparse.Namespace) -> ResultAnalyzer:
-    return DefaultResultAnalyzer(
-        max_deviation_as_percent_decimal=args.regression_threshold
-    )
+def create_result_analyzer(regression_threshold: float) -> ResultAnalyzer:
+    return DefaultResultAnalyzer(max_deviation_as_percent_decimal=regression_threshold)
 
 
 def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) -> None:
@@ -361,13 +367,26 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         )
 
 
-def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
-    if not outcome.has_regressions():
-        return
+def upload_regressions_to_buildkite(outcome: ComparisonOutcome) -> None:
+    if outcome.has_regressions():
+        _upload_scalability_changes_to_buildkite(
+            outcome.regression_df, paths.regressions_csv()
+        )
 
-    outcome.regression_data.to_csv(paths.regressions_csv())
+
+def upload_significant_improvements_to_buildkite(outcome: ComparisonOutcome) -> None:
+    if outcome.has_significant_improvements():
+        _upload_scalability_changes_to_buildkite(
+            outcome.significant_improvement_df, paths.significant_improvements_csv()
+        )
+
+
+def _upload_scalability_changes_to_buildkite(
+    scalability_changes: DfTotalsExtended, file_path: Path
+) -> None:
+    scalability_changes.to_csv(file_path)
     buildkite.upload_artifact(
-        paths.regressions_csv().relative_to(paths.RESULTS_DIR),
+        file_path.relative_to(paths.RESULTS_DIR),
         cwd=paths.RESULTS_DIR,
     )
 

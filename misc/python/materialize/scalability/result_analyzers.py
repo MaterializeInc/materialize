@@ -8,10 +8,14 @@
 # by the Apache License, Version 2.0.
 
 
+from materialize.scalability.comparison_outcome import ComparisonOutcome
 from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import (
     ResultAnalyzer,
+)
+from materialize.scalability.scalability_change import (
+    Regression,
+    ScalabilityImprovement,
 )
 from materialize.scalability.workload_result import WorkloadResult
 
@@ -20,29 +24,46 @@ class DefaultResultAnalyzer(ResultAnalyzer):
     def __init__(self, max_deviation_as_percent_decimal: float):
         self.max_deviation_as_percent_decimal = max_deviation_as_percent_decimal
 
-    def determine_regression_in_workload(
+    def perform_comparison_in_workload(
         self,
         workload_name: str,
         baseline_endpoint: Endpoint,
         other_endpoint: Endpoint,
         regression_baseline_result: WorkloadResult,
         other_result: WorkloadResult,
-    ) -> RegressionOutcome:
+    ) -> ComparisonOutcome:
         # tps = transactions per seconds (higher is better)
 
         merged_data = regression_baseline_result.df_totals.merge(other_result.df_totals)
         tps_per_endpoint_data = merged_data.to_enriched_result_frame(
             baseline_endpoint.try_load_version(), other_endpoint.try_load_version()
         )
-        entries_exceeding_threshold = tps_per_endpoint_data.to_filtered_with_threshold(
-            self.max_deviation_as_percent_decimal
+        entries_worse_than_threshold = tps_per_endpoint_data.to_filtered_with_threshold(
+            self.max_deviation_as_percent_decimal,
+            match_results_better_than_baseline=False,
+        )
+        entries_better_than_threshold = (
+            tps_per_endpoint_data.to_filtered_with_threshold(
+                self.max_deviation_as_percent_decimal,
+                match_results_better_than_baseline=True,
+            )
         )
 
-        regression_outcome = RegressionOutcome()
-        regressions = entries_exceeding_threshold.to_regressions(
+        comparison_outcome = ComparisonOutcome()
+        regressions = entries_worse_than_threshold.to_scalability_change(
+            Regression,
             workload_name,
             other_endpoint,
         )
-        regression_outcome.regressions.extend(regressions)
-        regression_outcome.append_raw_data(entries_exceeding_threshold)
-        return regression_outcome
+        improvements = entries_better_than_threshold.to_scalability_change(
+            ScalabilityImprovement,
+            workload_name,
+            other_endpoint,
+        )
+        comparison_outcome.regressions.extend(regressions)
+        comparison_outcome.significant_improvements.extend(improvements)
+        comparison_outcome.append_regression_df(entries_worse_than_threshold)
+        comparison_outcome.append_significant_improvement_df(
+            entries_better_than_threshold
+        )
+        return comparison_outcome

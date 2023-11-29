@@ -78,7 +78,7 @@ ALTER SYSTEM SET enable_unstable_dependencies = true;
 
 > CREATE TABLE panic_table (f1 TEXT);
 
-> INSERT INTO panic_table VALUES ('panic!');
+> INSERT INTO panic_table VALUES ('forced panic');
 
 ! INSERT INTO panic_table SELECT mz_internal.mz_panic(f1) FROM panic_table;
 contains: statement timeout

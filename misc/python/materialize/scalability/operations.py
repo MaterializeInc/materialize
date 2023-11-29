@@ -36,6 +36,11 @@ class SelectCount(Operation):
         return "SELECT COUNT(*) FROM t1;"
 
 
+class SelectCountInMv(Operation):
+    def sql_statement(self) -> str:
+        return "SELECT count FROM mv1;"
+
+
 class SelectUnionAll(Operation):
     def sql_statement(self) -> str:
         return "SELECT * FROM t1 UNION ALL SELECT * FROM t1;"
