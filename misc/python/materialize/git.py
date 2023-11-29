@@ -278,6 +278,12 @@ def is_on_main_branch() -> bool:
     return get_branch_name() == "main"
 
 
+def contains_commit(commit_sha: str, target: str = "HEAD") -> bool:
+    command = ["git", "merge-base", "--is-ancestor", commit_sha, target]
+    return_code = spawn.run_and_get_return_code(command)
+    return return_code == 0
+
+
 def get_tagged_release_version(version_type: type[VERSION_TYPE]) -> VERSION_TYPE | None:
     """
     This returns the release version if exactly this commit is tagged.
