@@ -140,7 +140,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     async fn trace(&mut self) -> Result<Trace, CatalogError>;
 
     /// Politely releases all external resources that can only be released in an async context.
-    async fn expire(self);
+    async fn expire(self: Box<Self>);
 }
 
 // TODO(jkosh44) No method should take &mut self, but due to stash implementations we need it.

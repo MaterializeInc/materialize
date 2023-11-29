@@ -533,7 +533,7 @@ impl OpenableDurableCatalogState for PersistHandle {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn expire(self) {
+    async fn expire(self: Box<Self>) {
         self.read_handle.expire().await;
         self.write_handle.expire().await;
     }

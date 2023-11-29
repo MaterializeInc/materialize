@@ -410,6 +410,7 @@ impl Listeners {
 
             if !openable_adapter_storage.is_initialized().await? {
                 tracing::info!("Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader");
+                openable_adapter_storage.expire().await;
                 break 'leader_promotion;
             }
             // TODO: once all catalogs have a deploy_generation, don't need to handle the Option
@@ -452,7 +453,9 @@ impl Listeners {
                 }
             } else if catalog_generation == Some(deploy_generation) {
                 tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
+                openable_adapter_storage.expire().await;
             } else {
+                openable_adapter_storage.expire().await;
                 mz_ore::halt!("Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically");
             }
         }

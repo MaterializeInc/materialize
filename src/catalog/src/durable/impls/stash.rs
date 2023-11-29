@@ -411,7 +411,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
         })
     }
 
-    async fn expire(self) {
+    async fn expire(self: Box<Self>) {
         // Nothing to release in the stash.
     }
 }
@@ -1152,7 +1152,7 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
         self.openable_connection.trace().await
     }
 
-    async fn expire(self) {
+    async fn expire(self: Box<Self>) {
         self.openable_connection.expire().await
     }
 }

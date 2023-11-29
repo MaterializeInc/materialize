@@ -160,7 +160,7 @@ where
         panic!("ShadowCatalog is not used for catalog-debug tool");
     }
 
-    async fn expire(self) {
+    async fn expire(self: Box<Self>) {
         futures::future::join(self.stash.expire(), self.persist.expire()).await;
     }
 }
