@@ -1833,7 +1833,7 @@ pub async fn run_string(
     // Transactions are currently relatively slow. Since sqllogictest runs in a single connection
     // there should be no difference in having longer running transactions.
     let mut in_transaction = false;
-    writeln!(runner.config.stdout, "==> {}", source);
+    writeln!(runner.config.stdout, "--- {}", source);
 
     for record in parser.parse_records()? {
         // In maximal-verbosity mode, print the query before attempting to run
@@ -1910,7 +1910,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
     let mut buf = RewriteBuffer::new(&input);
 
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
-    writeln!(runner.config.stdout, "==> {}", filename.display());
+    writeln!(runner.config.stdout, "--- {}", filename.display());
     let mut in_transaction = false;
 
     fn append_values_output(
