@@ -2249,7 +2249,7 @@ fn test_leader_promotion() {
         .unsafe_mode()
         .data_directory(tmpdir.path());
     {
-        // start with a stash with no deploy generation to match current production
+        // start with a catalog with no deploy generation to match current production
         let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client.simple_query("SELECT 1").unwrap();
