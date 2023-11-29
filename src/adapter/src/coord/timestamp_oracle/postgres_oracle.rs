@@ -291,8 +291,12 @@ where
 
             let txn = client.transaction().await?;
 
+            // Using `table_schema = CURRENT_SCHEMA` makes sure we only include
+            // tables that are queryable by us. Otherwise this check might
+            // return true but then the query below fails with a confusing
+            // "table does not exist" error.
             let q = r#"
-            SELECT EXISTS (SELECT * FROM information_schema.tables where table_name = 'timestamp_oracle');
+            SELECT EXISTS (SELECT * FROM information_schema.tables WHERE table_name = 'timestamp_oracle' AND table_schema = CURRENT_SCHEMA);
         "#;
             let statement = txn.prepare(q).await?;
             let exists_row = txn.query_one(&statement, &[]).await?;
