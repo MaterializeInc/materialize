@@ -1615,7 +1615,7 @@ write_action_list = ActionList(
         (HttpPostAction, 50),
         (CommitRollbackAction, 10),
         (ReconnectAction, 1),
-        (SourceInsertAction, 100),
+        (SourceInsertAction, 50),
     ],
     autocommit=False,
 )

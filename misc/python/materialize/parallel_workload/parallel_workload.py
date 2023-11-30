@@ -146,7 +146,7 @@ def run(
     for i in range(num_threads):
         weights: list[float]
         if complexity == Complexity.DDL:
-            weights = [60, 30, 30, 30, 10]
+            weights = [60, 30, 30, 30, 100]
         elif complexity == Complexity.DML:
             weights = [60, 30, 30, 30, 0]
         elif complexity == Complexity.Read:
@@ -180,7 +180,7 @@ def run(
         )
         thread_name = f"worker_{i}"
         print(
-            f"{thread_name}: {', '.join(action_class.__name__ for action_class in action_list.action_classes)}"
+            f"{thread_name}: {', '.join(action_class.__name__.removesuffix('Action') for action_class in action_list.action_classes)}"
         )
         workers.append(worker)
 
