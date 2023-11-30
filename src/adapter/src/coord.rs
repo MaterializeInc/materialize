@@ -1854,22 +1854,35 @@ impl Coordinator {
         // need to provide output starting from their `since`s, so these serve as upper bounds for
         // our `as_of`.
         let mut max_as_of = Antichain::new();
-        for mv_id in dependent_matviews {
-            let since = self.storage_implied_capability(mv_id);
-            let upper = self.storage_write_frontier(mv_id);
+        for mv_id in &dependent_matviews {
+            let since = self.storage_implied_capability(*mv_id);
+            let upper = self.storage_write_frontier(*mv_id);
             max_as_of.meet_assign(&since.join(upper));
         }
 
-        assert!(
+        mz_ore::soft_assert!(
             PartialOrder::less_equal(&min_as_of, &max_as_of),
-            "error bootrapping index `as_of`: min_as_of {:?} greater than max_as_of {:?}",
+            "error bootrapping index `as_of`: \
+             min_as_of {:?} greater than max_as_of {:?} \
+             (import_ids={}, export_ids={}, dependent_matviews={:?})",
             min_as_of.elements(),
             max_as_of.elements(),
+            dataflow.display_import_ids(),
+            dataflow.display_export_ids(),
+            dependent_matviews,
         );
 
-        let mut as_of = min_as_of.clone();
-        as_of.join_assign(&max_compaction_frontier);
-        as_of.meet_assign(&max_as_of);
+        // Ensure that we never select an `as_of` that's less than `min_as_of`,
+        // even if that means selecting an `as_of` that's greater than `max_as_of`.
+        // The former makes environmentd crash, the latter "only" leads to correctness bugs.
+        let as_of = if PartialOrder::less_equal(&min_as_of, &max_as_of) {
+            let mut as_of = min_as_of.clone();
+            as_of.join_assign(&max_compaction_frontier);
+            as_of.meet_assign(&max_as_of);
+            as_of
+        } else {
+            min_as_of.clone()
+        };
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
