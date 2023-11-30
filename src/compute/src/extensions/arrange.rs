@@ -455,32 +455,32 @@ where
     }
 }
 
-impl<G, K, T, R> ArrangementSize for Arranged<G, TraceAgent<RowKeySpine<K, T, R>>>
-where
-    G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord,
-    K: Data + Columnation,
-    T: Lattice + Timestamp + Columnation + HeapSize,
-    R: Semigroup + Columnation,
-    Vec<(T, R)>: HeapSize,
-{
-    fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
-            let (mut heap_size, mut heap_capacity, mut heap_allocations) = (0, 0, 0);
-            let mut heap_callback = |siz, cap, alc| {
-                heap_size += siz;
-                heap_capacity += cap;
-                heap_allocations += alc;
-            };
-
-            trace.map_batches(|batch| {
-                batch.layer.offs.estimate_size(&mut heap_callback);
-                batch.layer.vals.vals.estimate_size(&mut heap_callback);
-
-                let mut region_callback = |siz, cap| heap_callback(siz, cap, usize::from(cap > 0));
-                batch.layer.keys.heap_size(&mut region_callback);
-            });
-            (heap_size, heap_capacity, heap_allocations)
-        })
-    }
-}
+// impl<G, K, T, R> ArrangementSize for Arranged<G, TraceAgent<RowKeySpine<K, T, R>>>
+// where
+//     G: Scope<Timestamp = T>,
+//     G::Timestamp: Lattice + Ord,
+//     K: Data + Columnation,
+//     T: Lattice + Timestamp + Columnation + HeapSize,
+//     R: Semigroup + Columnation,
+//     Vec<(T, R)>: HeapSize,
+// {
+//     fn log_arrangement_size(self) -> Self {
+//         log_arrangement_size_inner(self, |trace| {
+//             let (mut heap_size, mut heap_capacity, mut heap_allocations) = (0, 0, 0);
+//             let mut heap_callback = |siz, cap, alc| {
+//                 heap_size += siz;
+//                 heap_capacity += cap;
+//                 heap_allocations += alc;
+//             };
+//
+//             trace.map_batches(|batch| {
+//                 batch.layer.offs.estimate_size(&mut heap_callback);
+//                 batch.layer.vals.vals.estimate_size(&mut heap_callback);
+//
+//                 let mut region_callback = |siz, cap| heap_callback(siz, cap, usize::from(cap > 0));
+//                 batch.layer.keys.heap_size(&mut region_callback);
+//             });
+//             (heap_size, heap_capacity, heap_allocations)
+//         })
+//     }
+// }

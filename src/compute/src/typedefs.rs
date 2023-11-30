@@ -20,8 +20,8 @@ use mz_repr::{Diff, Row, Timestamp};
 use mz_storage_types::errors::DataflowError;
 
 pub type RowSpine<K, V, T, R> = ColValSpine<K, V, T, R, Overflowing<u32>>;
-pub type RowKeySpine<K, T, R> = ColKeySpine<K, T, R, Overflowing<u32>>;
-pub type ErrSpine<K, T, R> = ColKeySpine<K, T, R, Overflowing<u32>>;
+pub type RowKeySpine<K, T, R> = ColValSpine<K, (), T, R, Overflowing<u32>>;
+pub type ErrSpine<K, T, R> = ColValSpine<K, (), T, R, Overflowing<u32>>;
 pub type ErrValSpine<K, T, R> = ColValSpine<K, DataflowError, T, R, Overflowing<u32>>;
 pub type TraceRowHandle<K, V, T, R> = TraceAgent<RowSpine<K, V, T, R>>;
 pub type TraceKeyHandle<K, T, R> = TraceAgent<RowKeySpine<K, T, R>>;
