@@ -4840,7 +4840,6 @@ impl Coordinator {
 
         let ops = vec![catalog::Op::UpdateItem {
             id,
-            name: self.catalog.get_entry(&id).name().clone(),
             to_item: CatalogItem::Connection(connection.clone()),
         }];
 
@@ -5183,9 +5182,6 @@ impl Coordinator {
                 // Redefine source.
                 ops.push(catalog::Op::UpdateItem {
                     id,
-                    // Look this up again so we don't have to hold an immutable reference to the
-                    // entry for so long.
-                    name: self.catalog.get_entry(&id).name().clone(),
                     to_item: CatalogItem::Source(source),
                 });
 
@@ -5382,9 +5378,6 @@ impl Coordinator {
                 // Redefine source.
                 ops.push(catalog::Op::UpdateItem {
                     id,
-                    // Look this up again so we don't have to hold an immutable reference to the
-                    // entry for so long.
-                    name: self.catalog.get_entry(&id).name().clone(),
                     to_item: CatalogItem::Source(source),
                 });
 
