@@ -156,8 +156,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         delay_sources_past_rehydration: config.storage_dataflow_delay_sources_past_rehydration(),
         shrink_upsert_unused_buffers_by_ratio: config
             .storage_shrink_upsert_unused_buffers_by_ratio(),
-        truncate_statement_log: config.truncate_statement_log(),
-        statement_logging_retention_time_seconds: config.statement_logging_retention().as_secs(),
         record_namespaced_errors: config.storage_record_source_sink_namespaced_errors(),
     }
 }
