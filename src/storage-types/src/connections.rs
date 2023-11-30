@@ -427,6 +427,11 @@ impl KafkaConnection {
             );
         }
 
+        // We don't override any socket timeouts (like `socket.timeout.ms`) as we allow rdkafka
+        // to choose a reasonably default for us, but we do enable keepalives, as
+        // they have no downsides <https://github.com/confluentinc/librdkafka/issues/283>.
+        options.insert("socket.keepalive.enable".into(), "true".into());
+
         let mut config = mz_kafka_util::client::create_new_client_config(
             connection_context.librdkafka_log_level,
         );
