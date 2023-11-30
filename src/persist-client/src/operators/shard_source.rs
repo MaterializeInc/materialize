@@ -192,8 +192,12 @@ where
     // values that are `yield`-ed from it's body.
     let name_owned = name.to_owned();
 
-    // Create a oneshot channel to give the part returner a handle to our subscribtion
-    let (tx, rx) = tokio::sync::oneshot::channel::<(Rc<dyn Any>, SubscriptionLeaseReturner)>();
+    // Create a shared slot between the operator to store the subscription handle
+    let subscription_handle = Rc::new(RefCell::new(None));
+    let return_subscription_handle = Rc::clone(&subscription_handle);
+
+    // Create a oneshot channel to give the part returner a SubscriptionLeaseReturner
+    let (tx, rx) = tokio::sync::oneshot::channel::<SubscriptionLeaseReturner>();
     let mut builder = AsyncOperatorBuilder::new(
         format!("shard_source_descs_return({})", name),
         scope.clone(),
@@ -207,7 +211,7 @@ where
     // This operator doesn't need to use a token because it naturally exits when its input
     // frontier reaches the empty antichain.
     builder.build(move |_caps| async move {
-        let Ok((subscriber, mut lease_returner)) = rx.await else {
+        let Ok(mut lease_returner) = rx.await else {
             // Either we're not the chosen worker or the dataflow was shutdown before the
             // subscriber was even created.
             return;
@@ -223,7 +227,7 @@ where
             }
         }
         // Make it explicit that the subscriber is kept alive until we have finished returning parts
-        drop(subscriber);
+        drop(return_subscription_handle);
     });
 
     let mut builder =
@@ -302,30 +306,22 @@ where
             }
         };
 
-        let subscription = read.subscribe(as_of.clone()).await.unwrap_or_else(|e| {
-            panic!(
-                "{}: {} cannot serve requested as_of {:?}: {:?}",
-                name_owned, shard_id, as_of, e
-            )
-        });
+        // Store the subscription handle in the shared slot so that it stays alive until both
+        // operators exit
+        let mut subscription = subscription_handle.borrow_mut();
+        let subscription =
+            subscription.insert(read.subscribe(as_of.clone()).await.unwrap_or_else(|e| {
+                panic!(
+                    "{}: {} cannot serve requested as_of {:?}: {:?}",
+                    name_owned, shard_id, as_of, e
+                )
+            }));
 
         // We're about to start producing parts to be fetched whose leases will be returned by the
         // `shard_source_descs_return` operator above. In order for that operator to successfully
-        // return the leases we send it two things:
-        // 1. A type erased Rc<RefCell<Subscribe>>
-        // 2. The associated SubscriptionLeaseReturner
-        // This ensures that that `shard_source_descs_return` can keep our Subscribe handle alive
-        // after this operator has shutdown, which in turns prevents its SeqNo hold from expiring.
-        // The reason for the type erasure is to prevent that operator from attempting a borrow_mut
-        // etc. We just need it to hold it until it has finished returning all the outstanding parts.
-        let lease_returner = subscription.lease_returner().clone();
-        let subscription = Rc::new(RefCell::new(subscription));
-        #[allow(clippy::as_conversions)]
-        let sub_handle = Rc::clone(&subscription) as Rc<dyn Any>;
-        tx.send((sub_handle, lease_returner))
+        // return the leases we send it the lease returner associated with our shared subscriber.
+        tx.send(subscription.lease_returner().clone())
             .expect("lease returner exited before desc producer");
-        // This is safe because the other copy of the shared reference is type erased
-        let subscription = &mut *subscription.borrow_mut();
         let mut lease_returner = subscription.lease_returner().clone();
 
         // Read from the subscription and pass them on.
