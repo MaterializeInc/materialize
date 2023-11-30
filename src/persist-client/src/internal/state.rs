@@ -29,7 +29,7 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::info;
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -645,7 +645,31 @@ where
             return Break(NoOpStateTransition(Since(Antichain::new())));
         }
 
+        // Check whether this handle is holding back the global since.
+        // It's a bit dicey to have a leased handle reading state from before the global since,
+        // since if the lessee goes away there's no way to pick up where we left off. However,
+        // since we only downgrade periodically it's likely that our leases will fall behind the
+        // critical since hold for minutes at a time before jumping ahead. So: we only do this
+        // check when we know the lease's hold is up to date, which is right as we're updating it.
+        let mut critical_since = Antichain::new();
+        for critical in self.critical_readers.values() {
+            critical_since.meet_assign(&critical.since);
+        }
+
         let reader_state = self.leased_reader(reader_id);
+
+        if PartialOrder::less_than(new_since, &critical_since) {
+            // Our new since is earlier than the earliest critical handle: we're not holding
+            // things back far enough.
+            error!(
+                reader_id =? reader_id,
+                critical_since =? critical_since,
+                new_since =? new_since,
+                purpose =? reader_state.debug.purpose,
+                "critical since has advanced past some lease's since. \
+                if this reader is not on an abandoned cluster, this may be a bug."
+            )
+        }
 
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
