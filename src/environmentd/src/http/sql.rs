@@ -558,6 +558,13 @@ trait ResultSender: Send {
 
 #[async_trait]
 impl ResultSender for SqlResponse {
+    // The first component of the return value is
+    // Err if sending to the client
+    // produced an error and the server should disconnect. It is Ok(Err) if the statement
+    // produced an error and should error the transaction, but remain connected. It is Ok(Ok(()))
+    // if the statement succeeded.
+    // The second component of the return value is `Some` if execution still
+    // needs to be retired for statement logging purposes.
     async fn add_result<C, F>(
         &mut self,
         _canceled: C,
@@ -608,6 +615,13 @@ impl ResultSender for SqlResponse {
 
 #[async_trait]
 impl ResultSender for WebSocket {
+    // The first component of the return value is
+    // Err if sending to the client
+    // produced an error and the server should disconnect. It is Ok(Err) if the statement
+    // produced an error and should error the transaction, but remain connected. It is Ok(Ok(()))
+    // if the statement succeeded.
+    // The second component of the return value is `Some` if execution still
+    // needs to be retired for statement logging purposes.
     async fn add_result<C, F>(
         &mut self,
         canceled: C,
