@@ -728,10 +728,14 @@ class TransactionIsolationAction(Action):
 
 class CommitRollbackAction(Action):
     def run(self, exe: Executor) -> bool:
+        if not exe.action_run_since_last_commit_rollback:
+            return False
+
         if self.rng.random() < 0.7:
             exe.commit()
         else:
             exe.rollback()
+        exe.action_run_since_last_commit_rollback = False
         return True
 
 
@@ -751,7 +755,7 @@ class CreateViewAction(Action):
         if self.rng.choice([True, False]) or base_object2 == base_object:
             base_object2 = None
         schema = self.rng.choice(exe.db.schemas)
-        with schema.db.lock:
+        with schema.lock:
             if schema not in exe.db.schemas:
                 return False
             view = View(
@@ -1609,9 +1613,9 @@ write_action_list = ActionList(
         (InsertAction, 50),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (HttpPostAction, 50),
-        (CommitRollbackAction, 100),
+        (CommitRollbackAction, 10),
         (ReconnectAction, 1),
-        (SourceInsertAction, 100),
+        (SourceInsertAction, 50),
     ],
     autocommit=False,
 )
