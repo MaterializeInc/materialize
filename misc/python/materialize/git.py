@@ -18,7 +18,6 @@ from typing import TypeVar
 from materialize import spawn
 from materialize.mz_version import MzVersion, TypedVersionBase
 from materialize.util import YesNoOnce
-from materialize.version_list import INVALID_VERSIONS
 
 VERSION_TYPE = TypeVar("VERSION_TYPE", bound=TypedVersionBase)
 
@@ -90,7 +89,7 @@ def expand_globs(root: Path, *specs: Path | str) -> set[str]:
 
 
 def get_version_tags(
-    *, version_type: type[VERSION_TYPE], fetch: bool = True
+    *, version_type: type[VERSION_TYPE], newest_first: bool = True, fetch: bool = True
 ) -> list[VERSION_TYPE]:
     """List all the version-like tags in the repo
 
@@ -112,7 +111,7 @@ def get_version_tags(
         except ValueError as e:
             print(f"WARN: {e}", file=sys.stderr)
 
-    return sorted(tags, reverse=True)
+    return sorted(tags, reverse=newest_first)
 
 
 def get_latest_version(
@@ -322,34 +321,6 @@ def get_commit_message(commit_sha: str) -> str | None:
 def get_branch_name() -> str:
     command = ["git", "branch", "--show-current"]
     return spawn.capture(command).strip()
-
-
-def get_previous_version(
-    version: VERSION_TYPE, excluded_versions: set[VERSION_TYPE] | None = None
-) -> VERSION_TYPE:
-    if excluded_versions is None:
-        excluded_versions = set()
-
-    if version.prerelease is not None and len(version.prerelease) > 0:
-        # simply drop the prerelease, do not try to find a decremented version
-        found_version = MzVersion.create(version.major, version.minor, version.patch)
-
-        if found_version not in excluded_versions:
-            return found_version
-        else:
-            # start searching with this version
-            version = found_version
-
-    all_versions: list[VERSION_TYPE] = get_version_tags(version_type=type(version))
-    all_suitable_previous_versions = [
-        v
-        for v in all_versions
-        if v < version
-        and (v.prerelease is None or len(v.prerelease) == 0)
-        and (not isinstance(version, MzVersion) or v not in INVALID_VERSIONS)
-        and v not in excluded_versions
-    ]
-    return max(all_suitable_previous_versions)
 
 
 # Work tree mutation

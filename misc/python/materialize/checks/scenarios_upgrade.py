@@ -18,18 +18,40 @@ from materialize.checks.mzcompose_actions import (
 )
 from materialize.checks.scenarios import Scenario
 from materialize.mz_version import MzVersion
-from materialize.version_list import VersionsFromDocs
+from materialize.version_list import get_published_minor_mz_versions
 
-version_list = VersionsFromDocs()
-minor_versions = version_list.minor_versions()
-previous_version, last_version = minor_versions[-2:]
+# late initialization
+_minor_versions: list[MzVersion] | None = None
+_last_version: MzVersion | None = None
+_previous_version: MzVersion | None = None
+
+
+def get_minor_versions() -> list[MzVersion]:
+    global _minor_versions
+    if _minor_versions is None:
+        _minor_versions = get_published_minor_mz_versions(limit=4)
+    return _minor_versions
+
+
+def get_last_version() -> MzVersion:
+    global _last_version
+    if _last_version is None:
+        _last_version = get_minor_versions()[0]
+    return _last_version
+
+
+def get_previous_version() -> MzVersion:
+    global _previous_version
+    if _previous_version is None:
+        _previous_version = get_minor_versions()[1]
+    return _previous_version
 
 
 class UpgradeEntireMz(Scenario):
     """Upgrade the entire Mz instance from the last released version."""
 
     def base_version(self) -> MzVersion:
-        return last_version
+        return get_last_version()
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
@@ -52,7 +74,7 @@ class UpgradeEntireMzPreviousVersion(UpgradeEntireMz):
     """Upgrade the entire Mz instance from the previous released version."""
 
     def base_version(self) -> MzVersion:
-        return previous_version
+        return get_previous_version()
 
 
 class UpgradeEntireMzTwoVersions(Scenario):
@@ -60,11 +82,11 @@ class UpgradeEntireMzTwoVersions(Scenario):
     released version and passing through the last released version."""
 
     def base_version(self) -> MzVersion:
-        return previous_version
+        return get_previous_version()
 
     def actions(self) -> list[Action]:
         print(
-            f"Upgrading starting from tag {self.base_version()} going through {last_version}"
+            f"Upgrading starting from tag {self.base_version()} going through {get_last_version()}"
         )
         return [
             # Start with previous_version
@@ -72,7 +94,7 @@ class UpgradeEntireMzTwoVersions(Scenario):
             Initialize(self),
             # Upgrade to last_version
             KillMz(),
-            StartMz(self, tag=last_version),
+            StartMz(self, tag=get_last_version()),
             Manipulate(self, phase=1),
             # Upgrade to current source
             KillMz(),
@@ -90,13 +112,13 @@ class UpgradeEntireMzSkipVersion(Scenario):
     """Upgrade the entire Mz instance from the previous version directly to the current HEAD"""
 
     def base_version(self) -> MzVersion:
-        return previous_version
+        return get_previous_version()
 
     def actions(self) -> list[Action]:
         print(f"Upgrading starting from tag {self.base_version()} directly to HEAD")
         return [
             # Start with previous_version
-            StartMz(self, tag=previous_version),
+            StartMz(self, tag=get_previous_version()),
             Initialize(self),
             Manipulate(self, phase=1),
             # Upgrade directly to current source
@@ -114,24 +136,26 @@ class UpgradeEntireMzSkipVersion(Scenario):
 class UpgradeEntireMzFourVersions(Scenario):
     """Test upgrade X-4 -> X-3 -> X-2 -> X-1 -> X"""
 
+    minor_versions = get_minor_versions()
+
     def base_version(self) -> MzVersion:
-        return minor_versions[-4]
+        return self.minor_versions[3]
 
     def actions(self) -> list[Action]:
         print(
-            f"Upgrading going through {minor_versions[-4]} -> {minor_versions[-3]} -> {minor_versions[-2]} -> {minor_versions[-1]}"
+            f"Upgrading going through {self.minor_versions[3]} -> {self.minor_versions[2]} -> {get_previous_version()} -> {get_last_version()}"
         )
         return [
-            StartMz(self, tag=minor_versions[-4]),
+            StartMz(self, tag=self.minor_versions[3]),
             Initialize(self),
             KillMz(),
-            StartMz(self, tag=minor_versions[-3]),
+            StartMz(self, tag=self.minor_versions[2]),
             Manipulate(self, phase=1),
             KillMz(),
-            StartMz(self, tag=minor_versions[-2]),
+            StartMz(self, tag=get_previous_version()),
             Manipulate(self, phase=2),
             KillMz(),
-            StartMz(self, tag=minor_versions[-1]),
+            StartMz(self, tag=get_last_version()),
             KillMz(),
             StartMz(self, tag=None),
             Validate(self),
@@ -154,7 +178,7 @@ class UpgradeClusterdComputeLast(Scenario):
     """Upgrade compute's clusterd separately after upgrading environmentd"""
 
     def base_version(self) -> MzVersion:
-        return last_version
+        return get_last_version()
 
     def actions(self) -> list[Action]:
         return [
@@ -186,7 +210,7 @@ class UpgradeClusterdComputeFirst(Scenario):
     """Upgrade compute's clusterd separately before environmentd"""
 
     def base_version(self) -> MzVersion:
-        return last_version
+        return get_last_version()
 
     def actions(self) -> list[Action]:
         return [
