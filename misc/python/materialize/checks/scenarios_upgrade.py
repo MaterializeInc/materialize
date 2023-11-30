@@ -9,6 +9,8 @@
 
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
+from materialize.checks.checks import Check
+from materialize.checks.executors import Executor
 from materialize.checks.mzcompose_actions import (
     KillClusterdCompute,
     KillMz,
@@ -136,7 +138,11 @@ class UpgradeEntireMzSkipVersion(Scenario):
 class UpgradeEntireMzFourVersions(Scenario):
     """Test upgrade X-4 -> X-3 -> X-2 -> X-1 -> X"""
 
-    minor_versions = get_minor_versions()
+    def __init__(
+        self, checks: list[type[Check]], executor: Executor, seed: str | None = None
+    ):
+        super().__init__(checks, executor, seed)
+        self.minor_versions = get_minor_versions()
 
     def base_version(self) -> MzVersion:
         return self.minor_versions[3]
