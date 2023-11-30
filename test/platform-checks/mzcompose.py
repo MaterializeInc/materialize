@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+import os
 from enum import Enum
 
 from materialize.checks.all_checks import *  # noqa: F401 F403
@@ -188,6 +188,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         checks = [all_checks[check] for check in args.check]
     else:
         checks = list(all_subclasses(Check))
+
+    parallel_job_index = int(os.environ.get("BUILDKITE_PARALLEL_JOB", 0))
+    parallel_job_count = int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
+
+    if parallel_job_count > 1:
+        checks.sort(key=lambda c: c.__name__)
+        checks = checks[parallel_job_index::parallel_job_count]
 
     executor = MzcomposeExecutor(composition=c)
     for scenario_class in scenarios:

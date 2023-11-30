@@ -426,10 +426,11 @@ steps:
     key: platform-checks
     steps:
       - id: checks-restart-environmentd-clusterd-storage
-        label: "Checks + restart of environmentd & storage clusterd"
+        label: "Checks + restart of environmentd & storage clusterd (%n)"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
+        parallelism: 2
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
