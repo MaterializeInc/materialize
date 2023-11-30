@@ -93,10 +93,9 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
-use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashSet;
+
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
@@ -142,10 +141,7 @@ use tokio_stream::StreamMap;
 use tracing::{debug, info, warn};
 
 use crate::command_wals::ProtoShardId;
-use crate::healthcheck::{
-    MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC,
-    MZ_STATEMENT_EXECUTION_HISTORY_DESC,
-};
+
 use crate::rehydration::RehydratingStorageClient;
 
 mod collection_mgmt;
@@ -799,7 +795,6 @@ where
         this.append_shard_mappings(to_create.iter().map(|(id, _)| *id), 1)
             .await;
 
-        let mut statement_logging_sources_seen = 0;
         // TODO(guswynn): perform the io in this final section concurrently.
         for (id, description) in to_create {
             match description.data_source {
@@ -882,19 +877,18 @@ where
                             .await;
                         }
 
-                        IntrospectionType::StatementExecutionHistory
-                        | IntrospectionType::SessionHistory
-                        | IntrospectionType::PreparedStatementHistory => {
-                            statement_logging_sources_seen += 1;
-                            if statement_logging_sources_seen == 3 {
-                                self.partially_truncate_statement_log().await;
-                            }
-                        }
-
                         // Truncate compute-maintained collections.
                         IntrospectionType::ComputeDependencies
                         | IntrospectionType::ComputeReplicaHeartbeats => {
                             self.reconcile_managed_collection(id, vec![]).await;
+                        }
+
+                        // Note [btv] - we don't truncate these, because that uses
+                        // a huge amount of memory on environmentd startup.
+                        IntrospectionType::PreparedStatementHistory
+                        | IntrospectionType::StatementExecutionHistory
+                        | IntrospectionType::SessionHistory => {
+                            // do nothing.
                         }
                     }
                 }
@@ -2436,206 +2430,6 @@ where
         }
 
         self.reconcile_managed_collection(id, updates).await;
-    }
-
-    /// Partially truncate the statement log tables.
-    /// The logic is as follows:
-    /// For any statement execution whose begin date is younger than
-    /// `statement_logging_retention_time_seconds`, retain both it, and any
-    /// prepared statement and session it references.
-    ///
-    /// Note - this can use unbounded memory. We don't need to ingest
-    /// the whole collection on startup, but we _do_ need to buffer
-    /// all the updates/retractions before sending them. This will be
-    /// fine with our current volume, but in the near future we should switch to a more incremental approach.
-    /// Persist will soon give us the ability to do that easily; see
-    /// [here](https://materializeinc.slack.com/archives/C01CFKM1QRF/p1693592123322009) for details.
-    ///
-    /// The other reason this might technically use unbounded memory
-    /// is because we have to store the UUID of every prepared
-    /// statement we plan to keep -- this will cost about 40 MB * the
-    /// average QPS, assuming 30-day retention. This shouldn't cause problems for any of the
-    /// existing usage patterns, but we will need to think harder
-    /// about how to avoid it if we start supporting customers with a
-    /// huge QPS (probably we will need to just make their statement
-    /// logs non-persistent or have a low sampling rate).
-    ///
-    /// If for any reason this function starts causing problems in the
-    /// real world, we can disable it by turning off the
-    /// `TRUNCATE_STATEMENT_LOG` variable.
-    async fn partially_truncate_statement_log(&mut self) {
-        if !self.config.truncate_statement_log {
-            tracing::info!("Not garbage-collecting statement log, due to config parameter.");
-            return;
-        }
-        let now = (self.now)();
-        let cutoff = to_datetime(now)
-            - chrono::Duration::seconds(
-                self.config
-                    .statement_logging_retention_time_seconds
-                    .try_into()
-                    .expect("sane config value"),
-            );
-
-        let mseh_id = self.introspection_ids.lock().expect("poisoned")
-            [&IntrospectionType::StatementExecutionHistory];
-        let mpsh_id = self.introspection_ids.lock().expect("poisoned")
-            [&IntrospectionType::PreparedStatementHistory];
-        let msh_id =
-            self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::SessionHistory];
-        let mseh_ts = match self.collections[&mseh_id]
-            .write_frontier
-            .elements()
-            .iter()
-            .next()
-        {
-            Some(ts) if ts > &T::minimum() => ts.step_back().unwrap(),
-            // If collection is closed or the frontier is the minimum, we cannot
-            // or don't need to truncate (respectively).
-            _ => return,
-        };
-        let mpsh_ts = match self.collections[&mpsh_id]
-            .write_frontier
-            .elements()
-            .iter()
-            .next()
-        {
-            Some(ts) if ts > &T::minimum() => ts.step_back().unwrap(),
-            // If collection is closed or the frontier is the minimum, we cannot
-            // or don't need to truncate (respectively).
-            _ => return,
-        };
-        let msh_ts = match self.collections[&msh_id]
-            .write_frontier
-            .elements()
-            .iter()
-            .next()
-        {
-            Some(ts) if ts > &T::minimum() => ts.step_back().unwrap(),
-            // If collection is closed or the frontier is the minimum, we cannot
-            // or don't need to truncate (respectively).
-            _ => return,
-        };
-
-        let (mseh_began_at, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
-            .get_by_name(&ColumnName::from("began_at"))
-            .expect("schema has not changed");
-        let (mseh_prepared_statement_id, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
-            .get_by_name(&ColumnName::from("prepared_statement_id"))
-            .expect("schema has not changed");
-        let (mseh_finished_at, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
-            .get_by_name(&ColumnName::from("finished_at"))
-            .expect("schema has not changed");
-        let (mseh_finished_status, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
-            .get_by_name(&ColumnName::from("finished_status"))
-            .expect("schema has not changed");
-
-        let mut mseh_rows = self
-            .snapshot_and_stream(mseh_id, mseh_ts)
-            .await
-            .expect("snapshot_succeeds");
-
-        let mut mseh_updates = vec![];
-        let mut ps_to_keep = HashSet::new();
-        use futures::stream::StreamExt;
-        while let Some((source_data, _ts, diff)) = mseh_rows.next().await {
-            assert!(diff != 0);
-            let row = source_data.0.expect("valid data");
-
-            let unpacked = row.unpack();
-            let began_at = unpacked[mseh_began_at].unwrap_timestamptz();
-
-            if *began_at < cutoff {
-                mseh_updates.push((row, diff * -1));
-            } else {
-                let ps_id = unpacked[mseh_prepared_statement_id].unwrap_uuid();
-                // The following `ps_to_keep.insert` invocation is imprecise -- technically, we only
-                // need to keep the corresponding prepared statement if the diffs of all the
-                // statement execution rows that reference it sum to a positive value.
-                // However, it's exceedingly likely that this is true if there are _any_ diffs in the
-                // window, so we don't really need to bother keeping track of a multiplicity here.
-                //
-                // In the event where due to some uncompacted data in mseh we keep around a row in mpsh
-                // that we shouldn't, no problems will be caused other than a tiny increase in storage until the
-                // next time we run this truncation process.
-                ps_to_keep.insert(ps_id);
-                let ended_at = unpacked[mseh_finished_at];
-                if matches!(ended_at, Datum::Null) {
-                    // We refer to a statement that began, but didn't finish (or whose finish was never recorded)
-                    // as "aborted".
-                    // We need to fill in "finished_at" and "finished_status" for such statements here.
-                    let aborted_row = Row::pack(unpacked.iter().enumerate().map(|(i, datum)| {
-                        if i == mseh_finished_at {
-                            Datum::TimestampTz(
-                                to_datetime(now).try_into().expect("sane system time"),
-                            )
-                        } else if i == mseh_finished_status {
-                            Datum::String("aborted")
-                        } else {
-                            *datum
-                        }
-                    }));
-                    mseh_updates.push((row, diff * -1));
-                    mseh_updates.push((aborted_row, diff));
-                }
-            }
-        }
-
-        let mut mpsh_updates = vec![];
-        let mut sessions_to_keep = HashSet::new();
-
-        let mut mpsh_rows = self
-            .snapshot_and_stream(mpsh_id, mpsh_ts)
-            .await
-            .expect("snapshot_succeeds");
-
-        let (mpsh_id_col, _) = MZ_PREPARED_STATEMENT_HISTORY_DESC
-            .get_by_name(&ColumnName::from("id"))
-            .expect("schema has not changed");
-        let (mpsh_session_id, _) = MZ_PREPARED_STATEMENT_HISTORY_DESC
-            .get_by_name(&ColumnName::from("session_id"))
-            .expect("schema has not changed");
-        while let Some((source_data, _ts, diff)) = mpsh_rows.next().await {
-            let row = source_data.0.expect("valid data");
-            let unpacked = row.unpack();
-            let id = unpacked[mpsh_id_col].unwrap_uuid();
-            if ps_to_keep.get(&id).is_some() {
-                let session_id = unpacked[mpsh_session_id].unwrap_uuid();
-                sessions_to_keep.insert(session_id);
-            } else {
-                mpsh_updates.push((row, diff * -1));
-            }
-        }
-        let ps_kept = ps_to_keep.len();
-        std::mem::drop(ps_to_keep);
-
-        let mut msh_rows = self
-            .snapshot_and_stream(msh_id, msh_ts)
-            .await
-            .expect("snapshot_succeeds");
-
-        let (msh_id_col, _) = MZ_SESSION_HISTORY_DESC
-            .get_by_name(&ColumnName::from("id"))
-            .expect("schema has not changed");
-
-        let mut msh_updates = vec![];
-        while let Some((source_data, _ts, diff)) = msh_rows.next().await {
-            let row = source_data.0.expect("valid data");
-            let id = row.iter().nth(msh_id_col).unwrap().unwrap_uuid();
-            if !sessions_to_keep.contains(&id) {
-                msh_updates.push((row, diff * -1));
-            }
-        }
-
-        self.append_to_managed_collection(mseh_id, mseh_updates)
-            .await;
-        self.append_to_managed_collection(mpsh_id, mpsh_updates)
-            .await;
-        self.append_to_managed_collection(msh_id, msh_updates).await;
-        // self.metrics
-        //     .set_startup_prepared_statement_bytes(u64::cast_from(mpsh_bytes));
-        self.metrics
-            .set_startup_prepared_statements_kept(u64::cast_from(ps_kept));
     }
 
     /// Effectively truncates the source status history shard except for the most recent updates
