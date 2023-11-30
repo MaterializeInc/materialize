@@ -5311,7 +5311,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_smoketest_all_builtins() {
-        fn inner(catalog: Catalog) -> Vec<tokio::task::JoinHandle<()>> {
+        fn inner(catalog: Catalog) -> Vec<mz_ore::task::JoinHandle<()>> {
             let catalog = Arc::new(catalog);
             let conn_catalog = catalog.for_system_session();
 

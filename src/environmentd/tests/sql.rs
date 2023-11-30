@@ -1124,11 +1124,9 @@ async fn test_subscribe_shutdown() {
         .unwrap();
 
     // Un-gracefully abort the connection.
-    conn_task.abort();
-
-    // Need to await `conn_task` to actually deliver the `abort`. We don't
+    // We need to await `conn_task` to actually deliver the `abort`. We don't
     // care about the result though (it's probably `JoinError` with `is_cancelled` being true).
-    let _ = conn_task.await;
+    conn_task.abort_and_wait().await;
 
     // Dropping the server will initiate a graceful shutdown. We previously had
     // a bug where the server would fail to notice that the client running
@@ -1561,10 +1559,9 @@ async fn test_github_12546() {
     // Aborting the connection should cause its pending queries to be cancelled,
     // allowing the compute instances to stop crashing while trying to execute
     // them.
-    conn_task.abort();
-
-    // Need to await `conn_task` to actually deliver the `abort`.
-    let _ = conn_task.await;
+    //
+    // We need to await `conn_task` to actually deliver the `abort`.
+    conn_task.abort_and_wait().await;
 
     // Make a new connection to verify the compute instance can now start.
     let client = server.connect().await.unwrap();

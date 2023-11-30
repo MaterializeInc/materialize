@@ -29,7 +29,7 @@ use mz_compute_types::plan::Plan;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
-use mz_ore::task::{AbortHandleExt, AbortOnDropAbortHandle};
+use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
@@ -735,7 +735,7 @@ impl PendingPeek {
         });
         PendingPeek::Persist(PersistPeek {
             peek,
-            _abort_handle: task_handle.abort_handle().abort_on_drop(),
+            _abort_handle: task_handle.abort_on_drop(),
             result: result_rx,
             span: tracing::Span::current(),
         })
@@ -764,7 +764,7 @@ pub struct PersistPeek {
     pub(crate) peek: Peek,
     /// A background task that's responsible for producing the peek results.
     /// If we're no longer interested in the results, we abort the task.
-    _abort_handle: AbortOnDropAbortHandle,
+    _abort_handle: AbortOnDropHandle<()>,
     /// The result of the background task, eventually.
     result: oneshot::Receiver<(PeekResponse, Duration)>,
     /// The `tracing::Span` tracking this peek's operation

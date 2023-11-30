@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use mz_ore::error::ErrorExt;
-use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::{self, AbortOnDropHandle};
 use openssh::{ForwardType, Session};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};

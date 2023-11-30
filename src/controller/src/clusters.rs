@@ -28,7 +28,7 @@ use mz_orchestrator::{
     ServiceEvent, ServicePort,
 };
 use mz_ore::halt;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::AbortOnDropHandle;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
 use once_cell::sync::Lazy;

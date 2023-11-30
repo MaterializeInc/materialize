@@ -18,7 +18,7 @@ use futures::stream::StreamExt;
 use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::AbortOnDropHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::client::TimestamplessUpdate;

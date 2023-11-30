@@ -25,7 +25,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::result::ResultExt;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row, ScalarType};
