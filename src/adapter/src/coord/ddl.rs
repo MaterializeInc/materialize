@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
+use futures::Future;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
@@ -83,6 +84,29 @@ impl Coordinator {
         Ok(result)
     }
 
+    /// Same as [`Self::catalog_transact_with`] but runs builtin table updates concurrently with
+    /// any side effects (e.g. creating collections).
+    pub(crate) async fn catalog_transact_with_side_effects<'c, F, Fut>(
+        &'c mut self,
+        session: Option<&Session>,
+        ops: Vec<catalog::Op>,
+        side_effect: F,
+    ) -> Result<(), AdapterError>
+    where
+        F: FnOnce(&'c mut Coordinator) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let (result, table_updates) = self
+            .catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
+            .await?;
+        let side_effects_fut = side_effect(self);
+
+        // Run our side effects concurrently with the table updates.
+        let ((), ()) = futures::future::join(side_effects_fut, table_updates).await;
+
+        Ok(result)
+    }
+
     /// Same as [`Self::catalog_transact_with`] without a closure passed in.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn catalog_transact_conn(
@@ -127,17 +151,16 @@ impl Coordinator {
         all_ops.extend(ops.clone());
 
         // Run our Catalog transaction, but abort before committing.
-        let (result, table_updates) = self
+        let result = self
             .catalog_transact_with(Some(&conn_id), all_ops.clone(), |state| {
                 // Return an error so we don't commit the Catalog Transaction, but include our
                 // updated state.
-                Err(AdapterError::DDLTransactionDryRun {
+                Err::<(), _>(AdapterError::DDLTransactionDryRun {
                     new_ops: all_ops,
                     new_state: state.catalog.clone(),
                 })
             })
-            .await?;
-        table_updates.await;
+            .await;
 
         match result {
             // We purposefully fail with this error to prevent committing the transaction.
@@ -151,7 +174,8 @@ impl Coordinator {
                 })?;
                 Ok(())
             }
-            other => other,
+            Ok((_result, _table_updates)) => unreachable!("unexpected success!"),
+            Err(e) => Err(e),
         }
     }
 

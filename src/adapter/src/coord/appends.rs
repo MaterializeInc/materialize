@@ -372,32 +372,36 @@ impl Coordinator {
 
         // Spawn a task to do the table writes.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        task::spawn(|| "group_commit_apply", async move {
-            // Wait for the writes to complete.
-            append_fut
-                .await
-                .expect("One-shot dropped while waiting")
-                .unwrap_or_terminate("cannot fail to apply appends");
+        task::spawn(
+            || "group_commit_apply",
+            async move {
+                // Wait for the writes to complete.
+                append_fut
+                    .await
+                    .expect("One-shot dropped while waiting")
+                    .unwrap_or_terminate("cannot fail to apply appends");
 
-            // Note: while technically we should have `GroupCommitApply` update the notifies, we
-            // know that internal commands get processed before any user commands, so the writes
-            // are still guaranteed to be observable before any user commands.
-            for notify in notifies {
-                // We don't care if the listeners have gone away.
-                let _ = notify.send(());
-            }
+                // Note: while technically we should have `GroupCommitApply` update the notifies, we
+                // know that internal commands get processed before any user commands, so the writes
+                // are still guaranteed to be observable before any user commands.
+                for notify in notifies {
+                    // We don't care if the listeners have gone away.
+                    let _ = notify.send(());
+                }
 
-            // Trigger a GroupCommitApply, which will run before any user commands since we're
-            // sending it on the internal command sender.
-            if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
-                timestamp,
-                responses,
-                write_lock_guard,
-                permit,
-            )) {
-                warn!("Server closed with non-responded writes, {e}");
+                // Trigger a GroupCommitApply, which will run before any user commands since we're
+                // sending it on the internal command sender.
+                if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
+                    timestamp,
+                    responses,
+                    write_lock_guard,
+                    permit,
+                )) {
+                    warn!("Server closed with non-responded writes, {e}");
+                }
             }
-        });
+            .instrument(Span::current()),
+        );
     }
 
     /// Applies the results of a completed group commit. The read timestamp of the timeline
@@ -487,7 +491,7 @@ pub struct BuiltinTableAppend<'a> {
     coord: &'a mut Coordinator,
 }
 
-/// [`Future`] that notifies when a builtin table write has completed.
+/// `Future` that notifies when a builtin table write has completed.
 ///
 /// Note: builtin table writes need to talk to persist, which can take 100s of milliseconds. This
 /// type allows you to execute a builtin table write, e.g. via [`BuiltinTableAppend::execute`], and
@@ -495,7 +499,7 @@ pub struct BuiltinTableAppend<'a> {
 pub type BuiltinTableAppendNotify = BoxFuture<'static, ()>;
 
 impl<'a> BuiltinTableAppend<'a> {
-    /// Submit a write to a system table be executed during the next group commit. This method
+    /// Submit a write to a system table to be executed during the next group commit. This method
     /// __does not__ trigger a group commit.
     ///
     /// This is useful for non-critical writes like metric updates because it allows us to piggy
@@ -511,7 +515,7 @@ impl<'a> BuiltinTableAppend<'a> {
 
     /// Submits a write to be executed during the next group commit __and__ triggers a group commit.
     ///
-    /// Returns a [`Future`] that resolves when the write has completed, does not block the
+    /// Returns a `Future` that resolves when the write has completed, does not block the
     /// Coordinator.
     pub fn defer(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
         let (tx, rx) = oneshot::channel();
@@ -526,8 +530,8 @@ impl<'a> BuiltinTableAppend<'a> {
 
     /// Submit a write to a system table.
     ///
-    /// This method will block the Coordinator on doing some initial work, and then returns a
-    /// [`Future`] that will complete once the write has been applied.
+    /// This method will block the Coordinator on acquiring a write timestamp from the timestamp
+    /// oracle, and then returns a `Future` that will complete once the write has been applied.
     pub async fn execute(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
         let (tx, rx) = oneshot::channel();
 
@@ -552,7 +556,7 @@ impl<'a> BuiltinTableAppend<'a> {
 
     /// Submit a write to a system table, blocking until complete.
     ///
-    /// Note: if possible you should use the `execute(...)` method, which returns a [`Future`] that
+    /// Note: if possible you should use the `execute(...)` method, which returns a `Future` that
     /// can be `await`-ed concurrently with other tasks.
     pub async fn blocking(self, updates: Vec<BuiltinTableUpdate>) {
         let notify = self.execute(updates).await;
