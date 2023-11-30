@@ -55,6 +55,34 @@ where
             let ok_input = ok_input.enter_region(inner);
             let mut err_collection = err_input.enter_region(inner);
 
+            // Determine if there should be errors due to limit evaluation; update `err_collection`.
+            // We do this f
+            let limit_err = match &top_k_plan {
+                TopKPlan::MonotonicTop1(MonotonicTop1Plan { .. }) => None,
+                TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => Some(limit),
+                TopKPlan::Basic(BasicTopKPlan { limit, .. }) => Some(limit),
+            };
+            if let Some(limit) = limit_err {
+                if let Some(expr) = limit {
+                    if expr.could_error() {
+                        // Produce errors from limit selectors that error,
+                        // and nothing from limit selectors that do not.
+                        let expr = expr.clone();
+                        let mut datum_vec = mz_repr::DatumVec::new();
+                        let errors = ok_input.flat_map(move |row| {
+                            let temp_storage = mz_repr::RowArena::new();
+                            let datums = datum_vec.borrow_with(&row);
+                            if let Err(e) = expr.eval(&datums[..], &temp_storage) {
+                                Some(e.into())
+                            } else {
+                                None
+                            }
+                        });
+                        err_collection = err_collection.concat(&errors);
+                    }
+                }
+            }
+
             let ok_result = match top_k_plan {
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                     group_key,
@@ -74,9 +102,18 @@ where
                     order_key,
                     group_key,
                     arity,
-                    limit,
+                    mut limit,
                     must_consolidate,
                 }) => {
+                    // Must permute `limit` to reference `group_key` elements as if in order.
+                    if let Some(expr) = limit.as_mut() {
+                        let mut map = BTreeMap::new();
+                        for (index, column) in group_key.iter().enumerate() {
+                            map.insert(*column, index);
+                        }
+                        expr.permute_map(&map);
+                    }
+
                     // Map the group key along with the row and consolidate if required to do so.
                     let mut datum_vec = mz_repr::DatumVec::new();
                     let collection = ok_input
@@ -159,10 +196,19 @@ where
                     group_key,
                     order_key,
                     offset,
-                    limit,
+                    mut limit,
                     arity,
                     buckets,
                 }) => {
+                    // Must permute `limit` to reference `group_key` elements as if in order.
+                    if let Some(expr) = limit.as_mut() {
+                        let mut map = BTreeMap::new();
+                        for (index, column) in group_key.iter().enumerate() {
+                            map.insert(*column, index);
+                        }
+                        expr.permute_map(&map);
+                    }
+
                     let (oks, errs) = self.build_topk(
                         ok_input, group_key, order_key, offset, limit, arity, buckets,
                     );
@@ -170,6 +216,7 @@ where
                     oks
                 }
             };
+
             // Extract the results from the region.
             (ok_result.leave_region(), err_collection.leave_region())
         });
@@ -427,8 +474,9 @@ where
                         let temp_storage = mz_repr::RowArena::new();
                         let key_datums = datum_vec.borrow_with(&key.0);
                         // Unpack `key` and determine the limit.
+                        // If the limit errors, use a zero limit; errors are surfaced elsewhere.
                         l.eval(&key_datums, &temp_storage)
-                            .expect("key function must not error")
+                            .unwrap_or(mz_repr::Datum::UInt64(0))
                             .as_usize()
                             .expect("Key function must evaluate to integer literal")
                     }
@@ -558,9 +606,10 @@ where
                             let temp_storage = mz_repr::RowArena::new();
                             let key_datums = datum_vec.borrow_with(&grp_row);
                             // Unpack `key` and determine the limit.
+                            // If the limit errors, use a zero limit; errors are surfaced elsewhere.
                             limit
                                 .eval(&key_datums, &temp_storage)
-                                .expect("key function must not error")
+                                .unwrap_or(mz_repr::Datum::UInt64(0))
                                 .as_usize()
                                 .expect("Key function must evaluate to integer literal")
                         };

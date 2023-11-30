@@ -791,7 +791,7 @@ impl HirRelationExpr {
                     // TopK is uncomplicated, except that we must group by the columns of `get_outer` as well.
                     let mut input =
                         input.applied_to(id_gen, get_outer.clone(), col_map, cte_map, config)?;
-                    let applied_group_key = (0..get_outer.arity())
+                    let mut applied_group_key: Vec<_> = (0..get_outer.arity())
                         .chain(group_key.iter().map(|i| get_outer.arity() + i))
                         .collect();
                     let applied_order_key = order_key
@@ -815,6 +815,8 @@ impl HirRelationExpr {
                     }
 
                     let new_arity = input.arity();
+                    // Extend the key to contain any new columns.
+                    applied_group_key.extend(old_arity..new_arity);
 
                     let mut result = input.top_k(
                         applied_group_key,
