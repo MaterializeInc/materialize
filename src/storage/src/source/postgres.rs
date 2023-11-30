@@ -242,11 +242,6 @@ impl SourceRender for PostgresSourceConnection {
 pub enum TransientError {
     #[error("replication slot mysteriously missing")]
     MissingReplicationSlot,
-    #[error("slot overcompacted. Requested LSN {requested_lsn} but only LSNs >= {available_lsn} are available")]
-    OvercompactedReplicationSlot {
-        requested_lsn: MzOffset,
-        available_lsn: MzOffset,
-    },
     #[error("stream ended prematurely")]
     ReplicationEOF,
     #[error("unexpected replication message")]
@@ -280,6 +275,11 @@ pub enum DefiniteError {
     PublicationDropped(String),
     #[error("replication slot has been invalidated because it exceeded the maximum reserved size")]
     InvalidReplicationSlot,
+    #[error("slot overcompacted. Requested LSN {requested_lsn} but only LSNs >= {available_lsn} are available")]
+    OvercompactedReplicationSlot {
+        requested_lsn: MzOffset,
+        available_lsn: MzOffset,
+    },
     #[error("unexpected number of columns while parsing COPY output")]
     MissingColumn,
     #[error("failed to parse COPY protocol")]
@@ -322,8 +322,8 @@ async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), Tran
     }
 }
 
-/// Fetches the minimum LSN at which this slot can safely resume.
-async fn fetch_slot_resume_lsn(client: &Client, slot: &str) -> Result<MzOffset, TransientError> {
+/// Fetches the minimum LSN for which all updates that happened beyond it exist in the slot.
+async fn fetch_slot_resume_upper(client: &Client, slot: &str) -> Result<MzOffset, TransientError> {
     loop {
         let query = format!(
             "SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{slot}'"
