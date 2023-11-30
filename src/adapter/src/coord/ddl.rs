@@ -1102,11 +1102,7 @@ impl Coordinator {
                         }
                     }
                 },
-                Op::UpdateItem {
-                    name: _,
-                    id,
-                    to_item,
-                } => match to_item {
+                Op::UpdateItem { id, to_item } => match to_item {
                     CatalogItem::Source(source) => {
                         let current_source = self
                             .catalog()

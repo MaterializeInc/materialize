@@ -3075,23 +3075,23 @@ impl Catalog {
                         1,
                     ));
                 }
-                Op::UpdateItem { id, name, to_item } => {
+                Op::UpdateItem { id, to_item } => {
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     Self::update_item(
                         state,
                         builtin_table_updates,
                         id,
-                        name.clone(),
+                        state.get_entry(&id).name.clone(),
                         to_item.clone(),
                     )?;
                     let entry = state.get_entry(&id);
                     tx.update_item(id, entry.clone().into())?;
 
                     if Self::should_audit_log_item(&to_item) {
-                        let name = Self::full_name_detail(
-                            &state
-                                .resolve_full_name(&name, session.map(|session| session.conn_id())),
-                        );
+                        let name = Self::full_name_detail(&state.resolve_full_name(
+                            entry.name(),
+                            session.map(|session| session.conn_id()),
+                        ));
 
                         state.add_to_audit_log(
                             oracle_write_ts,
@@ -3817,7 +3817,6 @@ pub enum Op {
     },
     UpdateItem {
         id: GlobalId,
-        name: QualifiedItemName,
         to_item: CatalogItem,
     },
     UpdateStorageUsage {
