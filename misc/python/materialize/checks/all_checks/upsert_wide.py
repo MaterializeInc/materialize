@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 
 PAD_100K = "X" * (100 * 1024)
@@ -17,6 +17,7 @@ PAD_500K = "Y" * (500 * 1024)
 PAD_1M = "Z" * (1000 * 1024)
 
 
+@externally_idempotent(False)
 class UpsertWideValue(Check):
     """Perform upsert over records with a very long/wide value."""
 
@@ -83,6 +84,7 @@ class UpsertWideValue(Check):
         )
 
 
+@externally_idempotent(False)
 class UpsertWideKey(Check):
     """Perform upsert over records with a very long/wide key."""
 
