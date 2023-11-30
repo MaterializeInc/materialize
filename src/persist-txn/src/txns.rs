@@ -1061,7 +1061,7 @@ mod tests {
             oneshot::Sender<u64>,
             ShardId,
             u64,
-            tokio::task::JoinHandle<Vec<(String, u64, i64)>>,
+            mz_ore::task::JoinHandle<Vec<(String, u64, i64)>>,
         )>,
     }
 

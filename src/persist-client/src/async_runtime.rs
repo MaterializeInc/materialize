@@ -12,9 +12,8 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use mz_ore::task::RuntimeExt;
+use mz_ore::task::{JoinHandle, RuntimeExt};
 use tokio::runtime::{Builder, Runtime};
-use tokio::task::JoinHandle;
 
 /// An isolated runtime for asynchronous tasks, particularly work
 /// that may be CPU intensive such as encoding/decoding and shard

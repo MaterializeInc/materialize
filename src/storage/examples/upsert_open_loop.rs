@@ -190,7 +190,6 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::task::JoinHandle;
 use tracing::{debug, error, info, info_span, trace, warn, Instrument};
 
 // TODO(aljoscha): Make workload configurable: cardinality of keyspace, hot vs. cold keys, the
@@ -427,7 +426,7 @@ async fn run_benchmark(
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
     let progress_tx = Arc::new(Mutex::new(Some(progress_tx)));
 
-    let mut generator_handles: Vec<JoinHandle<Result<String, anyhow::Error>>> = vec![];
+    let mut generator_handles: Vec<task::JoinHandle<Result<String, anyhow::Error>>> = vec![];
     let mut source_rxs = BTreeMap::new();
 
     // All workers should have the starting time (so they can consistently track progress

@@ -24,11 +24,11 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use mz_ore::task::JoinHandle;
 use mz_persist::location::Blob;
 use mz_persist_types::Codec64;
 use semver::Version;
 use timely::progress::Timestamp;
-use tokio::task::JoinHandle;
 use tracing::{debug_span, Instrument};
 
 use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter, LeasedBatchPart};

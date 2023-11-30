@@ -820,7 +820,6 @@ mod tests {
     use timely::order::{PartialOrder, Product};
     use timely::progress::timestamp::PathSummary;
     use timely::progress::Antichain;
-    use tokio::task::JoinHandle;
 
     use crate::cache::PersistClientCache;
     use crate::error::{CodecConcreteType, CodecMismatch, UpperMismatch};
@@ -1828,7 +1827,7 @@ mod tests {
         const NUM_WRITERS: usize = 2;
         let id = ShardId::new();
         let client = new_test_client().await;
-        let mut handles = Vec::<JoinHandle<()>>::new();
+        let mut handles = Vec::<mz_ore::task::JoinHandle<()>>::new();
         for idx in 0..NUM_WRITERS {
             let (data, client) = (data.clone(), client.clone());
 
@@ -2012,7 +2011,7 @@ mod tests {
             .take()
             .expect("handle should have unexpired state");
         read.expire().await;
-        for read_heartbeat_task in mem::take(&mut read_unexpired_state.heartbeat_tasks) {
+        for read_heartbeat_task in mem::take(&mut read_unexpired_state._heartbeat_tasks) {
             let () = read_heartbeat_task
                 .await
                 .expect("task should shutdown cleanly");

@@ -18,7 +18,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_ore::retry::Retry;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::AbortOnDropHandle;
 use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
