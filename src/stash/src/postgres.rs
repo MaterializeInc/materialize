@@ -447,7 +447,7 @@ pub struct Stash {
     nonce: [u8; 16],
     pub(crate) sinces_tx: mpsc::UnboundedSender<ConsolidateRequest>,
     pub(crate) collections: BTreeMap<String, Id>,
-    metrics: Arc<Metrics>,
+    pub metrics: Arc<Metrics>,
 }
 
 #[derive(Debug)]
