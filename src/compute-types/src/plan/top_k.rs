@@ -58,9 +58,9 @@ impl TopKPlan {
         expected_group_size: Option<u64>,
     ) -> Self {
         // Capture whether the limit is a literal integer first.
-        let limit_as_usize = limit.as_ref().and_then(|l| l.as_literal_usize());
+        let limit_as_int64 = limit.as_ref().and_then(|l| l.as_literal_int64());
 
-        if monotonic && offset == 0 && limit_as_usize == Some(1) {
+        if monotonic && offset == 0 && limit_as_int64 == Some(1) {
             TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                 group_key,
                 order_key,
@@ -101,7 +101,7 @@ impl TopKPlan {
         match self {
             TopKPlan::Basic(plan) => {
                 if plan.offset == 0 {
-                    *self = if plan.limit.as_ref().and_then(|l| l.as_literal_usize()) == Some(1) {
+                    *self = if plan.limit.as_ref().and_then(|l| l.as_literal_int64()) == Some(1) {
                         TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                             group_key: plan.group_key.clone(),
                             order_key: plan.order_key.clone(),

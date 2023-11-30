@@ -253,6 +253,13 @@ impl CastLossy<f64> for usize {
     }
 }
 
+impl CastLossy<i64> for f64 {
+    #[allow(clippy::as_conversions)]
+    fn cast_lossy(from: i64) -> Self {
+        from as f64
+    }
+}
+
 impl CastLossy<u64> for f64 {
     #[allow(clippy::as_conversions)]
     fn cast_lossy(from: u64) -> Self {

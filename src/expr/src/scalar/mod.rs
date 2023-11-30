@@ -618,6 +618,13 @@ impl MirScalarExpr {
         }
     }
 
+    pub fn as_literal_int64(&self) -> Option<i64> {
+        match self.as_literal() {
+            Some(Ok(Datum::Int64(i))) => Some(i),
+            _ => None,
+        }
+    }
+
     pub fn as_literal_err(&self) -> Option<&EvalError> {
         self.as_literal().and_then(|lit| lit.err())
     }
@@ -636,15 +643,6 @@ impl MirScalarExpr {
 
     pub fn is_literal_null(&self) -> bool {
         Some(Ok(Datum::Null)) == self.as_literal()
-    }
-
-    /// Returns true when `self` is a literal, and equals the supplied `usize` argument.
-    pub fn as_literal_usize(&self) -> Option<usize> {
-        if let Some(Ok(datum)) = self.as_literal() {
-            datum.as_usize()
-        } else {
-            None
-        }
     }
 
     pub fn is_literal_ok(&self) -> bool {
@@ -2410,6 +2408,7 @@ pub enum EvalError {
     InvalidParameterValue(String),
     InvalidDatePart(String),
     NegSqrt,
+    NegLimit,
     NullCharacterNotPermitted,
     UnknownUnits(String),
     UnsupportedUnits(String, String),
@@ -2547,6 +2546,7 @@ impl fmt::Display for EvalError {
             ),
             EvalError::InvalidDatePart(part) => write!(f, "invalid datepart {}", part.quoted()),
             EvalError::NegSqrt => f.write_str("cannot take square root of a negative number"),
+            EvalError::NegLimit => f.write_str("LIMIT must not be negative"),
             EvalError::NullCharacterNotPermitted => f.write_str("null character not permitted"),
             EvalError::InvalidRegex(e) => write!(f, "invalid regular expression: {}", e),
             EvalError::InvalidRegexFlag(c) => write!(f, "invalid regular expression flag: {}", c),
@@ -2844,6 +2844,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidParameterValue(v) => InvalidParameterValue(v.clone()),
             EvalError::InvalidDatePart(part) => InvalidDatePart(part.to_string()),
             EvalError::NegSqrt => NegSqrt(()),
+            EvalError::NegLimit => NegLimit(()),
             EvalError::NullCharacterNotPermitted => NullCharacterNotPermitted(()),
             EvalError::UnknownUnits(v) => UnknownUnits(v.clone()),
             EvalError::UnsupportedUnits(units, typ) => UnsupportedUnits(ProtoUnsupportedUnits {
@@ -2975,6 +2976,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidParameterValue(v) => Ok(EvalError::InvalidParameterValue(v)),
                 InvalidDatePart(part) => Ok(EvalError::InvalidDatePart(part)),
                 NegSqrt(()) => Ok(EvalError::NegSqrt),
+                NegLimit(()) => Ok(EvalError::NegLimit),
                 NullCharacterNotPermitted(()) => Ok(EvalError::NullCharacterNotPermitted),
                 UnknownUnits(v) => Ok(EvalError::UnknownUnits(v)),
                 UnsupportedUnits(v) => Ok(EvalError::UnsupportedUnits(v.units, v.typ)),

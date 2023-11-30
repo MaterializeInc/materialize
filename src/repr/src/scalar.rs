@@ -161,22 +161,6 @@ pub enum Datum<'a> {
     // other datum variants should appear before `Null`.
 }
 
-impl<'a> Datum<'a> {
-    /// If the datum can be viewed as a `usize`, report it as such.
-    pub fn as_usize(&self) -> Option<usize> {
-        match self {
-            Datum::UInt8(y) => (*y).try_into().ok(),
-            Datum::UInt16(y) => (*y).try_into().ok(),
-            Datum::UInt32(y) => (*y).try_into().ok(),
-            Datum::UInt64(y) => (*y).try_into().ok(),
-            Datum::Int16(y) => (*y).try_into().ok(),
-            Datum::Int32(y) => (*y).try_into().ok(),
-            Datum::Int64(y) => (*y).try_into().ok(),
-            _ => None,
-        }
-    }
-}
-
 impl TryFrom<Datum<'_>> for bool {
     type Error = ();
 

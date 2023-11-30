@@ -25,9 +25,10 @@ message ProtoTopKPlan {
 }
 
 message ProtoBasicTopKPlan {
+    reserved 3;
     repeated uint64 group_key = 1;
     repeated mz_expr.relation.ProtoColumnOrder order_key = 2;
-    optional mz_expr.scalar.ProtoMirScalarExpr limit = 3;
+    optional mz_expr.scalar.ProtoMirScalarExpr limit = 7;
     uint64 offset = 4;
     uint64 arity = 5;
     repeated uint64 buckets = 6;
@@ -40,9 +41,10 @@ message ProtoMonotonicTop1Plan {
 }
 
 message ProtoMonotonicTopKPlan {
+    reserved 3;
     repeated uint64 group_key = 1;
     repeated mz_expr.relation.ProtoColumnOrder order_key = 2;
-    optional mz_expr.scalar.ProtoMirScalarExpr limit = 3;
+    optional mz_expr.scalar.ProtoMirScalarExpr limit = 6;
     uint64 arity = 4;
     bool must_consolidate = 5;
 }

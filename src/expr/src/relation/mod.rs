@@ -21,6 +21,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
+use mz_ore::num::NonNeg;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -808,7 +809,7 @@ impl MirRelationExpr {
                 // If `limit` is `Some(1)` then the group key will become
                 // a unique key, as there will be only one record with that key.
                 let mut result = input_keys.next().unwrap().clone();
-                if limit.as_ref().and_then(|x| x.as_literal_usize()) == Some(1) {
+                if limit.as_ref().and_then(|x| x.as_literal_int64()) == Some(1) {
                     result.push(group_key.clone())
                 }
                 result
@@ -2960,7 +2961,7 @@ pub struct RowSetFinishing {
     /// Order rows by the given columns.
     pub order_by: Vec<ColumnOrder>,
     /// Include only as many rows (after offset).
-    pub limit: Option<usize>,
+    pub limit: Option<NonNeg<i64>>,
     /// Omit as many rows.
     pub offset: usize,
     /// Include only given columns.
@@ -3057,7 +3058,7 @@ impl RowSetFinishing {
             *nth_diff = NonZeroUsize::new(nth_diff.get() - offset_kth_copy).unwrap();
         }
 
-        let limit = self.limit.unwrap_or(usize::MAX);
+        let limit = self.limit.unwrap_or(NonNeg::<i64>::max());
 
         // The code below is logically equivalent to:
         //
@@ -3072,13 +3073,13 @@ impl RowSetFinishing {
             .iter()
             .try_fold(0, |sum: usize, (_, count)| {
                 let new_sum = sum.saturating_add(count.get());
-                if new_sum > limit {
+                if new_sum > usize::cast_from(u64::from(limit)) {
                     None
                 } else {
                     Some(new_sum)
                 }
             })
-            .unwrap_or(limit);
+            .unwrap_or_else(|| usize::cast_from(u64::from(limit)));
 
         // Check that the bytes allocated in the Vec below will be less than the minimum possible
         // byte limit (i.e., if zero rows spill to heap). We still have to check each row below
@@ -3093,7 +3094,7 @@ impl RowSetFinishing {
         }
 
         let mut ret = Vec::with_capacity(return_row_count);
-        let mut remaining = limit;
+        let mut remaining = usize::cast_from(u64::from(limit));
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
         let mut total_bytes = 0;
@@ -3506,7 +3507,7 @@ mod tests {
                 desc: true,
                 nulls_last: true,
             }],
-            limit: Some(7),
+            limit: Some(NonNeg::try_from(7).unwrap()),
             offset: Default::default(),
             project: vec![1, 3, 4, 5],
         };

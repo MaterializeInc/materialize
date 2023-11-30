@@ -895,7 +895,22 @@ SELECT * FROM ov
               "nulls_last": false
             }
           ],
-          "limit": 5,
+          "limit": {
+            "Literal": [
+              {
+                "Ok": {
+                  "data": [
+                    47,
+                    5
+                  ]
+                }
+              },
+              {
+                "scalar_type": "Int64",
+                "nullable": false
+              }
+            ]
+          },
           "offset": 0,
           "monotonic": false,
           "expected_group_size": null
@@ -2208,7 +2223,22 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                             0
                           ],
                           "order_key": [],
-                          "limit": 1,
+                          "limit": {
+                            "Literal": [
+                              {
+                                "Ok": {
+                                  "data": [
+                                    47,
+                                    1
+                                  ]
+                                }
+                              },
+                              {
+                                "scalar_type": "Int64",
+                                "nullable": false
+                              }
+                            ]
+                          },
                           "offset": 0,
                           "monotonic": false,
                           "expected_group_size": null
@@ -2398,7 +2428,22 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                 0
                               ],
                               "order_key": [],
-                              "limit": 1,
+                              "limit": {
+                                "Literal": [
+                                  {
+                                    "Ok": {
+                                      "data": [
+                                        47,
+                                        1
+                                      ]
+                                    }
+                                  },
+                                  {
+                                    "scalar_type": "Int64",
+                                    "nullable": false
+                                  }
+                                ]
+                              },
                               "offset": 0,
                               "monotonic": false,
                               "expected_group_size": null

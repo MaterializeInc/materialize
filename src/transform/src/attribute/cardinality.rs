@@ -340,7 +340,7 @@ impl Factorizer for WorstCaseFactorizer {
         if let Some(group_size) = expected_group_size {
             input / f64::cast_lossy(*group_size)
         } else if group_key.is_empty() {
-            SymExp::from(1)
+            SymExp::from(1.0)
         } else {
             // in the worst case, every row is its own group
             input.clone()
@@ -357,8 +357,8 @@ impl Factorizer for WorstCaseFactorizer {
         // TODO: support simple arithmetic expressions
         let k = limit
             .as_ref()
-            .and_then(|l| l.as_literal_usize())
-            .unwrap_or(1);
+            .and_then(|l| l.as_literal_int64())
+            .map_or(1, |l| std::cmp::max(0, l));
 
         if let Some(group_size) = expected_group_size {
             input * (f64::cast_lossy(k) / f64::cast_lossy(*group_size))

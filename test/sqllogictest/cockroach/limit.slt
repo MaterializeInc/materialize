@@ -58,11 +58,13 @@ SELECT generate_series FROM generate_series(1, 100) FETCH NEXT ROW ONLY LIMIT 3;
 statement error Expected end of statement, found FETCH
 SELECT generate_series FROM generate_series(1, 100) LIMIT 3 FETCH NEXT ROW ONLY;
 
-statement error LIMIT must be an integer constant
+query I
 SELECT generate_series FROM generate_series(1, 100) FETCH NEXT 1 + 1 ROWS ONLY;
+----
+1
+2
 
-# TODO(benesch): support this.
-query error Expected a keyword at the beginning of a statement, found number
+query I
 SELECT generate_series FROM generate_series(1, 100) ORDER BY generate_series FETCH FIRST (1 + 1) ROWS ONLY;
 ----
 1

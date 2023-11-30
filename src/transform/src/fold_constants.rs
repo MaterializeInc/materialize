@@ -18,7 +18,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
 use mz_repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena};
 
-use crate::{TransformCtx, TransformError};
+use crate::{any, TransformCtx, TransformError};
 
 /// Replace operators on constant collections with constant collections.
 #[derive(Debug)]
@@ -137,14 +137,24 @@ impl FoldConstants {
                 offset,
                 ..
             } => {
-                // Only fold constants with literal keys.
-                // We can improve this to arbitrary expressions, but it requires more typing.
-                if limit
-                    .as_ref()
-                    .map(|l| l.as_literal_usize().is_some())
-                    .unwrap_or(true)
-                {
-                    let limit = limit.as_ref().and_then(|l| l.as_literal_usize());
+                let input_typ = input_types.next().unwrap();
+
+                if let Some(limit) = limit {
+                    limit.reduce(input_typ);
+                }
+
+                // Only fold constants when:
+                //
+                // 1. The `limit` value is not set, or
+                // 2. The `limit` value is set to a literal x such that x >= 0.
+                //
+                // We can improve this to arbitrary expressions, but it requires
+                // more typing.
+                if any![
+                    limit.is_none(),
+                    limit.as_ref().and_then(|l| l.as_literal_int64()) >= Some(0),
+                ] {
+                    let limit = limit.as_ref().and_then(|l| l.as_literal_int64());
                     if let Some((rows, ..)) = (**input).as_const_mut() {
                         if let Ok(rows) = rows {
                             Self::fold_topk_constant(group_key, order_key, &limit, offset, rows);
@@ -532,7 +542,7 @@ impl FoldConstants {
     fn fold_topk_constant<'a>(
         group_key: &[usize],
         order_key: &[ColumnOrder],
-        limit: &Option<usize>,
+        limit: &Option<i64>,
         offset: &usize,
         rows: &'a mut [(Row, Diff)],
     ) {
@@ -580,7 +590,7 @@ impl FoldConstants {
         while cursor < rows.len() {
             // first, reset the remaining limit and offset for the current group
             let mut offset_rem: Diff = offset.clone().try_into().unwrap();
-            let mut limit_rem: Option<Diff> = limit.clone().map(|x| x.try_into().unwrap());
+            let mut limit_rem: Option<Diff> = limit.clone();
 
             let mut finger = cursor;
             while finger < rows.len() && same_group_key(&rows[cursor], &rows[finger]) {

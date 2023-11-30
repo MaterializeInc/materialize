@@ -21,9 +21,11 @@ use differential_dataflow::{AsCollection, Collection};
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
-use mz_expr::EvalError;
+use mz_expr::func::CastUint64ToInt64;
+use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc};
+use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{DatumVec, Diff, Row, SharedRow};
+use mz_repr::{Datum, DatumVec, Diff, Row, ScalarType, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
@@ -65,17 +67,18 @@ where
             if let Some(limit) = limit_err {
                 if let Some(expr) = limit {
                     if expr.could_error() {
-                        // Produce errors from limit selectors that error,
-                        // and nothing from limit selectors that do not.
+                        // Produce errors from limit selectors that error or are
+                        // negative, and nothing from limit selectors that do
+                        // not.
                         let expr = expr.clone();
                         let mut datum_vec = mz_repr::DatumVec::new();
                         let errors = ok_input.flat_map(move |row| {
                             let temp_storage = mz_repr::RowArena::new();
                             let datums = datum_vec.borrow_with(&row);
-                            if let Err(e) = expr.eval(&datums[..], &temp_storage) {
-                                Some(e.into())
-                            } else {
-                                None
+                            match expr.eval(&datums[..], &temp_storage) {
+                                Ok(l) if l.unwrap_int64() < 0 => Some(EvalError::NegLimit.into()),
+                                Ok(_) => None,
+                                Err(e) => Some(e.into()),
                             }
                         });
                         err_collection = err_collection.concat(&errors);
@@ -261,21 +264,22 @@ where
             // We may need a new `limit` that reflects the addition of `offset`.
             // Ideally we compile it down to a literal if at all possible.
             if offset > 0 {
-                use mz_expr::{BinaryFunc, MirScalarExpr};
-                use mz_repr::{Datum, ScalarType};
+                let new_limit = (|| {
+                    let limit = limit.as_literal_int64()?;
+                    let offset = i64::try_from(offset).ok()?;
+                    limit.checked_add(offset)
+                })();
 
-                if let Some(literal) = limit.as_literal_usize() {
-                    limit = MirScalarExpr::literal_ok(
-                        Datum::UInt64((literal + offset).try_into().unwrap()),
-                        ScalarType::UInt64,
-                    );
+                if let Some(new_limit) = new_limit {
+                    limit = MirScalarExpr::literal_ok(Datum::Int64(new_limit), ScalarType::Int64);
                 } else {
                     limit = limit.call_binary(
                         MirScalarExpr::literal_ok(
-                            Datum::UInt64(offset.try_into().unwrap()),
+                            Datum::UInt64(u64::cast_from(offset)),
                             ScalarType::UInt64,
-                        ),
-                        BinaryFunc::AddUInt64,
+                        )
+                        .call_unary(UnaryFunc::CastUint64ToInt64(CastUint64ToInt64)),
+                        BinaryFunc::AddInt64,
                     );
                 }
             }
@@ -467,8 +471,8 @@ where
         .mz_reduce_abelian::<_, KeyValSpine<_, _, _, _>>("Reduced TopK input", {
             move |key, source, target: &mut Vec<(R, Diff)>| {
                 // Unpack the limit, either into an integer literal or an expression to evaluate.
-                let limit: Option<usize> = limit.as_ref().map(|l| {
-                    if let Some(l) = l.as_literal_usize() {
+                let limit: Option<i64> = limit.as_ref().map(|l| {
+                    if let Some(l) = l.as_literal_int64() {
                         l
                     } else {
                         let temp_storage = mz_repr::RowArena::new();
@@ -476,9 +480,8 @@ where
                         // Unpack `key` and determine the limit.
                         // If the limit errors, use a zero limit; errors are surfaced elsewhere.
                         l.eval(&key_datums, &temp_storage)
-                            .unwrap_or(mz_repr::Datum::UInt64(0))
-                            .as_usize()
-                            .expect("Key function must evaluate to integer literal")
+                            .unwrap_or(Datum::Int64(0))
+                            .unwrap_int64()
                     }
                 });
 
@@ -493,11 +496,9 @@ where
                 }
 
                 // Determine if we must actually shrink the result set.
-                // TODO(benesch): avoid dangerous `as` conversion.
-                #[allow(clippy::as_conversions)]
                 let must_shrink = offset > 0
                     || limit
-                        .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() as usize > l)
+                        .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
                         .unwrap_or(false);
                 if !must_shrink {
                     return;
@@ -549,7 +550,7 @@ where
                     #[allow(clippy::as_conversions)]
                     if let Some(limit) = &mut limit {
                         diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
-                        *limit -= diff as usize;
+                        *limit -= diff;
                     }
                     // Output the indicated number of rows.
                     if diff > 0 {
@@ -600,7 +601,7 @@ where
                         };
 
                         // Evalute the limit, first as a constant and then against the key if needed.
-                        let limit = if let Some(l) = limit.as_literal_usize() {
+                        let limit = if let Some(l) = limit.as_literal_int64() {
                             l
                         } else {
                             let temp_storage = mz_repr::RowArena::new();
@@ -609,17 +610,13 @@ where
                             // If the limit errors, use a zero limit; errors are surfaced elsewhere.
                             limit
                                 .eval(&key_datums, &temp_storage)
-                                .unwrap_or(mz_repr::Datum::UInt64(0))
-                                .as_usize()
-                                .expect("Key function must evaluate to integer literal")
+                                .unwrap_or(mz_repr::Datum::Int64(0))
+                                .unwrap_int64()
                         };
 
-                        let topk =
-                            agg_time
-                                .entry((grp_row, record_time))
-                                .or_insert_with(move || {
-                                    topk_agg::TopKBatch::new(limit.try_into().expect("must fit"))
-                                });
+                        let topk = agg_time
+                            .entry((grp_row, record_time))
+                            .or_insert_with(move || topk_agg::TopKBatch::new(limit));
                         topk.update(monoid, diff);
                     }
                     notificator.notify_at(time.retain());

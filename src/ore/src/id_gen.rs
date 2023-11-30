@@ -182,7 +182,6 @@ where
     }
 }
 
-#[cfg(feature = "serde")]
 impl<T> serde::Serialize for IdHandle<T>
 where
     T: serde::Serialize + From<u8> + AddAssign + PartialOrd + Copy,
@@ -337,7 +336,6 @@ mod tests {
         assert!(btree.is_empty());
     }
 
-    #[cfg(feature = "serde")]
     #[mz_test_macro::test]
     fn test_serialization() {
         let allocator = IdAllocator::<u32>::new(42, 43);

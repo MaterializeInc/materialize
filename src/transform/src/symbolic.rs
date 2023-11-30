@@ -129,6 +129,11 @@ impl<V> SymbolicExpression<V> {
         }
     }
 
+    /// Generate a symbolic expression from an `i64` (may be lossy for high values)
+    pub fn i64(n: i64) -> Self {
+        Self::Constant(OrderedFloat(f64::cast_lossy(n)))
+    }
+
     /// Generate a symbolic expression from a `usize` (may be lossy for high values)
     pub fn usize(n: usize) -> Self {
         Self::Constant(OrderedFloat(f64::cast_lossy(n)))
@@ -536,6 +541,12 @@ where
 impl<V> From<usize> for SymbolicExpression<V> {
     fn from(value: usize) -> Self {
         SymbolicExpression::usize(value)
+    }
+}
+
+impl<V> From<i64> for SymbolicExpression<V> {
+    fn from(value: i64) -> Self {
+        SymbolicExpression::i64(value)
     }
 }
 

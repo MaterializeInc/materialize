@@ -173,7 +173,7 @@ pub fn describe_select(
         return Ok(StatementDesc::new(Some(desc)));
     }
 
-    let query::PlannedQuery { desc, .. } =
+    let query::PlannedRootQuery { desc, .. } =
         query::plan_root_query(scx, stmt.query, QueryLifetime::OneShot)?;
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -188,7 +188,7 @@ pub fn plan_select(
         return Ok(Plan::SideEffectingFunc(f));
     }
 
-    let query::PlannedQuery {
+    let query::PlannedRootQuery {
         expr, finishing, ..
     } = plan_query(scx, select.query, params, QueryLifetime::OneShot)?;
     let when = query::plan_as_of(scx, select.as_of)?;
@@ -330,7 +330,7 @@ pub fn plan_explain_plan(
             crate::plan::Explainee::Index(item.id())
         }
         Explainee::Query(query, broken) => {
-            let query::PlannedQuery {
+            let query::PlannedRootQuery {
                 expr: mut raw_plan,
                 desc,
                 finishing: row_set_finishing,
@@ -484,7 +484,7 @@ pub fn plan_explain_timestamp(
     };
 
     let raw_plan = {
-        let query::PlannedQuery {
+        let query::PlannedRootQuery {
             expr: mut raw_plan,
             desc: _,
             finishing: _,
@@ -508,8 +508,8 @@ pub fn plan_query(
     query: Query<Aug>,
     params: &Params,
     lifetime: QueryLifetime,
-) -> Result<query::PlannedQuery<MirRelationExpr>, PlanError> {
-    let query::PlannedQuery {
+) -> Result<query::PlannedRootQuery<MirRelationExpr>, PlanError> {
+    let query::PlannedRootQuery {
         mut expr,
         desc,
         finishing,
@@ -517,7 +517,7 @@ pub fn plan_query(
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(params)?;
 
-    Ok(query::PlannedQuery {
+    Ok(query::PlannedRootQuery {
         expr: expr.lower(scx.catalog.system_vars())?,
         desc,
         finishing,
@@ -538,7 +538,7 @@ pub fn describe_subscribe(
                 .into_owned()
         }
         SubscribeRelation::Query(query) => {
-            let query::PlannedQuery { desc, .. } =
+            let query::PlannedRootQuery { desc, .. } =
                 query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
             desc
         }

@@ -144,8 +144,9 @@ message ProtoAggregateFunc {
 }
 
 message ProtoRowSetFinishing {
+    reserved 2;
     repeated ProtoColumnOrder order_by = 1;
-    optional uint64 limit = 2;
+    optional int64 limit = 5;
     uint64 offset = 3;
     repeated uint64 project = 4;
 }

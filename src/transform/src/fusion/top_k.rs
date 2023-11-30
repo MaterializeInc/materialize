@@ -75,29 +75,41 @@ impl TopK {
                     //
                     // offset = inner_offset + outer_offset
                     // limit = min(max(inner_limit - outer_offset, 0), outer_limit)
-                    let inner_limit_usize = inner_limit.as_ref().map(|l| l.as_literal_usize());
-                    let outer_limit_usize = limit.as_ref().map(|l| l.as_literal_usize());
+                    let inner_limit_int64 = inner_limit.as_ref().map(|l| l.as_literal_int64());
+                    let outer_limit_int64 = limit.as_ref().map(|l| l.as_literal_int64());
                     // If either limit is an expression rather than a literal, bail out.
-                    if inner_limit_usize == Some(None) || outer_limit_usize == Some(None) {
+                    if inner_limit_int64 == Some(None) || outer_limit_int64 == Some(None) {
                         break;
                     }
-                    let inner_limit_usize = inner_limit_usize.and_then(|l| l);
-                    let outer_limit_usize = outer_limit_usize.and_then(|l| l);
+                    let inner_limit_int64 = inner_limit_int64.flatten();
+                    let outer_limit_int64 = outer_limit_int64.flatten();
+                    // If either limit is less than zero, bail out.
+                    if inner_limit_int64.map_or(false, |l| l < 0) {
+                        break;
+                    }
+                    if outer_limit_int64.map_or(false, |l| l < 0) {
+                        break;
+                    }
 
-                    if let Some(inner_limit) = inner_limit_usize {
-                        let inner_limit_minus_outer_offset = inner_limit.saturating_sub(*offset);
-                        let new_limit = if let Some(outer_limit) = outer_limit_usize {
+                    let Ok(offset_int64) = i64::try_from(*offset) else {
+                        break;
+                    };
+
+                    if let Some(inner_limit) = inner_limit_int64 {
+                        let inner_limit_minus_outer_offset =
+                            std::cmp::max(inner_limit - offset_int64, 0);
+                        let new_limit = if let Some(outer_limit) = outer_limit_int64 {
                             std::cmp::min(outer_limit, inner_limit_minus_outer_offset)
                         } else {
                             inner_limit_minus_outer_offset
                         };
                         *limit = Some(mz_expr::MirScalarExpr::literal_ok(
-                            mz_repr::Datum::UInt64(new_limit.try_into().unwrap()),
-                            mz_repr::ScalarType::UInt64,
+                            mz_repr::Datum::Int64(new_limit),
+                            mz_repr::ScalarType::Int64,
                         ));
                     }
 
-                    if let Some(0) = limit.as_ref().and_then(|l| l.as_literal_usize()) {
+                    if let Some(0) = limit.as_ref().and_then(|l| l.as_literal_int64()) {
                         relation.take_safely();
                         break;
                     }

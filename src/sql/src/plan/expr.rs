@@ -1350,7 +1350,6 @@ impl HirRelationExpr {
         }
     }
 
-    #[allow(dead_code)]
     pub fn top_k(
         self,
         group_key: Vec<usize>,
@@ -1654,12 +1653,16 @@ impl HirRelationExpr {
                         f(&aggregate.expr, depth)?;
                     }
                 }
+                HirRelationExpr::TopK { limit, .. } => {
+                    if let Some(limit) = limit {
+                        f(limit, depth)?;
+                    }
+                }
                 HirRelationExpr::Union { .. }
                 | HirRelationExpr::Let { .. }
                 | HirRelationExpr::LetRec { .. }
                 | HirRelationExpr::Project { .. }
                 | HirRelationExpr::Distinct { .. }
-                | HirRelationExpr::TopK { .. }
                 | HirRelationExpr::Negate { .. }
                 | HirRelationExpr::Threshold { .. }
                 | HirRelationExpr::Constant { .. }
@@ -1703,12 +1706,16 @@ impl HirRelationExpr {
                         f(&mut aggregate.expr, depth)?;
                     }
                 }
+                HirRelationExpr::TopK { limit, .. } => {
+                    if let Some(limit) = limit {
+                        f(limit, depth)?;
+                    }
+                }
                 HirRelationExpr::Union { .. }
                 | HirRelationExpr::Let { .. }
                 | HirRelationExpr::LetRec { .. }
                 | HirRelationExpr::Project { .. }
                 | HirRelationExpr::Distinct { .. }
-                | HirRelationExpr::TopK { .. }
                 | HirRelationExpr::Negate { .. }
                 | HirRelationExpr::Threshold { .. }
                 | HirRelationExpr::Constant { .. }
@@ -1804,9 +1811,9 @@ impl HirRelationExpr {
                 )),
                 group_key: vec![],
                 order_key: old_finishing.order_by,
-                limit: old_finishing.limit.map(|l| {
-                    HirScalarExpr::literal(Datum::UInt64(l.try_into().unwrap()), ScalarType::UInt64)
-                }),
+                limit: old_finishing
+                    .limit
+                    .map(|l| HirScalarExpr::literal(Datum::Int64(*l), ScalarType::Int64)),
                 offset: old_finishing.offset,
                 expected_group_size: group_size_hints.limit_input_group_size,
             }
@@ -2643,6 +2650,42 @@ impl HirScalarExpr {
 
     pub fn is_literal_null(&self) -> bool {
         Some(Datum::Null) == self.as_literal()
+    }
+
+    /// Return true iff `self` consists only of constants, function calls, and
+    /// if-else statements.
+    pub fn is_constant(&self) -> bool {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            match expr {
+                Self::Literal(_, _) => {
+                    // leaf node, do nothing
+                }
+                Self::CallUnary { expr, .. } => {
+                    worklist.push(expr);
+                }
+                Self::CallBinary {
+                    func: _,
+                    expr1,
+                    expr2,
+                } => {
+                    worklist.push(expr1);
+                    worklist.push(expr2);
+                }
+                Self::CallVariadic { func: _, exprs } => {
+                    worklist.extend(exprs.iter());
+                }
+                Self::If { cond, then, els } => {
+                    worklist.push(cond);
+                    worklist.push(then);
+                    worklist.push(els);
+                }
+                _ => {
+                    return false; // Any other node makes `self` non-constant.
+                }
+            }
+        }
+        true
     }
 
     pub fn call_unary(self, func: UnaryFunc) -> Self {
