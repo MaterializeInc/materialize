@@ -199,6 +199,8 @@ openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 
+lgalloc = { git = "https://github.com/antiguru/rust-lgalloc.git", branch = "eager_clear" }
+
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.
 columnation = { git = "https://github.com/MaterializeInc/columnation.git" }

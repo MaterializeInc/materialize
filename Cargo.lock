@@ -3012,8 +3012,7 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 [[package]]
 name = "lgalloc"
 version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "914567ecbb55c70b5a8d3009c45dd684619b5e5d1e8d84eff140b53b8e136e60"
+source = "git+https://github.com/antiguru/rust-lgalloc.git?branch=eager_clear#376278d004d4df31a96c4657fac3ea81ddb767da"
 dependencies = [
  "crossbeam-deque",
  "libc",
