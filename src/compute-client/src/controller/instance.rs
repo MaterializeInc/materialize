@@ -560,6 +560,7 @@ where
             config,
             ClusterStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
             self.compute.metrics.for_replica(id),
+            self.compute.introspection_tx.clone(),
         );
 
         // Take this opportunity to clean up the history we should present.
