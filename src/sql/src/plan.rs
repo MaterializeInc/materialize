@@ -1547,7 +1547,7 @@ pub enum ExecuteTimeout {
 pub enum IndexOption {
     /// Configures the logical compaction window for an index. `None` disables
     /// logical compaction entirely.
-    LogicalCompactionWindow(Option<Duration>),
+    LogicalCompactionWindow(Option<mz_repr::Timestamp>),
 }
 
 #[derive(Clone, Debug)]
