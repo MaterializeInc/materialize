@@ -388,7 +388,6 @@ steps:
       - id: kafka-auth
         label: Kafka auth test
         depends_on: build-x86_64
-        skip: "TODO(def-) Reenable when #23469 is fixed"
         timeout_in_minutes: 30
         inputs: [test/kafka-auth/smoketest.td]
         artifact_paths: junit_*.xml
