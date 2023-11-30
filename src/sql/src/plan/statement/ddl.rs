@@ -4113,7 +4113,10 @@ fn plan_index_options(
     if let Some(OptionalInterval(lcw)) = logical_compaction_window {
         scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
         out.push(crate::plan::IndexOption::LogicalCompactionWindow(
-            lcw.map(|interval| interval.duration()).transpose()?,
+            lcw.map(|interval| interval.duration())
+                .transpose()?
+                .map(|duration| duration.try_into())
+                .transpose()?,
         ))
     }
 
