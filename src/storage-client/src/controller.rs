@@ -515,6 +515,19 @@ pub trait StorageController: Debug + Send {
         type_: IntrospectionType,
         updates: Vec<(Row, Diff)>,
     );
+
+    /// Resets the txns system to a set of invariants necessary for correctness.
+    ///
+    /// Must be called on boot before create_collections or the various appends.
+    /// This is true _regardless_ of whether the persist-txn feature is on or
+    /// not. See the big comment in the impl of the method for details. Ideally,
+    /// this would have just been folded into `Controller::new`, but it needs
+    /// the timestamp and there are boot dependency issues.
+    ///
+    /// TODO: This can be removed once we've flipped to the new txns system for
+    /// good and there is no possibility of the old code running concurrently
+    /// with the new code.
+    async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
