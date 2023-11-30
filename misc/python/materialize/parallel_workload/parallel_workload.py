@@ -176,6 +176,7 @@ def run(
             action_list.autocommit,
             system=False,
             composition=composition,
+            action_list=action_list,
         )
         thread_name = f"worker_{i}"
         print(
@@ -262,7 +263,7 @@ def run(
             [StatisticsAction(worker_rng, composition)],
             [1],
             end_time,
-            autocommit=True,
+            autocommit=False,
             system=True,
             composition=composition,
         )
@@ -275,7 +276,7 @@ def run(
         thread.start()
         threads.append(thread)
 
-    num_queries = Counter()
+    num_queries = defaultdict(Counter)
     try:
         while time.time() < end_time:
             for thread in threads:
@@ -293,7 +294,9 @@ def run(
             )
             for worker in workers:
                 for action in worker.num_queries.elements():
-                    num_queries[action] += worker.num_queries[action]
+                    num_queries[worker.action_list][action] += worker.num_queries[
+                        action
+                    ]
                 worker.num_queries.clear()
     except KeyboardInterrupt:
         print("Keyboard interrupt, exiting")
@@ -334,14 +337,14 @@ def run(
         for count in counter.values():
             num_failures += count
 
-    total_queries = num_queries.total()
+    total_queries = sum(sub.total() for sub in num_queries.values())
     failed = 100.0 * num_failures / total_queries if total_queries else 0
     print(f"Queries executed: {total_queries} ({failed:.0f}% failed)")
     print("--- Action statistics:")
     for action_list in action_lists:
         text = ", ".join(
             [
-                f"{action_class.__name__}: {num_queries[action_class]}"
+                f"{action_class.__name__.removesuffix('Action')}: {num_queries[action_list][action_class]}"
                 for action_class in action_list.action_classes
             ]
         )

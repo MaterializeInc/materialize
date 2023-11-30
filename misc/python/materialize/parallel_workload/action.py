@@ -751,7 +751,7 @@ class CreateViewAction(Action):
         if self.rng.choice([True, False]) or base_object2 == base_object:
             base_object2 = None
         schema = self.rng.choice(exe.db.schemas)
-        with schema.db.lock:
+        with schema.lock:
             if schema not in exe.db.schemas:
                 return False
             view = View(
