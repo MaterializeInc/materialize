@@ -293,13 +293,7 @@ Issue a SQL query to get started. Need help?
             .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
             .await?
         {
-            (
-                ExecuteResponse::SendingRows {
-                    future,
-                    otel_ctx: _,
-                },
-                _,
-            ) => match future.await {
+            (ExecuteResponse::SendingRows { future }, _) => match future.await {
                 PeekResponseUnary::Rows(rows) => Ok(rows),
                 PeekResponseUnary::Canceled => bail!("query canceled"),
                 PeekResponseUnary::Error(e) => bail!(e),

@@ -358,16 +358,10 @@ pub enum ExecuteResponse {
     SendingRows {
         #[derivative(Debug = "ignore")]
         future: RowsFuture,
-        #[derivative(Debug = "ignore")]
-        otel_ctx: OpenTelemetryContext,
     },
     /// Like `SendingRows`, but the rows are known to be available
     /// immediately, and thus the execution is considered ended in the coordinator.
-    SendingRowsImmediate {
-        rows: Vec<Row>,
-        #[derivative(Debug = "ignore")]
-        otel_ctx: OpenTelemetryContext,
-    },
+    SendingRowsImmediate { rows: Vec<Row> },
     /// The specified variable was set to a new value.
     SetVariable {
         name: String,

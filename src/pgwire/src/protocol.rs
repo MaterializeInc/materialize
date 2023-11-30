@@ -1439,15 +1439,11 @@ where
                 )
                 .await
             }
-            ExecuteResponse::SendingRows {
-                future: rx,
-                otel_ctx,
-            } => {
+            ExecuteResponse::SendingRows { future: rx } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
 
-                let mut span = tracing::debug_span!("send_execute_response");
-                otel_ctx.attach_as_parent_to(&mut span);
+                let span = tracing::debug_span!("sending_rows");
                 let rows = self.row_future_to_stream(&span, rx).await?;
 
                 self.send_rows(
@@ -1467,12 +1463,11 @@ where
                 .await
                 .map(|(state, _)| state)
             }
-            ExecuteResponse::SendingRowsImmediate { rows, otel_ctx } => {
+            ExecuteResponse::SendingRowsImmediate { rows } => {
                 let row_desc = row_desc
                     .expect("missing row description for ExecuteResponse::SendingRowsImmediate");
 
-                let mut span = tracing::debug_span!("send_rows_immediate");
-                otel_ctx.attach_as_parent_to(&mut span);
+                let span = tracing::debug_span!("sending_rows_immediate");
 
                 let stream =
                     futures::stream::once(futures::future::ready(PeekResponseUnary::Rows(rows)));
@@ -1609,12 +1604,8 @@ where
                             .retire_execute(ctx_extra, statement_ended_execution_reason);
                         return result;
                     }
-                    ExecuteResponse::SendingRows {
-                        future: rows_rx,
-                        otel_ctx,
-                    } => {
-                        let mut span = tracing::debug_span!("row_future_to_stream");
-                        otel_ctx.attach_as_parent_to(&mut span);
+                    ExecuteResponse::SendingRows { future: rows_rx } => {
+                        let span = tracing::debug_span!("sending_rows");
                         let rows = self.row_future_to_stream(&span, rows_rx).await?;
                         // We don't need to finalize execution here;
                         // it was already done in the
@@ -1633,9 +1624,8 @@ where
                             .await
                             .map(|(state, _)| state);
                     }
-                    ExecuteResponse::SendingRowsImmediate { rows, otel_ctx } => {
-                        let mut span = tracing::debug_span!("send_rows_immediate");
-                        otel_ctx.attach_as_parent_to(&mut span);
+                    ExecuteResponse::SendingRowsImmediate { rows } => {
+                        let span = tracing::debug_span!("sending_rows_immediate");
 
                         let rows = futures::stream::once(futures::future::ready(
                             PeekResponseUnary::Rows(rows),

@@ -4337,10 +4337,7 @@ impl Coordinator {
                 Ok(diffs)
             };
             let diffs = match peek_response {
-                ExecuteResponse::SendingRows {
-                    future: batch,
-                    otel_ctx: _,
-                } => {
+                ExecuteResponse::SendingRows { future: batch } => {
                     // TODO(jkosh44): This timeout should be removed;
                     // we should instead periodically ensure clusters are
                     // healthy and actively cancel any work waiting on unhealthy
@@ -4368,7 +4365,7 @@ impl Coordinator {
                         }
                     }
                 }
-                ExecuteResponse::SendingRowsImmediate { rows, otel_ctx: _ } => make_diffs(rows),
+                ExecuteResponse::SendingRowsImmediate { rows } => make_diffs(rows),
                 resp @ ExecuteResponse::Canceled => {
                     ctx.retire(Ok(resp));
                     return;
