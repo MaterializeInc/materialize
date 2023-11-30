@@ -10,6 +10,7 @@
 //! A source that reads from a persist shard.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Debug;
 use std::future::Future;
@@ -22,8 +23,6 @@ use std::time::Instant;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
-use futures::StreamExt;
-use futures_util::future::Either;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::{Codec, Codec64};
@@ -37,12 +36,11 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::{timestamp::Refines, Antichain, Timestamp};
 use timely::scheduling::Activator;
 use timely::PartialOrder;
-use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
 use crate::cfg::RetryParameters;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
-use crate::read::ListenEvent;
+use crate::read::{ListenEvent, SubscriptionLeaseReturner};
 use crate::stats::PartStats;
 use crate::{Diagnostics, PersistClient, ShardId};
 
@@ -194,38 +192,50 @@ where
     // values that are `yield`-ed from it's body.
     let name_owned = name.to_owned();
 
-    let mut builder =
-        AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
-    let (mut descs_output, descs_stream) = builder.new_output();
+    // Create a shared slot between the operator to store the subscription handle
+    let subscription_handle = Rc::new(RefCell::new(None));
+    let return_subscription_handle = Rc::clone(&subscription_handle);
 
-    let mut completed_fetches = builder.new_input_connection(
+    // Create a oneshot channel to give the part returner a SubscriptionLeaseReturner
+    let (tx, rx) = tokio::sync::oneshot::channel::<SubscriptionLeaseReturner>();
+    let mut builder = AsyncOperatorBuilder::new(
+        format!("shard_source_descs_return({})", name),
+        scope.clone(),
+    );
+    let mut completed_fetches = builder.new_input(
         &completed_fetches_stream,
         // We must ensure all completed fetches are fed into
         // the worker responsible for managing part leases
         Exchange::new(move |_| u64::cast_from(chosen_worker)),
-        // Disconnect the completed fetches feedback edge from the output
-        // capabilities of the operator. The feedback edge influences only
-        // when the operator can be safely shut down, and does not affect
-        // its output.
-        vec![Antichain::new()],
     );
-
-    // NB: It is not safe to use the shutdown button, due to the possibility
-    // of the Subscribe handle's SeqNo hold releasing before `shard_source_fetch`
-    // has completed fetches to each outstanding part. Instead, we create a
-    // channel that we pass along as a token. Closing the Receiver informs this
-    // operator that the dataflow is being shutdown, and allows for a graceful
-    // termination where we wait for `shard_source_fetch` to complete all of
-    // its fetches before expiring our Subscribe handle and its SeqNo hold.
-    // We wrap the token with `ActivateOnDrop` to ensure that the operator is
-    // activated after the Receiver is closed.
-    let (token_tx, token_rx) = mpsc::channel::<()>(1);
-    let activate_on_drop = Rc::new(ActivateOnDrop {
-        activator: builder.activator().clone(),
-        token_rx,
+    // This operator doesn't need to use a token because it naturally exits when its input
+    // frontier reaches the empty antichain.
+    builder.build(move |_caps| async move {
+        let Ok(mut lease_returner) = rx.await else {
+            // Either we're not the chosen worker or the dataflow was shutdown before the
+            // subscriber was even created.
+            return;
+        };
+        while let Some(event) = completed_fetches.next_mut().await {
+            let Event::Data(_cap, data) = event else {
+                continue;
+            };
+            for part in data.drain(..) {
+                lease_returner.return_leased_part(
+                    lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part),
+                );
+            }
+        }
+        // Make it explicit that the subscriber is kept alive until we have finished returning parts
+        drop(return_subscription_handle);
     });
 
-    let _shutdown_button = builder.build(move |caps| async move {
+    let mut builder =
+        AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
+    let (mut descs_output, descs_stream) = builder.new_output();
+
+    #[allow(clippy::await_holding_refcell_ref)]
+    let shutdown_button = builder.build(move |caps| async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
         // Only one worker is responsible for distributing parts
@@ -237,9 +247,6 @@ where
             return;
         }
 
-        let token_is_dropped = token_tx.closed();
-        tokio::pin!(token_is_dropped);
-
         // Internally, the `open_leased_reader` call registers a new LeasedReaderId and then fires
         // up a background tokio task to heartbeat it. It is possible that we might get a
         // particularly adversarial scheduling where the CRDB query to register the id is sent and
@@ -249,13 +256,14 @@ where
         // TODO: Really we likely need to swap the inners of all persist operators to be
         // communicating with a tokio task over a channel, but that's much much harder, so for now
         // we whack the moles as we see them.
-        let create_read_handle = mz_ore::task::spawn(|| format!("shard_source_reader({})", name_owned), {
+        let read = mz_ore::task::spawn(|| format!("shard_source_reader({})", name_owned), {
             let diagnostics = Diagnostics {
                 handle_purpose: format!("shard_source({})", name_owned),
                 shard_name: name_owned.clone(),
             };
             async move {
-                client.await
+                client
+                    .await
                     .open_leased_reader::<K, V, G::Timestamp, D>(
                         shard_id,
                         key_schema,
@@ -264,34 +272,15 @@ where
                     )
                     .await
             }
-        });
+        })
+        .await
+        .expect("reader creation shouldn't panic")
+        .expect("could not open persist shard");
 
-        tokio::pin!(create_read_handle);
-
-        // Creating a ReadHandle can take indefinitely long, so we race its creation with our token
-        // to ensure any async work is dropped once the token is dropped.
-        //
-        // NB: Reading from a channel (token_is_dropped) is cancel-safe. `create_read_handle` is NOT
-        // cancel-safe, but we will not retry it if it is dropped.
-        let read = match futures::future::select(token_is_dropped, create_read_handle).await {
-            Either::Left(_) => {
-                // The token dropped before we finished creating our `ReadHandle.
-                // We can return immediately, as we could not have emitted any
-                // parts to fetch.
-                cap_set.downgrade(&[]);
-                return;
-            }
-            Either::Right((read, _)) => {
-                read
-                    .expect("reader creation shouldn't panic")
-                    .expect("could not open persist shard")
-            }
-        };
         let cfg = read.cfg.clone();
         let metrics = Arc::clone(&read.metrics);
 
         let as_of = as_of.unwrap_or_else(|| read.since().clone());
-
 
         // Eagerly downgrade our frontier to the initial as_of. This makes sure
         // that the output frontier of the `persist_source` closely tracks the
@@ -317,209 +306,108 @@ where
             }
         };
 
-        let create_subscribe = async {
-            read.subscribe(as_of.clone()).await
-        };
-        tokio::pin!(create_subscribe);
-        let token_is_dropped = token_tx.closed();
-        tokio::pin!(token_is_dropped);
+        // Store the subscription handle in the shared slot so that it stays alive until both
+        // operators exit
+        let mut subscription = subscription_handle.borrow_mut();
+        let subscription =
+            subscription.insert(read.subscribe(as_of.clone()).await.unwrap_or_else(|e| {
+                panic!(
+                    "{}: {} cannot serve requested as_of {:?}: {:?}",
+                    name_owned, shard_id, as_of, e
+                )
+            }));
 
-        // creating a Subscribe can take indefinitely long (e.g. as_of in the far future),
-        // so we race its creation with our token to ensure any async work is dropped once
-        // the token is dropped.
-        //
-        // NB: reading from a channel (token_is_dropped) is cancel-safe.
-        //     create_subscribe is NOT cancel-safe, but we will not retry it if it is dropped.
-        let subscription = match futures::future::select(token_is_dropped, create_subscribe).await {
-            Either::Left(_) => {
-                // the token dropped before we finished creating our Subscribe.
-                // we can return immediately, as we could not have emitted any
-                // parts to fetch.
-                cap_set.downgrade(&[]);
-                return;
-            }
-            Either::Right((subscription, _)) => {
-                subscription
-            }
-        };
-
-        let mut subscription = subscription.unwrap_or_else(|e| {
-            panic!(
-                "{}: {} cannot serve requested as_of {:?}: {:?}",
-                name_owned, shard_id, as_of, e
-            )
-        });
-
-        let mut batch_parts = vec![];
+        // We're about to start producing parts to be fetched whose leases will be returned by the
+        // `shard_source_descs_return` operator above. In order for that operator to successfully
+        // return the leases we send it the lease returner associated with our shared subscriber.
+        tx.send(subscription.lease_returner().clone())
+            .expect("lease returner exited before desc producer");
         let mut lease_returner = subscription.lease_returner().clone();
-        let (_keep_subscribe_alive_tx, keep_subscribe_alive_rx) = tokio::sync::oneshot::channel::<()>();
-        let subscription_stream = async_stream::stream! {
 
-            let mut done = false;
-            while !done {
-                let listen_retry = listen_sleep.as_ref().map(|retry| retry());
-                for event in subscription.next(listen_retry).await {
-                    if let ListenEvent::Progress(ref progress) = event {
-                        // If `until.less_equal(progress)`, it means that all subsequent batches will
-                        // contain only times greater or equal to `until`, which means they can be
-                        // dropped in their entirety. The current batch must be emitted, but we can
-                        // stop afterwards.
-                        if PartialOrder::less_equal(&until, progress) {
-                            done = true;
-                        }
+        // Read from the subscription and pass them on.
+        let mut batch_parts = vec![];
+        let listen_retry = listen_sleep.as_ref().map(|retry| retry());
+        let mut upper = Antichain::from_elem(Timestamp::minimum());
+        // If `until.less_equal(progress)`, it means that all subsequent batches will contain only
+        // times greater or equal to `until`, which means they can be dropped in their entirety.
+        while !PartialOrder::less_equal(&until, &upper) {
+            for event in subscription.next(listen_retry).await {
+                match event {
+                    ListenEvent::Updates(mut parts) => {
+                        batch_parts.append(&mut parts);
                     }
-                    yield event;
-                }
-            }
+                    ListenEvent::Progress(progress) => {
+                        // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
+                        // operator will refine this further, if its enabled.
+                        let session_cap = cap_set.delayed(&current_ts);
 
-            // intentionally keep this stream from dropping until the operator
-            // is dropped. this ensures our Subscribe handle stays alive for as
-            // long as is needed to finish fetching all of its parts.
-            let _ = keep_subscribe_alive_rx.await;
-        };
-        tokio::pin!(subscription_stream);
-
-        'emitting_parts:
-        loop {
-            // Notes on this select!:
-            //
-            // We use a `biased` select, not for correctness, but to minimize
-            // the work we need to do (e.g. check if the dataflow has been
-            // dropped before reading more data from CRDB).
-            tokio::select! {
-                biased;
-                // If the token has been dropped, we begin a graceful shutdown
-                // by downgrading to the empty frontier and proceeding to the
-                // next state, where we await our feedback edge's progression.
-                //
-                // NB: Reading from a channel is cancel safe.
-                _ = token_tx.closed() => {
-                    cap_set.downgrade(&[]);
-                    break 'emitting_parts;
-                }
-                // Return the leases of any parts that the following stage,
-                // `shard_source_fetch` has finished reading. This allows us
-                // to advance our SeqNo hold as we continue to emit batches.
-                //
-                // NB: AsyncInputHandle::next is cancel safe
-                completed_fetch = completed_fetches.next_mut() => {
-                    match completed_fetch {
-                        Some(Event::Data(_cap, data)) => {
-                            for part in data.drain(..) {
-                                lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
-                            }
-                        }
-                        Some(Event::Progress(frontier)) => {
-                            if frontier.is_empty() {
-                                return;
-                            }
-                        }
-                        None => {
-                            // the downstream operator has been dropped, nothing more to do
-                            return;
-                        }
-                    }
-                }
-                // Read from the subscription and pass them on.
-                //
-                // NB: StreamExt::next is cancel safe
-                event = subscription_stream.next() => {
-                    match event {
-                        Some(ListenEvent::Updates(mut parts)) => {
-                            batch_parts.append(&mut parts);
-                        }
-                        Some(ListenEvent::Progress(progress)) => {
-                            // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
-                            // operator will refine this further, if its enabled.
-                            let session_cap = cap_set.delayed(&current_ts);
-
-                            for mut part_desc in std::mem::take(&mut batch_parts) {
-                                // TODO: Push the filter down into the Subscribe?
-                                if cfg.dynamic.stats_filter_enabled() {
-                                    let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
-                                        should_fetch_part(&stats.decode(), AntichainRef::new(slice::from_ref(&current_ts)))
-                                    });
-                                    let bytes = u64::cast_from(part_desc.encoded_size_bytes);
-                                    if should_fetch {
-                                        metrics.pushdown.parts_fetched_count.inc();
-                                        metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
+                        for mut part_desc in std::mem::take(&mut batch_parts) {
+                            // TODO: Push the filter down into the Subscribe?
+                            if cfg.dynamic.stats_filter_enabled() {
+                                let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
+                                    should_fetch_part(
+                                        &stats.decode(),
+                                        AntichainRef::new(slice::from_ref(&current_ts)),
+                                    )
+                                });
+                                let bytes = u64::cast_from(part_desc.encoded_size_bytes);
+                                if should_fetch {
+                                    metrics.pushdown.parts_fetched_count.inc();
+                                    metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
+                                } else {
+                                    metrics.pushdown.parts_filtered_count.inc();
+                                    metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
+                                    let should_audit = {
+                                        let mut h = DefaultHasher::new();
+                                        part_desc.key.hash(&mut h);
+                                        usize::cast_from(h.finish()) % 100
+                                            < cfg.dynamic.stats_audit_percent()
+                                    };
+                                    if should_audit {
+                                        metrics.pushdown.parts_audited_count.inc();
+                                        metrics.pushdown.parts_audited_bytes.inc_by(bytes);
+                                        part_desc.request_filter_pushdown_audit();
                                     } else {
-                                        metrics.pushdown.parts_filtered_count.inc();
-                                        metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
-                                        let should_audit = {
-                                            let mut h = DefaultHasher::new();
-                                            part_desc.key.hash(&mut h);
-                                            usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()
-                                        };
-                                        if should_audit {
-                                            metrics.pushdown.parts_audited_count.inc();
-                                            metrics.pushdown.parts_audited_bytes.inc_by(bytes);
-                                            part_desc.request_filter_pushdown_audit();
-                                        } else {
-                                            debug!("skipping part because of stats filter {:?}", part_desc.stats);
-                                            lease_returner.return_leased_part(part_desc);
-                                            continue;
-                                        }
+                                        debug!(
+                                            "skipping part because of stats filter {:?}",
+                                            part_desc.stats
+                                        );
+                                        lease_returner.return_leased_part(part_desc);
+                                        continue;
                                     }
                                 }
-
-                                // Give the part to a random worker. This isn't
-                                // round robin in an attempt to avoid skew issues:
-                                // if your parts alternate size large, small, then
-                                // you'll end up only using half of your workers.
-                                //
-                                // There's certainly some other things we could be
-                                // doing instead here, but this has seemed to work
-                                // okay so far. Continue to revisit as necessary.
-                                let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                                descs_output.give(&session_cap, (worker_idx, part_desc.into_exchangeable_part())).await;
                             }
 
-                            cap_set.downgrade(progress.iter());
-                            match progress.into_option() {
-                                Some(ts) => {
-                                    current_ts = ts;
-                                }
-                                None => {
-                                    cap_set.downgrade(&[]);
-                                    break 'emitting_parts;
-                                }
-                            }
+                            // Give the part to a random worker. This isn't
+                            // round robin in an attempt to avoid skew issues:
+                            // if your parts alternate size large, small, then
+                            // you'll end up only using half of your workers.
+                            //
+                            // There's certainly some other things we could be
+                            // doing instead here, but this has seemed to work
+                            // okay so far. Continue to revisit as necessary.
+                            let worker_idx =
+                                usize::cast_from(Instant::now().hashed()) % num_workers;
+                            descs_output
+                                .give(
+                                    &session_cap,
+                                    (worker_idx, part_desc.into_exchangeable_part()),
+                                )
+                                .await;
                         }
-                        // We never expect any further output from our subscribe,
-                        // so propagate that information downstream.
-                        None => {
-                            cap_set.downgrade(&[]);
-                            break 'emitting_parts;
-                        }
-                    }
-                }
-            }
-        }
 
-        // We have finished outputting all leased parts the dataflow will need,
-        // but `shard_source_fetches` may still be fetching those parts. We must
-        // keep our Subscribe (and its SeqNo hold) alive until all of them have
-        // been fetched to avoid racing with GC and panicking on a missing blob.
-        // We can drop our handle when the feedback edge from `shard_source_fetches`
-        // advances to the empty frontier, indicating that all parts have been read.
-        while let Some(completed_fetch) = completed_fetches.next_mut().await {
-            match completed_fetch {
-                Event::Data(_cap, data) => {
-                    for part in data.drain(..) {
-                        lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
-                    }
-                }
-                Event::Progress(frontier) => {
-                    if frontier.is_empty() {
-                        return;
+                        if let Some(ts) = progress.as_option() {
+                            current_ts = ts.clone();
+                        }
+                        cap_set.downgrade(progress.iter());
+                        upper = progress;
                     }
                 }
             }
         }
     });
 
-    (descs_stream, activate_on_drop)
+    (descs_stream, Rc::new(shutdown_button.press_on_drop()))
 }
 
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
