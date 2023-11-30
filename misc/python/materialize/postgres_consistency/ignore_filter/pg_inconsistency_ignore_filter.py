@@ -25,6 +25,8 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     is_function_invoked_only_with_non_nested_parameters,
     matches_fun_by_any_name,
     matches_fun_by_name,
+    matches_op_by_pattern,
+    matches_x_or_y,
 )
 from materialize.output_consistency.ignore_filter.ignore_verdict import (
     IgnoreVerdict,
@@ -434,6 +436,16 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             partial(matches_fun_by_name, function_name_in_lower_case="mod"), True
         ):
             return YesIgnore("#22005: mod")
+
+        if query_template.matches_any_expression(
+            partial(
+                matches_x_or_y,
+                x=partial(matches_fun_by_name, function_name_in_lower_case="date_part"),
+                y=partial(matches_op_by_pattern, pattern="EXTRACT($ FROM $)"),
+            ),
+            True,
+        ):
+            return YesIgnore("#23586")
 
         if query_template.matches_any_expression(
             matches_math_op_with_large_or_tiny_val, True
