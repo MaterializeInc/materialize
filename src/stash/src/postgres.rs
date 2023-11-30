@@ -92,50 +92,48 @@ struct PreparedStatements {
 
 impl PreparedStatements {
     async fn from(client: &Client, mode: TransactionMode) -> Result<Self, StashError> {
-        let fetch_epoch = client
-            .prepare(match mode {
-                TransactionMode::Readonly | TransactionMode::Savepoint => {
-                    // For readonly and savepoint stashes, don't attempt to
-                    // increment the version and instead hard code it to 0 which
-                    // will always fail the version check, since the version
-                    // starts at 1 and goes up. Savepoint however will never
-                    // retry COMMITs (and otherwise they'd retry forever because
-                    // 0 will never succeed). Readonly can safely retry the
-                    // original transaction.
-                    "SELECT epoch, nonce, 0 AS version FROM fence"
-                }
-                TransactionMode::Writeable => {
-                    "UPDATE fence SET version=version+1 RETURNING epoch, nonce, version"
-                }
-            })
-            .await?;
-        let iter_key = client
-            .prepare(
-                "SELECT value, time, diff FROM data
+        let fetch_epoch_fut = client.prepare(match mode {
+            TransactionMode::Readonly | TransactionMode::Savepoint => {
+                // For readonly and savepoint stashes, don't attempt to
+                // increment the version and instead hard code it to 0 which
+                // will always fail the version check, since the version
+                // starts at 1 and goes up. Savepoint however will never
+                // retry COMMITs (and otherwise they'd retry forever because
+                // 0 will never succeed). Readonly can safely retry the
+                // original transaction.
+                "SELECT epoch, nonce, 0 AS version FROM fence"
+            }
+            TransactionMode::Writeable => {
+                "UPDATE fence SET version=version+1 RETURNING epoch, nonce, version"
+            }
+        });
+        let iter_key_fut = client.prepare(
+            "SELECT value, time, diff FROM data
              WHERE collection_id = $1 AND key = $2",
-            )
-            .await?;
-        let since = client
-            .prepare("SELECT since FROM sinces WHERE collection_id = $1")
-            .await?;
-        let upper = client
-            .prepare("SELECT upper FROM uppers WHERE collection_id = $1")
-            .await?;
-        let collection = client
-            .prepare("SELECT collection_id FROM collections WHERE name = $1")
-            .await?;
-        let iter = client
-            .prepare(
-                "SELECT key, value, time, diff FROM data
+        );
+        let since_fut = client.prepare("SELECT since FROM sinces WHERE collection_id = $1");
+        let upper_fut = client.prepare("SELECT upper FROM uppers WHERE collection_id = $1");
+        let collection_fut =
+            client.prepare("SELECT collection_id FROM collections WHERE name = $1");
+        let iter_fut = client.prepare(
+            "SELECT key, value, time, diff FROM data
              WHERE collection_id = $1",
-            )
-            .await?;
-        let seal = client
-            .prepare("UPDATE uppers SET upper = $1 WHERE collection_id = $2")
-            .await?;
-        let compact = client
-            .prepare("UPDATE sinces SET since = $1 WHERE collection_id = $2")
-            .await?;
+        );
+        let seal_fut = client.prepare("UPDATE uppers SET upper = $1 WHERE collection_id = $2");
+        let compact_fut = client.prepare("UPDATE sinces SET since = $1 WHERE collection_id = $2");
+
+        // Run all of our prepare statements in parallel.
+        let (fetch_epoch, iter_key, since, upper, collection, iter, seal, compact) = futures::try_join!(
+            fetch_epoch_fut,
+            iter_key_fut,
+            since_fut,
+            upper_fut,
+            collection_fut,
+            iter_fut,
+            seal_fut,
+            compact_fut
+        )?;
+
         Ok(PreparedStatements {
             fetch_epoch,
             iter_key,
@@ -538,25 +536,46 @@ impl Stash {
     /// Sets `client` to a new connection to the Postgres server.
     #[tracing::instrument(name = "stash::connect", level = "debug", skip_all)]
     async fn connect(&mut self) -> Result<(), StashError> {
-        let (mut client, connection) = self.config.lock().await.connect(self.tls.clone()).await?;
+        // Initialize a connection.
+        let result = self.config.lock().await.connect(self.tls.clone()).await;
+        let (mut client, connection) = match result {
+            Ok((client, connection)) => {
+                self.metrics
+                    .connection_attempts
+                    .with_label_values(&["success"])
+                    .inc();
+                (client, connection)
+            }
+            Err(e) => {
+                self.metrics
+                    .connection_attempts
+                    .with_label_values(&["failure"])
+                    .inc();
+                return Err(e.into());
+            }
+        };
+
+        let metrics = Arc::clone(&self.metrics);
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
+                metrics.connection_errors.inc();
                 tracing::warn!("postgres stash connection error: {}", e);
             }
         });
+
         // The Config is shared with the Consolidator, so we update the application name in the
         // session instead of the Config.
-        client
-            .batch_execute("SET application_name = 'stash'")
-            .await?;
-        client
-            .batch_execute("SET default_transaction_isolation = serializable")
-            .await?;
+        let mut statements = vec![
+            "SET application_name = 'stash'".to_string(),
+            "SET default_transaction_isolation = serializable".to_string(),
+        ];
         if let Some(schema) = &self.schema {
-            client
-                .execute(format!("SET search_path TO {schema}").as_str(), &[])
-                .await?;
+            statements.push(format!("SET search_path TO {schema}"));
         }
+        let query = statements.join(";");
+
+        // Run all of our setup as a single query to reduce network roundtrips.
+        client.batch_execute(&query).await?;
 
         if self.epoch.is_none() {
             let tx = client
@@ -596,12 +615,13 @@ impl Stash {
                 //
                 // See: https://github.com/MaterializeInc/materialize/issues/15842
                 // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-                tx.batch_execute("ALTER TABLE data CONFIGURE ZONE USING gc.ttlseconds = 600;")
-                    .await?;
-                tx.batch_execute("ALTER TABLE sinces CONFIGURE ZONE USING gc.ttlseconds = 600;")
-                    .await?;
-                tx.batch_execute("ALTER TABLE uppers CONFIGURE ZONE USING gc.ttlseconds = 600;")
-                    .await?;
+                let statements = [
+                    "ALTER TABLE data CONFIGURE ZONE USING gc.ttlseconds = 600",
+                    "ALTER TABLE sinces CONFIGURE ZONE USING gc.ttlseconds = 600",
+                    "ALTER TABLE uppers CONFIGURE ZONE USING gc.ttlseconds = 600",
+                ];
+                let query = statements.join(";");
+                tx.batch_execute(&query).await?;
 
                 // Bump the epoch, which will cause any previous connection to fail. Add a
                 // unique nonce so that if some other thing recreates the entire schema, we
