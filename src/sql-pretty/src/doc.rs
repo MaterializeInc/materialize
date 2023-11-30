@@ -14,8 +14,8 @@ use mz_sql_parser::ast::*;
 use pretty::{Doc, RcDoc};
 
 use crate::util::{
-    bracket, bracket_doc, comma_separate, comma_separated, nest, nest_comma_separate, nest_title,
-    title_comma_separate,
+    bracket, bracket_doc, comma_separate, comma_separated, intersperse_line_nest, nest,
+    nest_comma_separate, nest_title, title_comma_separate,
 };
 use crate::TAB;
 
@@ -36,6 +36,94 @@ fn doc_display_pass<'a, T: AstDisplay>(v: &T) -> RcDoc<'a, ()> {
     RcDoc::text(v.to_ast_string())
 }
 
+pub(crate) fn doc_copy<T: AstInfo>(v: &CopyStatement<T>) -> RcDoc {
+    let relation = match &v.relation {
+        CopyRelation::Table { name, columns } => {
+            let mut relation = doc_display_pass(name);
+            if !columns.is_empty() {
+                relation = bracket_doc(
+                    nest(relation, RcDoc::text("(")),
+                    comma_separate(doc_display_pass, columns),
+                    RcDoc::text(")"),
+                    RcDoc::line_(),
+                );
+            }
+            RcDoc::concat([RcDoc::text("COPY "), relation])
+        }
+        CopyRelation::Select(query) => bracket("COPY (", doc_select_statement(query), ")"),
+        CopyRelation::Subscribe(query) => bracket("COPY (", doc_subscribe(query), ")"),
+    };
+    let mut docs = vec![
+        relation,
+        RcDoc::concat([
+            doc_display_pass(&v.direction),
+            RcDoc::text(" "),
+            doc_display_pass(&v.target),
+        ]),
+    ];
+    if !v.options.is_empty() {
+        docs.push(bracket(
+            "WITH (",
+            comma_separate(doc_display_pass, &v.options),
+            ")",
+        ));
+    }
+    RcDoc::intersperse(docs, Doc::line()).group()
+}
+
+pub(crate) fn doc_subscribe<T: AstInfo>(v: &SubscribeStatement<T>) -> RcDoc {
+    let doc = match &v.relation {
+        SubscribeRelation::Name(name) => nest_title("SUBSCRIBE", doc_display_pass(name)),
+        SubscribeRelation::Query(query) => bracket("SUBSCRIBE (", doc_query(query), ")"),
+    };
+    let mut docs = vec![doc];
+    if !v.options.is_empty() {
+        docs.push(bracket(
+            "WITH (",
+            comma_separate(doc_display_pass, &v.options),
+            ")",
+        ));
+    }
+    if let Some(as_of) = &v.as_of {
+        docs.push(doc_as_of(as_of));
+    }
+    if let Some(up_to) = &v.up_to {
+        docs.push(nest_title("UP TO", doc_expr(up_to)));
+    }
+    match &v.output {
+        SubscribeOutput::Diffs => {}
+        SubscribeOutput::WithinTimestampOrderBy { order_by } => {
+            docs.push(nest_title(
+                "WITHIN TIMESTAMP ORDER BY ",
+                comma_separate(doc_order_by_expr, order_by),
+            ));
+        }
+        SubscribeOutput::EnvelopeUpsert { key_columns } => {
+            docs.push(bracket(
+                "ENVELOPE UPSERT (KEY (",
+                comma_separate(doc_display_pass, key_columns),
+                "))",
+            ));
+        }
+        SubscribeOutput::EnvelopeDebezium { key_columns } => {
+            docs.push(bracket(
+                "ENVELOPE DEBEZIUM (KEY (",
+                comma_separate(doc_display_pass, key_columns),
+                "))",
+            ));
+        }
+    }
+    RcDoc::intersperse(docs, Doc::line()).group()
+}
+
+fn doc_as_of<T: AstInfo>(v: &AsOf<T>) -> RcDoc {
+    let (title, expr) = match v {
+        AsOf::At(expr) => ("AS OF", expr),
+        AsOf::AtLeast(expr) => ("AS OFAT LEAST", expr),
+    };
+    nest_title(title, doc_expr(expr))
+}
+
 pub(crate) fn doc_create_view<T: AstInfo>(v: &CreateViewStatement<T>) -> RcDoc {
     let mut docs = vec![];
     docs.push(RcDoc::text(format!(
@@ -53,7 +141,7 @@ pub(crate) fn doc_create_view<T: AstInfo>(v: &CreateViewStatement<T>) -> RcDoc {
         },
     )));
     docs.push(doc_view_definition(&v.definition));
-    RcDoc::intersperse(docs, Doc::line()).nest(TAB).group()
+    intersperse_line_nest(docs)
 }
 
 pub(crate) fn doc_create_materialized_view<T: AstInfo>(
@@ -95,7 +183,7 @@ pub(crate) fn doc_create_materialized_view<T: AstInfo>(
         ));
     }
     docs.push(nest_title("AS", doc_query(&v.query)));
-    RcDoc::intersperse(docs, Doc::line()).nest(TAB).group()
+    intersperse_line_nest(docs)
 }
 
 fn doc_view_definition<T: AstInfo>(v: &ViewDefinition<T>) -> RcDoc {
@@ -127,15 +215,7 @@ pub(crate) fn doc_insert<T: AstInfo>(v: &InsertStatement<T>) -> RcDoc {
         InsertSource::Query(query) => doc_query(query),
         _ => doc_display(&v.source, "insert source"),
     };
-    let mut doc = RcDoc::intersperse(
-        [
-            RcDoc::intersperse(first, Doc::line()).nest(TAB).group(),
-            sources,
-        ],
-        Doc::line(),
-    )
-    .nest(TAB)
-    .group();
+    let mut doc = intersperse_line_nest([intersperse_line_nest(first), sources]);
     if !v.returning.is_empty() {
         doc = nest(
             doc,
@@ -148,9 +228,7 @@ pub(crate) fn doc_insert<T: AstInfo>(v: &InsertStatement<T>) -> RcDoc {
 pub(crate) fn doc_select_statement<T: AstInfo>(v: &SelectStatement<T>) -> RcDoc {
     let mut doc = doc_query(&v.query);
     if let Some(as_of) = &v.as_of {
-        doc = RcDoc::intersperse([doc, doc_display_pass(as_of)], Doc::line())
-            .nest(TAB)
-            .group();
+        doc = intersperse_line_nest([doc, doc_display_pass(as_of)]);
     }
     doc.group()
 }
@@ -291,7 +369,7 @@ fn doc_table_with_joins<T: AstInfo>(v: &TableWithJoins<T>) -> RcDoc {
     for j in &v.joins {
         docs.push(doc_join(j));
     }
-    RcDoc::intersperse(docs, Doc::line()).nest(TAB).group()
+    intersperse_line_nest(docs)
 }
 
 fn doc_join<T: AstInfo>(v: &Join<T>) -> RcDoc {
@@ -313,12 +391,7 @@ fn doc_join<T: AstInfo>(v: &Join<T>) -> RcDoc {
         }
         _ => return doc_display(v, "join constrant"),
     };
-    RcDoc::intersperse(
-        [RcDoc::text(name), doc_table_factor(&v.relation), constraint],
-        Doc::line(),
-    )
-    .nest(TAB)
-    .group()
+    intersperse_line_nest([RcDoc::text(name), doc_table_factor(&v.relation), constraint])
 }
 
 fn doc_table_factor<T: AstInfo>(v: &TableFactor<T>) -> RcDoc {
@@ -333,7 +406,7 @@ fn doc_table_factor<T: AstInfo>(v: &TableFactor<T>) -> RcDoc {
             if let Some(alias) = alias {
                 docs.push(RcDoc::text(format!("AS {}", alias)));
             }
-            RcDoc::intersperse(docs, Doc::line()).nest(TAB).group()
+            intersperse_line_nest(docs)
         }
         TableFactor::NestedJoin { join, alias } => {
             let mut doc = bracket("(", doc_table_with_joins(join), ")");
@@ -437,7 +510,7 @@ fn doc_expr<T: AstInfo>(v: &Expr<T>) -> RcDoc {
             if let Some(else_result) = else_result {
                 docs.push(nest_title("ELSE", doc_expr(else_result)));
             }
-            let doc = RcDoc::intersperse(docs, RcDoc::line()).nest(TAB).group();
+            let doc = intersperse_line_nest(docs);
             bracket("CASE", doc, "END")
         }
         Expr::Cast { expr, data_type } => bracket(
