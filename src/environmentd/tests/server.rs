@@ -1715,6 +1715,37 @@ fn test_ws_passes_options() {
 }
 
 #[mz_ore::test]
+// Test that statement logging
+// doesn't cause a crash with subscribes over web sockets,
+// which was previously happening (in staging) due to us
+// dropping the `ExecuteContext` on the floor in that case.
+fn test_ws_subscribe_no_crash() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "statement_logging_max_sample_rate".to_string(),
+            "1.0".to_string(),
+        )
+        .with_system_parameter_default(
+            "statement_logging_default_sample_rate".to_string(),
+            "1.0".to_string(),
+        )
+        .start_blocking();
+
+    // Create our WebSocket.
+    let ws_url = server.ws_addr();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    test_util::auth_with_ws(&mut ws, Default::default()).unwrap();
+
+    let query = "SUBSCRIBE (SELECT 1)";
+    let json = format!("{{\"query\":\"{query}\"}}");
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
+
+    // Give the server time to crash, if it's going to.
+    std::thread::sleep(Duration::from_secs(1))
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_notifies_for_bad_options() {
     let server = test_util::TestHarness::default().start_blocking();
