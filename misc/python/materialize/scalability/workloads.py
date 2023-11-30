@@ -9,6 +9,9 @@
 
 from materialize.scalability.operation import Operation
 from materialize.scalability.operations import (
+    CreateDropMaterializedView,
+    CreateDropTable,
+    CreateDropView,
     InsertDefaultValues,
     SelectCount,
     SelectCountInMv,
@@ -64,3 +67,12 @@ class InsertAndSelectLimitWorkload(Workload):
 class UpdateWorkload(Workload):
     def operations(self) -> list["Operation"]:
         return [Update()]
+
+
+class DDLWorkload(Workload):
+    def operations(self) -> list["Operation"]:
+        return [
+            CreateDropTable(),
+            CreateDropView(),
+            CreateDropMaterializedView(),
+        ]
