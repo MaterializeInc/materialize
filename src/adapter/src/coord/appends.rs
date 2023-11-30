@@ -381,14 +381,6 @@ impl Coordinator {
                     .expect("One-shot dropped while waiting")
                     .unwrap_or_terminate("cannot fail to apply appends");
 
-                // Note: while technically we should have `GroupCommitApply` update the notifies, we
-                // know that internal commands get processed before any user commands, so the writes
-                // are still guaranteed to be observable before any user commands.
-                for notify in notifies {
-                    // We don't care if the listeners have gone away.
-                    let _ = notify.send(());
-                }
-
                 // Trigger a GroupCommitApply, which will run before any user commands since we're
                 // sending it on the internal command sender.
                 if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
@@ -398,6 +390,15 @@ impl Coordinator {
                     permit,
                 )) {
                     warn!("Server closed with non-responded writes, {e}");
+                }
+
+                // Note: while technically we should have `GroupCommitApply` update the notifies, we
+                // know that internal commands get processed before any user commands, so the writes
+                // are still guaranteed to be observable before any user commands, because we
+                // submitted the GroupCommitApply above.
+                for notify in notifies {
+                    // We don't care if the listeners have gone away.
+                    let _ = notify.send(());
                 }
             }
             .instrument(Span::current()),
