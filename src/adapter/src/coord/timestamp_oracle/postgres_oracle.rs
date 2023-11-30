@@ -291,8 +291,12 @@ where
 
             let txn = client.transaction().await?;
 
+            // Using `table_schema = CURRENT_SCHEMA` makes sure we only include
+            // tables that are queryable by us. Otherwise this check might
+            // return true but then the query below fails with a confusing
+            // "table does not exist" error.
             let q = r#"
-            SELECT EXISTS (SELECT * FROM information_schema.tables where table_name = 'timestamp_oracle');
+            SELECT EXISTS (SELECT * FROM information_schema.tables WHERE table_name = 'timestamp_oracle' AND table_schema = CURRENT_SCHEMA);
         "#;
             let statement = txn.prepare(q).await?;
             let exists_row = txn.query_one(&statement, &[]).await?;
@@ -629,8 +633,6 @@ mod tests {
             }
         };
 
-        cleanup(config.clone()).await?;
-
         timestamp_oracle::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
             let oracle =
                 PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
@@ -638,8 +640,6 @@ mod tests {
             oracle
         })
         .await?;
-
-        cleanup(config).await?;
 
         Ok(())
     }
@@ -658,8 +658,6 @@ mod tests {
             }
         };
 
-        cleanup(config.clone()).await?;
-
         timestamp_oracle::tests::shareable_timestamp_oracle_impl_test(
             |timeline, now_fn, initial_ts| {
                 let oracle =
@@ -674,20 +672,6 @@ mod tests {
             },
         )
         .await?;
-
-        cleanup(config).await?;
-
-        Ok(())
-    }
-
-    // Best-effort cleanup!
-    async fn cleanup(config: PostgresTimestampOracleConfig) -> Result<(), anyhow::Error> {
-        let postgres_client = PostgresClient::open(config.into())?;
-        let client = postgres_client.get_connection().await?;
-
-        client
-            .execute("DROP TABLE IF EXISTS timestamp_oracle", &[])
-            .await?;
 
         Ok(())
     }
