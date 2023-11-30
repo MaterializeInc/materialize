@@ -2177,6 +2177,7 @@ impl Coordinator {
 
         self.sequence_peek_stage(
             ctx,
+            OpenTelemetryContext::obtain(),
             PeekStage::Validate(PeekStageValidate {
                 plan,
                 target_cluster,
@@ -2190,6 +2191,7 @@ impl Coordinator {
     pub(crate) async fn sequence_peek_stage(
         &mut self,
         mut ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
         mut stage: PeekStage,
     ) {
         // Process the current stage and allow for processing the next.
@@ -2213,15 +2215,17 @@ impl Coordinator {
                     (ctx, PeekStage::Timestamp(next))
                 }
                 PeekStage::Timestamp(stage) => {
-                    self.peek_stage_timestamp(ctx, stage).await;
+                    self.peek_stage_timestamp(ctx, root_otel_ctx.clone(), stage)
+                        .await;
                     return;
                 }
                 PeekStage::Optimize(stage) => {
-                    self.peek_stage_optimize(ctx, stage).await;
+                    self.peek_stage_optimize(ctx, root_otel_ctx.clone(), stage)
+                        .await;
                     return;
                 }
                 PeekStage::RealTimeRecency(stage) => {
-                    match self.peek_stage_real_time_recency(ctx, stage) {
+                    match self.peek_stage_real_time_recency(ctx, root_otel_ctx.clone(), stage) {
                         Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
                         None => return,
                     }
@@ -2339,6 +2343,7 @@ impl Coordinator {
     async fn peek_stage_timestamp(
         &mut self,
         ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
         PeekStageTimestamp {
             validity,
             source,
@@ -2379,10 +2384,9 @@ impl Coordinator {
                 if let Some(shared_oracle) = shared_oracle {
                     // We can do it in an async task, because we can ship off
                     // the timetamp oracle.
-                    let otel_ctx = OpenTelemetryContext::obtain();
 
+                    let span = tracing::debug_span!("linearized timestamp task");
                     mz_ore::task::spawn(|| "linearized timestamp task", async move {
-                        let span = tracing::debug_span!("linearized timestamp task");
                         let oracle_read_ts = shared_oracle.read_ts().instrument(span).await;
                         let stage = build_optimize_stage(Some(oracle_read_ts));
 
@@ -2390,7 +2394,7 @@ impl Coordinator {
                         // Ignore errors if the coordinator has shut down.
                         let _ = internal_cmd_tx.send(Message::PeekStageReady {
                             ctx,
-                            otel_ctx,
+                            otel_ctx: root_otel_ctx,
                             stage,
                         });
                     });
@@ -2403,10 +2407,9 @@ impl Coordinator {
 
                     let stage = PeekStage::Optimize(stage);
                     // Ignore errors if the coordinator has shut down.
-                    let otel_ctx = OpenTelemetryContext::obtain();
                     let _ = internal_cmd_tx.send(Message::PeekStageReady {
                         ctx,
-                        otel_ctx,
+                        otel_ctx: root_otel_ctx,
                         stage,
                     });
                 }
@@ -2415,10 +2418,9 @@ impl Coordinator {
                 let stage = build_optimize_stage(None);
                 let stage = PeekStage::Optimize(stage);
                 // Ignore errors if the coordinator has shut down.
-                let otel_ctx = OpenTelemetryContext::obtain();
                 let _ = internal_cmd_tx.send(Message::PeekStageReady {
                     ctx,
-                    otel_ctx,
+                    otel_ctx: root_otel_ctx,
                     stage,
                 });
             }
@@ -2426,7 +2428,12 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
+    async fn peek_stage_optimize(
+        &mut self,
+        ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
+        mut stage: PeekStageOptimize,
+    ) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -2466,13 +2473,11 @@ impl Coordinator {
             }
         };
 
-        let otel_ctx = OpenTelemetryContext::obtain();
+        let span = tracing::debug_span!("optimize peek task");
 
         mz_ore::task::spawn_blocking(
             || "optimize peek",
             move || {
-                let mut span = tracing::debug_span!("optimize peek task");
-                otel_ctx.attach_as_parent_to(&mut span);
                 let _guard = span.enter();
 
                 match Self::optimize_peek(ctx.session(), stats, id_bundle, stage) {
@@ -2481,7 +2486,7 @@ impl Coordinator {
                         // Ignore errors if the coordinator has shut down.
                         let _ = internal_cmd_tx.send(Message::PeekStageReady {
                             ctx,
-                            otel_ctx,
+                            otel_ctx: root_otel_ctx,
                             stage,
                         });
                     }
@@ -2532,6 +2537,7 @@ impl Coordinator {
     fn peek_stage_real_time_recency(
         &mut self,
         ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
         PeekStageRealTimeRecency {
             validity,
             copy_to,
@@ -2554,6 +2560,7 @@ impl Coordinator {
                     conn_id.clone(),
                     RealTimeRecencyContext::Peek {
                         ctx,
+                        root_otel_ctx,
                         copy_to,
                         when,
                         target_replica,

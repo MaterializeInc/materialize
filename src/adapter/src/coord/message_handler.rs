@@ -149,7 +149,7 @@ impl Coordinator {
                     stage,
                 } => {
                     otel_ctx.attach_as_parent();
-                    self.sequence_peek_stage(ctx, stage).await;
+                    self.sequence_peek_stage(ctx, otel_ctx, stage).await;
                 }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
@@ -788,6 +788,7 @@ impl Coordinator {
             }
             RealTimeRecencyContext::Peek {
                 ctx,
+                root_otel_ctx,
                 copy_to,
                 when,
                 target_replica,
@@ -800,6 +801,7 @@ impl Coordinator {
             } => {
                 self.sequence_peek_stage(
                     ctx,
+                    root_otel_ctx,
                     PeekStage::Finish(PeekStageFinish {
                         validity,
                         copy_to,

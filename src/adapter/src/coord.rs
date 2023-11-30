@@ -319,6 +319,7 @@ pub enum RealTimeRecencyContext {
     },
     Peek {
         ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
         copy_to: Option<CopyFormat>,
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
