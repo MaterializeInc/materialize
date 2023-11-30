@@ -9,17 +9,90 @@
 
 //! Types and traits that connect up our mz-repr types with the stats that persist maintains.
 
+use crate::errors::DataflowError;
+use crate::sources::SourceData;
 use mz_expr::ResultSpec;
 use mz_persist_client::metrics::Metrics;
+use mz_persist_client::read::{Cursor, LazyPartStats, ReadHandle, Since};
 use mz_persist_client::stats::PartStats;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
 use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{
-    ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, RowArena, ScalarType,
+    ColumnType, Datum, DatumToPersist, DatumToPersistFn, Diff, RelationDesc, Row, RowArena,
+    ScalarType, Timestamp,
 };
+use timely::progress::Antichain;
 use tracing::warn;
+
+/// This is a streaming-consolidating cursor type specialized to `RelationDesc`.
+///
+/// Internally this maintains two separate cursors: one for errors and one for data.
+/// This is necessary so that errors are presented before data, which matches our usual
+/// lookup semantics. To avoid being ludicrously inefficient, this pushes down a filter
+/// on the stats. (In particular, in the common case of no errors, we don't do any extra
+/// fetching.)
+pub struct StatsCursor {
+    errors: Cursor<SourceData, (), Timestamp, Diff>,
+    data: Cursor<SourceData, (), Timestamp, Diff>,
+}
+
+impl StatsCursor {
+    pub async fn new(
+        handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
+        metrics: &Metrics,
+        desc: &RelationDesc,
+        as_of: Antichain<Timestamp>,
+    ) -> Result<StatsCursor, Since<Timestamp>> {
+        let should_fetch = |name: &'static str, count: fn(&RelationPartStats) -> Option<usize>| {
+            move |stats: &Option<LazyPartStats>| {
+                let Some(stats) = stats else { return true };
+                let stats = stats.decode();
+                let relation_stats = RelationPartStats::new(name, metrics, desc, &stats);
+                count(&relation_stats).map_or(true, |n| n > 0)
+            }
+        };
+        let errors = handle
+            .snapshot_cursor(as_of.clone(), should_fetch("errors", |s| s.err_count()))
+            .await?;
+        let data = handle
+            .snapshot_cursor(as_of.clone(), should_fetch("data", |s| s.ok_count()))
+            .await?;
+        Ok(StatsCursor { errors, data })
+    }
+
+    pub async fn next(
+        &mut self,
+    ) -> Option<impl Iterator<Item = (Result<Row, DataflowError>, Timestamp, Diff)> + '_> {
+        fn expect_decode(
+            raw: impl Iterator<
+                Item = (
+                    (Result<SourceData, String>, Result<(), String>),
+                    Timestamp,
+                    Diff,
+                ),
+            >,
+            is_err: bool,
+        ) -> impl Iterator<Item = (Result<Row, DataflowError>, Timestamp, Diff)> {
+            raw.map(|((k, v), t, d)| {
+                // NB: this matches the decode behaviour in sources
+                let SourceData(row) = k.expect("decode error");
+                let () = v.expect("decode error");
+                (row, t, d)
+            })
+            .filter(move |(r, _, _)| if is_err { r.is_err() } else { r.is_ok() })
+        }
+
+        if let Some(errors) = self.errors.next().await {
+            Some(expect_decode(errors, true))
+        } else if let Some(data) = self.data.next().await {
+            Some(expect_decode(data, false))
+        } else {
+            None
+        }
+    }
+}
 
 /// Bundles together a relation desc with the stats for a specific part, and translates between
 /// Persist's stats representation and the `ResultSpec`s that are used for eg. filter pushdown.
@@ -171,18 +244,22 @@ impl RelationPartStats<'_> {
         Some(self.stats.key.len)
     }
 
+    pub fn ok_count(&self) -> Option<usize> {
+        // The number of OKs is the number of rows whose error is None.
+        self.stats
+            .key
+            .col::<Option<Vec<u8>>>("err")
+            .expect("err column should be a Option<Vec<u8>>")
+            .map(|x| x.none)
+    }
+
     pub fn err_count(&self) -> Option<usize> {
         // Counter-intuitive: We can easily calculate the number of errors that
         // were None from the column stats, but not how many were Some. So, what
         // we do is count the number of Nones, which is the number of Oks, and
         // then subtract that from the total.
         let num_results = self.stats.key.len;
-        let num_oks = self
-            .stats
-            .key
-            .col::<Option<Vec<u8>>>("err")
-            .expect("err column should be a Vec<u8>")
-            .map(|x| x.none);
+        let num_oks = self.ok_count();
         num_oks.map(|num_oks| num_results - num_oks)
     }
 
