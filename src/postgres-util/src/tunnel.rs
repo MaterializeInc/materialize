@@ -218,6 +218,13 @@ impl Config {
                 let tcp_stream = TokioTcpStream::connect(tunnel.local_addr())
                     .await
                     .map_err(PostgresError::SshIo)?;
+                // Because we are connecting to a local host/port, we don't configure any TCP
+                // keepalive settings. The connection is entirely local to the machine running the
+                // process and we trust the kernel to keep a local connection alive without keepalives.
+                //
+                // Ideally we'd be able to configure SSH to enable TCP keepalives on the other
+                // end of the tunnel, between the SSH bastion host and the PostgreSQL server,
+                // but SSH does not expose an option for this.
                 let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
                 task::spawn(|| task_name, async {
                     let _tunnel = tunnel; // Keep SSH tunnel alive for duration of connection.
@@ -229,11 +236,25 @@ impl Config {
                 Ok(client)
             }
             TunnelConfig::AwsPrivatelink { connection_id } => {
-                let (host, port) = self.address()?;
+                // This section of code is somewhat subtle. We are overriding the host
+                // for the actual TCP connection to be the PrivateLink host, but leaving the host
+                // for TLS verification as the original host. Managing the
+                // `tokio_postgres::Config` to do this is somewhat confusing, and requires we edit
+                // the singular host in place.
+
+                let (host, _) = self.address()?;
+                postgres_config.tls_verify_host(host);
+
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
-                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
-                let tcp_stream = TokioTcpStream::connect((privatelink_host, port)).await?;
-                let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;
+
+                match postgres_config.get_hosts_mut() {
+                    [Host::Tcp(host)] => *host = privatelink_host,
+                    _ => bail_generic!(
+                        "only TCP connections to a single PostgreSQL server are supported"
+                    ),
+                }
+
+                let (client, connection) = postgres_config.connect(tls).await?;
                 task::spawn(|| task_name, connection);
                 Ok(client)
             }
