@@ -7,9 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
-
-RUN apt-get update && apt-get -qy install ca-certificates
+MZFROM prod-base
 
 COPY persistcli /usr/local/bin/persistcli
 COPY mz-stash-debug /usr/local/bin/mz-stash-debug
