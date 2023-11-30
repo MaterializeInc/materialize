@@ -195,6 +195,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if parallel_job_count > 1:
         checks.sort(key=lambda c: c.__name__)
         checks = checks[parallel_job_index::parallel_job_count]
+        print(
+            f"Selected checks in job with index {parallel_job_index}: {[c.__name__ for c in checks]}"
+        )
 
     executor = MzcomposeExecutor(composition=c)
     for scenario_class in scenarios:
