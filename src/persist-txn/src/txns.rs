@@ -27,7 +27,7 @@ use tracing::{debug, instrument};
 
 use crate::txn_cache::TxnsCache;
 use crate::txn_write::Txn;
-use crate::{TxnsCodec, TxnsCodecDefault};
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
 /// An interface for atomic multi-shard writes.
 ///
@@ -212,7 +212,8 @@ where
             .iter()
             .map(|data_write| {
                 let data_id = data_write.shard_id();
-                (data_id, C::encode(crate::TxnsEntry::Register(data_id)))
+                let entry = TxnsEntry::Register(data_id, T::encode(&register_ts));
+                (data_id, C::encode(entry))
             })
             .collect::<Vec<_>>();
         let data_ids_debug = || {
@@ -309,7 +310,7 @@ where
         loop {
             self.txns_cache.update_ge(&txns_upper).await;
 
-            let (key, val) = C::encode(crate::TxnsEntry::Register(data_id));
+            let (key, val) = C::encode(TxnsEntry::Register(data_id, T::encode(&forget_ts)));
             let updates = if self.txns_cache.registered_at(&data_id, &txns_upper) {
                 vec![((&key, &val), &forget_ts, -1)]
             } else {
@@ -414,7 +415,9 @@ where
             };
             let updates = registered
                 .iter()
-                .map(|data_id| C::encode(crate::TxnsEntry::Register(*data_id)))
+                .map(|data_id| {
+                    C::encode(crate::TxnsEntry::Register(*data_id, T::encode(&forget_ts)))
+                })
                 .collect::<Vec<_>>();
             let updates = updates
                 .iter()
@@ -529,7 +532,7 @@ where
                     // NB: Protos are not guaranteed to exactly roundtrip the
                     // encoded bytes, so we intentionally use the raw batch so that
                     // it definitely retracts.
-                    ret.push((batch_raw.clone(), data_id));
+                    ret.push((batch_raw.clone(), (T::encode(commit_ts), data_id)));
                 }
                 (data_write, ret)
             });
@@ -611,7 +614,7 @@ where
 /// a normal txn with [Txn::tidy].
 #[derive(Debug, Default)]
 pub struct Tidy {
-    pub(crate) retractions: BTreeMap<Vec<u8>, ShardId>,
+    pub(crate) retractions: BTreeMap<Vec<u8>, ([u8; 8], ShardId)>,
 }
 
 impl Tidy {

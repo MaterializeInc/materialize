@@ -142,7 +142,11 @@ where
                         batch_raw.hashed(),
                         updates.len()
                     );
-                    let update = C::encode(TxnsEntry::Append(*data_id, batch_raw));
+                    let update = C::encode(TxnsEntry::Append(
+                        *data_id,
+                        T::encode(&commit_ts),
+                        batch_raw,
+                    ));
                     (data_write, batch, update)
                 })
             }
@@ -162,8 +166,8 @@ where
             let filtered_retractions = handle
                 .read_cache()
                 .filter_retractions(&txns_upper, self.tidy.retractions.iter())
-                .map(|(batch_raw, data_id)| {
-                    C::encode(TxnsEntry::Append(*data_id, batch_raw.clone()))
+                .map(|(batch_raw, (ts, data_id))| {
+                    C::encode(TxnsEntry::Append(*data_id, *ts, batch_raw.clone()))
                 })
                 .collect::<Vec<_>>();
             txns_updates.extend(
