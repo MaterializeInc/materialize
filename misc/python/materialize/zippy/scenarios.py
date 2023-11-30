@@ -69,7 +69,14 @@ class Scenario:
         assert False
 
     def finalization(self) -> list[ActionOrFactory]:
-        return [ValidateAll(), BackupAndRestore, ValidateAll()]
+        return [
+            MzStart,
+            BalancerdStart,
+            StoragedStart,
+            ValidateAll(),
+            BackupAndRestore,
+            ValidateAll(),
+        ]
 
 
 class KafkaSources(Scenario):
