@@ -2075,7 +2075,7 @@ feature_flags!(
     {
         name: enable_aws_connection,
         desc: "CREATE CONNECTION ... TO AWS",
-        default: &true, // will set to false once we verify that nobody's using this
+        default: &false,
         internal: true,
         enable_for_item_parsing: false,
     },
