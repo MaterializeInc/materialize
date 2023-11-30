@@ -67,7 +67,7 @@ jobs:
       - name: "Long change filter"
         id: long
         run: |
-          num_lines=$(git diff --diff-filter=AM ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} -- '*.rs' | grep "^+" | grep -v "^+++" | wc -l)
+          num_lines=$(git diff --diff-filter=AM ${{ github.event.pull_request.base.sha }} -- '*.rs' | grep "^+" | grep -v "^+++" | wc -l)
           if [[ $num_lines -gt 300 ]]; then
             echo "long=true" >> $GITHUB_OUTPUT
           fi
@@ -83,21 +83,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "A new risky change is ready for review!"
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "• *PR:* <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>"
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "• *Author:* <${{ github.event.pull_request.user.html_url }}|${{ github.event.pull_request.user.login }}>"
+                    "text": "• <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>"
                   }
                 }
               ]
