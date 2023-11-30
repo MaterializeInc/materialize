@@ -307,12 +307,18 @@ Issue a SQL query to get started. Need help?
         &self.metrics
     }
 
+    /// The current time according to the [`Client`].
+    pub fn now(&self) -> DateTime<Utc> {
+        to_datetime((self.now)())
+    }
+
     pub async fn append_webhook(
         &self,
         database: String,
         schema: String,
         name: String,
         conn_id: ConnectionId,
+        received_at: DateTime<Utc>,
     ) -> Result<AppendWebhookResponse, AdapterError> {
         let (tx, rx) = oneshot::channel();
 
@@ -322,6 +328,7 @@ Issue a SQL query to get started. Need help?
             schema,
             name,
             conn_id,
+            received_at,
             tx,
         });
 
