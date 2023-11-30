@@ -1827,9 +1827,17 @@ impl Coordinator {
             dependent_matviews,
         );
 
-        let mut as_of = min_as_of.clone();
-        as_of.join_assign(&max_compaction_frontier);
-        as_of.meet_assign(&max_as_of);
+        // Ensure that we never select an `as_of` that's less than `min_as_of`,
+        // even if that means selecting an `as_of` that's greater than `max_as_of`.
+        // The former makes environmentd crash, the latter "only" leads to correctness bugs.
+        let as_of = if PartialOrder::less_equal(&min_as_of, &max_as_of) {
+            let mut as_of = min_as_of.clone();
+            as_of.join_assign(&max_compaction_frontier);
+            as_of.meet_assign(&max_as_of);
+            as_of
+        } else {
+            min_as_of.clone()
+        };
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
