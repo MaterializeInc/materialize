@@ -39,6 +39,7 @@ use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
 use mz_repr::{ColumnType, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::stats::StatsCursor;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::order::PartialOrder;
@@ -786,19 +787,25 @@ impl PersistPeek {
         let mut reader: ReadHandle<SourceData, (), Timestamp, Diff> = client
             .open_leased_reader(
                 metadata.data_shard,
-                Arc::new(metadata.relation_desc),
+                Arc::new(metadata.relation_desc.clone()),
                 Arc::new(UnitSchema),
                 Diagnostics::from_purpose("persist::peek"),
             )
             .await
             .map_err(|e| e.to_string())?;
 
-        let mut cursor = reader
-            .snapshot_cursor(Antichain::from_elem(as_of), |_| true)
-            .await
-            .map_err(|since| {
-                format!("attempted to peek at {as_of}, but the since has advanced to {since:?}")
-            })?;
+        let metrics = client.metrics();
+
+        let mut cursor = StatsCursor::new(
+            &mut reader,
+            metrics,
+            &metadata.relation_desc,
+            Antichain::from_elem(as_of),
+        )
+        .await
+        .map_err(|since| {
+            format!("attempted to peek at {as_of}, but the since has advanced to {since:?}")
+        })?;
 
         // Re-used state for processing and building rows.
         let mut result = vec![];
@@ -810,9 +817,8 @@ impl PersistPeek {
             let Some(batch) = cursor.next().await else {
                 break;
             };
-            for ((k, v), _, d) in batch {
-                let row = k?.0.map_err(|e| e.to_string())?;
-                let () = v?;
+            for (data, _, d) in batch {
+                let row = data.map_err(|e| e.to_string())?;
                 let count: usize = d.try_into().map_err(|_| {
                     format!(
                         "Invalid data in source, saw retractions ({}) for row that does not exist",
