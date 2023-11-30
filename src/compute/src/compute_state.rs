@@ -261,12 +261,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                             .enable()
                             .with_path(path.clone())
                             .with_background_config(lgalloc::BackgroundWorkerConfig {
-                                interval: Duration::from_secs(1),
-                                batch: 32,
+                                interval: Duration::from_millis(100),
+                                batch: 128,
                             }),
                     );
                 } else {
-                    warn!("Not enabling lgalloc, scratch directory not specified");
+                    info!("Not enabling lgalloc, scratch directory not specified");
                 }
             }
             Some(false) => {
