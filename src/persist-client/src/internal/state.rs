@@ -97,6 +97,8 @@ pub struct LeasedReaderState<T> {
     pub seqno: SeqNo,
     /// The since capability of this reader.
     pub since: Antichain<T>,
+    /// The id of the since handle that protects this reader.
+    pub critical_id: Option<CriticalReaderId>,
     /// UNIX_EPOCH timestamp (in millis) of this reader's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
     /// Duration (in millis) allowed after [Self::last_heartbeat_timestamp_ms]
@@ -451,6 +453,7 @@ where
             },
             seqno,
             since: self.trace.since().clone(),
+            critical_id: None,
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
@@ -1545,6 +1548,7 @@ pub(crate) mod tests {
                 LeasedReaderState {
                     seqno,
                     since: since.map_or_else(Antichain::new, Antichain::from_elem),
+                    critical_id: None,
                     last_heartbeat_timestamp_ms,
                     lease_duration_ms,
                     debug,
