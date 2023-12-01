@@ -578,7 +578,7 @@ mod delta_queries {
                 .iter()
                 .map(|o| o.iter().skip(1).filter(|(c, _, _)| c.arranged).count())
                 .collect::<Vec<_>>();
-            let expected_number_of_arrangements = inputs.len() - 1;
+            let expected_differential_arrangements = inputs.len() - 1;
             let missing_arrangements: std::collections::BTreeSet<usize> = orders
                 .iter()
                 .flat_map(|o| {
@@ -595,7 +595,7 @@ mod delta_queries {
                     total_orders = inputs.len(),
                     missing_orders_by_delta_path = arrangement_counts
                         .iter()
-                        .map(|count| format!("{}", expected_number_of_arrangements - count))
+                        .map(|count| format!("{}", expected_differential_arrangements - count))
                         .join(" "),
                     missing_arrangements = missing_arrangements
                         .iter()
@@ -606,7 +606,7 @@ mod delta_queries {
 
                 // Differential joins need to arrange every intermediate result: #inputs - 1 such arrangements.
                 // Delta joins only arrange inputs... if we would have fewer net arrangements, delta will be a better deal.
-                if insufficiently_arranged_orders > expected_number_of_arrangements {
+                if insufficiently_arranged_orders > expected_differential_arrangements {
                     return Err(TransformError::Internal(String::from(
                         "delta plan not viable",
                     )));
@@ -619,7 +619,7 @@ mod delta_queries {
 
             tracing::info!(
                 new_delta_input_arrangements = insufficiently_arranged_orders,
-                expected_differential_arrangements = expected_number_of_arrangements,
+                expected_differential_arrangements = expected_differential_arrangements,
                 "using a delta join instead of a differential join"
             );
 
