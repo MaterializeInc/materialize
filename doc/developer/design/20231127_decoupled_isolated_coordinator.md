@@ -188,7 +188,7 @@ At a high level, processing of these queries goes like this (abridged):
 4. An internal GroupCommmit message is synthesized
 5. Internal GroupCommit message is processed, writing to tables, at the end we
    spawn an internal GroupCommitApply message
-6. The internal GroupCommitApply is processed, which spaws an Internal
+6. The internal GroupCommitApply is processed, which spawns an Internal
    AdvanceTimelines message
 7. The internal AdvanceTimelines is processed, which updates oracle timestamps
 8. External SELECT/Peek command comes in
@@ -399,11 +399,11 @@ snapshot as the source of truth.
 
 When handling DDL-style client queries, ADAPTER uses TIMESTAMP ORACLE to get a
 write timestamp and tries to append the required changes to the CATALOG. If
-there is a conflict we can get a new timestamp, get the latest CATALOG
+there is a conflict it has to get a new timestamp, get the latest CATALOG
 snapshot, and try again. ADAPTER does _not_ explicitly instruct the controllers
 to do anything that is required by these changes and it does _not_ wait for
 controllers to act on those changes before returning to the client. Controllers
-are expectec to learn about these changes and act upon them from their
+are expected to learn about these changes and act upon them from their
 "private" command loop.
 
 Client queries that spawn ephemeral controller commands (mostly DQL and
