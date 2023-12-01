@@ -138,11 +138,12 @@ where
         val_schema: Arc<V::Schema>,
     ) -> Self {
         let (txns_key_schema, txns_val_schema) = C::schemas();
-        let (mut txns_write, txns_read) = client
-            .open(
+        let txns_since = client
+            .open_critical_since(
                 txns_id,
-                Arc::new(txns_key_schema),
-                Arc::new(txns_val_schema),
+                // TODO(txn): We likely need to use a different critical reader
+                // id for this if we want to be able to introspect it via SQL.
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
                 Diagnostics {
                     shard_name: "txns".to_owned(),
                     handle_purpose: "commit txns".to_owned(),
@@ -150,12 +151,11 @@ where
             )
             .await
             .expect("txns schema shouldn't change");
-        let txns_since = client
-            .open_critical_since(
+        let (mut txns_write, txns_read) = client
+            .open(
                 txns_id,
-                // TODO(txn): We likely need to use a different critical reader
-                // id for this if we want to be able to introspect it via SQL.
-                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Arc::new(txns_key_schema),
+                Arc::new(txns_val_schema),
                 Diagnostics {
                     shard_name: "txns".to_owned(),
                     handle_purpose: "commit txns".to_owned(),
