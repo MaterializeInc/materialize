@@ -93,8 +93,6 @@ pub struct DataflowBuilder<'a> {
     pub compute: ComputeInstanceSnapshot,
     /// Indexes to be ignored even if they are present in the catalog.
     pub ignored_indexes: BTreeSet<GlobalId>,
-    /// Whether to eagerly build delta joins
-    pub enable_eager_delta_joins: bool,
     /// A guard for recursive operations in this [`DataflowBuilder`] instance.
     recursion_guard: RecursionGuard,
 }
@@ -135,11 +133,7 @@ impl Coordinator {
         let compute = self
             .instance_snapshot(instance)
             .expect("compute instance does not exist");
-        DataflowBuilder::new(
-            self.catalog().state(),
-            compute,
-            self.catalog.system_config().enable_eager_delta_joins(),
-        )
+        DataflowBuilder::new(self.catalog().state(), compute)
     }
 
     /// Return a reference-less snapshot to the indicated compute instance.
@@ -187,16 +181,11 @@ pub fn dataflow_import_id_bundle<P>(
 }
 
 impl<'a> DataflowBuilder<'a> {
-    pub fn new(
-        catalog: &'a CatalogState,
-        compute: ComputeInstanceSnapshot,
-        enable_eager_delta_joins: bool,
-    ) -> Self {
+    pub fn new(catalog: &'a CatalogState, compute: ComputeInstanceSnapshot) -> Self {
         Self {
             catalog,
             compute,
             ignored_indexes: Default::default(),
-            enable_eager_delta_joins,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
@@ -329,7 +318,7 @@ impl<'a> DataflowBuilder<'a> {
             dataflow,
             self,
             &mz_transform::EmptyStatisticsOracle,
-            self.enable_eager_delta_joins,
+            self.catalog.system_config().enable_eager_delta_joins(),
         )?;
 
         Ok(dataflow_metainfo)

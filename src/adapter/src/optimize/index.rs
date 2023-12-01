@@ -148,8 +148,7 @@ impl Optimize<Index> for Optimizer {
 
         let mut df_builder = DataflowBuilder::new(
             state,
-            self.compute_instance.clone(),
-            self.config.enable_eager_delta_joins,
+            self.compute_instance.clone()
         );
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 

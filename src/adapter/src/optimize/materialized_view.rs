@@ -200,11 +200,8 @@ impl Optimize<LocalMirPlan> for Optimizer {
         }
         let rel_desc = RelationDesc::new(rel_typ, self.column_names.clone());
 
-        let mut df_builder = DataflowBuilder::new(
-            self.catalog.state(),
-            self.compute_instance.clone(),
-            self.config.enable_eager_delta_joins,
-        );
+        let mut df_builder =
+            DataflowBuilder::new(self.catalog.state(), self.compute_instance.clone());
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
 
         df_builder.import_view_into_dataflow(&self.internal_view_id, &expr, &mut df_desc)?;
