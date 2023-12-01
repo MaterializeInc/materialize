@@ -125,3 +125,17 @@ def capture(
     return subprocess.check_output(
         args, cwd=cwd, env=env, input=input, stdin=stdin, stderr=stderr, text=True
     )
+
+
+def run_and_get_return_code(
+    args: Sequence[Path | str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
+    """Run a subprocess and return the return code."""
+    try:
+        capture(args, cwd=cwd, env=env, stderr=subprocess.DEVNULL)
+        return 0
+    except CalledProcessError as e:
+        return e.returncode

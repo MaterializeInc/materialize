@@ -90,7 +90,6 @@ use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
-use mz_sql::catalog::EnvironmentId;
 use mz_testdrive::{CatalogConfig, Config};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -316,9 +315,6 @@ struct Args {
         env = "AWS_SECRET_ACCESS_KEY"
     )]
     aws_secret_access_key: String,
-
-    #[clap(long)]
-    environment_id: String,
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -464,8 +460,6 @@ async fn main() {
         materialize_params: args.materialize_param,
         materialize_catalog_config,
         build_info: &BUILD_INFO,
-        environment_id: <EnvironmentId as std::str::FromStr>::from_str(&args.environment_id)
-            .unwrap(),
 
         // === Persist options. ===
         persist_consensus_url: args.persist_consensus_url,

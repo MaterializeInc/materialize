@@ -2357,6 +2357,7 @@ impl<'a> Parser<'a> {
         let name = match self.expect_one_of_keywords(&[
             ACKS,
             CLIENT,
+            COMPRESSION,
             ENABLE,
             FETCH,
             GROUP,
@@ -2373,6 +2374,10 @@ impl<'a> Parser<'a> {
             CLIENT => {
                 self.expect_keyword(ID)?;
                 KafkaConfigOptionName::ClientId
+            }
+            COMPRESSION => {
+                self.expect_keyword(TYPE)?;
+                KafkaConfigOptionName::CompressionType
             }
             ENABLE => {
                 self.expect_keyword(IDEMPOTENCE)?;
@@ -3469,7 +3474,13 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
+        // For historical reasons, the parentheses around the options can be
+        // omitted.
+        let paren = self.consume_token(&Token::LParen);
         let options = self.parse_comma_separated(Parser::parse_cluster_option)?;
+        if paren {
+            let _ = self.consume_token(&Token::RParen);
+        }
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
             options,
@@ -3609,8 +3620,13 @@ impl<'a> Parser<'a> {
         let of_cluster = self.parse_identifier()?;
         self.expect_token(&Token::Dot)?;
         let name = self.parse_identifier()?;
-
+        // For historical reasons, the parentheses around the options can be
+        // omitted.
+        let paren = self.consume_token(&Token::LParen);
         let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+        if paren {
+            let _ = self.consume_token(&Token::RParen);
+        }
         Ok(Statement::CreateClusterReplica(
             CreateClusterReplicaStatement {
                 of_cluster,
@@ -4774,11 +4790,15 @@ impl<'a> Parser<'a> {
                 AlterConnectionAction::RotateKeys
             }
             SET => {
+                self.expect_token(&Token::LParen)?;
                 let option = self.parse_connection_option_unified()?;
+                self.expect_token(&Token::RParen)?;
                 AlterConnectionAction::SetOption(option)
             }
             DROP | RESET => {
+                self.expect_token(&Token::LParen)?;
                 let option = self.parse_connection_option_name()?;
+                self.expect_token(&Token::RParen)?;
                 AlterConnectionAction::DropOption(option)
             }
             _ => unreachable!(),

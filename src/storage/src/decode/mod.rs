@@ -13,7 +13,6 @@
 //! The primary exports are [`render_decode_delimited`], and
 //! [`render_decode_cdcv2`]. See their docs for more details about their differences.
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -30,7 +29,9 @@ use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
 };
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use regex::Regex;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Map;
@@ -40,14 +41,13 @@ use tracing::error;
 
 use crate::decode::avro::AvroDecoderState;
 use crate::decode::csv::CsvDecoderState;
-use crate::decode::metrics::DecodeMetrics;
 use crate::decode::protobuf::ProtobufDecoderState;
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::decode::DecodeMetricDefs;
 use crate::source::types::{DecodeResult, SourceOutput};
 
 mod avro;
 mod csv;
-pub mod metrics;
 mod protobuf;
 
 /// Decode delimited CDCv2 messages.
@@ -61,7 +61,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     connection_context: ConnectionContext,
     csr_connection: Option<CsrConnection>,
     confluent_wire_format: bool,
-) -> (Collection<G, Row, Diff>, Box<dyn Any + Send + Sync>) {
+) -> (Collection<G, Row, Diff>, PressOnDropButton) {
     let channel_rx = Rc::new(RefCell::new(VecDeque::new()));
     let activator_set: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
 
@@ -138,7 +138,16 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
         *activator_set.borrow_mut() = Some(ac);
         YieldingIter::new_from(VdIterator(channel_rx), Duration::from_millis(10))
     });
-    (stream.as_collection(), token)
+
+    // The token returned by DD's operator is not compatible with the shutdown mechanism used in
+    // storage so we create a dummy operator to hold onto that token.
+    let builder = AsyncOperatorBuilder::new("CDCv2-Token".to_owned(), input.scope());
+    let button = builder.build(move |_caps| async move {
+        let _dd_token = token;
+        // Keep this operator around until shutdown
+        std::future::pending::<()>().await;
+    });
+    (stream.as_collection(), button.press_on_drop())
 }
 
 // These don't know how to find delimiters --
@@ -211,7 +220,7 @@ pub(crate) enum DataDecoderInner {
 #[derive(Debug)]
 struct DataDecoder {
     inner: DataDecoderInner,
-    metrics: DecodeMetrics,
+    metrics: DecodeMetricDefs,
 }
 
 impl DataDecoder {
@@ -286,7 +295,7 @@ async fn get_decoder(
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     is_connection_delimited: bool,
-    metrics: DecodeMetrics,
+    metrics: DecodeMetricDefs,
     connection_context: &ConnectionContext,
 ) -> Result<DataDecoder, CsrConnectError> {
     let decoder = match encoding.inner {
@@ -401,12 +410,11 @@ pub fn render_decode_delimited<G>(
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: String,
-    metrics: DecodeMetrics,
+    metrics: DecodeMetricDefs,
     connection_context: ConnectionContext,
 ) -> (
     Collection<G, DecodeResult, Diff>,
     Stream<G, HealthStatusMessage>,
-    Option<Box<dyn Any + Send + Sync>>,
 )
 where
     G: Scope,
@@ -531,5 +539,5 @@ where
         }
     });
 
-    (output.as_collection(), health, None)
+    (output.as_collection(), health)
 }

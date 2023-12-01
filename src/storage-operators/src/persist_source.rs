@@ -9,11 +9,9 @@
 
 //! A source that reads from an a persist shard.
 
-use std::any::Any;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -27,25 +25,19 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
-use mz_persist_client::metrics::Metrics;
 use mz_persist_client::operators::shard_source::shard_source;
-use mz_persist_client::stats::PartStats;
 use mz_persist_txn::operator::txns_progress;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::Data;
-use mz_persist_types::dyn_struct::DynStruct;
-use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
 use mz_persist_types::Codec64;
-use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::{
-    ColumnType, Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationDesc,
-    RelationType, Row, RowArena, ScalarType, Timestamp,
-};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationType, Row, RowArena, Timestamp};
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::stats::RelationPartStats;
 use mz_timely_util::buffer::ConsolidateBuffer;
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use mz_timely_util::probe::ProbeNotify;
 use serde::{Deserialize, Serialize};
 use timely::communication::Push;
@@ -64,7 +56,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::{trace, warn};
+use tracing::trace;
 
 use crate::metrics::BackpressureMetrics;
 
@@ -147,14 +139,16 @@ pub fn persist_source<G>(
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
-    Rc<dyn Any>,
+    Vec<PressOnDropButton>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
 
-    let (stream, token) = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
+    let mut tokens = vec![];
+
+    let stream = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
         let (flow_control, feedback_handle) = match max_inflight_bytes {
             Some(max_inflight_bytes) => {
                 let backpressure_metrics = BackpressureMetrics {
@@ -188,7 +182,7 @@ where
             None => None,
         };
 
-        let (stream, token) = persist_source_core(
+        let (stream, source_tokens) = persist_source_core(
             scope,
             source_id,
             Arc::clone(&persist_clients),
@@ -199,6 +193,7 @@ where
             flow_control,
             subscribe_sleep,
         );
+        tokens.extend(source_tokens);
 
         let stream = match feedback_handle {
             Some(feedback_handle) => {
@@ -214,21 +209,23 @@ where
             None => stream,
         };
 
-        (stream.leave(), token)
+        stream.leave()
     });
+
     // If a txns_shard was provided, then this shard is in the persist-txn
     // system. This means the "logical" upper may be ahead of the "physical"
     // upper. Render a dataflow operator that passes through the input and
     // translates the progress frontiers as necessary.
-    let (stream, txns_token) = match metadata.txns_shard {
-        Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _>(
+    let (stream, txns_tokens) = match metadata.txns_shard {
+        Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _, _>(
             stream,
             &source_id.to_string(),
-            async move {
-                persist_clients
-                    .open(metadata.persist_location)
-                    .await
-                    .expect("location is valid")
+            move || {
+                let (c, l) = (
+                    Arc::clone(&persist_clients),
+                    metadata.persist_location.clone(),
+                );
+                async move { c.open(l).await.expect("location is valid") }
             },
             txns_shard,
             metadata.data_shard,
@@ -239,17 +236,14 @@ where
             Arc::new(metadata.relation_desc),
             Arc::new(UnitSchema),
         ),
-        None => {
-            let token: Rc<dyn Any> = Rc::new(());
-            (stream, token)
-        }
+        None => (stream, vec![]),
     };
+    tokens.extend(txns_tokens);
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((row, t.0, r)),
         Err(err) => Err((err, t.0, r)),
     });
-    let token = Rc::new((token, txns_token));
-    (ok_stream, err_stream, token)
+    (ok_stream, err_stream, tokens)
 }
 
 type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)>;
@@ -281,7 +275,7 @@ pub fn persist_source_core<'g, G>(
             Diff,
         ),
     >,
-    Rc<dyn Any>,
+    Vec<PressOnDropButton>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -293,14 +287,15 @@ where
 
     let desc_transformer = match flow_control {
         Some(flow_control) => Some(move |mut scope: _, descs: &Stream<_, _>, chosen_worker| {
-            backpressure(
+            let (stream, token) = backpressure(
                 &mut scope,
                 &format!("backpressure({source_id})"),
                 descs,
                 flow_control,
                 chosen_worker,
                 None,
-            )
+            );
+            (stream, vec![token])
         }),
         None => None,
     };
@@ -334,12 +329,7 @@ where
                 ResultSpec::nothing()
             };
             if let Some(plan) = &filter_plan {
-                let stats = PersistSourceDataStats {
-                    name: &filter_name,
-                    metrics: &metrics,
-                    desc: &desc,
-                    stats,
-                };
+                let stats = RelationPartStats::new(&filter_name, &metrics, &desc, stats);
                 filter_may_match(desc.typ(), time_range, stats, plan)
             } else {
                 true
@@ -354,7 +344,7 @@ where
 fn filter_may_match(
     relation_type: &RelationType,
     time_range: ResultSpec,
-    stats: PersistSourceDataStats,
+    stats: RelationPartStats,
     plan: &MfpPlan,
 ) -> bool {
     let arena = RowArena::new();
@@ -574,203 +564,6 @@ impl PendingWork {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct PersistSourceDataStats<'a> {
-    pub(crate) name: &'a str,
-    pub(crate) metrics: &'a Metrics,
-    pub(crate) desc: &'a RelationDesc,
-    pub(crate) stats: &'a PartStats,
-}
-
-fn downcast_stats<'a, T: Data>(
-    metrics: &Metrics,
-    name: &str,
-    col_name: &str,
-    stats: &'a dyn DynStats,
-) -> Option<&'a T::Stats> {
-    match stats.as_any().downcast_ref::<T::Stats>() {
-        Some(x) => Some(x),
-        None => {
-            // TODO: There is a known instance of this #22680. While we look
-            // into it, log at warn instead of error to avoid spamming Sentry.
-            // Once we fix it, flip this back to error.
-            warn!(
-                "unexpected stats type for {} {} {}: expected {} got {}",
-                name,
-                col_name,
-                std::any::type_name::<T>(),
-                std::any::type_name::<T::Stats>(),
-                stats.type_name()
-            );
-            metrics.pushdown.parts_mismatched_stats_count.inc();
-            None
-        }
-    }
-}
-
-impl PersistSourceDataStats<'_> {
-    fn json_spec<'a>(len: usize, stats: &'a JsonStats, arena: &'a RowArena) -> ResultSpec<'a> {
-        match stats {
-            JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
-            JsonStats::Bools(bools) => {
-                ResultSpec::value_between(bools.lower.into(), bools.upper.into())
-            }
-            JsonStats::Strings(strings) => ResultSpec::value_between(
-                strings.lower.as_str().into(),
-                strings.upper.as_str().into(),
-            ),
-            JsonStats::Numerics(numerics) => ResultSpec::value_between(
-                arena.make_datum(|r| Jsonb::decode(&numerics.lower, r)),
-                arena.make_datum(|r| Jsonb::decode(&numerics.upper, r)),
-            ),
-            JsonStats::Maps(maps) => {
-                ResultSpec::map_spec(
-                    maps.into_iter()
-                        .map(|(k, v)| {
-                            let mut v_spec = Self::json_spec(v.len, &v.stats, arena);
-                            if v.len != len {
-                                // This field is not always present, so assume
-                                // that accessing it might be null.
-                                v_spec = v_spec.union(ResultSpec::null());
-                            }
-                            (k.as_str().into(), v_spec)
-                        })
-                        .collect(),
-                )
-            }
-            JsonStats::None => ResultSpec::nothing(),
-            JsonStats::Lists | JsonStats::Mixed => ResultSpec::anything(),
-        }
-    }
-
-    fn col_stats<'a>(&'a self, id: usize, arena: &'a RowArena) -> ResultSpec<'a> {
-        let value_range = self.col_values(id, arena).unwrap_or(ResultSpec::anything());
-        let json_range = self.col_json(id, arena).unwrap_or(ResultSpec::anything());
-
-        // If this is not a JSON column or we don't have JSON stats, json_range is
-        // [ResultSpec::anything] and this is a noop.
-        value_range.intersect(json_range)
-    }
-
-    fn col_json<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
-        let ok_stats = self
-            .stats
-            .key
-            .col::<Option<DynStruct>>("ok")
-            .expect("ok column should be a struct")?;
-        let stats = ok_stats.some.cols.get(name.as_str())?;
-        match typ {
-            ColumnType {
-                scalar_type: ScalarType::Jsonb,
-                nullable: false,
-            } => {
-                let byte_stats =
-                    downcast_stats::<Vec<u8>>(self.metrics, self.name, name.as_str(), &**stats)?;
-                let value_range = match byte_stats {
-                    BytesStats::Json(json_stats) => {
-                        Self::json_spec(ok_stats.some.len, json_stats, arena)
-                    }
-                    BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
-                };
-                Some(value_range)
-            }
-            ColumnType {
-                scalar_type: ScalarType::Jsonb,
-                nullable: true,
-            } => {
-                let option_stats = downcast_stats::<Option<Vec<u8>>>(
-                    self.metrics,
-                    self.name,
-                    name.as_str(),
-                    &**stats,
-                )?;
-                let null_range = match option_stats.none {
-                    0 => ResultSpec::nothing(),
-                    _ => ResultSpec::null(),
-                };
-                let value_range = match &option_stats.some {
-                    BytesStats::Json(json_stats) => {
-                        Self::json_spec(ok_stats.some.len, json_stats, arena)
-                    }
-                    BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
-                };
-                Some(null_range.union(value_range))
-            }
-            _ => None,
-        }
-    }
-
-    fn len(&self) -> Option<usize> {
-        Some(self.stats.key.len)
-    }
-
-    fn err_count(&self) -> Option<usize> {
-        // Counter-intuitive: We can easily calculate the number of errors that
-        // were None from the column stats, but not how many were Some. So, what
-        // we do is count the number of Nones, which is the number of Oks, and
-        // then subtract that from the total.
-        let num_results = self.stats.key.len;
-        let num_oks = self
-            .stats
-            .key
-            .col::<Option<Vec<u8>>>("err")
-            .expect("err column should be a Vec<u8>")
-            .map(|x| x.none);
-        num_oks.map(|num_oks| num_results - num_oks)
-    }
-
-    fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec> {
-        struct ColValues<'a>(
-            &'a Metrics,
-            &'a str,
-            &'a str,
-            &'a dyn DynStats,
-            &'a RowArena,
-            Option<usize>,
-        );
-        impl<'a> DatumToPersistFn<Option<ResultSpec<'a>>> for ColValues<'a> {
-            fn call<T: DatumToPersist>(self) -> Option<ResultSpec<'a>> {
-                let ColValues(metrics, name, col_name, stats, arena, total_count) = self;
-                let stats = downcast_stats::<T::Data>(metrics, name, col_name, stats)?;
-                let make_datum = |lower| arena.make_datum(|packer| T::decode(lower, packer));
-                let min = stats.lower().map(make_datum);
-                let max = stats.upper().map(make_datum);
-                let null_count = stats.none_count();
-                let values = match (total_count, min, max) {
-                    (Some(total_count), _, _) if total_count == null_count => ResultSpec::nothing(),
-                    (_, Some(min), Some(max)) => ResultSpec::value_between(min, max),
-                    _ => ResultSpec::value_all(),
-                };
-                let nulls = if null_count > 0 {
-                    ResultSpec::null()
-                } else {
-                    ResultSpec::nothing()
-                };
-                Some(values.union(nulls))
-            }
-        }
-
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
-        let ok_stats = self
-            .stats
-            .key
-            .col::<Option<DynStruct>>("ok")
-            .expect("ok column should be a struct")?;
-        let stats = ok_stats.some.cols.get(name.as_str())?;
-        typ.to_persist(ColValues(
-            self.metrics,
-            self.name,
-            name.as_str(),
-            stats.as_ref(),
-            arena,
-            self.len(),
-        ))?
-    }
-}
-
 /// A trait representing a type that can be used in `backpressure`.
 pub trait Backpressureable: Clone + 'static {
     /// Return the weight of the object, in bytes.
@@ -822,7 +615,7 @@ pub fn backpressure<T, G, O>(
     chosen_worker: usize,
     // A probe used to inspect this operator during unit-testing
     probe: Option<UnboundedSender<(Antichain<(T, Subtime)>, usize, usize)>>,
-) -> (Stream<G, O>, Rc<dyn Any>)
+) -> (Stream<G, O>, PressOnDropButton)
 where
     T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
     G: Scope<Timestamp = (T, Subtime)>,
@@ -1073,94 +866,16 @@ where
             }
         }
     });
-    (data_stream, Rc::new(shutdown_button.press_on_drop()))
+    (data_stream, shutdown_button.press_on_drop())
 }
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::metrics::MetricsRegistry;
-    use mz_persist_client::stats::PartStats;
-    use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{PartEncoder, Schema};
-    use mz_persist_types::part::PartBuilder;
     use timely::dataflow::operators::{Enter, Probe};
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::sync::oneshot;
 
-    use mz_repr::{
-        is_no_stats_type, ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row,
-        RowArena, ScalarType,
-    };
-    use proptest::prelude::*;
-
     use super::*;
-    use crate::persist_source::PersistSourceDataStats;
-    use mz_storage_types::sources::SourceData;
-
-    fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
-        // Skip types that we don't keep stats for (yet).
-        if is_no_stats_type(&scalar_type) {
-            return;
-        }
-
-        struct ValidateStats<'a>(PersistSourceDataStats<'a>, &'a RowArena, Datum<'a>);
-        impl<'a> DatumToPersistFn<()> for ValidateStats<'a> {
-            fn call<T: DatumToPersist>(self) -> () {
-                let ValidateStats(stats, arena, datum) = self;
-                if let Some(spec) = stats.col_values(0, arena) {
-                    assert!(spec.may_contain(datum));
-                }
-            }
-        }
-
-        fn validate_stats(column_type: &ColumnType, datum: Datum<'_>) -> Result<(), String> {
-            let schema = RelationDesc::empty().with_column("col", column_type.clone());
-            let row = SourceData(Ok(Row::pack(std::iter::once(datum))));
-
-            let mut part = PartBuilder::new::<SourceData, _, _, _>(&schema, &UnitSchema);
-            {
-                let mut part_mut = part.get_mut();
-                <RelationDesc as Schema<SourceData>>::encoder(&schema, part_mut.key)?.encode(&row);
-                part_mut.ts.push(1u64);
-                part_mut.diff.push(1i64);
-            }
-            let part = part.finish()?;
-            let stats = part.key_stats()?;
-
-            let metrics = Metrics::new(&PersistConfig::new_for_tests(), &MetricsRegistry::new());
-            let stats = PersistSourceDataStats {
-                name: "test",
-                metrics: &metrics,
-                stats: &PartStats { key: stats },
-                desc: &schema,
-            };
-            let arena = RowArena::default();
-            column_type.to_persist(ValidateStats(stats, &arena, datum));
-            Ok(())
-        }
-
-        // Non-nullable version of the column.
-        let column_type = scalar_type.clone().nullable(false);
-        for datum in scalar_type.interesting_datums() {
-            assert_eq!(validate_stats(&column_type, datum), Ok(()));
-        }
-
-        // Nullable version of the column.
-        let column_type = scalar_type.clone().nullable(true);
-        for datum in scalar_type.interesting_datums() {
-            assert_eq!(validate_stats(&column_type, datum), Ok(()));
-        }
-        assert_eq!(validate_stats(&column_type, Datum::Null), Ok(()));
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn all_scalar_types_stats_roundtrip() {
-        proptest!(|(scalar_type in any::<ScalarType>())| {
-            // The proptest! macro interferes with rustfmt.
-            scalar_type_stats_roundtrip(scalar_type)
-        });
-    }
 
     #[mz_ore::test]
     fn test_backpressure_non_granular() {

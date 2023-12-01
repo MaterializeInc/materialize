@@ -337,7 +337,9 @@ true true true true true
 # (24 + 4) + (24 + 4) + (8 + 8) = 72 bytes per element. Note that the range for c2 comes from
 # different alignments for the enum Accum in ARM vs. x86 (namely, 16 vs. 8). Otherwise, the numbers
 # come from row keys and values taking 24 bytes, offsets 4 bytes, timestamps 8 bytes, regular diffs
-# 8 bytes, and reduce accumulable diffs [136|144] bytes.
+# 8 bytes, and reduce accumulable diffs [136|144] bytes. Due to deduplication in arrangements and
+# fragmentation in allocations, we allow for a half (times a fudge factor) to twice (times a fudge
+# factor) interval in sizes and capacities in the tests below.
 
 > CREATE TABLE ten (f1 integer);
 
@@ -355,27 +357,31 @@ true true true true true
 
 > SELECT
     records > 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size > (68 + 68) * 1000 AND size < 1.1 * (68 + 68) * 1000,
-    capacity > (68 + 68) * 1000 AND capacity < 1.1 * (68 + 68) * 1000,
+    size > 0.5 * 0.9 * (68 + 68) * 1000,
+    size < 2 * 1.1 * (68 + 68) * 1000,
+    capacity > 0.5 * 0.9 * (68 + 68) * 1000,
+    capacity < 2 * 1.1 * (68 + 68) * 1000,
     allocations > 0
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c1%';
-true true true true
+true true true true true true
 
 > SELECT
     records > 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size > 0.7 * (172 + 72) * 1000 AND size < 1.1 * (180 + 72) * 1000,
-    capacity > 0.7 * (172 + 72) * 1000 AND capacity < 1.1 * (180 + 72) * 1000,
+    size > 0.5 * 0.9 * (172 + 72) * 1000,
+    size < 2 * 1.1 * (180 + 72) * 1000,
+    capacity > 0.5 * 0.9 * (172 + 72) * 1000,
+    capacity < 2 * 1.1 * (180 + 72) * 1000,
     allocations > 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c2%';
-true true true true
+true true true true true true
 
 # For coverage, we also include a recursive materialized view to account for dynamic timestamps.
 # Here, the timestamps take not 8 bytes, but (8 + (24 + [0|1 * 8])) = [32|40] bytes. There are also
 # not two but six largest arrangements of interest (for one min/max aggregation and two distincts).
-# The distinct arrangements approach (24 + 4) + (0 + 4) + ([32|40] + 8) = [72|80] bytes per row;
-# However, one of them takes slightly less at 2/3* ((24 + 4) + (0 + 4)) + (40 + 8) = [62|70] bytes
+# The distinct arrangements approach (24 + 4) + ([32|40] + 8) = [68|76] bytes per row;
+# However, one of them takes slightly less at 2/3 * (24 + 4) + ([32|40] + 8) = [59|67] bytes
 # due to containing 3000 records but only 2000 distinct elements. The min/max reduction input
 # arrangement takes 1/2 * (24 + 4) + (24 + 24 + 4) + ([32|40] + 8) = [106|114] as there are 2000
 # records, but only 1000 keys and also the values are represented as Vec<Row>. The output
@@ -399,14 +405,14 @@ true true true true
 
 > SELECT
     records > (4 * 2 + 2 * 3) * 1000 AND records < 1.1 * (4 * 2 + 2 * 3) * 1000,
-    size > 0.7 * (3 * 72 * 2 + 62 * 3 + 106 * 2 + 68 * 3) * 1000
-      AND size < 1.1 * (3 * 80 * 2 + 70 * 3 + 114 * 2 + 76 * 3) * 1000,
-    capacity > 0.7 * (3 * 72 * 2 + 62 * 3 + 106 * 2 + 68 * 3) * 1000
-      AND capacity < 1.1 * (3 * 80 * 2 + 70 * 3 + 114 * 2 + 76 * 3) * 1000,
+    size > 0.5 * 0.9 * (3 * 68 * 2 + 59 * 3 + 106 * 2 + 68 * 3) * 1000,
+    size < 2 * 1.1 * (3 * 76 * 2 + 67 * 3 + 114 * 2 + 76 * 3) * 1000,
+    capacity > 0.5 * 0.9 * (3 * 68 * 2 + 59 * 3 + 106 * 2 + 68 * 3) * 1000,
+    capacity < 2 * 1.1 * (3 * 76 * 2 + 67 * 3 + 114 * 2 + 76 * 3) * 1000,
     allocations > 0
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%rec%';
-true true true true
+true true true true true true
 
 > DROP TABLE ten CASCADE;
 
@@ -415,7 +421,7 @@ true true true true
 # since we include monoids in the diff field. Note that in both materialized views below,
 # the output arrangements end up taking 72 bytes per element due to a similar reasoning
 # as above. The input arrangement of m_minmax takes (24 + 4) + (8 + (24 + (32 + 32))) = 124
-# bytes per element, while for m_top1 we have (24 + 4) + (0 + 4) + (8 + (48 + 16)) = 104.
+# bytes per element, while for m_top1 we have (24 + 4) + (8 + (48 + 16)) = 100.
 # A Vec<ReductionMonoid> takes 24 for the Vec plus 32 bytes per ReductionMonoid, while a
 # Top1Monoid takes 48 bytes plus 16 bytes per ColumnOrder.
 
@@ -437,21 +443,25 @@ true true true true
 
 > SELECT
     records >= 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size >= 0.7 * (124 + 72) * 1000 AND size < 1.1 * (124 + 72) * 1000,
-    capacity >= 0.7 * (124 + 72) * 1000 AND capacity < 1.1 * (124 + 72) * 1000,
+    size > 0.5 * 0.9 * (124 + 72) * 1000,
+    size < 2 * 1.1 * (124 + 72) * 1000,
+    capacity > 0.5 * 0.9 * (124 + 72) * 1000,
+    capacity < 2 * 1.1 * (124 + 72) * 1000,
     allocations > 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_minmax%';
-true true true true
+true true true true true true
 
 > SELECT
     records >= 2 * 1000 AND records < 1.1 * 2 * 1000,
-    size >= 0.7 * (104 + 72) * 1000 AND size < 2 * (104 + 72) * 1000,
-    capacity >= 0.7 * (104 + 72) * 1000 AND capacity < 2 * (104 + 72) * 1000,
+    size > 0.5 * 0.9 * (100 + 72) * 1000,
+    size < 2 * 1.1 * (100 + 72) * 1000,
+    capacity > 0.5 * 0.9 * (100 + 72) * 1000,
+    capacity < 2 * 1.1 * (100 + 72) * 1000,
     allocations > 100
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_top1%';
-true true true true
+true true true true true true
 
 > DROP SOURCE counter CASCADE;
 

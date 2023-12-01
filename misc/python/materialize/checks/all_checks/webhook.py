@@ -21,10 +21,10 @@ def schemas() -> str:
 
 class Webhook(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse("0.62.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.62.0-dev")
 
     def enable(self) -> str:
-        if self.base_version < MzVersion.parse("0.76.0-dev"):
+        if self.base_version < MzVersion.parse_mz("v0.76.0-dev"):
             return dedent(
                 """
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}

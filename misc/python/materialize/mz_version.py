@@ -7,35 +7,54 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Various utilities"""
+"""Version types"""
 
 from __future__ import annotations
 
 import json
 import subprocess
+from typing import TypeVar
 
 try:
     from semver.version import Version
 except ImportError:
     from semver import VersionInfo as Version  # type: ignore
 
+T = TypeVar("T", bound="TypedVersionBase")
 
-class MzVersion(Version):
-    """Version of Materialize, can be parsed from version string, SQL, cargo"""
+
+class TypedVersionBase(Version):
+    """Typed version, can be parsed from version string"""
 
     @classmethod
-    def create_mz(
-        cls, major: int, minor: int, patch: int, prerelease: str | None = None
-    ) -> MzVersion:
+    def get_prefix(cls) -> str:
+        raise NotImplementedError(f"Not implemented in {cls}")
+
+    @classmethod
+    def create(
+        cls: type[T], major: int, minor: int, patch: int, prerelease: str | None = None
+    ) -> T:
         prerelease_suffix = f"-{prerelease}" if prerelease is not None else ""
-        return cls.parse_mz(f"v{major}.{minor}.{patch}{prerelease_suffix}")
+        return cls.parse(
+            f"{cls.get_prefix()}{major}.{minor}.{patch}{prerelease_suffix}"
+        )
 
     @classmethod
-    def parse_mz(cls, version: str, drop_dev_suffix: bool = False) -> MzVersion:
-        """Parses a Mz version string, for example:  v0.45.0-dev (f01773cb1)"""
-        if not version[0] == "v":
-            raise ValueError(f"Invalid mz version string: {version}")
-        version = version[1:]
+    def parse_without_prefix(
+        cls: type[T], version_without_prefix: str, drop_dev_suffix: bool = False
+    ) -> T:
+        version = f"{cls.get_prefix()}{version_without_prefix}"
+        return cls.parse(version, drop_dev_suffix=drop_dev_suffix)
+
+    @classmethod
+    def parse(cls: type[T], version: str, drop_dev_suffix: bool = False) -> T:
+        """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1)"""
+        expected_prefix = cls.get_prefix()
+        if not version.startswith(expected_prefix):
+            raise ValueError(
+                f"Invalid version string '{version}', expected prefix '{expected_prefix}'"
+            )
+        version = version.removeprefix(expected_prefix)
         if " " in version:
             version, git_hash = version.split(" ")
             if not git_hash[0] == "(" or not git_hash[-1] == ")":
@@ -45,21 +64,40 @@ class MzVersion(Version):
         if drop_dev_suffix:
             version = version.replace("-dev", "")
 
-        return cls.parse(version)
+        return super().parse(version)
 
     @classmethod
-    def try_parse_mz(
-        cls, version: str, drop_dev_suffix: bool = False
-    ) -> MzVersion | None:
-        """Parses a Mz version string but returns empty if that fails"""
+    def try_parse(
+        cls: type[T], version: str, drop_dev_suffix: bool = False
+    ) -> T | None:
+        """Parses a version string but returns empty if that fails"""
         try:
-            return cls.parse_mz(version, drop_dev_suffix=drop_dev_suffix)
+            return cls.parse(version, drop_dev_suffix=drop_dev_suffix)
         except ValueError:
             return None
 
     @classmethod
-    def is_mz_version_string(cls, version: str) -> bool:
-        return cls.try_parse_mz(version) is not None
+    def is_valid_version_string(cls, version: str) -> bool:
+        return cls.try_parse(version) is not None
+
+    def str_without_prefix(self) -> str:
+        return super().__str__()
+
+    def __str__(self) -> str:
+        return f"{self.get_prefix()}{self.str_without_prefix()}"
+
+
+class MzVersion(TypedVersionBase):
+    """Version of Materialize, can be parsed from version string, SQL, cargo"""
+
+    @classmethod
+    def get_prefix(cls) -> str:
+        return "v"
+
+    @classmethod
+    def parse_mz(cls: type[T], version: str, drop_dev_suffix: bool = False) -> T:
+        """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1)"""
+        return cls.parse(version=version, drop_dev_suffix=drop_dev_suffix)
 
     @classmethod
     def parse_cargo(cls) -> MzVersion:
@@ -71,16 +109,22 @@ class MzVersion(Version):
         )
         for package in metadata["packages"]:
             if package["name"] == "mz-environmentd":
-                return cls.parse(package["version"])
+                return cls.parse_without_prefix(package["version"])
         else:
             raise ValueError("No mz-environmentd version found in cargo metadata")
 
+
+class MzCliVersion(TypedVersionBase):
+    """Version of Materialize APT"""
+
     @classmethod
-    def from_semver(cls, version: Version) -> MzVersion:
-        return cls.parse(str(version))
+    def get_prefix(cls) -> str:
+        return "mz-v"
 
-    def to_semver(self) -> Version:
-        return Version.parse(str(self).lstrip("v"))
 
-    def __str__(self) -> str:
-        return "v" + super().__str__()
+class MzLspServerVersion(TypedVersionBase):
+    """Version of Materialize LSP Server"""
+
+    @classmethod
+    def get_prefix(cls) -> str:
+        return "mz-lsp-server-v"

@@ -1469,7 +1469,10 @@ async fn test_utilization_hold() {
             // If we're not in EpochMilliseconds, the timestamp math below is invalid, so assert that here.
             assert!(matches!(
                 explain.determination.timestamp_context,
-                TimestampContext::TimelineTimestamp(Timeline::EpochMilliseconds, _)
+                TimestampContext::TimelineTimestamp {
+                    timeline: Timeline::EpochMilliseconds,
+                    ..
+                }
             ));
             let since = explain
                 .determination
@@ -1772,8 +1775,7 @@ async fn test_timeline_read_holds() {
     let source_name = "source_hold";
     let (pg_client, cleanup_fn) =
         test_util::create_postgres_source_with_table(&mz_client, view_name, "(a INT)", source_name)
-            .await
-            .unwrap();
+            .await;
 
     // Create user table in Materialize.
     mz_client
@@ -1797,9 +1799,7 @@ async fn test_timeline_read_holds() {
             .unwrap();
     }
 
-    test_util::wait_for_view_population(&mz_client, view_name, source_rows)
-        .await
-        .unwrap();
+    test_util::wait_for_view_population(&mz_client, view_name, source_rows).await;
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mz_join_client = server.connect().await.unwrap();
@@ -1815,7 +1815,7 @@ async fn test_timeline_read_holds() {
     .await
     .unwrap();
 
-    cleanup_fn(&mz_client, &pg_client).await.unwrap();
+    cleanup_fn(&mz_client, &pg_client).await;
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -1837,17 +1837,14 @@ async fn test_linearizability() {
     let source_name = "source_lin";
     let (pg_client, cleanup_fn) =
         test_util::create_postgres_source_with_table(&mz_client, view_name, "(a INT)", source_name)
-            .await
-            .unwrap();
+            .await;
     // Insert value into postgres table.
     let _ = pg_client
         .execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[])
         .await
         .unwrap();
 
-    test_util::wait_for_view_population(&mz_client, view_name, 1)
-        .await
-        .unwrap();
+    test_util::wait_for_view_population(&mz_client, view_name, 1).await;
 
     // The user table's write frontier will be close to zero because we use a deterministic
     // now function in this test. It may be slightly higher than zero because bootstrapping
@@ -1901,7 +1898,7 @@ async fn test_linearizability() {
     // If we go back to serializable, then timestamps can revert again.
     assert!(join_ts < view_ts);
 
-    cleanup_fn(&mz_client, &pg_client).await.unwrap();
+    cleanup_fn(&mz_client, &pg_client).await;
 }
 
 #[mz_ore::test]

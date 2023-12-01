@@ -1743,7 +1743,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#b55e5b6256ad94bb9047890704a1eaf912a0c2d1"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#fca940b40e7827a9a639f99af45806100ef14954"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1800,7 +1800,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#b55e5b6256ad94bb9047890704a1eaf912a0c2d1"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#fca940b40e7827a9a639f99af45806100ef14954"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3690,6 +3690,7 @@ dependencies = [
  "once_cell",
  "paste",
  "postgres-openssl",
+ "prometheus",
  "proptest",
  "proptest-derive",
  "prost",
@@ -4428,7 +4429,7 @@ dependencies = [
 
 [[package]]
 name = "mz-lsp-server"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "httparse",
  "mz-build-info",
@@ -4748,6 +4749,7 @@ dependencies = [
  "mz-timely-util",
  "prost",
  "rand",
+ "serde",
  "timely",
  "tokio",
  "tracing",
@@ -5669,6 +5671,7 @@ dependencies = [
  "mz-storage-client",
  "mz-storage-types",
  "mz-tls-util",
+ "once_cell",
  "proptest",
  "prost",
  "serde",
@@ -8459,7 +8462,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#9adb32c061330b5a82876606141121362c7c659a"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#de20aa88cc6df3de910e9befbe68408d31e287be"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -8477,12 +8480,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#9adb32c061330b5a82876606141121362c7c659a"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#de20aa88cc6df3de910e9befbe68408d31e287be"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#9adb32c061330b5a82876606141121362c7c659a"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#de20aa88cc6df3de910e9befbe68408d31e287be"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -8498,7 +8501,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#9adb32c061330b5a82876606141121362c7c659a"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#de20aa88cc6df3de910e9befbe68408d31e287be"
 dependencies = [
  "columnation",
  "serde",
@@ -8507,7 +8510,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#9adb32c061330b5a82876606141121362c7c659a"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#de20aa88cc6df3de910e9befbe68408d31e287be"
 
 [[package]]
 name = "tiny-keccak"

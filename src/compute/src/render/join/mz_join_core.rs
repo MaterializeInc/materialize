@@ -74,8 +74,8 @@ pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, K, V1, V2, YFn>(
 where
     G: Scope,
     G::Timestamp: Lattice,
-    Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, R = Diff> + Clone + 'static,
-    Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, R = Diff> + Clone + 'static,
+    Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+    Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
     L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
     I: IntoIterator,
     I::Item: Data,
@@ -389,8 +389,8 @@ where
 struct Deferred<T, C1, C2, D, K, V1, V2>
 where
     T: Timestamp,
-    C1: Cursor<Key = K, Val = V1, Time = T, R = Diff>,
-    C2: Cursor<Key = K, Val = V2, Time = T, R = Diff>,
+    C1: Cursor<Key = K, Val = V1, Time = T, Diff = Diff>,
+    C2: Cursor<Key = K, Val = V2, Time = T, Diff = Diff>,
 {
     cursor1: C1,
     storage1: C1::Storage,
@@ -404,8 +404,8 @@ where
 impl<T, C1, C2, D, K, V1, V2> Deferred<T, C1, C2, D, K, V1, V2>
 where
     T: Timestamp + Lattice,
-    C1: Cursor<Key = K, Val = V1, Time = T, R = Diff>,
-    C2: Cursor<Key = K, Val = V2, Time = T, R = Diff>,
+    C1: Cursor<Key = K, Val = V1, Time = T, Diff = Diff>,
+    C2: Cursor<Key = K, Val = V2, Time = T, Diff = Diff>,
     D: Data,
     K: Data,
     V1: Data,

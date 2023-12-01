@@ -37,8 +37,8 @@ mammalmore    moose    2
 # as rehydration has to store values differently.
 > SELECT
     SUM(u.envelope_state_bytes) > 0,
-    SUM(u.envelope_state_count),
-    bool_and(u.rehydration_latency_ms IS NOT NULL)
+    SUM(u.envelope_state_records),
+    bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
@@ -74,7 +74,7 @@ mammalmore    moose               2
 # space differently during rehydration and normal operation.
 > SELECT
     SUM(u.envelope_state_bytes) != ${rehydrated-state-bytes},
-    SUM(u.envelope_state_count)
+    SUM(u.envelope_state_records)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
@@ -94,7 +94,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 
 > SELECT
     SUM(u.envelope_state_bytes) > ${state-bytes},
-    SUM(u.envelope_state_count)
+    SUM(u.envelope_state_records)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
@@ -114,7 +114,7 @@ birdmore      geese               56
 mammalmore    moose               2
 
 > SELECT
-    SUM(u.envelope_state_count)
+    SUM(u.envelope_state_records)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')

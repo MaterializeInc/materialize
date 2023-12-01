@@ -16,6 +16,9 @@ from collections.abc import Generator
 import networkx as nx
 
 from materialize.util import all_subclasses
+from materialize.version_list import (
+    get_published_minor_mz_versions,
+)
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
@@ -49,7 +52,6 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
-from materialize.version_list import VersionsFromDocs
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -111,8 +113,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--min-version",
         metavar="VERSION",
-        type=MzVersion.parse,
-        default=MzVersion.parse("0.39.0"),
+        type=MzVersion.parse_without_prefix,
+        default=MzVersion.parse_without_prefix("0.39.0"),
         help="Minimum Mz version to involve.",
     )
 
@@ -143,17 +145,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     executor = MzcomposeExecutor(composition=c)
 
-    versions = list(
-        [v for v in VersionsFromDocs().minor_versions() if v >= args.min_version]
+    versions_in_ascending_order = get_published_minor_mz_versions(
+        newest_first=False, include_filter=lambda v: v >= args.min_version
     )
+
     print(
         "--- Testing upgrade scenarios involving the following versions: "
-        + " ".join([str(v) for v in versions])
+        + " ".join([str(v) for v in versions_in_ascending_order])
     )
 
     for id, upgrade_scenario in enumerate(
         get_upgrade_scenarios(
-            versions=versions,
+            versions=versions_in_ascending_order,
             num_scenarios=args.num_scenarios,
         )
     ):

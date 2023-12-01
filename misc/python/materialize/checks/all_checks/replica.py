@@ -79,7 +79,7 @@ class CreateReplica(Check):
                   AND details->>'replica_id' NOT LIKE 'u%';
                 true
                 """
-                if self.base_version < MzVersion.parse("0.66.0-dev")
+                if self.base_version < MzVersion.parse_mz("v0.66.0-dev")
                 else TESTDRIVE_NOP
             )
         )
@@ -139,7 +139,7 @@ class DropReplica(Check):
 
 class ReplicaAnnotations(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse("0.71.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.71.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

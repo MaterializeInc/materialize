@@ -37,6 +37,7 @@ mz-stash-types = { path = "../stash-types" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 paste = "1.0.11"
+prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 prost = { version = "0.11.9" }

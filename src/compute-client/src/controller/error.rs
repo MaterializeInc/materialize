@@ -164,7 +164,7 @@ impl From<instance::PeekError> for PeekError {
         match error {
             CollectionMissing(id) => Self::CollectionMissing(id),
             ReplicaMissing(id) => Self::ReplicaMissing(id),
-            SinceViolation(id) => Self::CollectionMissing(id),
+            SinceViolation(id) => Self::SinceViolation(id),
         }
     }
 }

@@ -576,8 +576,15 @@ pub trait CatalogItem {
     fn create_sql(&self) -> &str;
 
     /// Returns the IDs of the catalog items upon which this catalog item
+    /// directly references.
+    fn references(&self) -> &ResolvedIds;
+
+    /// Returns the IDs of the catalog items upon which this catalog item
     /// depends.
-    fn uses(&self) -> &ResolvedIds;
+    fn uses(&self) -> BTreeSet<GlobalId>;
+
+    /// Returns the IDs of the catalog items that directly reference this catalog item.
+    fn referenced_by(&self) -> &[GlobalId];
 
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];
@@ -931,6 +938,14 @@ impl EnvironmentId {
     /// Returns the cloud provider region associated with this environment ID.
     pub fn cloud_provider_region(&self) -> &str {
         &self.cloud_provider_region
+    }
+
+    /// Returns the name of the region associted with this environment ID.
+    ///
+    /// A region is a combination of [`EnvironmentId::cloud_provider`] and
+    /// [`EnvironmentId::cloud_provider_region`].
+    pub fn region(&self) -> String {
+        format!("{}/{}", self.cloud_provider, self.cloud_provider_region)
     }
 
     /// Returns the organization ID associated with this environment ID.

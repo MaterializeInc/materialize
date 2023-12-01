@@ -83,8 +83,7 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::BufMut;
@@ -94,17 +93,16 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
-use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashSet;
+
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
-use mz_persist_txn::txn_cache::TxnsCache;
+use mz_persist_txn::txn_read::TxnsRead;
 use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
@@ -114,17 +112,13 @@ use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand,
-    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
+    SinkStatisticsUpdate, SourceStatisticsUpdate, StatusUpdate, StorageCommand, StorageResponse,
     TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
     ExportState, IntrospectionType, MonotonicAppender, ReadPolicy, SnapshotCursor,
     StorageController,
-};
-use mz_storage_client::healthcheck::{
-    self, MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC,
-    MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
@@ -144,13 +138,15 @@ use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio_stream::StreamMap;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::command_wals::ProtoShardId;
+
 use crate::rehydration::RehydratingStorageClient;
 
 mod collection_mgmt;
 mod command_wals;
+mod healthcheck;
 mod persist_handles;
 mod rehydration;
 mod statistics;
@@ -271,6 +267,33 @@ impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
     }
 }
 
+#[derive(Debug)]
+enum PersistTxns<T> {
+    NeverEnabled,
+    Enabled {
+        txns_read: TxnsRead<T>,
+        txns_client: PersistClient,
+    },
+    DisabledPreviouslyEnabled {
+        txns_id: ShardId,
+        txns_client: PersistClient,
+    },
+}
+
+impl<T: Timestamp + Lattice + Codec64> PersistTxns<T> {
+    fn expect_enabled(&self, txns_id: &ShardId) -> &TxnsRead<T> {
+        match self {
+            PersistTxns::Enabled { txns_read, .. } => {
+                assert_eq!(txns_id, txns_read.txns_id());
+                txns_read
+            }
+            PersistTxns::NeverEnabled | PersistTxns::DisabledPreviouslyEnabled { .. } => {
+                panic!("set if txns are enabled")
+            }
+        }
+    }
+}
+
 /// A storage controller for a storage instance.
 #[derive(Debug)]
 pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
@@ -298,11 +321,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
-    /// The shard id of the persist-txn txns shard or None if persist-txn is not
-    /// enabled.
-    txns_id: Option<ShardId>,
-    /// A PersistClient usable for opening txns_id.
-    txns_client: PersistClient,
+    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// one.
+    txns: PersistTxns<T>,
+    /// Whether we have run `txns_init` yet (required before create_collections
+    /// and the various flavors of append).
+    txns_init_run: bool,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
@@ -310,8 +334,11 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
+
+    /// Facility for appending status updates for sources/sinks
+    pub(crate) collection_status_manager: healthcheck::CollectionStatusManager<T>,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
-    pub(crate) introspection_ids: BTreeMap<IntrospectionType, GlobalId>,
+    pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
     /// this will make sure that any tasks (or other resources) will stop when
     /// needed.
@@ -320,13 +347,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    source_statistics: Arc<
-        std::sync::Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SourceStatisticsUpdate>>>,
-    >,
+    source_statistics:
+        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SourceStatisticsUpdate>>>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics:
-        Arc<std::sync::Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SinkStatisticsUpdate>>>>,
+        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SinkStatisticsUpdate>>>>,
 
     /// Clients for all known storage instances.
     clients: BTreeMap<StorageInstanceId, RehydratingStorageClient<T>>,
@@ -419,6 +445,7 @@ where
             self.metrics.for_instance(id),
             self.envd_epoch,
             self.config.grpc_client.clone(),
+            self.now.clone(),
         );
         if self.initialized {
             client.send(StorageCommand::InitializationComplete);
@@ -490,6 +517,7 @@ where
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
+        assert!(self.txns_init_run);
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
         // 2. create an existing identifier with a new description.
@@ -526,17 +554,13 @@ where
 
         // Perform all stash writes in a single transaction, to minimize transaction overhead and
         // the time spent waiting for stash.
-        METADATA_COLLECTION
+        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
             .insert_without_overwrite(
                 &mut self.stash,
                 entries
                     .into_iter()
                     .map(|(key, val)| (key.into_proto(), val.into_proto())),
             )
-            .await?;
-
-        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
-            .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(RustType::from_proto)
@@ -583,11 +607,11 @@ where
                 // If the shard is being managed by persist-txn (initially, tables), then we need to
                 // pass along the shard id for the txns shard to dataflow rendering.
                 let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites) => {
-                        // `self.txns_id` is None if persist-txn is not enabled, which makes this
-                        // do the right thing.
-                        self.txns_id.clone()
-                    }
+                    DataSource::Other(DataSourceOther::TableWrites) => match &self.txns {
+                        PersistTxns::Enabled { txns_read, .. } => Some(*txns_read.txns_id()),
+                        PersistTxns::NeverEnabled
+                        | PersistTxns::DisabledPreviouslyEnabled { .. } => None,
+                    },
                     DataSource::Ingestion(_)
                     | DataSource::Introspection(_)
                     | DataSource::Progress
@@ -748,9 +772,19 @@ where
                     (id, write)
                 })
                 .collect();
+            // This register call advances the logical upper of the table. The
+            // register call eventually circles that info back to the
+            // controller, but some tests fail if we don't synchronously update
+            // it in create_collections, so just do that now.
+            let advance_to = mz_persist_types::StepForward::step_forward(&register_ts);
             self.persist_table_worker
                 .register(register_ts, table_registers);
-            for (id, collection_state) in collection_states {
+            for (id, mut collection_state) in collection_states {
+                if let PersistTxns::Enabled { .. } = &self.txns {
+                    if collection_state.write_frontier.less_than(&advance_to) {
+                        collection_state.write_frontier = Antichain::from_elem(advance_to.clone());
+                    }
+                }
                 self.collections.insert(id, collection_state);
             }
         }
@@ -802,7 +836,6 @@ where
         this.append_shard_mappings(to_create.iter().map(|(id, _)| *id), 1)
             .await;
 
-        let mut statement_logging_sources_seen = 0;
         // TODO(guswynn): perform the io in this final section concurrently.
         for (id, description) in to_create {
             match description.data_source {
@@ -822,7 +855,11 @@ where
                     client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
                 DataSource::Introspection(i) => {
-                    let prev = self.introspection_ids.insert(i, id);
+                    let prev = self
+                        .introspection_ids
+                        .lock()
+                        .expect("poisoned lock")
+                        .insert(i, id);
                     assert!(
                         prev.is_none(),
                         "cannot have multiple IDs for introspection type"
@@ -881,19 +918,18 @@ where
                             .await;
                         }
 
-                        IntrospectionType::StatementExecutionHistory
-                        | IntrospectionType::SessionHistory
-                        | IntrospectionType::PreparedStatementHistory => {
-                            statement_logging_sources_seen += 1;
-                            if statement_logging_sources_seen == 3 {
-                                self.partially_truncate_statement_log().await;
-                            }
-                        }
-
                         // Truncate compute-maintained collections.
                         IntrospectionType::ComputeDependencies
                         | IntrospectionType::ComputeReplicaHeartbeats => {
                             self.reconcile_managed_collection(id, vec![]).await;
+                        }
+
+                        // Note [btv] - we don't truncate these, because that uses
+                        // a huge amount of memory on environmentd startup.
+                        IntrospectionType::PreparedStatementHistory
+                        | IntrospectionType::StatementExecutionHistory
+                        | IntrospectionType::SessionHistory => {
+                            // do nothing.
                         }
                     }
                 }
@@ -1282,6 +1318,7 @@ where
         advance_to: Self::Timestamp,
         commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
+        assert!(self.txns_init_run);
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         for (id, updates) in commands.iter() {
             if !updates.is_empty() {
@@ -1297,6 +1334,7 @@ where
     }
 
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
+        assert!(self.txns_init_run);
         self.collection_manager.monotonic_appender(id)
     }
 
@@ -1340,14 +1378,11 @@ where
                 // never come (worse, it's tricky to keep it making progress, which results in a
                 // stuck since). Replace this with the shared TxnsCache thing we'll have to do
                 // anyway for the dataflow operators.
-                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
-                    &self.txns_client,
-                    *txns_id,
-                    Some(metadata.data_shard),
-                )
-                .await;
-                txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let txns_read = self.txns.expect_enabled(txns_id);
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
                 data_snapshot.snapshot_and_fetch(&mut read_handle).await
             }
@@ -1381,7 +1416,7 @@ where
             None => {
                 let mut handle = self.read_handle_for_snapshot(id).await?;
                 let cursor = handle
-                    .snapshot_cursor(Antichain::from_elem(as_of))
+                    .snapshot_cursor(Antichain::from_elem(as_of), |_| true)
                     .await
                     .map_err(|_| StorageError::ReadBeforeSince(id))?;
                 SnapshotCursor {
@@ -1390,16 +1425,11 @@ where
                 }
             }
             Some(txns_id) => {
-                // TODO(txn): Replace this with the shared TxnsCache thing
-                // we'll have to do anyway for the dataflow operators.
-                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
-                    &self.txns_client,
-                    *txns_id,
-                    Some(metadata.data_shard),
-                )
-                .await;
-                txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let txns_read = self.txns.expect_enabled(txns_id);
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
                 let mut handle = self.read_handle_for_snapshot(id).await?;
                 let cursor = data_snapshot
                     .snapshot_cursor(&mut handle)
@@ -1736,6 +1766,9 @@ where
                     }
                 }
             }
+            Some(StorageResponse::StatusUpdates(updates)) => {
+                self.record_status_updates(updates).await;
+            }
         }
 
         // IDs of sources that were dropped whose statuses should be updated.
@@ -1812,22 +1845,13 @@ where
         //
         // The locks are held for a short time, only while we do some hash map removals.
 
-        let source_status_history_id =
-            self.introspection_ids[&IntrospectionType::SourceStatusHistory];
         let mut updates = vec![];
         for id in pending_source_drops.drain(..) {
-            let status_row = healthcheck::pack_status_row(
-                id,
-                "dropped",
-                None,
-                &Default::default(),
-                &Default::default(),
-                (self.now)(),
-            );
-            updates.push((status_row, 1));
+            updates.push(id);
         }
 
-        self.append_to_managed_collection(source_status_history_id, updates)
+        self.collection_status_manager
+            .drop_sources(updates, mz_ore::now::to_datetime((self.now)()))
             .await;
 
         {
@@ -1838,25 +1862,16 @@ where
         }
 
         // Record the drop status for all pending sink drops.
-        let sink_status_history_id = self.introspection_ids[&IntrospectionType::SinkStatusHistory];
         let mut updates = vec![];
         {
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in pending_sink_drops.drain(..) {
-                let status_row = healthcheck::pack_status_row(
-                    id,
-                    "dropped",
-                    None,
-                    &Default::default(),
-                    &Default::default(),
-                    (self.now)(),
-                );
-                updates.push((status_row, 1));
-
+                updates.push(id);
                 sink_statistics.remove(&id);
             }
         }
-        self.append_to_managed_collection(sink_status_history_id, updates)
+        self.collection_status_manager
+            .drop_sinks(updates, mz_ore::now::to_datetime((self.now)()))
             .await;
 
         Ok(())
@@ -1938,11 +1953,8 @@ where
             push_update(id, old, -1);
         }
 
-        self.append_to_managed_collection(
-            self.introspection_ids[&IntrospectionType::Frontiers],
-            updates,
-        )
-        .await;
+        let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
+        self.append_to_managed_collection(id, updates).await;
     }
 
     async fn record_replica_frontiers(
@@ -2001,11 +2013,9 @@ where
             push_update(key, old, -1);
         }
 
-        self.append_to_managed_collection(
-            self.introspection_ids[&IntrospectionType::ReplicaFrontiers],
-            updates,
-        )
-        .await;
+        let id =
+            self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
+        self.append_to_managed_collection(id, updates).await;
     }
 
     async fn record_introspection_updates(
@@ -2013,8 +2023,115 @@ where
         type_: IntrospectionType,
         updates: Vec<(Row, Diff)>,
     ) {
-        let id = self.introspection_ids[&type_];
+        let id = self.introspection_ids.lock().expect("poisoned")[&type_];
         self.append_to_managed_collection(id, updates).await;
+    }
+
+    /// With the CRDB based timestamp oracle, there is no longer write timestamp
+    /// fencing. As in, when a new Coordinator, `B`, starts up, there is nothing
+    /// that prevents an old Coordinator, `A`, from getting a new write
+    /// timestamp that is higher than `B`'s boot timestamp. Below is the
+    /// implications for all persist transaction scenarios, `on` means a
+    /// Coordinator turning the persist txn flag on, `off` means a Coordinator
+    /// turning the persist txn flag off.
+    ///
+    /// The following series of events is a concern:
+    ///   1. `A` writes at `t_0`, s.t. `t_0` > `B`'s boot timestamp.
+    ///   2. `B` writes at `t_1`, s.t. `t_1` > `t_0`.
+    ///   3. `A` writes at `t_2`, s.t. `t_2` > `t_1`.
+    ///   4. etc.
+    ///
+    /// - `off` -> `off`: If `B`` manages to append `t_1` before A appends `t_0`
+    ///    then the `t_0` append will panic and we won't acknowledge the write
+    ///   to the user (or similarly `t_2` and `t_1`). Before persist-txn,
+    ///   appends are not atomic, so we might get a partial append. This is fine
+    ///   because we only support single table transactions.
+    /// - `on` -> `on`: The txn-shard is meant to correctly handle two writers
+    ///   so this should be fine. Note it's possible that we have two
+    ///   Coordinators interleaving write transactions without the leadership
+    ///   check described below, but that should be fine.
+    /// - `off` -> `on`: If `A` gets a write timestamp higher than `B`'s boot
+    ///   timestamp, then `A` can write directly to a data shard after it's been
+    ///   registered with a txn-shard, breaking the invariant that no data shard
+    ///   is written to directly while it's registered to a transaction shard.
+    ///   To mitigate this, we must do a leadership check AFTER getting the
+    ///   write timestamp. In order for `B` to register a data shard in the txn
+    ///   shard, it must first become the leader then second get a register
+    ///   timestamp. So if `A` gets a write timestamp higher than `B`'s register
+    ///   timestamp, it will fail the leadership check before attempting the
+    ///   append.
+    /// - `on` -> `off`: If `A` tries to write to the txn-shard at a timestamp
+    ///   higher than `B`'s boot timestamp, it will fail because the shards have
+    ///   been forgotten. So everything should be ok.
+    ///
+    ///  In general, all transitions make the following steps:
+    ///   1. Get write timestamp, `ts`.
+    ///   2. Apply all transactions to all data shards up to `ts`.
+    ///   3. Register/forget all data shards. So if we crash at any point in
+    ///      these steps, for example after only applying some transactions,
+    ///      then the next Coordinator can pick up where we left off and finish
+    ///      whatever needs finishing.
+    ///
+    /// H/t jkosh44 for the above notes from the discussion in which we hashed
+    /// this all out.
+    async fn init_txns(&mut self, init_ts: T) -> Result<(), StorageError> {
+        assert_eq!(self.txns_init_run, false);
+        let (txns_id, txns_client) = match &self.txns {
+            PersistTxns::NeverEnabled => {
+                info!("init_txns at {:?}: disabled", init_ts);
+                self.txns_init_run = true;
+                return Ok(());
+            }
+            PersistTxns::Enabled {
+                txns_read,
+                txns_client,
+            } => {
+                info!(
+                    "init_txns at {:?}: enabled txns_id={}",
+                    init_ts,
+                    txns_read.txns_id()
+                );
+                (txns_read.txns_id(), txns_client)
+            }
+            PersistTxns::DisabledPreviouslyEnabled {
+                txns_id,
+                txns_client,
+            } => {
+                info!("init_txns at {:?}: disabled txns_id={}", init_ts, txns_id);
+                (txns_id, txns_client)
+            }
+        };
+
+        let mut txns = TxnsHandle::<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>::open(
+            T::minimum(),
+            txns_client.clone(),
+            *txns_id,
+            Arc::new(RelationDesc::empty()),
+            Arc::new(UnitSchema),
+        )
+        .await;
+
+        // If successful, this forget_all call guarantees:
+        // - That we were able to write to the txns shard at `init_ts` (a
+        //   timestamp given to us by the coordinator).
+        // - That no data shards are registered at `init_ts` and thus every
+        //   table is now free to be written to directly at times greater than
+        //   that. This is not necessary if the txns feature is enabled, we
+        //   could instead commit an empty txn, but we need the apply guarantee
+        //   that it has and it doesn't hurt to start everything from a clean
+        //   slate on boot (register is idempotent and create_collections will
+        //   be called shortly).
+        // - That all txn writes through `init_ts` have been applied
+        //   (materialized physically in the data shards).
+        let removed = txns
+            .forget_all(init_ts.clone())
+            .await
+            .map_err(|_| StorageError::InvalidUppers(vec![]))?;
+        info!("init_txns removed from txns shard: {:?}", removed);
+        drop(txns);
+
+        self.txns_init_run = true;
+        Ok(())
     }
 }
 
@@ -2122,16 +2239,26 @@ where
                 Box::pin(async move {
                     // Query all collections in parallel. Makes for triplicated
                     // names, but runs quick.
-                    let (metadata_collection, metadata_export, shard_finalization) = futures::join!(
+                    let (
+                        metadata_collection,
+                        metadata_export,
+                        persist_txns_shard,
+                        shard_finalization,
+                    ) = futures::join!(
                         maybe_get_init_batch(&tx, &METADATA_COLLECTION),
                         maybe_get_init_batch(&tx, &METADATA_EXPORT),
+                        maybe_get_init_batch(&tx, &PERSIST_TXNS_SHARD),
                         maybe_get_init_batch(&tx, &command_wals::SHARD_FINALIZATION),
                     );
-                    let batches: Vec<AppendBatch> =
-                        [metadata_collection, metadata_export, shard_finalization]
-                            .into_iter()
-                            .filter_map(|b| b)
-                            .collect();
+                    let batches: Vec<AppendBatch> = [
+                        metadata_collection,
+                        metadata_export,
+                        persist_txns_shard,
+                        shard_finalization,
+                    ]
+                    .into_iter()
+                    .filter_map(|b| b)
+                    .collect();
 
                     tx.append(batches).await
                 })
@@ -2143,7 +2270,7 @@ where
             .open(persist_location.clone())
             .await
             .expect("location should be valid");
-        let (persist_table_worker, txns_id) = if enable_persist_txn_tables {
+        let (persist_table_worker, txns) = if enable_persist_txn_tables {
             let txns_id = PERSIST_TXNS_SHARD
                 .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
                 .await
@@ -2159,10 +2286,27 @@ where
             )
             .await;
             let worker = persist_handles::PersistTableWriteWorker::new_txns(tx.clone(), txns);
-            (worker, Some(txns_id))
+            let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id);
+            let txns = PersistTxns::Enabled {
+                txns_read,
+                txns_client,
+            };
+            (worker, txns)
         } else {
             let worker = persist_handles::PersistTableWriteWorker::new_legacy(tx.clone());
-            (worker, None)
+            let txns_id = PERSIST_TXNS_SHARD
+                .peek_key_one(&mut stash, ())
+                .await
+                .expect("could not get txns shard id")
+                .map(|x| x.parse::<ShardId>().expect("should be valid shard id"));
+            let txns = match txns_id {
+                Some(txns_id) => PersistTxns::DisabledPreviouslyEnabled {
+                    txns_id,
+                    txns_client,
+                },
+                None => PersistTxns::NeverEnabled,
+            };
+            (worker, txns)
         };
         let persist_monotonic_worker =
             persist_handles::PersistMonotonicWriteWorker::new(tx.clone());
@@ -2170,6 +2314,13 @@ where
 
         let collection_manager =
             collection_mgmt::CollectionManager::new(collection_manager_write_handle, now.clone());
+
+        let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
+
+        let collection_status_manager = crate::healthcheck::CollectionStatusManager::new(
+            collection_manager.clone(),
+            Arc::clone(&introspection_ids),
+        );
 
         Self {
             build_info,
@@ -2179,17 +2330,18 @@ where
             persist_table_worker,
             persist_monotonic_worker,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
-            txns_id,
-            txns_client,
+            txns,
+            txns_init_run: false,
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
-            introspection_ids: BTreeMap::new(),
+            collection_status_manager,
+            introspection_ids,
             introspection_tokens: BTreeMap::new(),
             now,
             envd_epoch,
-            source_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
-            sink_statistics: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            source_statistics: Arc::new(Mutex::new(BTreeMap::new())),
+            sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             clients: BTreeMap::new(),
             replicas: BTreeMap::new(),
             initialized: false,
@@ -2418,6 +2570,7 @@ where
     /// - If `id` is not registered as a managed collection.
     #[tracing::instrument(level = "debug", skip(self, updates))]
     async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        assert!(self.txns_init_run);
         self.collection_manager
             .append_to_collection(id, updates)
             .await;
@@ -2433,7 +2586,8 @@ where
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     async fn initialize_shard_mapping(&mut self) {
-        let id = self.introspection_ids[&IntrospectionType::ShardMapping];
+        let id =
+            self.introspection_ids.lock().expect("poisoned lock")[&IntrospectionType::ShardMapping];
 
         let mut row_buf = Row::default();
         let mut updates = Vec::with_capacity(self.collections.len());
@@ -2452,202 +2606,6 @@ where
         }
 
         self.reconcile_managed_collection(id, updates).await;
-    }
-
-    /// Partially truncate the statement log tables.
-    /// The logic is as follows:
-    /// For any statement execution whose begin date is younger than
-    /// `statement_logging_retention_time_seconds`, retain both it, and any
-    /// prepared statement and session it references.
-    ///
-    /// Note - this can use unbounded memory. We don't need to ingest
-    /// the whole collection on startup, but we _do_ need to buffer
-    /// all the updates/retractions before sending them. This will be
-    /// fine with our current volume, but in the near future we should switch to a more incremental approach.
-    /// Persist will soon give us the ability to do that easily; see
-    /// [here](https://materializeinc.slack.com/archives/C01CFKM1QRF/p1693592123322009) for details.
-    ///
-    /// The other reason this might technically use unbounded memory
-    /// is because we have to store the UUID of every prepared
-    /// statement we plan to keep -- this will cost about 40 MB * the
-    /// average QPS, assuming 30-day retention. This shouldn't cause problems for any of the
-    /// existing usage patterns, but we will need to think harder
-    /// about how to avoid it if we start supporting customers with a
-    /// huge QPS (probably we will need to just make their statement
-    /// logs non-persistent or have a low sampling rate).
-    ///
-    /// If for any reason this function starts causing problems in the
-    /// real world, we can disable it by turning off the
-    /// `TRUNCATE_STATEMENT_LOG` variable.
-    async fn partially_truncate_statement_log(&mut self) {
-        if !self.config.truncate_statement_log {
-            tracing::info!("Not garbage-collecting statement log, due to config parameter.");
-            return;
-        }
-        let now = (self.now)();
-        let cutoff = to_datetime(now)
-            - chrono::Duration::seconds(
-                self.config
-                    .statement_logging_retention_time_seconds
-                    .try_into()
-                    .expect("sane config value"),
-            );
-        let mseh_id = self.introspection_ids[&IntrospectionType::StatementExecutionHistory];
-        let mpsh_id = self.introspection_ids[&IntrospectionType::PreparedStatementHistory];
-        let msh_id = self.introspection_ids[&IntrospectionType::SessionHistory];
-        let mseh_ts = match self.collections[&mseh_id]
-            .write_frontier
-            .elements()
-            .iter()
-            .next()
-        {
-            Some(ts) if ts > &T::minimum() => ts.step_back().unwrap(),
-            // If collection is closed or the frontier is the minimum, we cannot
-            // or don't need to truncate (respectively).
-            _ => return,
-        };
-        let mpsh_ts = match self.collections[&mpsh_id]
-            .write_frontier
-            .elements()
-            .iter()
-            .next()
-        {
-            Some(ts) if ts > &T::minimum() => ts.step_back().unwrap(),
-            // If collection is closed or the frontier is the minimum, we cannot
-            // or don't need to truncate (respectively).
-            _ => return,
-        };
-        let msh_ts = match self.collections[&msh_id]
-            .write_frontier
-            .elements()
-            .iter()
-            .next()
-        {
-            Some(ts) if ts > &T::minimum() => ts.step_back().unwrap(),
-            // If collection is closed or the frontier is the minimum, we cannot
-            // or don't need to truncate (respectively).
-            _ => return,
-        };
-
-        let (mseh_began_at, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
-            .get_by_name(&ColumnName::from("began_at"))
-            .expect("schema has not changed");
-        let (mseh_prepared_statement_id, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
-            .get_by_name(&ColumnName::from("prepared_statement_id"))
-            .expect("schema has not changed");
-        let (mseh_finished_at, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
-            .get_by_name(&ColumnName::from("finished_at"))
-            .expect("schema has not changed");
-        let (mseh_finished_status, _) = MZ_STATEMENT_EXECUTION_HISTORY_DESC
-            .get_by_name(&ColumnName::from("finished_status"))
-            .expect("schema has not changed");
-
-        let mut mseh_rows = self
-            .snapshot_and_stream(mseh_id, mseh_ts)
-            .await
-            .expect("snapshot_succeeds");
-
-        let mut mseh_updates = vec![];
-        let mut ps_to_keep = HashSet::new();
-        use futures::stream::StreamExt;
-        while let Some((source_data, _ts, diff)) = mseh_rows.next().await {
-            assert!(diff != 0);
-            let row = source_data.0.expect("valid data");
-
-            let unpacked = row.unpack();
-            let began_at = unpacked[mseh_began_at].unwrap_timestamptz();
-
-            if *began_at < cutoff {
-                mseh_updates.push((row, diff * -1));
-            } else {
-                let ps_id = unpacked[mseh_prepared_statement_id].unwrap_uuid();
-                // The following `ps_to_keep.insert` invocation is imprecise -- technically, we only
-                // need to keep the corresponding prepared statement if the diffs of all the
-                // statement execution rows that reference it sum to a positive value.
-                // However, it's exceedingly likely that this is true if there are _any_ diffs in the
-                // window, so we don't really need to bother keeping track of a multiplicity here.
-                //
-                // In the event where due to some uncompacted data in mseh we keep around a row in mpsh
-                // that we shouldn't, no problems will be caused other than a tiny increase in storage until the
-                // next time we run this truncation process.
-                ps_to_keep.insert(ps_id);
-                let ended_at = unpacked[mseh_finished_at];
-                if matches!(ended_at, Datum::Null) {
-                    // We refer to a statement that began, but didn't finish (or whose finish was never recorded)
-                    // as "aborted".
-                    // We need to fill in "finished_at" and "finished_status" for such statements here.
-                    let aborted_row = Row::pack(unpacked.iter().enumerate().map(|(i, datum)| {
-                        if i == mseh_finished_at {
-                            Datum::TimestampTz(
-                                to_datetime(now).try_into().expect("sane system time"),
-                            )
-                        } else if i == mseh_finished_status {
-                            Datum::String("aborted")
-                        } else {
-                            *datum
-                        }
-                    }));
-                    mseh_updates.push((row, diff * -1));
-                    mseh_updates.push((aborted_row, diff));
-                }
-            }
-        }
-
-        let mut mpsh_updates = vec![];
-        let mut sessions_to_keep = HashSet::new();
-
-        let mut mpsh_rows = self
-            .snapshot_and_stream(mpsh_id, mpsh_ts)
-            .await
-            .expect("snapshot_succeeds");
-
-        let (mpsh_id_col, _) = MZ_PREPARED_STATEMENT_HISTORY_DESC
-            .get_by_name(&ColumnName::from("id"))
-            .expect("schema has not changed");
-        let (mpsh_session_id, _) = MZ_PREPARED_STATEMENT_HISTORY_DESC
-            .get_by_name(&ColumnName::from("session_id"))
-            .expect("schema has not changed");
-        while let Some((source_data, _ts, diff)) = mpsh_rows.next().await {
-            let row = source_data.0.expect("valid data");
-            let unpacked = row.unpack();
-            let id = unpacked[mpsh_id_col].unwrap_uuid();
-            if ps_to_keep.get(&id).is_some() {
-                let session_id = unpacked[mpsh_session_id].unwrap_uuid();
-                sessions_to_keep.insert(session_id);
-            } else {
-                mpsh_updates.push((row, diff * -1));
-            }
-        }
-        let ps_kept = ps_to_keep.len();
-        std::mem::drop(ps_to_keep);
-
-        let mut msh_rows = self
-            .snapshot_and_stream(msh_id, msh_ts)
-            .await
-            .expect("snapshot_succeeds");
-
-        let (msh_id_col, _) = MZ_SESSION_HISTORY_DESC
-            .get_by_name(&ColumnName::from("id"))
-            .expect("schema has not changed");
-
-        let mut msh_updates = vec![];
-        while let Some((source_data, _ts, diff)) = msh_rows.next().await {
-            let row = source_data.0.expect("valid data");
-            let id = row.iter().nth(msh_id_col).unwrap().unwrap_uuid();
-            if !sessions_to_keep.contains(&id) {
-                msh_updates.push((row, diff * -1));
-            }
-        }
-
-        self.append_to_managed_collection(mseh_id, mseh_updates)
-            .await;
-        self.append_to_managed_collection(mpsh_id, mpsh_updates)
-            .await;
-        self.append_to_managed_collection(msh_id, msh_updates).await;
-        // self.metrics
-        //     .set_startup_prepared_statement_bytes(u64::cast_from(mpsh_bytes));
-        self.metrics
-            .set_startup_prepared_statements_kept(u64::cast_from(ps_kept));
     }
 
     /// Effectively truncates the source status history shard except for the most recent updates
@@ -2679,7 +2637,7 @@ where
             _ => unreachable!(),
         };
 
-        let id = self.introspection_ids[&collection];
+        let id = self.introspection_ids.lock().expect("poisoned")[&collection];
 
         let mut rows = match self.collections[&id].write_frontier.as_option() {
             Some(f) if f > &T::minimum() => {
@@ -2777,9 +2735,15 @@ where
     where
         I: Iterator<Item = GlobalId>,
     {
+        assert!(self.txns_init_run);
         mz_ore::soft_assert!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
 
-        let id = match self.introspection_ids.get(&IntrospectionType::ShardMapping) {
+        let id = match self
+            .introspection_ids
+            .lock()
+            .expect("poisoned")
+            .get(&IntrospectionType::ShardMapping)
+        {
             Some(id) => *id,
             _ => return,
         };
@@ -2962,77 +2926,72 @@ where
             .unwrap();
 
         let persist_client = &persist_client;
+        let diagnostics = &Diagnostics::from_purpose("finalizing shards");
 
         use futures::stream::StreamExt;
         let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(shards)
             .map(|shard_id| async move {
-                // Open read handle, whose since is the global since.
-                let read_handle: ReadHandle<SourceData, (), T, Diff> = persist_client
-                    .open_leased_reader(
-                        shard_id,
-                        Arc::new(RelationDesc::empty()),
-                        Arc::new(UnitSchema),
-                        // TODO: thread the global ID into the shard finalization WAL
-                        Diagnostics::from_purpose("finalizing shards"),
-                    )
+                let persist_client = persist_client.clone();
+                let diagnostics = diagnostics.clone();
+
+                let is_finalized = persist_client
+                    .is_finalized::<SourceData, (), T, Diff>(shard_id, diagnostics)
                     .await
                     .expect("invalid persist usage");
 
-                // If global since is empty, we can close shard because no one has an outstanding
-                // read hold.
-                if read_handle.since().is_empty() {
-                    let mut write_handle: WriteHandle<SourceData, (), T, Diff> = persist_client
-                        .open_writer(
-                            shard_id,
-                            Arc::new(RelationDesc::empty()),
-                            Arc::new(UnitSchema),
-                            // TODO: thread the global ID into the shard finalization WAL
-                            Diagnostics::from_purpose("finalizing shards"),
-                        )
-                        .await
-                        .expect("invalid persist usage");
-
-                    if write_handle.upper().is_empty() {
-                        Some(shard_id)
-                    } else {
-                        // Finalizing a shard can take a long time cleaning up existing data.
-                        // Spawning a task means that we can't proactively remove this shard
-                        // from the finalization register, unfortunately... but the next run
-                        // of `finalize_shards` should notice the upper has advanced and tidy
-                        // up.
-                        mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
-                            let result =
-                                tokio::time::timeout(
-                                    Duration::from_secs(15 * 60),
-
-                                    write_handle.append(
-                                        Vec::<(
-                                            (mz_storage_types::sources::SourceData, ()),
-                                            T,
-                                            Diff,
-                                        )>::new(),
-                                        write_handle.upper().clone(),
-                                        Antichain::new(),
-                                    )
-                                ).await;
-
-                            // Rather than error, just leave this shard as one to finalize later.
-                            match result {
-                                Err(_) => {
-                                    warn!("timed out while trying to finalize shard {shard_id}");
-                                }
-                                Ok(Err(usage)) => {
-                                    error!("invalid usage while finalizing shard {shard_id}: {usage:?}")
-                                }
-                                Ok(Ok(Err(mismatch))) => {
-                                    warn!("unable to advance the upper of shard {shard_id} to the empty antichain: {mismatch:?}")
-                                }
-                                Ok(Ok(Ok(()))) => {}
-                            };
-                        });
-                        None
-                    }
+                if is_finalized {
+                    Some(shard_id)
                 } else {
+                    // Finalizing a shard can take a long time cleaning up existing data.
+                    // Spawning a task means that we can't proactively remove this shard
+                    // from the finalization register, unfortunately... but a future run
+                    // of `finalize_shards` should notice the shard has been finalized and tidy
+                    // up.
+                    mz_ore::task::spawn(|| format!("finalize_shard({shard_id})"), async move {
+                        let finalize = || async move {
+                            let empty_batch: Vec<((SourceData, ()), T, Diff)> = vec![];
+                            let mut write_handle: WriteHandle<SourceData, (), T, Diff> =
+                                persist_client
+                                    .open_writer(
+                                        shard_id,
+                                        Arc::new(RelationDesc::empty()),
+                                        Arc::new(UnitSchema),
+                                        // TODO: thread the global ID into the shard finalization WAL
+                                        Diagnostics::from_purpose("finalizing shards"),
+                                    )
+                                    .await
+                                    .expect("invalid persist usage");
+
+                            let upper = write_handle.upper();
+                            if !upper.is_empty() {
+                                let append = write_handle
+                                    .append(empty_batch, upper.clone(), Antichain::new())
+                                    .await?;
+
+                                if let Err(e) = append {
+                                    warn!(
+                                        "tried to finalize a shard with an advancing upper: {e:?}"
+                                    );
+                                    return Ok(());
+                                }
+                            }
+
+                            persist_client
+                                .finalize_shard::<SourceData, (), T, Diff>(
+                                    shard_id,
+                                    Diagnostics::from_purpose("finalizing shards"),
+                                )
+                                .await
+                        };
+
+                        match finalize().await {
+                            Err(e) => {
+                                // Rather than error, just leave this shard as one to finalize later.
+                                warn!("error during background finalization: {e:?}");
+                            }
+                            Ok(()) => {}
+                        }
+                    });
                     None
                 }
             })
@@ -3334,16 +3293,11 @@ where
                 }
             }
             Some(txns_id) => {
-                // TODO(txn): Replace this with the shared TxnsCache thing
-                // we'll have to do anyway for the dataflow operators.
-                let mut txns_cache = TxnsCache::<T, TxnsCodecRow>::open(
-                    &self.txns_client,
-                    *txns_id,
-                    Some(metadata.data_shard),
-                )
-                .await;
-                txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let txns_read = self.txns.expect_enabled(txns_id);
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
                 let mut handle = self.read_handle_for_snapshot(id).await?;
                 let contents = data_snapshot.snapshot_and_stream(&mut handle).await;
                 match contents {
@@ -3358,5 +3312,36 @@ where
                 }
             }
         }
+    }
+    /// Handles writing of status updates for sources/sinks to the appropriate
+    /// status relation
+    async fn record_status_updates(&mut self, updates: Vec<StatusUpdate>) {
+        let mut sink_status_updates = vec![];
+        let mut source_status_updates = vec![];
+
+        for update in updates {
+            let id = update.id;
+            let update = healthcheck::RawStatusUpdate {
+                id,
+                ts: update.timestamp,
+                status_name: update.status,
+                error: update.error,
+                hints: update.hints,
+                namespaced_errors: update.namespaced_errors,
+            };
+
+            if self.exports.contains_key(&id) {
+                sink_status_updates.push(update);
+            } else if self.collections.contains_key(&id) {
+                source_status_updates.push(update);
+            }
+        }
+
+        self.collection_status_manager
+            .append_source_updates(source_status_updates)
+            .await;
+        self.collection_status_manager
+            .append_sink_updates(sink_status_updates)
+            .await;
     }
 }

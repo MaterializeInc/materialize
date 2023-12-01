@@ -46,8 +46,8 @@ use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
-    KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
+    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionRetention, KafkaSinkFormat,
+    SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -2497,9 +2497,7 @@ fn kafka_sink_builder(
     sink_from: GlobalId,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
-    // Get Kafka connection + progress topic
-    //
-    // TODO: In ALTER CONNECTION, the progress topic must be immutable
+    // Get Kafka connection + progress topic.
     let (connection, progress_topic) = match item.connection()? {
         Connection::Kafka(connection) => {
             let id = item.id();
@@ -2518,7 +2516,10 @@ fn kafka_sink_builder(
 
     // Starting offsets are allowed with feature flags mode, as they are a simple,
     // useful way to specify where to start reading a topic.
-    const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[KafkaConfigOptionName::Topic];
+    const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[
+        KafkaConfigOptionName::Topic,
+        KafkaConfigOptionName::CompressionType,
+    ];
 
     if let Some(op) = options
         .iter()
@@ -2631,11 +2632,11 @@ fn kafka_sink_builder(
                 .key_writer_schema()
                 .map(|key_schema| key_schema.to_string());
 
-            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
+            KafkaSinkFormat::Avro {
                 key_schema,
                 value_schema,
                 csr_connection,
-            })
+            }
         }
         Some(Format::Json) => KafkaSinkFormat::Json,
         Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
@@ -5389,7 +5390,7 @@ pub fn plan_comment(
         }
     };
 
-    // Note: the `mz_comments` table uses an `Int4` for the column position, but in the Stash we
+    // Note: the `mz_comments` table uses an `Int4` for the column position, but in the catalog storage we
     // store a `usize` which would be a `Uint8`. We guard against a safe conversion here because
     // it's the easiest place to raise an error.
     //

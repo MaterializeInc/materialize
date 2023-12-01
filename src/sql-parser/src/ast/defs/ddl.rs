@@ -822,6 +822,7 @@ impl_display_t!(CreateConnectionOption);
 pub enum KafkaConfigOptionName {
     Acks,
     ClientId,
+    CompressionType,
     EnableIdempotence,
     FetchMessageMaxBytes,
     GroupIdPrefix,
@@ -842,6 +843,7 @@ impl AstDisplay for KafkaConfigOptionName {
         f.write_str(match self {
             KafkaConfigOptionName::Acks => "ACKS",
             KafkaConfigOptionName::ClientId => "CLIENT ID",
+            KafkaConfigOptionName::CompressionType => "COMPRESSION TYPE",
             KafkaConfigOptionName::EnableIdempotence => "ENABLE IDEMPOTENCE",
             KafkaConfigOptionName::FetchMessageMaxBytes => "FETCH MESSAGE MAX BYTES",
             KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",

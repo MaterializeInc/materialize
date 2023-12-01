@@ -7,9 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
 use std::convert::Infallible;
-use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection};
@@ -19,7 +17,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::{
     Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset, SourceTimestamp,
 };
-use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use timely::dataflow::operators::to_stream::Event;
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
@@ -94,7 +92,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         >,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
-        Rc<dyn Any>,
+        Vec<PressOnDropButton>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
@@ -170,7 +168,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             stream.as_collection(),
             None,
             status,
-            Rc::new(button.press_on_drop()),
+            vec![button.press_on_drop()],
         )
     }
 }

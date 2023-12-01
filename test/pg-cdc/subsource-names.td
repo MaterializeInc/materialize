@@ -74,3 +74,14 @@ contains: unknown
 # table2 gets created in mentioned bar because it does have a prefix
 > SELECT * FROM bar.table2;
 5
+
+> CREATE SCHEMA baz;
+> CREATE SOURCE baz.mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR SCHEMAS (public);
+
+> SELECT * FROM baz.t1;
+1
+
+> SELECT * FROM baz.t2;
+5

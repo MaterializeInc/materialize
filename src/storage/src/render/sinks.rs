@@ -9,7 +9,6 @@
 
 //! Logic related to the creation of dataflow sinks.
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -18,15 +17,13 @@ use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::implementations::ord::ColValSpine;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format};
-use mz_ore::now::NowFn;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_operators::persist_source;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{
     MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
 };
+use mz_timely_util::builder_async::PressOnDropButton;
 use timely::dataflow::operators::Leave;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
@@ -41,13 +38,13 @@ use crate::storage_state::StorageState;
 pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &mut StorageState,
-    tokens: &mut Vec<Rc<dyn std::any::Any>>,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
-) -> Stream<G, HealthStatusMessage> {
+) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
     let sink_render = get_sink_render_for(&sink.connection);
 
-    let (ok_collection, err_collection, source_token) = persist_source::persist_source(
+    let mut tokens = vec![];
+    let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
         scope,
         sink.from,
         Arc::clone(&storage_state.persist_clients),
@@ -57,12 +54,12 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         None,
         None,
     );
-    tokens.push(source_token);
+    tokens.extend(persist_tokens);
 
     let ok_collection =
         apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
 
-    let (health, sink_token) = sink_render.render_continuous_sink(
+    let (health, sink_tokens) = sink_render.render_continuous_sink(
         storage_state,
         sink,
         sink_id,
@@ -70,11 +67,9 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         err_collection.as_collection(),
     );
 
-    if let Some(sink_token) = sink_token {
-        tokens.push(sink_token);
-    }
+    tokens.extend(sink_tokens);
 
-    health.leave()
+    (health.leave(), tokens)
 }
 
 #[allow(clippy::borrowed_box)]
@@ -211,18 +206,6 @@ where
     collection
 }
 
-/// Args for creating a healthchecker.  Not done inline because it requires async.
-pub struct HealthcheckerArgs {
-    /// persist_clients
-    pub persist_clients: Arc<PersistClientCache>,
-    /// location of persist
-    pub persist_location: PersistLocation,
-    /// id of status shard for updates
-    pub status_shard_id: Option<ShardId>,
-    /// now_fn
-    pub now_fn: NowFn,
-}
-
 /// A type that can be rendered as a dataflow sink.
 pub(crate) trait SinkRender<G>
 where
@@ -242,7 +225,7 @@ where
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-    ) -> (Stream<G, HealthStatusMessage>, Option<Rc<dyn Any>>)
+    ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>)
     where
         G: Scope<Timestamp = Timestamp>;
 }

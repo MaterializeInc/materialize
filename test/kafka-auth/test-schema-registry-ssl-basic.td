@@ -117,7 +117,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk_backup sort-messages
 
 ### Break sink broker connection and produce data
 
-> ALTER CONNECTION kafka_backup SET BROKER 'kafka:9093' WITH (VALIDATE = false);
+> ALTER CONNECTION kafka_backup SET (BROKER 'kafka:9093') WITH (VALIDATE = false);
 
 $ kafka-ingest topic=avro-data format=avro schema=${schema} timestamp=2
 {"a": 2}
@@ -129,7 +129,7 @@ $ kafka-ingest topic=avro-data format=avro schema=${schema} timestamp=2
 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'snk_backup';
 stalled
 
-> ALTER CONNECTION kafka_backup SET BROKER 'kafka:9092';
+> ALTER CONNECTION kafka_backup SET (BROKER 'kafka:9092');
 
 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'snk_backup';
 running
@@ -139,52 +139,52 @@ $ kafka-verify-data format=avro sink=materialize.public.snk_backup sort-messages
 
 ## CSR connection
 
-! ALTER CONNECTION schema_registry SET URL = 'abc' WITH (VALIDATE = true);
+! ALTER CONNECTION schema_registry SET (URL = 'abc') WITH (VALIDATE = true);
 contains:invalid ALTER CONNECTION: parsing schema registry url: relative URL without a base
 
-! ALTER CONNECTION schema_registry RESET URL;
+! ALTER CONNECTION schema_registry RESET (URL);
 contains:invalid ALTER CONNECTION: invalid CONNECTION: must specify URL
 
-! ALTER CONNECTION schema_registry SET SSL KEY = 'x' WITH (VALIDATE = true);
+! ALTER CONNECTION schema_registry SET (SSL KEY = 'x') WITH (VALIDATE = true);
 contains:invalid SSL KEY: must provide a secret value
 
 > CREATE SECRET IF NOT EXISTS invalid_secret AS 'x'
 
-! ALTER CONNECTION schema_registry SET SSL KEY = SECRET invalid_secret WITH (VALIDATE = true);
+! ALTER CONNECTION schema_registry SET (SSL KEY = SECRET invalid_secret) WITH (VALIDATE = true);
 contains:requires both SSL KEY and SSL CERTIFICATE
 
-! ALTER CONNECTION schema_registry SET SSL CERTIFICATE = 'x' WITH (VALIDATE = true);
+! ALTER CONNECTION schema_registry SET (SSL CERTIFICATE = 'x') WITH (VALIDATE = true);
 contains:requires both SSL KEY and SSL CERTIFICATE
 
-! ALTER CONNECTION schema_registry SET SSL KEY = SECRET invalid_secret, SET SSL CERTIFICATE = 'x' WITH (VALIDATE = true);
+! ALTER CONNECTION schema_registry SET (SSL KEY = SECRET invalid_secret), SET (SSL CERTIFICATE = 'x') WITH (VALIDATE = true);
 contains:ANY PRIVATE KEY
 
-! ALTER CONNECTION schema_registry SET SSL CERTIFICATE AUTHORITY = 'x' WITH (VALIDATE = true);
+! ALTER CONNECTION schema_registry SET (SSL CERTIFICATE AUTHORITY = 'x') WITH (VALIDATE = true);
 contains:CERTIFICATE
 
-> ALTER CONNECTION schema_registry RESET SSL KEY;
+> ALTER CONNECTION schema_registry RESET (SSL KEY);
 
-> ALTER CONNECTION schema_registry RESET SSL CERTIFICATE;
+> ALTER CONNECTION schema_registry RESET (SSL CERTIFICATE);
 
-! ALTER CONNECTION schema_registry RESET SSL CERTIFICATE AUTHORITY WITH (VALIDATE = true);
+! ALTER CONNECTION schema_registry RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = true);
 contains:self signed certificate in certificate chain
 
-! ALTER CONNECTION schema_registry RESET SSL KEY, RESET SSL CERTIFICATE, RESET SSL CERTIFICATE AUTHORITY;
+! ALTER CONNECTION schema_registry RESET (SSL KEY), RESET (SSL CERTIFICATE), RESET (SSL CERTIFICATE AUTHORITY);
 contains:self signed certificate in certificate chain
 
-! ALTER CONNECTION schema_registry RESET USERNAME;
+! ALTER CONNECTION schema_registry RESET (USERNAME);
 contains:Unauthorized
 
-! ALTER CONNECTION schema_registry RESET PASSWORD;
+! ALTER CONNECTION schema_registry RESET (PASSWORD);
 contains:Unauthorized
 
-! ALTER CONNECTION schema_registry RESET USERNAME, RESET PASSWORD;
+! ALTER CONNECTION schema_registry RESET (USERNAME), RESET (PASSWORD);
 contains:Unauthorized
 
 # Break CSR connection
 # These won't necessarily stall running sources which might not reach out to the CSR.
 
-> ALTER CONNECTION schema_registry DROP SSL CERTIFICATE AUTHORITY WITH (VALIDATE = false);
+> ALTER CONNECTION schema_registry DROP (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = false);
 
 ! CREATE SOURCE kafka_broken_csr_connector_source_broken
   FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -192,7 +192,7 @@ contains:Unauthorized
   USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
 contains:failed to fetch schema subject
 
-> ALTER CONNECTION schema_registry SET SSL CERTIFICATE AUTHORITY = '${ca-crt}' WITH (VALIDATE = true);
+> ALTER CONNECTION schema_registry SET (SSL CERTIFICATE AUTHORITY = '${ca-crt}') WITH (VALIDATE = true);
 
 > CREATE SOURCE kafka_broken_csr_connector_source_fixed FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'

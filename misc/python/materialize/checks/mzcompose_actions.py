@@ -15,6 +15,9 @@ from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.ssh_bastion_host import (
+    setup_default_ssh_test_connection,
+)
 
 if TYPE_CHECKING:
     from materialize.checks.scenarios import Scenario
@@ -39,7 +42,7 @@ class StartMz(MzcomposeAction):
         self.system_parameter_defaults = system_parameter_defaults
         self.catalog_store = (
             "shadow"
-            if scenario.base_version() >= MzVersion.parse("0.78.0-dev")
+            if scenario.base_version() >= MzVersion.parse_mz("v0.78.0-dev")
             else "stash"
         )
 
@@ -74,29 +77,8 @@ class StartMz(MzcomposeAction):
         # This should live in ssh.py and alter_connection.py, but accessing the
         # ssh bastion host from inside a check is not possible currently.
         for i in range(4):
-            c.sql(
-                f"""
-                CREATE CONNECTION IF NOT EXISTS ssh_tunnel_{i} TO SSH TUNNEL (
-                HOST 'ssh-bastion-host',
-                USER 'mz',
-                PORT 22
-                )"""
-            )
-
-            public_key = c.sql_query(
-                f"""
-                    select public_key_1 from mz_ssh_tunnel_connections ssh \
-                    join mz_connections c on c.id = ssh.id
-                    where c.name = 'ssh_tunnel_{i}';
-                    """
-            )[0][0]
-
-            c.exec(
-                "ssh-bastion-host",
-                "bash",
-                "-c",
-                f"echo '{public_key}' >> /etc/authorized_keys/mz",
-            )
+            ssh_tunnel_name = f"ssh_tunnel_{i}"
+            setup_default_ssh_test_connection(c, ssh_tunnel_name)
 
         mz_version = MzVersion.parse_mz(c.query_mz_version())
         if self.tag:
@@ -138,22 +120,26 @@ class ConfigureMz(MzcomposeAction):
 
         # Since we already test with RBAC enabled, we have to give materialize
         # user the relevant attributes so the existing tests keep working.
-        if MzVersion(0, 45, 0) <= e.current_mz_version < MzVersion.parse("0.59.0-dev"):
+        if (
+            MzVersion.parse_mz("v0.45.0")
+            <= e.current_mz_version
+            < MzVersion.parse_mz("v0.59.0-dev")
+        ):
             system_settings.add(
                 "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;"
             )
-        elif e.current_mz_version >= MzVersion.parse("0.59.0"):
+        elif e.current_mz_version >= MzVersion.parse_mz("v0.59.0"):
             system_settings.add("GRANT ALL PRIVILEGES ON SYSTEM TO materialize;")
 
-        if e.current_mz_version >= MzVersion(0, 47, 0):
+        if e.current_mz_version >= MzVersion.parse_mz("v0.47.0"):
             system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO true;")
 
-        if e.current_mz_version >= MzVersion.parse(
-            "0.51.0-dev"
-        ) and e.current_mz_version < MzVersion.parse("0.76.0-dev"):
+        if e.current_mz_version >= MzVersion.parse_mz(
+            "v0.51.0-dev"
+        ) and e.current_mz_version < MzVersion.parse_mz("v0.76.0-dev"):
             system_settings.add("ALTER SYSTEM SET enable_ld_rbac_checks TO true;")
 
-        if e.current_mz_version >= MzVersion.parse("0.52.0-dev"):
+        if e.current_mz_version >= MzVersion.parse_mz("v0.52.0-dev"):
             # Since we already test with RBAC enabled, we have to give materialize
             # user the relevant privileges so the existing tests keep working.
             system_settings.add("GRANT CREATE ON DATABASE materialize TO materialize;")
@@ -163,16 +149,16 @@ class ConfigureMz(MzcomposeAction):
             system_settings.add("GRANT CREATE ON CLUSTER default TO materialize;")
 
         if (
-            MzVersion.parse("0.58.0-dev")
+            MzVersion.parse_mz("v0.58.0-dev")
             <= e.current_mz_version
-            <= MzVersion.parse("0.63.99")
+            <= MzVersion.parse_mz("v0.63.99")
         ):
             system_settings.add("ALTER SYSTEM SET enable_managed_clusters = on;")
 
         # Before #22790, enable_specialized_arrangements=on would cause a panic on upgrade
         # This flag must be disabled by default in StartMz() and then conditionally enabled
         # here for the versions where it is expected to work.
-        if e.current_mz_version >= MzVersion.parse("0.75.0"):
+        if e.current_mz_version >= MzVersion.parse_mz("v0.75.0"):
             system_settings.add(
                 "ALTER SYSTEM SET enable_specialized_arrangements = on;"
             )
@@ -187,7 +173,7 @@ class ConfigureMz(MzcomposeAction):
 
         kafka_broker = "BROKER '${testdrive.kafka-addr}'"
         print(e.current_mz_version)
-        if e.current_mz_version >= MzVersion.parse("0.78.0-dev"):
+        if e.current_mz_version >= MzVersion.parse_mz("v0.78.0-dev"):
             kafka_broker += ", SECURITY PROTOCOL PLAINTEXT"
         input += dedent(
             f"""

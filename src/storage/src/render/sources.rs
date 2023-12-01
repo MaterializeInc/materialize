@@ -11,16 +11,13 @@
 //!
 //! See [`render_source`] for more details.
 
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use mz_ore::cast::CastLossy;
-use mz_ore::metrics::{CounterVecExt, GaugeVecExt};
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
-use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_operators::persist_source;
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::controller::CollectionMetadata;
@@ -30,6 +27,7 @@ use mz_storage_types::errors::{
 use mz_storage_types::parameters::StorageMaxInflightBytesConfig;
 use mz_storage_types::sources::encoding::*;
 use mz_storage_types::sources::*;
+use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
@@ -87,10 +85,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
     )>,
     Stream<G, HealthStatusMessage>,
-    Rc<dyn Any>,
+    Vec<PressOnDropButton>,
 ) {
     // Tokens that we should return from the method.
-    let mut needed_tokens: Vec<Rc<dyn Any>> = Vec::new();
+    let mut needed_tokens = Vec::new();
 
     // Note that this `render_source` attaches a single _instance_ of a source
     // to the passed `Scope`, and this instance may be disabled if the
@@ -120,8 +118,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         worker_count: scope.peers(),
         encoding: description.desc.encoding.clone(),
         now: storage_state.now.clone(),
-        // TODO(guswynn): avoid extra clones here
-        base_metrics: storage_state.source_metrics.clone(),
+        metrics: storage_state.metrics.clone(),
         as_of: as_of.clone(),
         resume_uppers,
         source_resume_uppers,
@@ -152,9 +149,9 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let (streams, mut health, capability) = match connection {
+    let (streams, mut health, source_tokens) = match connection {
         GenericSourceConnection::Kafka(connection) => {
-            let (streams, health, cap) = source::create_raw_source(
+            let (streams, health, source_tokens) = source::create_raw_source(
                 scope,
                 resume_stream,
                 base_source_config.clone(),
@@ -166,10 +163,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 .into_iter()
                 .map(|(ok, err)| (SourceType::Delimited(ok), err))
                 .collect();
-            (streams, health, cap)
+            (streams, health, source_tokens)
         }
         GenericSourceConnection::Postgres(connection) => {
-            let (streams, health, cap) = source::create_raw_source(
+            let (streams, health, source_tokens) = source::create_raw_source(
                 scope,
                 resume_stream,
                 base_source_config.clone(),
@@ -181,10 +178,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 .into_iter()
                 .map(|(ok, err)| (SourceType::Row(ok), err))
                 .collect();
-            (streams, health, cap)
+            (streams, health, source_tokens)
         }
         GenericSourceConnection::LoadGenerator(connection) => {
-            let (streams, health, cap) = source::create_raw_source(
+            let (streams, health, source_tokens) = source::create_raw_source(
                 scope,
                 resume_stream,
                 base_source_config.clone(),
@@ -196,10 +193,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 .into_iter()
                 .map(|(ok, err)| (SourceType::Row(ok), err))
                 .collect();
-            (streams, health, cap)
+            (streams, health, source_tokens)
         }
         GenericSourceConnection::TestScript(connection) => {
-            let (streams, health, cap) = source::create_raw_source(
+            let (streams, health, source_tokens) = source::create_raw_source(
                 scope,
                 resume_stream,
                 base_source_config.clone(),
@@ -211,13 +208,11 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 .into_iter()
                 .map(|(ok, err)| (SourceType::Delimited(ok), err))
                 .collect();
-            (streams, health, cap)
+            (streams, health, source_tokens)
         }
     };
 
-    let source_token = Rc::new(capability);
-
-    needed_tokens.push(source_token);
+    needed_tokens.extend(source_tokens);
 
     let mut outputs = vec![];
     for (ok_source, err_source) in streams {
@@ -243,7 +238,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
 
         health = health.concat(&health_stream.leave());
     }
-    (outputs, health, Rc::new(needed_tokens))
+    (outputs, health, needed_tokens)
 }
 
 /// Completes the rendering of a particular source stream by applying decoding and envelope
@@ -262,13 +257,13 @@ fn render_source_stream<G>(
 ) -> (
     Collection<G, Row, Diff>,
     Collection<G, DataflowError, Diff>,
-    Vec<Rc<dyn Any>>,
+    Vec<PressOnDropButton>,
     Stream<G, HealthStatusMessage>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let mut needed_tokens: Vec<Rc<dyn Any>> = vec![];
+    let mut needed_tokens = vec![];
 
     let SourceDesc {
         encoding,
@@ -310,19 +305,19 @@ where
                 csr_connection,
                 confluent_wire_format,
             );
-            needed_tokens.push(Rc::new(token));
+            needed_tokens.push(token);
             (oks, None, empty(scope))
         } else {
             // Depending on the type of _raw_ source produced for the given source
             // connection, render the _decode_ part of the pipeline, that turns a raw data
             // stream into a `DecodeResult`.
-            let (decoded_stream, decode_health, extra_token) = match ok_source {
+            let (decoded_stream, decode_health) = match ok_source {
                 SourceType::Delimited(source) => render_decode_delimited(
                     &source,
                     key_encoding,
                     value_encoding,
                     dataflow_debug_name.clone(),
-                    storage_state.decode_metrics.clone(),
+                    storage_state.metrics.decode_defs.clone(),
                     storage_state.connection_context.clone(),
                 ),
                 SourceType::Row(source) => (
@@ -333,12 +328,8 @@ where
                         position_for_upsert: r.position_for_upsert,
                     }),
                     empty(scope),
-                    None,
                 ),
             };
-            if let Some(tok) = extra_token {
-                needed_tokens.push(Rc::new(tok));
-            }
 
             // render envelopes
             let (envelope_ok, envelope_err, envelope_health) = match &envelope {
@@ -366,7 +357,7 @@ where
                                 tx_source_ok_stream.as_collection(),
                                 tx_source_err_stream.as_collection(),
                             );
-                            needed_tokens.push(tx_token);
+                            needed_tokens.extend(tx_token);
                             error_collections.push(tx_source_err);
 
                             super::debezium::render_tx(dbz_envelope, &decoded_stream, tx_source_ok)
@@ -423,39 +414,14 @@ where
                                                 let (feedback_handle, feedback_data) =
                                                     scope.feedback(Default::default());
 
-                                                let backpressure_metrics =
-                                                    Some(BackpressureMetrics {
-                                                        emitted_bytes: Arc::new(
-                                                            base_source_config
-                                                                .base_metrics
-                                                                .upsert_backpressure_specific
-                                                                .emitted_bytes
-                                                                .get_delete_on_drop_counter(vec![
-                                                                    id.to_string(),
-                                                                    scope.index().to_string(),
-                                                                ]),
-                                                        ),
-                                                        last_backpressured_bytes: Arc::new(
-                                                            base_source_config
-                                                                .base_metrics
-                                                                .upsert_backpressure_specific
-                                                                .last_backpressured_bytes
-                                                                .get_delete_on_drop_gauge(vec![
-                                                                    id.to_string(),
-                                                                    scope.index().to_string(),
-                                                                ]),
-                                                        ),
-                                                        retired_bytes: Arc::new(
-                                                            base_source_config
-                                                                .base_metrics
-                                                                .upsert_backpressure_specific
-                                                                .retired_bytes
-                                                                .get_delete_on_drop_counter(vec![
-                                                                    id.to_string(),
-                                                                    scope.index().to_string(),
-                                                                ]),
-                                                        ),
-                                                    });
+                                                // TODO(guswynn): cleanup
+                                                let backpressure_metrics = Some(
+                                                    base_source_config.metrics.get_backpressure_metrics(
+                                                        id,
+                                                        scope.index(),
+                                                    ),
+                                                );
+
                                                 (
                                                     Some(feedback_handle),
                                                     Some(persist_source::FlowControl {

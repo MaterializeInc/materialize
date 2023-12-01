@@ -91,11 +91,11 @@ find cores -name 'core.*' | while read -r core; do
     exe=$(echo "$core" | sed -e "s/core\.\(.*\)\.[0-9]*/\1/" -e "s/.*\!//")
     bin/ci-builder run stable gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || true
     if grep -q "Program terminated with signal SIGABRT, Aborted." "$core".txt; then
-      echo "SIGABRT found in \"$core.txt\", ignoring core file"
+        echo "SIGABRT found in \"$core.txt\", ignoring core file"
     else
-      zstd --rm "$core"
-      buildkite-agent artifact upload "$core".txt
-      buildkite-agent artifact upload "$core".zst
+        zstd --rm "$core"
+        buildkite-agent artifact upload "$core".txt
+        buildkite-agent artifact upload "$core".zst
     fi
 done
 # can be huge, clean up
@@ -107,3 +107,8 @@ artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-pan
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 buildkite-agent artifact upload "$artifacts_str"
 bin/ci-builder run stable bin/ci-logged-errors-detect "${artifacts[@]}"
+
+if [ ! -s services.log ] && [ "$BUILDKITE_STEP_KEY" != "persist-maelstrom" ] && [ "$BUILDKITE_STEP_KEY" != "persist-maelstrom-single-node" ] && [ "$BUILDKITE_STEP_KEY" != "mz-e2e" ] && [ "$BUILDKITE_STEP_KEY" != "version-consistency" ]; then
+    echo "+++ services.log is empty, failing"
+    exit 1
+fi

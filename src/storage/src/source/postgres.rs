@@ -79,10 +79,8 @@
 //!             v                  v
 //! ```
 
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::Collection;
@@ -95,6 +93,7 @@ use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
+use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
@@ -107,7 +106,6 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespac
 use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
-mod metrics;
 mod replication;
 mod snapshot;
 
@@ -131,7 +129,7 @@ impl SourceRender for PostgresSourceConnection {
         Collection<G, (usize, Result<SourceMessage<(), Row>, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
-        Rc<dyn Any>,
+        Vec<PressOnDropButton>,
     ) {
         // Determined which collections need to be snapshot and which already have been.
         let subsource_resume_uppers: BTreeMap<_, _> = config
@@ -230,8 +228,12 @@ impl SourceRender for PostgresSourceConnection {
             statuses
         });
 
-        let token = Rc::new((snapshot_token, repl_token));
-        (updates, Some(uppers), health, token)
+        (
+            updates,
+            Some(uppers),
+            health,
+            vec![snapshot_token, repl_token],
+        )
     }
 }
 
@@ -278,6 +280,8 @@ pub enum DefiniteError {
     TableDropped,
     #[error("publication {0:?} does not exist")]
     PublicationDropped(String),
+    #[error("replication slot has been invalidated because it exceeded the maximum reserved size")]
+    InvalidReplicationSlot,
     #[error("unexpected number of columns while parsing COPY output")]
     MissingColumn,
     #[error("failed to parse COPY protocol")]

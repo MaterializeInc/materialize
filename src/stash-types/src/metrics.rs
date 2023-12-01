@@ -12,11 +12,13 @@
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{HistogramVec, IntCounter, IntCounterVec};
+use prometheus::{Counter, HistogramVec, IntCounter, IntCounterVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
     pub transactions: IntCounter,
+    pub catalog_transaction_commits: IntCounter,
+    pub catalog_transaction_commit_latency_seconds: Counter,
     pub transaction_errors: IntCounterVec,
     pub query_latency_duration_seconds: HistogramVec,
 }
@@ -27,6 +29,14 @@ impl Metrics {
             transactions: registry.register(metric!(
                 name: "mz_stash_transactions",
                 help: "Total number of started transactions.",
+            )),
+            catalog_transaction_commits: registry.register(metric!(
+                name: "mz_stash_catalog_transaction_commits",
+                help: "Total number of catalog transaction commits.",
+            )),
+            catalog_transaction_commit_latency_seconds: registry.register(metric!(
+                name: "mz_stash_transaction_latency_seconds",
+                help: "Total latency for catalog transaction commits.",
             )),
             transaction_errors: registry.register(metric!(
                 name: "mz_stash_transaction_errors",

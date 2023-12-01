@@ -13,7 +13,7 @@ from random import Random
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
@@ -50,7 +50,7 @@ class AlterConnectionSshChangeBase(Check):
         self.index = index
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse("0.78.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.78.0-dev")
 
     def initialize(self) -> Testdrive:
         i = self.index
@@ -109,7 +109,7 @@ class AlterConnectionSshChangeBase(Check):
                 $ kafka-ingest topic=alter-connection-{i}a format=bytes
                 two
 
-                > ALTER CONNECTION kafka_conn_alter_connection_{i}a SET BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.ADD_SSH, SshChange.CHANGE_SSH_HOST} else ''};
+                > ALTER CONNECTION kafka_conn_alter_connection_{i}a SET (BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.ADD_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
                 $ kafka-ingest topic=alter-connection-{i}a format=bytes
                 three
@@ -130,7 +130,7 @@ class AlterConnectionSshChangeBase(Check):
                 $ kafka-ingest topic=alter-connection-{i}b format=bytes
                 twenty
 
-                {f"> ALTER CONNECTION ssh_tunnel_{i} SET HOST = 'other_ssh_bastion' WITH (VALIDATE = true);" if self.ssh_change == SshChange.CHANGE_SSH_HOST else "$ nop"}
+                {f"> ALTER CONNECTION ssh_tunnel_{i} SET (HOST = 'other_ssh_bastion') WITH (VALIDATE = true);" if self.ssh_change == SshChange.CHANGE_SSH_HOST else "$ nop"}
 
                 > INSERT INTO alter_connection_table_{i} VALUES (2);
                 """,
@@ -141,7 +141,7 @@ class AlterConnectionSshChangeBase(Check):
                 $ kafka-ingest topic=alter-connection-{i}b format=bytes
                 thirty
 
-                > ALTER CONNECTION kafka_conn_alter_connection_{i}b SET BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.ADD_SSH, SshChange.CHANGE_SSH_HOST} else ''};
+                > ALTER CONNECTION kafka_conn_alter_connection_{i}b SET (BROKER '${{testdrive.kafka-addr}}' {WITH_SSH_SUFFIX.replace('{i}', str(i)) if self.ssh_change in {SshChange.ADD_SSH, SshChange.CHANGE_SSH_HOST} else ''});
 
                 $ kafka-ingest topic=alter-connection-{i}b format=bytes
                 fourty
@@ -206,16 +206,19 @@ class AlterConnectionSshChangeBase(Check):
         )
 
 
+@externally_idempotent(False)
 class AlterConnectionToSsh(AlterConnectionSshChangeBase):
     def __init__(self, base_version: MzVersion, rng: Random | None):
         super().__init__(SshChange.ADD_SSH, 1, base_version, rng)
 
 
+@externally_idempotent(False)
 class AlterConnectionToNonSsh(AlterConnectionSshChangeBase):
     def __init__(self, base_version: MzVersion, rng: Random | None):
         super().__init__(SshChange.DROP_SSH, 2, base_version, rng)
 
 
+@externally_idempotent(False)
 class AlterConnectionHost(AlterConnectionSshChangeBase):
     def __init__(self, base_version: MzVersion, rng: Random | None):
         super().__init__(SshChange.CHANGE_SSH_HOST, 3, base_version, rng)

@@ -100,9 +100,9 @@ use crate::coord::timestamp_selection::{
 };
 use crate::coord::{
     peek, AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady,
-    ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
-    PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
-    RealTimeRecencyContext, TargetCluster,
+    ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
+    PeekStageRealTimeRecency, PeekStageTimestamp, PeekStageValidate, PendingRead, PendingReadTxn,
+    PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
@@ -2154,16 +2154,23 @@ impl Coordinator {
                 PeekStage::Validate(stage) => {
                     let next =
                         return_if_err!(self.peek_stage_validate(ctx.session_mut(), stage), ctx);
-                    (ctx, PeekStage::Optimize(next))
+
+                    (ctx, PeekStage::Timestamp(next))
+                }
+                PeekStage::Timestamp(stage) => {
+                    self.peek_stage_timestamp(ctx, stage).await;
+                    return;
                 }
                 PeekStage::Optimize(stage) => {
                     self.peek_stage_optimize(ctx, stage).await;
                     return;
                 }
-                PeekStage::Timestamp(stage) => match self.peek_stage_timestamp(ctx, stage) {
-                    Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
-                    None => return,
-                },
+                PeekStage::RealTimeRecency(stage) => {
+                    match self.peek_stage_real_time_recency(ctx, stage) {
+                        Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
+                        None => return,
+                    }
+                }
                 PeekStage::Finish(stage) => {
                     let res = self.peek_stage_finish(&mut ctx, stage).await;
                     ctx.retire(res);
@@ -2181,7 +2188,7 @@ impl Coordinator {
             plan,
             target_cluster,
         }: PeekStageValidate,
-    ) -> Result<PeekStageOptimize, AdapterError> {
+    ) -> Result<PeekStageTimestamp, AdapterError> {
         let plan::SelectPlan {
             source,
             when,
@@ -2257,7 +2264,7 @@ impl Coordinator {
             role_metadata: session.role_metadata().clone(),
         };
 
-        Ok(PeekStageOptimize {
+        Ok(PeekStageTimestamp {
             validity,
             source,
             copy_to,
@@ -2268,6 +2275,80 @@ impl Coordinator {
             in_immediate_multi_stmt_txn,
             optimizer,
         })
+    }
+
+    /// Determine a linearized read timestamp (from a `TimestampOracle`), if
+    /// needed.
+    async fn peek_stage_timestamp(
+        &mut self,
+        ctx: ExecuteContext,
+        PeekStageTimestamp {
+            validity,
+            source,
+            copy_to,
+            source_ids,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+            optimizer,
+        }: PeekStageTimestamp,
+    ) {
+        let isolation_level = ctx.session.vars().transaction_isolation().clone();
+        let linearized_timeline =
+            Coordinator::get_linearized_timeline(&isolation_level, &when, &timeline_context);
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+
+        let build_optimize_stage = move |oracle_read_ts: Option<Timestamp>| -> PeekStageOptimize {
+            PeekStageOptimize {
+                validity,
+                source,
+                copy_to,
+                source_ids,
+                when,
+                target_replica,
+                timeline_context,
+                oracle_read_ts,
+                in_immediate_multi_stmt_txn,
+                optimizer,
+            }
+        };
+
+        match linearized_timeline {
+            Some(timeline) => {
+                let shared_oracle = self.get_shared_timestamp_oracle(&timeline);
+
+                if let Some(shared_oracle) = shared_oracle {
+                    // We can do it in an async task, because we can ship off
+                    // the timetamp oracle.
+                    mz_ore::task::spawn(|| "linearized timestamp task", async move {
+                        let oracle_read_ts = shared_oracle.read_ts().await;
+                        let stage = build_optimize_stage(Some(oracle_read_ts));
+
+                        let stage = PeekStage::Optimize(stage);
+                        // Ignore errors if the coordinator has shut down.
+                        let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+                    });
+                } else {
+                    // Timestamp oracle can't be shipped to an async task, we
+                    // have to do it here.
+                    let oracle = self.get_timestamp_oracle(&timeline);
+                    let oracle_read_ts = oracle.read_ts().await;
+                    let stage = build_optimize_stage(Some(oracle_read_ts));
+
+                    let stage = PeekStage::Optimize(stage);
+                    // Ignore errors if the coordinator has shut down.
+                    let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+                }
+            }
+            None => {
+                let stage = build_optimize_stage(None);
+                let stage = PeekStage::Optimize(stage);
+                // Ignore errors if the coordinator has shut down.
+                let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+            }
+        }
     }
 
     async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
@@ -2292,6 +2373,7 @@ impl Coordinator {
                     &stage.when,
                     stage.optimizer.cluster_id(),
                     &stage.timeline_context,
+                    stage.oracle_read_ts.clone(),
                     None,
                 )
                 .await
@@ -2313,7 +2395,7 @@ impl Coordinator {
             || "optimize peek",
             move || match Self::optimize_peek(ctx.session(), stats, id_bundle, stage) {
                 Ok(stage) => {
-                    let stage = PeekStage::Timestamp(stage);
+                    let stage = PeekStage::RealTimeRecency(stage);
                     // Ignore errors if the coordinator has shut down.
                     let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
                 }
@@ -2334,15 +2416,16 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             in_immediate_multi_stmt_txn,
             mut optimizer,
         }: PeekStageOptimize,
-    ) -> Result<PeekStageTimestamp, AdapterError> {
+    ) -> Result<PeekStageRealTimeRecency, AdapterError> {
         let local_mir_plan = optimizer.optimize(source)?;
         let local_mir_plan = local_mir_plan.resolve(session, stats);
         let global_mir_plan = optimizer.optimize(local_mir_plan)?;
 
-        Ok(PeekStageTimestamp {
+        Ok(PeekStageRealTimeRecency {
             validity,
             copy_to,
             source_ids,
@@ -2350,6 +2433,7 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             in_immediate_multi_stmt_txn,
             optimizer,
             global_mir_plan,
@@ -2357,10 +2441,10 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn peek_stage_timestamp(
+    fn peek_stage_real_time_recency(
         &mut self,
         ctx: ExecuteContext,
-        PeekStageTimestamp {
+        PeekStageRealTimeRecency {
             validity,
             copy_to,
             source_ids,
@@ -2368,10 +2452,11 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             in_immediate_multi_stmt_txn,
             optimizer,
             global_mir_plan,
-        }: PeekStageTimestamp,
+        }: PeekStageRealTimeRecency,
     ) -> Option<(ExecuteContext, PeekStageFinish)> {
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {
@@ -2385,6 +2470,7 @@ impl Coordinator {
                         when,
                         target_replica,
                         timeline_context,
+                        oracle_read_ts: oracle_read_ts.clone(),
                         source_ids,
                         in_immediate_multi_stmt_txn,
                         optimizer,
@@ -2414,6 +2500,7 @@ impl Coordinator {
                     when,
                     target_replica,
                     timeline_context,
+                    oracle_read_ts,
                     source_ids,
                     real_time_recency_ts: None,
                     optimizer,
@@ -2434,6 +2521,7 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             source_ids,
             real_time_recency_ts,
             mut optimizer,
@@ -2449,6 +2537,7 @@ impl Coordinator {
                 ctx.session_mut(),
                 &when,
                 timeline_context,
+                oracle_read_ts,
                 source_ids,
                 &id_bundle,
                 real_time_recency_ts,
@@ -2511,6 +2600,7 @@ impl Coordinator {
         when: &QueryWhen,
         cluster_id: ClusterId,
         timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         source_bundle: &CollectionIdBundle,
         source_ids: &BTreeSet<GlobalId>,
         real_time_recency_ts: Option<Timestamp>,
@@ -2525,7 +2615,7 @@ impl Coordinator {
                 // Use the transaction's timestamp if it exists and this isn't an AS OF query.
                 Some(
                     determination @ TimestampDetermination {
-                        timestamp_context: TimestampContext::TimelineTimestamp(_, _),
+                        timestamp_context: TimestampContext::TimelineTimestamp { .. },
                         ..
                     },
                 ) if in_immediate_multi_stmt_txn => (determination, None),
@@ -2551,6 +2641,7 @@ impl Coordinator {
                             when,
                             cluster_id,
                             &timeline_context,
+                            oracle_read_ts,
                             real_time_recency_ts,
                         )
                         .await?;
@@ -2630,6 +2721,7 @@ impl Coordinator {
         session: &mut Session,
         when: &QueryWhen,
         timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
         id_bundle: &CollectionIdBundle,
         real_time_recency_ts: Option<Timestamp>,
@@ -2643,6 +2735,7 @@ impl Coordinator {
                 when,
                 optimizer.cluster_id(),
                 timeline_context,
+                oracle_read_ts,
                 id_bundle,
                 &source_ids,
                 real_time_recency_ts,
@@ -2801,6 +2894,7 @@ impl Coordinator {
         // MIR ⇒ MIR optimization (global)
         let global_mir_plan = optimizer.optimize(from)?;
         // Timestamp selection
+        let oracle_read_ts = self.oracle_read_ts(&ctx.session, &timeline, &when).await;
         let as_of = self
             .determine_timestamp(
                 ctx.session(),
@@ -2808,6 +2902,7 @@ impl Coordinator {
                 &when,
                 cluster_id,
                 &timeline,
+                oracle_read_ts,
                 None,
             )
             .await?
@@ -3340,12 +3435,18 @@ impl Coordinator {
                 .sufficient_collections(&source_ids);
 
             // Acquire a timestamp (necessary for loading statistics).
+            let when = QueryWhen::Immediately;
+            let oracle_read_ts = self
+                .oracle_read_ts(session, &timeline_context, &when)
+                .with_subscriber(root_dispatch.clone())
+                .await;
             let timestamp_ctx = self
                 .sequence_peek_timestamp(
                     session,
-                    &QueryWhen::Immediately,
+                    &when,
                     target_cluster_id,
                     timeline_context,
+                    oracle_read_ts,
                     &id_bundle,
                     &source_ids,
                     None, // no real-time recency
@@ -3835,12 +3936,16 @@ impl Coordinator {
         let source_ids = source.depends_on();
         let timeline_context = self.validate_timeline_context(source_ids.clone())?;
 
+        let when = QueryWhen::Immediately;
+        let oracle_read_ts = self.oracle_read_ts(session, &timeline_context, &when).await;
+
         let determination = self
             .sequence_peek_timestamp(
                 session,
-                &QueryWhen::Immediately,
+                &when,
                 cluster_id,
                 timeline_context,
+                oracle_read_ts,
                 &id_bundle,
                 &source_ids,
                 real_time_recency_ts,
@@ -3995,10 +4100,9 @@ impl Coordinator {
                             && (
                                 // empty `uses` indicates either system func or
                                 // view created from constants
-                                entry.uses().0.is_empty()
+                                entry.uses().is_empty()
                                     || entry
                                         .uses()
-                                        .0
                                         .iter()
                                         .all(|id| validate_read_dependencies(catalog, id))
                             )
@@ -4221,13 +4325,17 @@ impl Coordinator {
             // Note: It's only OK for the write to have a greater timestamp than the read
             // because the write lock prevents any other writes from happening in between
             // the read and write.
-            if let Some(TimestampContext::TimelineTimestamp(timeline, read_ts)) = timestamp_context
+            if let Some(TimestampContext::TimelineTimestamp {
+                timeline,
+                chosen_ts: chosen_read_ts,
+                oracle_ts: _,
+            }) = timestamp_context
             {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 let result = strict_serializable_reads_tx.send(PendingReadTxn {
                     txn: PendingRead::ReadThenWrite {
                         tx,
-                        timestamp: (read_ts, timeline),
+                        timestamp: (chosen_read_ts, timeline),
                     },
                     created: Instant::now(),
                     num_requeues: 0,

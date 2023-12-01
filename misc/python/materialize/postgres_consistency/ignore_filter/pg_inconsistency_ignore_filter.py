@@ -49,7 +49,6 @@ from materialize.output_consistency.input_data.return_specs.text_return_spec imp
 )
 from materialize.output_consistency.input_data.types.date_time_types_provider import (
     TIME_TYPE_IDENTIFIER,
-    TIMESTAMPTZ_TYPE_IDENTIFIER,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -86,15 +85,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         operation: DbOperationOrFunction,
         _all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
-        for arg in expression.args:
-            return_type_spec = arg.resolve_return_type_spec()
-
-            if (
-                isinstance(return_type_spec, DateTimeReturnTypeSpec)
-                and return_type_spec.type_identifier == TIMESTAMPTZ_TYPE_IDENTIFIER
-            ):
-                return YesIgnore("#22016: age, to_char, and others ignore timezone")
-
         if matches_float_comparison(expression):
             return YesIgnore("#22022: real with decimal comparison")
 
@@ -455,7 +445,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             ),
             True,
         ):
-            return YesIgnore("Consequence of #22016")
+            return YesIgnore("#23586")
 
         if query_template.matches_any_expression(
             matches_math_op_with_large_or_tiny_val, True

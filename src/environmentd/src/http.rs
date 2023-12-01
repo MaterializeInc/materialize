@@ -35,6 +35,7 @@ use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Method, Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
+use mz_adapter::session::Session;
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, Error as FronteggError,
@@ -529,17 +530,21 @@ pub struct AuthedClient {
 }
 
 impl AuthedClient {
-    async fn new(
+    async fn new<F>(
         adapter_client: &Client,
         user: AuthedUser,
         active_connection_count: SharedConnectionCounter,
+        session_config: F,
         options: BTreeMap<String, String>,
-    ) -> Result<Self, AdapterError> {
+    ) -> Result<Self, AdapterError>
+    where
+        F: FnOnce(&mut Session),
+    {
         let AuthedUser(user) = user;
         let drop_connection = DropConnection::new_connection(&user, active_connection_count)?;
         let conn_id = adapter_client.new_conn_id()?;
         let mut session = adapter_client.new_session(conn_id, user);
-        let mut set_setting_keys = Vec::new();
+        session_config(&mut session);
         for (key, val) in options {
             const LOCAL: bool = false;
             if let Err(err) = session
@@ -550,11 +555,9 @@ impl AuthedClient {
                     name: key.to_string(),
                     reason: err.to_string(),
                 })
-            } else {
-                set_setting_keys.push(key);
             }
         }
-        let adapter_client = adapter_client.startup(session, set_setting_keys).await?;
+        let adapter_client = adapter_client.startup(session).await?;
         Ok(AuthedClient {
             client: adapter_client,
             drop_connection,
@@ -616,6 +619,11 @@ where
             &adapter_client,
             user.clone(),
             Arc::clone(active_connection_count),
+            |session| {
+                session
+                    .vars_mut()
+                    .set_default("welcome_message", Box::new(false))
+            },
             options,
         )
         .await
@@ -786,6 +794,7 @@ async fn init_ws(
         &adapter_client_rx.clone().await?,
         user,
         Arc::clone(active_connection_count),
+        |_session| (),
         options,
     )
     .await?;

@@ -1087,7 +1087,7 @@ impl Catalog {
             match state.set_system_configuration_default(name, VarInput::Flat(value)) {
                 Ok(_) => (),
                 Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
-                    warn!(%name, "cannot load unknown system parameter from stash");
+                    warn!(%name, "cannot load unknown system parameter from catalog storage");
                 }
                 Err(e) => return Err(e),
             };
@@ -1096,7 +1096,7 @@ impl Catalog {
             match state.insert_system_configuration(&name, VarInput::Flat(&value)) {
                 Ok(_) => (),
                 Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
-                    warn!(%name, "cannot load unknown system parameter from stash");
+                    warn!(%name, "cannot load unknown system parameter from catalog storage");
                 }
                 Err(e) => return Err(e),
             };

@@ -47,7 +47,10 @@ CREATE CONNECTION aws_conn TO AWS (
   ASSUME ROLE ARN = 'arn:aws:iam::001234567890:role/MaterializeConn'
 );
 ```
-On Materialize's end we generate an External ID and create an entry in a new `mz_aws_connections` table.
+On Materialize's end we generate an External ID and create an entry in a new
+[`mz_aws_connections` table](#mz_aws_connections-table).
+
+
 Users should be able to get the external_id and the principal by querying this table.
 ```
 SELECT principal, external_id
@@ -62,7 +65,6 @@ Users should then be able to add a trust policy in their AWS account to give acc
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "",
       "Effect": "Allow",
       "Principal": {
         "AWS": "<principal>"
@@ -77,6 +79,9 @@ Users should then be able to add a trust policy in their AWS account to give acc
   ]
 }
 ```
+
+They can also retrieve a fully rendered version of the above policy from the
+`example_trust_policy` column in the `mz_aws_connections` table.
 
 ## Implementation
 
@@ -107,15 +112,57 @@ When creating the connection, users should specify `WITH (VALIDATE = false)` in 
 This is because we won't be able to validate the connection unless the trust policy has
 been added on the user's end.
 
+#### `mz_aws_connections` table
+
+We'll add a new `mz_aws_connections` table with the following definition:
+
+```sql
+CREATE TABLE mz_internal.mz_aws_connections (
+    -- The ID of the connection in `mz_connections`.
+    id text NOT NULL,
+    -- The value of the `ENDPOINT` option, if specified. `NULL` otherwise.
+    endpoint text,
+    -- The value of the `REGION` option, if specified. `NULL` otherwise.
+    region text,
+    -- The value of the `AWS ACCESS KEY ID` option, if specified as a string.
+    -- `NULL` otherwise.
+    access_key_id text,
+    -- The value of the `AWS ACCESS KEY ID` option, if specified as a secret.
+    -- `NULL` otherwise.
+    access_key_id_secret_id text,
+    -- The value of the `ASSUME ROLE ARN` option, if specified. `NULL` otherwise.
+    assume_role_arn text,
+    -- The value of the `ASSUME ROLE SESSION ARN` option, if specified. `NULL` otherwise.
+    assume_role_session_name text,
+    -- The AWS IAM principal Materialize will use to assume the role, if
+    -- the connection configured `ASSUME ROLE ARN`. `NULL` otherwise.
+    principal text,
+    -- The external ID Materialize will use to assume the role, if
+    -- the connection configured `ASSUME ROLE ARN`. `NULL` otherwise.
+    external_id text,
+    -- A fully rendered AWS IAM trust policy that can be installed on the
+    -- role specified by `ASSUME ROLE ARN` to grant Materialize permission to
+    -- assume the role. `NULL` if `ASSUME ROLE ARN` is not specified.
+    example_trust_policy jsonb
+)
+```
+
 #### External ID and principal
 We already have external ID prefix provided in the catalog state.
 The connection ID will be appended to the external ID prefix to get the complete
 External ID and then stored in the new `mz_aws_connections` table for that connection ID.
 
-For principal, we'll create one global role named something like
-`arn:aws:iam::<account_id>:role/MaterializeCloudConnectionAssumeRole`
+For principal, we'll create one global role named
+`arn:aws:iam::<account_id>:role/MaterializeConnection`
 which all environmentd/clusterd-s can assume. This will add some good restrictions
 on who could assume the customers role and also allow for migration between environment clusters.
+
+Note that role is named with the end _customer_ in mind. Internally, we might
+prefer a more verbose name, like
+`MaterializeEnvironmentConnectionIntermediatingRole`, to clearly specify this
+role's purpose relative to the other roles in the account. But for the end
+customer, this is the one and only role they'll interact with in our account, so
+we prefer the conciseness and simplicity of `MaterializeConnection`.
 
 Note: There's a hard limit of 1 hour on the session duration when [Role chaining in AWS](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html).
 This can be revisited for workarounds if we hit this issue.

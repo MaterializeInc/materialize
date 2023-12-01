@@ -688,16 +688,16 @@ the system are restarted.
 <!-- RELATION_SPEC mz_internal.mz_source_statistics -->
 | Field                    | Type        | Meaning                                                                                                                                                                                                                                                                             |
 | -------------------------|-------------| --------                                                                                                                                                                                                                                                                            |
-| `id`                     | [`text`]    | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
-| `worker_id`              | [`uint8`]   | The ID of the worker thread.                                                                                                                                                                                                                                                        |
-| `snapshot_committed`     | [`boolean`] | Whether the worker has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
-| `messages_received`      | [`uint8`]   | The number of messages the worker has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
-| `updates_staged`         | [`uint8`]   | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.                                                                                                                                                                |
-| `updates_committed`      | [`uint8`]   | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
-| `bytes_received`         | [`uint8`]   | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
-| `envelope_state_bytes`   | [`uint8`]   | The number of bytes stored in the source envelope state.                                                                       |
-| `envelope_state_count`   | [`uint8`]   | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
-| `rehydration_latency_ms` | [`uint8`]   | The amount of time in milliseconds it took for the worker to rehydrate the source envelope state. |
+| `id`                     | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
+| `worker_id`              | [`uint8`]    | The ID of the worker thread.                                                                                                                                                                                                                                                        |
+| `snapshot_committed`     | [`boolean`]  | Whether the worker has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
+| `messages_received`      | [`uint8`]    | The number of messages the worker has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
+| `updates_staged`         | [`uint8`]    | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.                                                                                                                                                                |
+| `updates_committed`      | [`uint8`]    | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
+| `bytes_received`         | [`uint8`]    | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
+| `envelope_state_bytes`   | [`uint8`]    | The number of bytes stored in the source envelope state.                                                                       |
+| `envelope_state_records` | [`uint8`]    | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
+| `rehydration_latency`    | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state. |
 
 ### `mz_source_statuses`
 
@@ -803,11 +803,11 @@ Per-worker relations expose the same data as their global counterparts, but have
 The `mz_active_peeks` view describes all read queries ("peeks") that are pending in the [dataflow] layer.
 
 <!-- RELATION_SPEC mz_internal.mz_active_peeks -->
-| Field       | Type               | Meaning                                                                                                           |
-| ----------- | ------------------ | --------                                                                                                          |
-| `id`        | [`uuid`]           | The ID of the peek request.                                                                                       |
-| `index_id`  | [`text`]           | The ID of the index the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes). |
-| `time`      | [`mz_timestamp`]   | The timestamp the peek has requested.                                                                             |
+| Field       | Type               | Meaning                                                                                                                                              |
+| ----------- | ------------------ |------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `id`        | [`uuid`]           | The ID of the peek request.                                                                                                                          |
+| `index_id`  | [`text`]           | The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
+| `time`      | [`mz_timestamp`]   | The timestamp the peek has requested.                                                                                                                |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_active_peeks_per_worker -->
 

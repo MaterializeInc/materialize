@@ -12,6 +12,7 @@
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::num::NonZeroI64;
+use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -19,6 +20,7 @@ use mz_stash::DebugStashFactory;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
+pub use crate::durable::impls::persist::metrics::Metrics;
 use crate::durable::impls::persist::PersistHandle;
 use crate::durable::impls::shadow::OpenableShadowCatalogState;
 use crate::durable::impls::stash::{OpenableConnection, TestOpenableConnection};
@@ -41,6 +43,7 @@ use crate::durable::transaction::TransactionBatch;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
@@ -137,7 +140,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     async fn trace(&mut self) -> Result<Trace, CatalogError>;
 
     /// Politely releases all external resources that can only be released in an async context.
-    async fn expire(self);
+    async fn expire(self: Box<Self>);
 }
 
 // TODO(jkosh44) No method should take &mut self, but due to stash implementations we need it.
@@ -163,6 +166,8 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError>;
 
     /// Get all audit log events.
+    ///
+    /// Results are guaranteed to be sorted by ID.
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError>;
 
     /// Get the next ID of `id_type`, without allocating it.
@@ -202,6 +207,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Gets all storage usage events and permanently deletes from the catalog those
     /// that happened more than the retention period ago from boot_ts.
+    ///
+    /// Results are guaranteed to be sorted by ID.
     async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
@@ -271,8 +278,19 @@ pub fn test_stash_backed_catalog_state(
 pub async fn persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
+    metrics: Arc<Metrics>,
 ) -> PersistHandle {
-    PersistHandle::new(persist_client, organization_id).await
+    PersistHandle::new(persist_client, organization_id, metrics).await
+}
+
+/// Creates an openable durable catalog state implemented using persist that is meant to be used in
+/// tests.
+pub async fn test_persist_backed_catalog_state(
+    persist_client: PersistClient,
+    organization_id: Uuid,
+) -> PersistHandle {
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    persist_backed_catalog_state(persist_client, organization_id, metrics).await
 }
 
 /// Creates an openable durable catalog state implemented using both the stash and persist, that
@@ -284,7 +302,9 @@ pub async fn shadow_catalog_state(
     organization_id: Uuid,
 ) -> impl OpenableDurableCatalogState {
     let stash = Box::new(stash_backed_catalog_state(stash_config));
-    let persist = Box::new(persist_backed_catalog_state(persist_client, organization_id).await);
+    // Shadow catalog is only used for tests, so it's OK to get a test persist catalog state.
+    let persist =
+        Box::new(test_persist_backed_catalog_state(persist_client, organization_id).await);
     OpenableShadowCatalogState { stash, persist }
 }
 

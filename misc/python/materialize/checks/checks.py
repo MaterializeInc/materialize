@@ -31,7 +31,7 @@ class Check:
 
     def _kafka_broker(self) -> str:
         result = "BROKER '${testdrive.kafka-addr}'"
-        if self.current_version >= MzVersion.parse("0.78.0-dev"):
+        if self.current_version >= MzVersion.parse_mz("v0.78.0-dev"):
             result += ", SECURITY PROTOCOL PLAINTEXT"
         return result
 

@@ -239,6 +239,7 @@ class SQLsmithAction(Action):
 
         if not self.queries:
             self.composition.silent = True
+            seed = self.rng.randrange(2**31)
             try:
                 result = self.composition.run(
                     "sqlsmith",
@@ -247,11 +248,16 @@ class SQLsmithAction(Action):
                     "--read-state",
                     "--dry-run",
                     "--max-queries=100",
+                    f"--seed={seed}",
                     stdin=exe.db.sqlsmith_state,
                     capture=True,
                     capture_stderr=True,
                     rm=True,
                 )
+                if result.returncode != 0:
+                    raise ValueError(
+                        f"SQLsmith failed: {result.returncode} (seed {seed})\nStderr: {result.stderr}\nState: {exe.db.sqlsmith_state}"
+                    )
                 try:
                     data = json.loads(result.stdout)
                 except:
@@ -459,8 +465,12 @@ class CreateTableAction(Action):
             return False
         table_id = exe.db.table_id
         exe.db.table_id += 1
-        table = Table(self.rng, table_id, self.rng.choice(exe.db.schemas))
-        table.create(exe)
+        schema = self.rng.choice(exe.db.schemas)
+        with schema.lock:
+            if schema not in exe.db.schemas:
+                return False
+            table = Table(self.rng, table_id, schema)
+            table.create(exe)
         exe.db.tables.append(table)
         return True
 
@@ -718,10 +728,14 @@ class TransactionIsolationAction(Action):
 
 class CommitRollbackAction(Action):
     def run(self, exe: Executor) -> bool:
+        if not exe.action_run_since_last_commit_rollback:
+            return False
+
         if self.rng.random() < 0.7:
             exe.commit()
         else:
             exe.rollback()
+        exe.action_run_since_last_commit_rollback = False
         return True
 
 
@@ -740,14 +754,18 @@ class CreateViewAction(Action):
         )
         if self.rng.choice([True, False]) or base_object2 == base_object:
             base_object2 = None
-        view = View(
-            self.rng,
-            view_id,
-            base_object,
-            base_object2,
-            self.rng.choice(exe.db.schemas),
-        )
-        view.create(exe)
+        schema = self.rng.choice(exe.db.schemas)
+        with schema.lock:
+            if schema not in exe.db.schemas:
+                return False
+            view = View(
+                self.rng,
+                view_id,
+                base_object,
+                base_object2,
+                schema,
+            )
+            view.create(exe)
         exe.db.views.append(view)
         return True
 
@@ -1595,9 +1613,9 @@ write_action_list = ActionList(
         (InsertAction, 50),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (HttpPostAction, 50),
-        (CommitRollbackAction, 100),
+        (CommitRollbackAction, 10),
         (ReconnectAction, 1),
-        (SourceInsertAction, 100),
+        (SourceInsertAction, 50),
     ],
     autocommit=False,
 )

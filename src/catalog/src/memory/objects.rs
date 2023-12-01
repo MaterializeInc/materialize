@@ -26,7 +26,7 @@ use mz_controller::clusters::{
     ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::role_id::RoleId;
@@ -315,6 +315,8 @@ pub struct ClusterReplicaProcessStatus {
 #[derive(Clone, Debug, Serialize)]
 pub struct CatalogEntry {
     pub item: CatalogItem,
+    #[serde(skip)]
+    pub referenced_by: Vec<GlobalId>,
     #[serde(skip)]
     pub used_by: Vec<GlobalId>,
     pub id: GlobalId,
@@ -804,7 +806,7 @@ impl CatalogItem {
 
     /// Collects the identifiers of the objects that were encountered when
     /// resolving names in the item's DDL statement.
-    pub fn uses(&self) -> &ResolvedIds {
+    pub fn references(&self) -> &ResolvedIds {
         static EMPTY: Lazy<ResolvedIds> = Lazy::new(|| ResolvedIds(BTreeSet::new()));
         match self {
             CatalogItem::Func(_) => &*EMPTY,
@@ -819,6 +821,31 @@ impl CatalogItem {
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
         }
+    }
+
+    /// Collects the identifiers of the objects used by this [`CatalogItem`].
+    ///
+    /// Like [`CatalogItem::references()`] but also includes objects that are not directly
+    /// referenced. For example this will include any catalog objects used to implement functions
+    /// and casts in the item.
+    pub fn uses(&self) -> BTreeSet<GlobalId> {
+        let mut uses = self.references().0.clone();
+        match self {
+            // TODO(jkosh44) This isn't really correct for functions. They may use other objects in
+            // their implementation. However, currently there's no way to get that information.
+            CatalogItem::Func(_) => {}
+            CatalogItem::Index(_) => {}
+            CatalogItem::Sink(_) => {}
+            CatalogItem::Source(_) => {}
+            CatalogItem::Log(_) => {}
+            CatalogItem::Table(_) => {}
+            CatalogItem::Type(_) => {}
+            CatalogItem::View(view) => uses.extend(view.raw_expr.depends_on()),
+            CatalogItem::MaterializedView(mview) => uses.extend(mview.raw_expr.depends_on()),
+            CatalogItem::Secret(_) => {}
+            CatalogItem::Connection(_) => {}
+        }
+        uses
     }
 
     /// Returns the connection ID that this item belongs to, if this item is
@@ -1317,6 +1344,11 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::MaterializedView(_))
     }
 
+    /// Reports whether this catalog entry is a view.
+    pub fn is_view(&self) -> bool {
+        matches!(self.item(), CatalogItem::View(_))
+    }
+
     /// Reports whether this catalog entry is a secret.
     pub fn is_secret(&self) -> bool {
         matches!(self.item(), CatalogItem::Secret(_))
@@ -1339,7 +1371,16 @@ impl CatalogEntry {
 
     /// Collects the identifiers of the objects that were encountered when
     /// resolving names in the item's DDL statement.
-    pub fn uses(&self) -> &ResolvedIds {
+    pub fn references(&self) -> &ResolvedIds {
+        self.item.references()
+    }
+
+    /// Collects the identifiers of the objects used by this [`CatalogEntry`].
+    ///
+    /// Like [`CatalogEntry::references()`] but also includes objects that are not directly
+    /// referenced. For example this will include any catalog objects used to implement functions
+    /// and casts in the item.
+    pub fn uses(&self) -> BTreeSet<GlobalId> {
         self.item.uses()
     }
 
@@ -1361,6 +1402,11 @@ impl CatalogEntry {
     /// Returns the fully qualified name of this catalog entry.
     pub fn name(&self) -> &QualifiedItemName {
         &self.name
+    }
+
+    /// Returns the identifiers of the dataflows that are directly referenced by this dataflow.
+    pub fn referenced_by(&self) -> &[GlobalId] {
+        &self.referenced_by
     }
 
     /// Returns the identifiers of the dataflows that depend upon this dataflow.
@@ -1959,8 +2005,16 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn uses(&self) -> &ResolvedIds {
+    fn references(&self) -> &ResolvedIds {
+        self.references()
+    }
+
+    fn uses(&self) -> BTreeSet<GlobalId> {
         self.uses()
+    }
+
+    fn referenced_by(&self) -> &[GlobalId] {
+        self.referenced_by()
     }
 
     fn used_by(&self) -> &[GlobalId] {

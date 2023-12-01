@@ -73,7 +73,6 @@
 //! update, is that it might fill out new internal state in the mid-level
 //! clients on the way toward being run.
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -94,14 +93,15 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
-    RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand,
-    StorageResponse,
+    RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StatusUpdate,
+    StorageCommand, StorageResponse,
 };
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData};
 use mz_storage_types::AlterCompatible;
+use mz_timely_util::builder_async::PressOnDropButton;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -112,12 +112,10 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 use tracing::{info, trace, warn};
 
-use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{
     self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
 };
-use crate::sink::SinkBaseMetrics;
-use crate::source::metrics::SourceBaseMetrics;
+use crate::metrics::StorageMetrics;
 use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
@@ -155,9 +153,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             ResponseSender,
             crossbeam_channel::Sender<std::thread::Thread>,
         )>,
-        decode_metrics: DecodeMetrics,
-        source_metrics: SourceBaseMetrics,
-        sink_metrics: SinkBaseMetrics,
+        metrics: StorageMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
         instance_context: StorageInstanceContext,
@@ -209,13 +205,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let storage_state = StorageState {
             source_uppers: BTreeMap::new(),
             source_tokens: BTreeMap::new(),
-            decode_metrics,
+            metrics,
             reported_frontiers: BTreeMap::new(),
             ingestions: BTreeMap::new(),
             exports: BTreeMap::new(),
             now,
-            source_metrics,
-            sink_metrics,
             timely_worker_index: timely_worker.index(),
             timely_worker_peers: timely_worker.peers(),
             connection_context,
@@ -227,6 +221,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             dropped_ids: BTreeSet::new(),
             source_statistics: BTreeMap::new(),
             sink_statistics: BTreeMap::new(),
+            object_status_updates: Default::default(),
             internal_cmd_tx: command_sequencer,
             async_worker,
             dataflow_parameters: DataflowParameters::new(
@@ -260,9 +255,11 @@ pub struct StorageState {
     /// and we should aim for that but are not there yet.
     pub source_uppers: BTreeMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
     /// Handles to created sources, keyed by ID
-    pub source_tokens: BTreeMap<GlobalId, Rc<dyn Any>>,
-    /// Decoding metrics reported by all dataflows.
-    pub decode_metrics: DecodeMetrics,
+    /// NB: The type of the tokens must not be changed to something other than `PressOnDropButton`
+    /// to prevent usage of custom shutdown tokens that are tricky to get right.
+    pub source_tokens: BTreeMap<GlobalId, Vec<PressOnDropButton>>,
+    /// Metrics for storage objects.
+    pub metrics: StorageMetrics,
     /// Tracks the conditional write frontiers we have reported.
     pub reported_frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
     /// Descriptions of each installed ingestion.
@@ -271,10 +268,6 @@ pub struct StorageState {
     pub exports: BTreeMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
-    /// Metrics for the source-specific side of dataflows.
-    pub source_metrics: SourceBaseMetrics,
-    /// Undocumented
-    pub sink_metrics: SinkBaseMetrics,
     /// Index of the associated timely dataflow worker.
     pub timely_worker_index: usize,
     /// Peers in the associated timely dataflow worker.
@@ -288,7 +281,9 @@ pub struct StorageState {
     pub persist_clients: Arc<PersistClientCache>,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
-    pub sink_tokens: BTreeMap<GlobalId, SinkToken>,
+    /// NB: The type of the tokens must not be changed to something other than `PressOnDropButton`
+    /// to prevent usage of custom shutdown tokens that are tricky to get right.
+    pub sink_tokens: BTreeMap<GlobalId, Vec<PressOnDropButton>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
@@ -304,6 +299,12 @@ pub struct StorageState {
     /// The same as `source_statistics`, but for sinks.
     pub sink_statistics:
         BTreeMap<GlobalId, StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>>,
+
+    /// Status updates reported by health operators.
+    ///
+    /// **NOTE**: Operators that append to this collection should take care to only add new
+    /// status updates if the status of the ingestion/export in question has _changed_.
+    pub object_status_updates: Rc<RefCell<Vec<StatusUpdate>>>,
 
     /// Sender for cluster-internal storage commands. These can be sent from
     /// within workers/operators and will be distributed to all workers. For
@@ -456,15 +457,6 @@ impl SinkHandle {
     }
 }
 
-/// A token that keeps a sink alive.
-pub struct SinkToken(Box<dyn Any>);
-impl SinkToken {
-    /// Create new token
-    pub fn new(t: Box<dyn Any>) -> Self {
-        Self(t)
-    }
-}
-
 impl<'w, A: Allocate> Worker<'w, A> {
     /// Waits for client connections and runs them to completion.
     pub fn run(&mut self) {
@@ -537,6 +529,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
 
             self.report_frontier_progress(&response_tx);
+
+            // Report status updates if any are present
+            if self.storage_state.object_status_updates.borrow().len() > 0 {
+                self.send_storage_response(
+                    &response_tx,
+                    StorageResponse::StatusUpdates(self.storage_state.object_status_updates.take()),
+                );
+            }
 
             // Note: this interval configures the level of granularity we expect statistics
             // (at least with this implementation) to have. We expect a statistic in the
@@ -754,7 +754,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         StorageStatistics::<SourceStatisticsUpdate, SourceStatisticsMetrics>::new(
                             *export_id,
                             self.storage_state.timely_worker_index,
-                            &self.storage_state.source_metrics,
+                            &self.storage_state.metrics.source_statistics,
                             ingestion_id,
                             &export.storage_metadata.data_shard,
                         );
@@ -836,7 +836,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 let stats = StorageStatistics::<SinkStatisticsUpdate, SinkStatisticsMetrics>::new(
                     sink_id,
                     self.storage_state.timely_worker_index,
-                    &self.storage_state.sink_metrics,
+                    &self.storage_state.metrics.sink_statistics,
                 );
                 self.storage_state.sink_statistics.insert(sink_id, stats);
 

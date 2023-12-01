@@ -177,7 +177,7 @@ pub(crate) fn add_materialize_comments(
     if catalog.system_vars().enable_sink_doc_on_option() {
         let from_id = stmt.from.item_id();
         let from = catalog.get_item(from_id);
-        let object_ids = from.uses().0.iter().map(|id| *id).chain_one(from.id());
+        let object_ids = from.references().0.clone().into_iter().chain_one(from.id());
 
         // add comments to the avro doc comments
         if let Some(Format::Avro(AvroSchema::Csr {
@@ -645,8 +645,7 @@ async fn purify_create_source(
                             Ident::new(&table.namespace)?,
                             Ident::new(&table.name)?,
                         ]);
-                        let subsource_name = Ident::new(&table.name)?;
-                        let subsource_name = UnresolvedItemName::unqualified(subsource_name);
+                        let subsource_name = subsource_name_gen(source_name, &table.name)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }

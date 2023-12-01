@@ -94,10 +94,10 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::stack;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
@@ -324,6 +324,7 @@ pub enum RealTimeRecencyContext {
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
         timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
         in_immediate_multi_stmt_txn: bool,
         optimizer: optimize::peek::Optimizer,
@@ -343,8 +344,9 @@ impl RealTimeRecencyContext {
 #[derive(Debug)]
 pub enum PeekStage {
     Validate(PeekStageValidate),
-    Optimize(PeekStageOptimize),
     Timestamp(PeekStageTimestamp),
+    Optimize(PeekStageOptimize),
+    RealTimeRecency(PeekStageRealTimeRecency),
     Finish(PeekStageFinish),
 }
 
@@ -352,8 +354,9 @@ impl PeekStage {
     fn validity(&mut self) -> Option<&mut PlanValidity> {
         match self {
             PeekStage::Validate(_) => None,
-            PeekStage::Optimize(PeekStageOptimize { validity, .. })
-            | PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
+            PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
+            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
+            | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
         }
     }
@@ -366,7 +369,7 @@ pub struct PeekStageValidate {
 }
 
 #[derive(Debug)]
-pub struct PeekStageOptimize {
+pub struct PeekStageTimestamp {
     validity: PlanValidity,
     source: MirRelationExpr,
     copy_to: Option<CopyFormat>,
@@ -379,7 +382,21 @@ pub struct PeekStageOptimize {
 }
 
 #[derive(Debug)]
-pub struct PeekStageTimestamp {
+pub struct PeekStageOptimize {
+    validity: PlanValidity,
+    source: MirRelationExpr,
+    copy_to: Option<CopyFormat>,
+    source_ids: BTreeSet<GlobalId>,
+    when: QueryWhen,
+    target_replica: Option<ReplicaId>,
+    timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
+    in_immediate_multi_stmt_txn: bool,
+    optimizer: optimize::peek::Optimizer,
+}
+
+#[derive(Debug)]
+pub struct PeekStageRealTimeRecency {
     validity: PlanValidity,
     copy_to: Option<CopyFormat>,
     source_ids: BTreeSet<GlobalId>,
@@ -387,6 +404,7 @@ pub struct PeekStageTimestamp {
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
@@ -400,6 +418,7 @@ pub struct PeekStageFinish {
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     source_ids: BTreeSet<GlobalId>,
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
@@ -682,7 +701,12 @@ impl PendingRead {
             PendingRead::ReadThenWrite {
                 timestamp: (timestamp, timeline),
                 ..
-            } => TimestampContext::TimelineTimestamp(timeline.clone(), timestamp.clone()),
+            } => TimestampContext::TimelineTimestamp {
+                timeline: timeline.clone(),
+                chosen_ts: timestamp.clone(),
+                oracle_ts: None, // For writes, we always pick the oracle
+                                 // timestamp!
+            },
         }
     }
 
@@ -768,20 +792,10 @@ impl Drop for ExecuteContextExtra {
     fn drop(&mut self) {
         let Self { statement_uuid } = &*self;
         if let Some(statement_uuid) = statement_uuid {
-            // TODO [btv] -- We know this is happening in prod now,
-            // seemingly only related to SUBSCRIBEs from the console.
-            //
-            // This is `error` for now until I get around to debugging
-            // the root cause, as it's not a severe enough issue to be
-            // worth breaking staging.
-            //
-            // Once all known causes of this are resolved, bump this
-            // back to a soft_assert.
-            //
             // Note: the impact when this error hits
             // is that the statement will never be marked
             // as finished in the statement log.
-            tracing::error!("execute context for statement {statement_uuid:?} dropped without being properly retired.");
+            soft_panic_or_log!("execute context for statement {statement_uuid:?} dropped without being properly retired.");
         }
     }
 }
@@ -1143,7 +1157,7 @@ impl Coordinator {
             .entries()
             .cloned()
             .map(|entry| {
-                let remaining_deps = entry.uses().0.iter().copied().collect::<Vec<_>>();
+                let remaining_deps = entry.uses().into_iter().collect::<Vec<_>>();
                 (entry, remaining_deps)
             })
             .collect();
@@ -1497,6 +1511,19 @@ impl Coordinator {
     /// allows subsequent bootstrap logic to fetch metadata (such as frontiers) of arbitrary
     /// storage collections, without needing to worry about dependency order.
     async fn bootstrap_storage_collections(&mut self) {
+        // Reset the txns and table shards to a known set of invariants.
+        //
+        // TODO: This can be removed once we've flipped to the new txns system
+        // for good and there is no possibility of the old code running
+        // concurrently with the new code.
+        let init_ts = self.get_local_write_ts().await.timestamp;
+        self.controller
+            .storage
+            .init_txns(init_ts)
+            .await
+            .unwrap_or_terminate("init_txns");
+        self.apply_local_write(init_ts).await;
+
         let catalog = self.catalog();
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
@@ -1830,22 +1857,35 @@ impl Coordinator {
         // need to provide output starting from their `since`s, so these serve as upper bounds for
         // our `as_of`.
         let mut max_as_of = Antichain::new();
-        for mv_id in dependent_matviews {
-            let since = self.storage_implied_capability(mv_id);
-            let upper = self.storage_write_frontier(mv_id);
+        for mv_id in &dependent_matviews {
+            let since = self.storage_implied_capability(*mv_id);
+            let upper = self.storage_write_frontier(*mv_id);
             max_as_of.meet_assign(&since.join(upper));
         }
 
-        assert!(
+        mz_ore::soft_assert!(
             PartialOrder::less_equal(&min_as_of, &max_as_of),
-            "error bootrapping index `as_of`: min_as_of {:?} greater than max_as_of {:?}",
+            "error bootrapping index `as_of`: \
+             min_as_of {:?} greater than max_as_of {:?} \
+             (import_ids={}, export_ids={}, dependent_matviews={:?})",
             min_as_of.elements(),
             max_as_of.elements(),
+            dataflow.display_import_ids(),
+            dataflow.display_export_ids(),
+            dependent_matviews,
         );
 
-        let mut as_of = min_as_of.clone();
-        as_of.join_assign(&max_compaction_frontier);
-        as_of.meet_assign(&max_as_of);
+        // Ensure that we never select an `as_of` that's less than `min_as_of`,
+        // even if that means selecting an `as_of` that's greater than `max_as_of`.
+        // The former makes environmentd crash, the latter "only" leads to correctness bugs.
+        let as_of = if PartialOrder::less_equal(&min_as_of, &max_as_of) {
+            let mut as_of = min_as_of.clone();
+            as_of.join_assign(&max_compaction_frontier);
+            as_of.meet_assign(&max_as_of);
+            as_of
+        } else {
+            min_as_of.clone()
+        };
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),

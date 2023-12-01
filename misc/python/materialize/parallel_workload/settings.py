@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import random
 from enum import Enum
 
 
@@ -15,6 +16,11 @@ class Complexity(Enum):
     DML = "dml"
     DDL = "ddl"
 
+    @classmethod
+    def _missing_(cls, value):
+        if value == "random":
+            return cls(random.choice([elem.value for elem in cls]))
+
 
 class Scenario(Enum):
     Regression = "regression"
@@ -22,3 +28,8 @@ class Scenario(Enum):
     Kill = "kill"
     Rename = "rename"
     BackupRestore = "backup-restore"
+
+    @classmethod
+    def _missing_(cls, value):
+        if value == "random":
+            return cls(random.choice([elem.value for elem in cls]))

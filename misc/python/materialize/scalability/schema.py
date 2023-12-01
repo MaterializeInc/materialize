@@ -51,11 +51,13 @@ class Schema:
                     [
                         f"CREATE TABLE t{t} (f1 INTEGER DEFAULT 1);",
                         f"INSERT INTO t{t} DEFAULT VALUES;",
+                        f"CREATE OR REPLACE MATERIALIZED VIEW mv{t} AS SELECT count(*) AS count FROM t{t};",
                     ]
                 )
 
                 if self.create_index:
                     init_sqls.append(f"CREATE INDEX i{t} ON t{t} (f1);")
+                    init_sqls.append(f"CREATE INDEX mv_i{t} ON mv{t} (count);")
 
         return init_sqls
 

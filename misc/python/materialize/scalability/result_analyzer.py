@@ -10,18 +10,18 @@
 
 from __future__ import annotations
 
+from materialize.scalability.comparison_outcome import ComparisonOutcome
 from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.workload_result import WorkloadResult
 
 
 class ResultAnalyzer:
-    def determine_regression_in_workload(
+    def perform_comparison_in_workload(
         self,
         workload_name: str,
         baseline_endpoint: Endpoint,
         other_endpoint: Endpoint,
         regression_baseline_result: WorkloadResult,
         other_result: WorkloadResult,
-    ) -> RegressionOutcome:
+    ) -> ComparisonOutcome:
         raise NotImplementedError

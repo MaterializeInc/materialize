@@ -287,6 +287,24 @@ async fn test_conn_startup() {
         );
     }
 
+    // A welcome notice should be sent.
+    {
+        let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
+        let _client = server
+            .connect()
+            .options("") // Override the test harness's default of `--welcome_message=off`.
+            .notice_callback(move |notice| notice_tx.send(notice).unwrap())
+            .await
+            .unwrap();
+        match notice_rx.recv().await {
+            Some(n) => {
+                assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
+                assert!(n.message().starts_with("connected to Materialize"));
+            }
+            _ => panic!("welcome notice not generated"),
+        }
+    }
+
     // Test that connecting with an old protocol version is gracefully rejected.
     // This used to crash the adapter.
     {

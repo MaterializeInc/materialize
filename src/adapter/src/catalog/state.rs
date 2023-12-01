@@ -267,7 +267,8 @@ impl CatalogState {
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Connection(_)) => {
-                for id in &item.uses().0 {
+                // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
+                for id in &item.references().0 {
                     self.introspection_dependencies_inner(*id, out);
                 }
             }
@@ -483,7 +484,7 @@ impl CatalogState {
         }
 
         let unstable_dependencies: Vec<_> = item
-            .uses()
+            .references()
             .0
             .iter()
             .filter(|id| !self.is_stable(**id))
@@ -1031,11 +1032,22 @@ impl CatalogState {
             id,
             oid,
             used_by: Vec::new(),
+            referenced_by: Vec::new(),
             owner_id,
             privileges,
         };
-        for u in &entry.uses().0 {
+        for u in &entry.references().0 {
             match self.entry_by_id.get_mut(u) {
+                Some(metadata) => metadata.referenced_by.push(entry.id()),
+                None => panic!(
+                    "Catalog: missing dependent catalog item {} while installing {}",
+                    &u,
+                    self.resolve_full_name(entry.name(), entry.conn_id())
+                ),
+            }
+        }
+        for u in entry.uses() {
+            match self.entry_by_id.get_mut(&u) {
                 Some(metadata) => metadata.used_by.push(entry.id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
@@ -1077,8 +1089,13 @@ impl CatalogState {
             self.resolve_full_name(metadata.name(), metadata.conn_id()),
             id
         );
-        for u in &metadata.uses().0 {
+        for u in &metadata.references().0 {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
+                dep_metadata.referenced_by.retain(|u| *u != metadata.id())
+            }
+        }
+        for u in metadata.uses() {
+            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.id())
             }
         }

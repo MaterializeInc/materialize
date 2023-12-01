@@ -59,28 +59,16 @@ def run(
     ports: dict[str, int],
     seed: str,
     runtime: int,
-    complexity_str: str,
-    scenario_str: str,
+    complexity: Complexity,
+    scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
     fast_startup: bool,
     composition: Composition | None,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
-    random.seed(seed)
 
     rng = random.Random(random.randrange(SEED_RANGE))
-
-    complexity = (
-        Complexity(rng.choice([elem.value for elem in Complexity]))
-        if complexity_str == "random"
-        else Complexity(complexity_str)
-    )
-    scenario = (
-        Scenario(rng.choice([elem.value for elem in Scenario]))
-        if scenario_str == "random"
-        else Scenario(scenario_str)
-    )
 
     print(
         f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} {'--fast-startup' if fast_startup else ''}(--host={host})"
@@ -102,30 +90,31 @@ def run(
     with system_conn.cursor() as system_cur:
         system_exe = Executor(rng, system_cur, database)
         system_exe.execute(
-            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 10 + num_threads}"
         )
         # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
         system_exe.execute(
-            f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 10 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 2 + num_threads}"
+            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 10 + num_threads}"
         )
+        system_exe.execute("ALTER SYSTEM SET max_secrets = 1000000")
         # Most queries should not fail because of privileges
         for object_type in [
             "TABLES",
@@ -157,7 +146,7 @@ def run(
     for i in range(num_threads):
         weights: list[float]
         if complexity == Complexity.DDL:
-            weights = [60, 30, 30, 30, 10]
+            weights = [60, 30, 30, 30, 100]
         elif complexity == Complexity.DML:
             weights = [60, 30, 30, 30, 0]
         elif complexity == Complexity.Read:
@@ -187,10 +176,11 @@ def run(
             action_list.autocommit,
             system=False,
             composition=composition,
+            action_list=action_list,
         )
         thread_name = f"worker_{i}"
         print(
-            f"{thread_name}: {', '.join(action_class.__name__ for action_class in action_list.action_classes)}"
+            f"{thread_name}: {', '.join(action_class.__name__.removesuffix('Action') for action_class in action_list.action_classes)}"
         )
         workers.append(worker)
 
@@ -273,7 +263,7 @@ def run(
             [StatisticsAction(worker_rng, composition)],
             [1],
             end_time,
-            autocommit=True,
+            autocommit=False,
             system=True,
             composition=composition,
         )
@@ -286,7 +276,7 @@ def run(
         thread.start()
         threads.append(thread)
 
-    num_queries = Counter()
+    num_queries = defaultdict(Counter)
     try:
         while time.time() < end_time:
             for thread in threads:
@@ -304,7 +294,9 @@ def run(
             )
             for worker in workers:
                 for action in worker.num_queries.elements():
-                    num_queries[action] += worker.num_queries[action]
+                    num_queries[worker.action_list][action] += worker.num_queries[
+                        action
+                    ]
                 worker.num_queries.clear()
     except KeyboardInterrupt:
         print("Keyboard interrupt, exiting")
@@ -324,7 +316,7 @@ def run(
             if thread.is_alive():
                 print(f"{thread.name} still running: {worker.exe.last_log}")
         print("Threads have not stopped within 5 minutes, exiting hard")
-        # TODO(def-): Switch to failing exit code when #23254 is fixed
+        # TODO(def-): Switch to failing exit code when #23582 is fixed
         os._exit(0)
 
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
@@ -345,14 +337,14 @@ def run(
         for count in counter.values():
             num_failures += count
 
-    total_queries = num_queries.total()
+    total_queries = sum(sub.total() for sub in num_queries.values())
     failed = 100.0 * num_failures / total_queries if total_queries else 0
     print(f"Queries executed: {total_queries} ({failed:.0f}% failed)")
     print("--- Action statistics:")
     for action_list in action_lists:
         text = ", ".join(
             [
-                f"{action_class.__name__}: {num_queries[action_class]}"
+                f"{action_class.__name__.removesuffix('Action')}: {num_queries[action_list][action_class]}"
                 for action_class in action_list.action_classes
             ]
         )
@@ -435,13 +427,15 @@ def main() -> int:
             cur.execute(f"ALTER SYSTEM SET {key} = '{value}'")
     system_conn.close()
 
+    random.seed(args.seed)
+
     run(
         args.host,
         ports,
         args.seed,
         args.runtime,
-        args.complexity,
-        args.scenario,
+        Complexity(args.complexity),
+        Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
         args.fast_startup,

@@ -10,7 +10,7 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{btree_map, BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use futures::future::LocalBoxFuture;
@@ -617,16 +617,52 @@ impl Coordinator {
         let mut ready_txns = Vec::new();
         let mut deferred_txns = Vec::new();
 
+        // Cache for `TimestampOracle::read_ts` calls. These are somewhat
+        // expensive so we cache the value. This is correct since all we're
+        // risking is being too conservative. We will not accidentally "release"
+        // a result too early.
+        let mut cached_oracle_ts = BTreeMap::new();
+
         for mut read_txn in pending_read_txns {
-            if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
-                read_txn.txn.timestamp_context()
+            if let TimestampContext::TimelineTimestamp {
+                timeline,
+                chosen_ts,
+                oracle_ts,
+            } = read_txn.txn.timestamp_context()
             {
-                let timestamp_oracle = self.get_timestamp_oracle(&timeline);
-                let read_ts = timestamp_oracle.read_ts().await;
-                if timestamp <= read_ts {
+                let oracle_ts = match oracle_ts {
+                    Some(oracle_ts) => oracle_ts,
+                    None => {
+                        // There was no oracle timestamp, so no need to delay.
+                        ready_txns.push(read_txn);
+                        continue;
+                    }
+                };
+
+                if chosen_ts <= oracle_ts {
+                    // Chosen ts was already <= the oracle ts, so we're good
+                    // to go!
+                    ready_txns.push(read_txn);
+                    continue;
+                }
+
+                // See what the oracle timestamp is now and delay when needed.
+                let current_oracle_ts = cached_oracle_ts.entry(timeline.clone());
+                let current_oracle_ts = match current_oracle_ts {
+                    btree_map::Entry::Vacant(entry) => {
+                        let timestamp_oracle = self.get_timestamp_oracle(&timeline);
+                        let read_ts = timestamp_oracle.read_ts().await;
+                        entry.insert(read_ts.clone());
+                        read_ts
+                    }
+                    btree_map::Entry::Occupied(entry) => entry.get().clone(),
+                };
+
+                if chosen_ts <= current_oracle_ts {
                     ready_txns.push(read_txn);
                 } else {
-                    let wait = Duration::from_millis(timestamp.saturating_sub(read_ts).into());
+                    let wait =
+                        Duration::from_millis(chosen_ts.saturating_sub(current_oracle_ts).into());
                     if wait < shortest_wait {
                         shortest_wait = wait;
                     }
@@ -724,6 +760,7 @@ impl Coordinator {
                 when,
                 target_replica,
                 timeline_context,
+                oracle_read_ts,
                 source_ids,
                 in_immediate_multi_stmt_txn: _,
                 optimizer,
@@ -738,6 +775,7 @@ impl Coordinator {
                         when,
                         target_replica,
                         timeline_context,
+                        oracle_read_ts,
                         source_ids,
                         real_time_recency_ts: Some(real_time_recency_ts),
                         optimizer,

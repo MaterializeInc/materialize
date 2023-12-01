@@ -132,7 +132,6 @@
 //!      v          v
 //! ```
 
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin::pin;
 use std::rc::Rc;
@@ -155,7 +154,9 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 
 use crate::source::postgres::replication::RewindRequest;
@@ -175,7 +176,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, RewindRequest>,
     Stream<G, Rc<TransientError>>,
-    Rc<dyn Any>,
+    PressOnDropButton,
 ) {
     let op_name = format!("TableReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope.clone());
@@ -392,12 +393,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         (*output_index, event.err_into())
     });
 
-    (
-        snapshot_updates,
-        rewinds,
-        errors,
-        Rc::new(button.press_on_drop()),
-    )
+    (snapshot_updates, rewinds, errors, button.press_on_drop())
 }
 
 /// Starts a read-only transaction on the SQL session of `client` at a consistent LSN point by

@@ -36,7 +36,7 @@ fish:AREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISH
 
 > SELECT
     SUM(u.envelope_state_bytes) > 0,
-    SUM(u.envelope_state_count)
+    SUM(u.envelope_state_records)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('autospill')
@@ -53,10 +53,10 @@ animal:
 > SELECT count(*) from autospill;
 0
 
-# Both envelope_state_bytes and envelope_state_count should be zero
+# Both envelope_state_bytes and envelope_state_records should be zero
 > SELECT
     SUM(u.envelope_state_bytes),
-    SUM(u.envelope_state_count)
+    SUM(u.envelope_state_records)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name = 'autospill'

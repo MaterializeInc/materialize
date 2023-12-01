@@ -554,6 +554,13 @@ pub const MAX_IDENTIFIER_LENGTH: ServerVar<usize> = ServerVar {
     internal: false,
 };
 
+pub const WELCOME_MESSAGE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("welcome_message"),
+    value: &true,
+    description: "Whether to send a notice with a welcome message after a successful connection (Materialize).",
+    internal: false,
+};
+
 /// The logical compaction window for builtin tables and sources that have the
 /// `retained_metrics_relation` flag set.
 ///
@@ -1395,21 +1402,6 @@ pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<ServerVar<Numeric>> =
         internal: false,
     });
 
-pub const TRUNCATE_STATEMENT_LOG: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("truncate_statement_log"),
-    value: &true,
-    description: "Whether to garbage-collect old statement log entries on startup (Materialize).",
-    internal: true,
-};
-
-pub const STATEMENT_LOGGING_RETENTION: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("statement_logging_retention"),
-    // 30 days
-    value: &Duration::from_secs(30 * 24 * 60 * 60),
-    description: "The time to retain logged statements (Materialize).",
-    internal: true,
-};
-
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
     value: &true,
@@ -2068,7 +2060,7 @@ feature_flags!(
     {
         name: enable_aws_connection,
         desc: "CREATE CONNECTION ... TO AWS",
-        default: &true, // will set to false once we verify that nobody's using this
+        default: &false,
         internal: true,
         enable_for_item_parsing: false,
     },
@@ -2175,6 +2167,7 @@ impl SessionVars {
             )
             .with_var(&EMIT_INTROSPECTION_QUERY_NOTICE)
             .with_var(&UNSAFE_NEW_TRANSACTION_WALL_TIME)
+            .with_var(&WELCOME_MESSAGE)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -2339,6 +2332,16 @@ impl SessionVars {
             })
             .transpose()?
             .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
+    }
+
+    /// Sets the default value for the parameter named `name` to the value
+    /// represented by `value`.
+    pub fn set_default(&mut self, name: &str, input: Box<dyn Any>) {
+        let name = UncasedStr::new(name);
+        let var = self.vars.get_mut(name).unwrap_or_else(|| {
+            panic!("SessionVars::set_default called with unknown variable {name}")
+        });
+        var.set_default(input);
     }
 
     /// Sets the "role default" parameter named `name` to the value represented by `value`.
@@ -2601,6 +2604,11 @@ impl SessionVars {
     pub fn unsafe_new_transaction_wall_time(&self) -> Option<CheckedTimestamp<DateTime<Utc>>> {
         *self.expect_value(&UNSAFE_NEW_TRANSACTION_WALL_TIME)
     }
+
+    /// Returns the value of the `welcome_message` configuration parameter.
+    pub fn welcome_message(&self) -> bool {
+        *self.expect_value(&WELCOME_MESSAGE)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -2819,8 +2827,6 @@ impl SystemVars {
                 &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
-            .with_var(&TRUNCATE_STATEMENT_LOG)
-            .with_var(&STATEMENT_LOGGING_RETENTION)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
@@ -3576,16 +3582,6 @@ impl SystemVars {
         *self.expect_value(&STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE)
     }
 
-    /// Returns the `truncate_statement_log` configuration parameter.
-    pub fn truncate_statement_log(&self) -> bool {
-        *self.expect_value(&TRUNCATE_STATEMENT_LOG)
-    }
-
-    /// Returns the `statement_logging_retention` configuration parameter.
-    pub fn statement_logging_retention(&self) -> Duration {
-        *self.expect_value(&STATEMENT_LOGGING_RETENTION)
-    }
-
     /// Returns the `optimizer_stats_timeout` configuration parameter.
     pub fn optimizer_stats_timeout(&self) -> Duration {
         *self.expect_value(&OPTIMIZER_STATS_TIMEOUT)
@@ -3962,7 +3958,7 @@ where
     V: Value + ToOwned + Debug + PartialEq + 'static,
 {
     /// Default value.
-    default_value: &'static V,
+    default_value: Option<V::Owned>,
     /// Value persisted with the current role.
     role_value: Option<V::Owned>,
     /// Value `LOCAL` to a transaction, will be unset at the completion of the transaction.
@@ -4039,7 +4035,7 @@ where
 {
     fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
-            default_value: parent.value,
+            default_value: None,
             role_value: None,
             local_value: None,
             staged_value: None,
@@ -4083,6 +4079,7 @@ where
             .or_else(|| self.staged_value.as_ref().map(|v| v.borrow()))
             .or_else(|| self.session_value.as_ref().map(|v| v.borrow()))
             .or_else(|| self.role_value.as_ref().map(|v| v.borrow()))
+            .or_else(|| self.default_value.as_ref().map(|v| v.borrow()))
             .unwrap_or(self.parent.value)
     }
 }
@@ -4128,6 +4125,9 @@ pub trait SessionVarMut: Var + Send + Sync {
     /// Parse the input and update the stored value to match.
     fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError>;
 
+    /// Sets the default value for the variable.
+    fn set_default(&mut self, value: Box<dyn Any>);
+
     /// Parse the input and update the default Role value.
     ///
     /// Note: these only get set on Session start. Updating the default value for a role will not
@@ -4170,6 +4170,18 @@ where
         Ok(())
     }
 
+    /// Sets the default value.
+    fn set_default(&mut self, input: Box<dyn Any>) {
+        let v = input.downcast().unwrap_or_else(|input| {
+            panic!(
+                "SessionVar::set_default called with invalid value {:?} for {}",
+                input,
+                self.name()
+            )
+        });
+        self.default_value = Some(*v);
+    }
+
     /// Parse the input and set the default Role value.
     fn set_role_default(&mut self, input: VarInput) -> Result<(), VarError> {
         let v = V::parse(self, input)?;
@@ -4183,8 +4195,10 @@ where
         let value = self
             .role_value
             .as_ref()
-            .map(|val| val.borrow().to_owned())
-            .unwrap_or_else(|| self.default_value.to_owned());
+            .map(|v| v.borrow())
+            .or_else(|| self.default_value.as_ref().map(|v| v.borrow()))
+            .unwrap_or(self.parent.value)
+            .to_owned();
         if local {
             self.local_value = Some(value);
         } else {

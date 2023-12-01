@@ -60,7 +60,7 @@ use crate::controller::instance::{ActiveInstance, Instance};
 use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
-use crate::protocol::command::ComputeParameters;
+use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -520,6 +520,7 @@ where
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
+        peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
         self.instance(instance_id)?.peek(
             collection_id,
@@ -529,6 +530,7 @@ where
             finishing,
             map_filter_project,
             target_replica,
+            peek_target,
         )?;
         Ok(())
     }

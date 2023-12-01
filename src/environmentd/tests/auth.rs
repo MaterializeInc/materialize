@@ -254,18 +254,13 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                         Retry::default()
                             .max_duration(Duration::from_secs(10))
                             .retry_async(|_| async {
-                                // Due to delayed startup, we must attempt a query to
-                                // check if there was a login error.
-                                let pg_client = server
+                                let Err(err) = server
                                     .connect()
                                     .with_config(conn_config.as_pg_config().clone())
                                     .with_tls(tls.clone())
-                                    .await;
-                                let err = match pg_client {
-                                    Ok(pg_client) => {
-                                        pg_client.query_one("SELECT 1", &[]).await.unwrap_err()
-                                    }
-                                    Err(err) => err,
+                                    .await
+                                else {
+                                    return Err(());
                                 };
                                 let Some(err) = err.as_db_error() else {
                                     return Err(());
@@ -277,13 +272,9 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                             .unwrap();
                     }
                     Assert::Err(check) => {
-                        // Due to delayed startup, we must attempt a query to
-                        // check if there was a login error.
                         let pg_client = conn_config.with_tls(tls.clone()).await;
                         let err = match pg_client {
-                            Ok(pg_client) => {
-                                pg_client.query_one("SELECT 1", &[]).await.unwrap_err()
-                            }
+                            Ok(_) => panic!("connection unexpectedly succeeded"),
                             Err(err) => err,
                         };
                         check(&err);

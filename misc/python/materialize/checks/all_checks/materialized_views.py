@@ -72,7 +72,7 @@ class MaterializedViews(Check):
 class MaterializedViewsAssertNotNull(Check):
     def _can_run(self, e: Executor) -> bool:
         # ASSERT NOT NULL known broken in earlier releases
-        return self.base_version >= MzVersion.parse("0.74.0")
+        return self.base_version >= MzVersion.parse_mz("v0.74.0")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

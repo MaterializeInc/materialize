@@ -125,8 +125,6 @@ pub struct Config {
     pub materialize_catalog_config: Option<CatalogConfig>,
     /// Build information
     pub build_info: &'static BuildInfo,
-    /// The environment ID to use for this run
-    pub environment_id: EnvironmentId,
 
     // === Persist options. ===
     /// Handle to the persist consensus system.
@@ -299,7 +297,7 @@ impl State {
 
         Ok(())
     }
-    /// Makes of copy of the stash's catalog and runs a function on its
+    /// Makes of copy of the durable catalog and runs a function on its
     /// state. Returns `None` if there's no catalog information in the State.
     pub async fn with_catalog_copy<F, T>(&self, f: F) -> Result<Option<T>, anyhow::Error>
     where
@@ -883,6 +881,13 @@ pub async fn create_state(
         )
     };
 
+    let environment_id = pgclient
+        .query_one("SELECT mz_environment_id()", &[])
+        .await?
+        .get::<_, String>(0)
+        .parse()
+        .context("parsing environment ID")?;
+
     let schema_registry_url = config.schema_registry_url.to_owned();
 
     let ccsr_client = {
@@ -972,7 +977,7 @@ pub async fn create_state(
         materialize_internal_http_addr,
         materialize_user,
         pgclient,
-        environment_id: config.environment_id.clone(),
+        environment_id,
 
         // === Persist state. ===
         persist_consensus_url: config.persist_consensus_url.clone(),

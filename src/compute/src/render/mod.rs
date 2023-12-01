@@ -100,13 +100,15 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection, ExchangeData, Hashable};
 use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
@@ -132,11 +134,11 @@ use timely::{Data, PartialOrder};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{HeapSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, HeapSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
-use crate::typedefs::{ErrSpine, RowKeySpine, TraceRowHandle};
+use crate::typedefs::{ErrSpine, RowKeySpine};
 
 pub mod context;
 mod errors;
@@ -246,6 +248,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
 
                     // Associate returned tokens with the source identifier.
+                    let token: Rc<dyn Any> = Rc::new(token);
                     tokens.insert(*source_id, token);
                 });
             }
@@ -594,14 +597,19 @@ where
 
     /// Rearranges an arrangement coming from an iterative scope into an arrangement
     /// in the outer timestamp scope.
-    fn rearrange_iterative<K, V>(
+    fn rearrange_iterative<Tr, K, V, Tr2>(
         &self,
-        oks: Arranged<Child<'g, G, T>, TraceRowHandle<K, V, T, Diff>>,
+        oks: Arranged<Child<'g, G, T>, TraceAgent<Tr>>,
         name: &str,
-    ) -> Arranged<G, TraceRowHandle<K, V, G::Timestamp, Diff>>
+    ) -> Arranged<G, TraceAgent<Tr2>>
     where
-        K: Columnation + ExchangeData + Hashable,
-        V: Columnation + ExchangeData,
+        Tr: TraceReader<Key = K, Val = V, Time = T, Diff = Diff>,
+        Tr::Key: Columnation + ExchangeData + Hashable,
+        Tr::Val: Columnation + ExchangeData,
+        Tr2: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, Diff = Diff> + 'static,
+        Tr2::Batch: Batch,
+        Tr2::Batcher: Batcher<Item = ((K, V), G::Timestamp, Diff)>,
+        Arranged<G, TraceAgent<Tr2>>: ArrangementSize,
     {
         oks.as_collection(|k, v| (k.clone(), v.clone()))
             .leave()

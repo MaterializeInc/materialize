@@ -108,6 +108,7 @@ text
 ----
 1
 
+# TODO(guswynn): ensure this error stays in place even when _environmentd_ restarts.
 > SELECT name, status, error FROM mz_internal.mz_source_statuses WHERE type != 'progress'
 name            status    error
 -------------------------------

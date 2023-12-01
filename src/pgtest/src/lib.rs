@@ -197,6 +197,7 @@ impl PgConn {
 
         conn.stream.set_read_timeout(Some(timeout))?;
         options.insert(0, ("user", user));
+        options.insert(0, ("welcome_message", "off"));
         conn.send(|buf| frontend::startup_message(options, buf).unwrap())?;
         match conn.recv()?.1 {
             Message::AuthenticationOk => {}
