@@ -46,7 +46,7 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::oneshot;
-use tracing::{error, info, span, warn, Level};
+use tracing::{debug, error, info, span, warn, Level};
 use uuid::Uuid;
 
 use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceManager};
@@ -267,7 +267,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                             }),
                     );
                 } else {
-                    warn!("Not enabling lgalloc, scratch directory not specified");
+                    debug!("Not enabling lgalloc, scratch directory not specified");
                 }
             }
             Some(false) => {
