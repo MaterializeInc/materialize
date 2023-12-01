@@ -566,9 +566,14 @@ mod delta_queries {
                 input_mapper,
             );
 
-            // A viable delta query requires that, for every order,
+            // A delta query requires that, for every order,
             // there is an arrangement for every input except for
-            // the starting one.
+            // the starting one. Such queries are viable when:
+            //
+            //   (a) all the arrangements already exist, or
+            //   (b) both:
+            //       (i) we wouldn't create more arrangements than a differential join would
+            //       (ii) `enable_eager_delta_joins` is on
             let arrangement_counts = orders
                 .iter()
                 .map(|o| o.iter().skip(1).filter(|(c, _, _)| c.arranged).count())
