@@ -426,6 +426,7 @@ steps:
 
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous"
+        skip: "To be addressed with #23608"
         timeout_in_minutes: 60
         artifact_paths: junit_*.xml
         agents:
