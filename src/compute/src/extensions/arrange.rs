@@ -12,6 +12,7 @@ use std::rc::Rc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
+use differential_dataflow::trace::implementations::OffsetList;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
 use timely::container::columnation::Columnation;
@@ -223,15 +224,19 @@ pub trait ArrangementSize {
     fn log_arrangement_size(self) -> Self;
 }
 
-/// Helper to compute the size of a vector in memory.
-///
-/// The function only considers the immediate allocation of the vector, but is oblivious of any
-/// pointers to owned allocations. It only invokes the callback for allocations that exist, i.e.,
-/// calling [`vec_size`] on a vector with no capacity will not invoke `callback`.
+/// Helper to compute the size of an [`OffsetList`] in memory.
 #[inline]
-fn vec_size<T>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
-    let size_of_t = std::mem::size_of::<T>();
-    callback(data.len() * size_of_t, data.capacity() * size_of_t);
+fn offset_list_size(data: &OffsetList, mut callback: impl FnMut(usize, usize)) {
+    // Private `vec_size` because we should only use it where data isn't region-allocated.
+    // `T: Copy` makes sure the implementation is correct even if types change!
+    #[inline(always)]
+    fn vec_size<T: Copy>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
+        let size_of_t = std::mem::size_of::<T>();
+        callback(data.len() * size_of_t, data.len() * size_of_t);
+    }
+
+    vec_size(&data.smol, &mut callback);
+    vec_size(&data.chonk, callback);
 }
 
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
@@ -326,19 +331,17 @@ where
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut heap_callback = |siz, cap, alc| {
+            let mut callback = |siz, cap| {
                 size += siz;
                 capacity += cap;
-                allocations += alc;
+                allocations += usize::from(cap > 0);
             };
             trace.map_batches(|batch| {
-                let mut region_callback = |siz, cap| heap_callback(siz, cap, usize::from(cap > 0));
-                vec_size(&batch.storage.keys_offs, &mut region_callback);
-                vec_size(&batch.storage.vals_offs, &mut region_callback);
-
-                batch.storage.keys.heap_size(&mut region_callback);
-                batch.storage.vals.heap_size(&mut region_callback);
-                batch.storage.updates.heap_size(&mut region_callback);
+                batch.storage.keys.heap_size(&mut callback);
+                offset_list_size(&batch.storage.keys_offs, &mut callback);
+                batch.storage.vals.heap_size(&mut callback);
+                offset_list_size(&batch.storage.vals_offs, &mut callback);
+                batch.storage.updates.heap_size(&mut callback);
             });
             (size, capacity, allocations)
         })
@@ -357,14 +360,14 @@ where
         log_arrangement_size_inner(self, |trace| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
-                allocations += usize::from(cap > 0);
                 size += siz;
-                capacity += cap
+                capacity += cap;
+                allocations += usize::from(cap > 0);
             };
             trace.map_batches(|batch| {
-                batch.layer.keys.heap_size(&mut callback);
-                vec_size(&batch.layer.offs, &mut callback);
-                vec_size(&batch.layer.vals.vals, &mut callback);
+                batch.storage.keys.heap_size(&mut callback);
+                offset_list_size(&batch.storage.keys_offs, &mut callback);
+                batch.storage.updates.heap_size(&mut callback);
             });
             (size, capacity, allocations)
         })

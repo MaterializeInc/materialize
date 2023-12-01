@@ -23,7 +23,7 @@ version = "0.26.0"
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:fca940b40e7827a9a639f99af45806100ef14954"
+version = "0.12.0@git:9623aaad1020b799e43c6e59d93624d6c8449699"
 
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
