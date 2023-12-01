@@ -114,6 +114,7 @@ use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, Id};
+use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Diff, GlobalId};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
@@ -215,6 +216,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         Arc::clone(&compute_state.persist_clients),
                         source.storage_metadata.clone(),
                         dataflow.as_of.clone(),
+                        SnapshotMode::Include,
                         dataflow.until.clone(),
                         mfp.as_mut(),
                         compute_state.dataflow_max_inflight_bytes,

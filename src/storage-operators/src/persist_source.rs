@@ -25,7 +25,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
-use mz_persist_client::operators::shard_source::shard_source;
+use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_txn::operator::txns_progress;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
@@ -133,6 +133,7 @@ pub fn persist_source<G>(
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
     as_of: Option<Antichain<Timestamp>>,
+    snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     max_inflight_bytes: Option<usize>,
@@ -188,6 +189,7 @@ where
             Arc::clone(&persist_clients),
             metadata.clone(),
             as_of.clone(),
+            snapshot_mode,
             until,
             map_filter_project,
             flow_control,
@@ -261,6 +263,7 @@ pub fn persist_source_core<'g, G>(
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
     as_of: Option<Antichain<Timestamp>>,
+    snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<RefinedScope<'g, G>>>,
@@ -318,6 +321,7 @@ where
         },
         metadata.data_shard,
         as_of,
+        snapshot_mode,
         until.clone(),
         desc_transformer,
         Arc::new(metadata.relation_desc),
