@@ -79,6 +79,8 @@
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+use std::time::Duration;
 
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
@@ -87,8 +89,10 @@ use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
 };
 use mz_frontegg_mock::FronteggMockServer;
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_server_core::TlsCertConfig;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
@@ -123,7 +127,8 @@ async fn test_balancer() {
         roles,
         SYSTEM_TIME.clone(),
         EXPIRES_IN_SECS,
-        None,
+        // Add a bit of delay so we can test connection de-duplication.
+        Some(Duration::from_millis(100)),
     )
     .unwrap();
 
@@ -178,6 +183,7 @@ async fn test_balancer() {
     });
 
     for resolver in resolvers {
+        let is_frontegg_resolver = matches!(resolver, Resolver::Frontegg(_));
         let balancer_cfg = BalancerConfig::new(
             &BUILD_INFO,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -194,12 +200,14 @@ async fn test_balancer() {
             balancer_server.serve().await.unwrap();
         });
 
+        let conn_str = Arc::new(format!(
+            "user={frontegg_user} password={frontegg_password} host={} port={} sslmode=require",
+            balancer_pgwire_listen.ip(),
+            balancer_pgwire_listen.port()
+        ));
+
         let (pg_client, conn) = tokio_postgres::connect(
-            &format!(
-                "user={frontegg_user} password={frontegg_password} host={} port={} sslmode=require",
-                balancer_pgwire_listen.ip(),
-                balancer_pgwire_listen.port()
-            ),
+            &conn_str,
             make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
                 Ok(b.set_verify(SslVerifyMode::NONE))
             })),
@@ -212,5 +220,48 @@ async fn test_balancer() {
 
         let res: i32 = pg_client.query_one("SELECT 2", &[]).await.unwrap().get(0);
         assert_eq!(res, 2);
+
+        if !is_frontegg_resolver {
+            continue;
+        }
+
+        // Test de-duplication in the frontegg resolver. This is a bit racy so use a retry loop.
+        Retry::default()
+            .retry_async(|_| async {
+                let start_auth_count = *frontegg_server.auth_requests.lock().unwrap();
+                const CONNS: u64 = 10;
+                let mut handles = Vec::with_capacity(usize::cast_from(CONNS));
+                for _ in 0..CONNS {
+                    let conn_str = Arc::clone(&conn_str);
+                    let handle = task::spawn(|| "test conn", async move {
+                        let (pg_client, conn) = tokio_postgres::connect(
+                            &conn_str,
+                            make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+                                Ok(b.set_verify(SslVerifyMode::NONE))
+                            })),
+                        )
+                        .await
+                        .unwrap();
+                        task::spawn(|| "balancer-pg_client", async move {
+                            conn.await.expect("balancer-pg_client")
+                        });
+                        let res: i32 = pg_client.query_one("SELECT 2", &[]).await.unwrap().get(0);
+                        assert_eq!(res, 2);
+                    });
+                    handles.push(handle);
+                }
+                for handle in handles {
+                    handle.await.unwrap();
+                }
+                let end_auth_count = *frontegg_server.auth_requests.lock().unwrap();
+                // We expect that the auth count increased by fewer than the number of connections.
+                if end_auth_count == start_auth_count + CONNS {
+                    // No deduplication was done, try again.
+                    return Err("no auth dedup");
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
     }
 }
