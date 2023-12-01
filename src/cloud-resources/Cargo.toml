@@ -9,8 +9,8 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 async-trait = "0.1.68"
-k8s-openapi = { version = "0.19.0", features = ["schemars", "v1_25"] }
-kube = { version = "0.85.0", features = ["derive", "openssl-tls", "ws"] }
+k8s-openapi = { version = "0.20.0", features = ["schemars", "v1_26"] }
+kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "ws"] }
 mz-ore = { path = "../ore", features = [] }
 mz-repr = { path = "../repr" }
 schemars = { version = "0.8", features = ["uuid1"] }

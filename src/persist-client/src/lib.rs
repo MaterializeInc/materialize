@@ -344,6 +344,37 @@ impl PersistClient {
             .expect("in-mem location is valid")
     }
 
+    async fn make_machine<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<Machine<K, V, T, D>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
+        let machine = Machine::<K, V, T, D>::new(
+            self.cfg.clone(),
+            shard_id,
+            Arc::clone(&self.metrics),
+            Arc::new(state_versions),
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
+            Arc::clone(&self.isolated_runtime),
+            diagnostics.clone(),
+        )
+        .await?;
+        Ok(machine)
+    }
+
     /// Provides capabilities for the durable TVC identified by `shard_id` at
     /// its current since and upper frontiers.
     ///
@@ -410,23 +441,7 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let state_versions = StateVersions::new(
-            self.cfg.clone(),
-            Arc::clone(&self.consensus),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.metrics),
-        );
-        let mut machine = Machine::new(
-            self.cfg.clone(),
-            shard_id,
-            Arc::clone(&self.metrics),
-            Arc::new(state_versions),
-            Arc::clone(&self.shared_states),
-            Arc::clone(&self.pubsub_sender),
-            Arc::clone(&self.isolated_runtime),
-            diagnostics.clone(),
-        )
-        .await?;
+        let mut machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let reader_id = LeasedReaderId::new();
@@ -461,10 +476,6 @@ impl PersistClient {
     }
 
     /// Creates and returns a [BatchFetcher] for the given shard id.
-    ///
-    /// The `_schema` parameter is currently unused, but should be an object
-    /// that represents the schema of the data in the shard. This will be required
-    /// in the future.
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
     pub async fn create_batch_fetcher<K, V, T, D>(
         &self,
@@ -571,23 +582,7 @@ impl PersistClient {
         D: Semigroup + Codec64 + Send + Sync,
         O: Opaque + Codec64,
     {
-        let state_versions = StateVersions::new(
-            self.cfg.clone(),
-            Arc::clone(&self.consensus),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.metrics),
-        );
-        let mut machine = Machine::new(
-            self.cfg.clone(),
-            shard_id,
-            Arc::clone(&self.metrics),
-            Arc::new(state_versions),
-            Arc::clone(&self.shared_states),
-            Arc::clone(&self.pubsub_sender),
-            Arc::clone(&self.isolated_runtime),
-            diagnostics.clone(),
-        )
-        .await?;
+        let mut machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
@@ -627,23 +622,7 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
-        let state_versions = StateVersions::new(
-            self.cfg.clone(),
-            Arc::clone(&self.consensus),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.metrics),
-        );
-        let machine = Machine::new(
-            self.cfg.clone(),
-            shard_id,
-            Arc::clone(&self.metrics),
-            Arc::new(state_versions),
-            Arc::clone(&self.shared_states),
-            Arc::clone(&self.pubsub_sender),
-            Arc::clone(&self.isolated_runtime),
-            diagnostics.clone(),
-        )
-        .await?;
+        let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
         let writer_id = WriterId::new();
         let schemas = Schemas {
@@ -661,6 +640,59 @@ impl PersistClient {
             schemas,
         );
         Ok(writer)
+    }
+
+    /// Check if the given shard is in a finalized state; ie. it can no longer be
+    /// read and any data that was written to it is no longer accessible.
+    pub async fn is_finalized<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<bool, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        Ok(machine.is_tombstone())
+    }
+
+    /// If a shard is guaranteed to never be used again, finalize it to delete
+    /// the associated data and release any associated resources. (Except for a
+    /// little state in consensus we use to represent the tombstone.)
+    ///
+    /// The caller should ensure that both the `since` and `upper` of the shard
+    /// have been advanced to `[]`: ie. the shard is no longer writable or readable.
+    /// Otherwise an error is returned.
+    ///
+    /// Once `finalize_shard` has been called, the result of future operations on
+    /// the shard are not defined. They may return errors or succeed as a noop.
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    pub async fn finalize_shard<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<(), InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let mut machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+
+        let maintenance = machine.become_tombstone().await?;
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+
+        let () = maintenance.perform(&machine, &gc).await;
+
+        Ok(())
     }
 
     /// Returns the internal state of the shard for debugging and QA.
@@ -1174,12 +1206,16 @@ mod tests {
             let shard_id1 = "s11111111-1111-1111-1111-111111111111"
                 .parse::<ShardId>()
                 .expect("invalid shard id");
-            let (_, read1) = client
-                .expect_open::<String, String, u64, i64>(shard_id1)
+            let fetcher1 = client
+                .create_batch_fetcher::<String, String, u64, i64>(
+                    shard_id1,
+                    Default::default(),
+                    Default::default(),
+                    Diagnostics::for_tests(),
+                )
                 .await;
-            let fetcher1 = read1.clone("").await.batch_fetcher().await;
             for batch in snap {
-                let (batch, res) = fetcher1.fetch_leased_part(batch).await;
+                let res = fetcher1.fetch_leased_part(&batch).await;
                 read0.process_returned_leased_part(batch);
                 assert_eq!(
                     res.unwrap_err(),

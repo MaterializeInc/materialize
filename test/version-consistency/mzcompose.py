@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 from random import Random
 
-from materialize import docker
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
@@ -17,6 +16,7 @@ from materialize.version_consistency.version_consistency_test import (
     EVALUATION_STRATEGY_NAMES,
     VersionConsistencyTest,
 )
+from materialize.version_list import resolve_ancestor_image_tag
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -53,7 +53,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     name_mz_this, name_mz_other = "mz_this", "mz_other"
     port_mz_internal, port_mz_this, port_mz_other = 6875, 6875, 16875
-    tag_mz_other = docker.resolve_ancestor_image_tag()
+    tag_mz_other = resolve_ancestor_image_tag()
 
     print(f"Using {tag_mz_other} as tag for other mz version")
 

@@ -10,24 +10,33 @@
 import os
 
 from materialize import MZ_ROOT, ci_util
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 
 SERVICES = [Cockroach(in_memory=True), SqlLogicTest()]
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     "Run fast SQL logic tests"
-    run_sqllogictest(c, "ci/test/slt-fast.sh")
+    run_sqllogictest(c, parser, "ci/test/slt-fast.sh")
 
 
-def workflow_sqllogictest(c: Composition) -> None:
+def workflow_sqllogictest(c: Composition, parser: WorkflowArgumentParser) -> None:
     "Run slow SQL logic tests"
-    run_sqllogictest(c, "ci/slt/slt.sh")
+    run_sqllogictest(
+        c,
+        parser,
+        "ci/slt/slt.sh",
+    )
 
 
-def run_sqllogictest(c: Composition, command: str) -> None:
+def run_sqllogictest(
+    c: Composition, parser: WorkflowArgumentParser, command: str
+) -> None:
+    parser.add_argument("--replicas", default=2, type=int)
+    args = parser.parse_args()
+
     c.up("cockroach")
 
     shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
@@ -35,19 +44,20 @@ def run_sqllogictest(c: Composition, command: str) -> None:
 
     junit_report = ci_util.junit_report_filename(c.name)
 
-    args = [
+    cmd_args = [
         "sqllogictest",
         command,
         f"--junit-report={junit_report}",
         "--postgres-url=postgres://root@cockroach:26257",
+        f"--replicas={args.replicas}",
     ]
 
     if shard:
-        args += [f"--shard={shard}"]
+        cmd_args += [f"--shard={shard}"]
     if shard_count:
-        args += [f"--shard-count={shard_count}"]
+        cmd_args += [f"--shard-count={shard_count}"]
 
     try:
-        c.run(*args)
+        c.run(*cmd_args)
     finally:
         ci_util.upload_junit_report(c.name, MZ_ROOT / junit_report)

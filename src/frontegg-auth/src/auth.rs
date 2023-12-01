@@ -128,16 +128,29 @@ impl Authentication {
         let config = match (
             args.frontegg_tenant,
             args.frontegg_api_token_url,
-            args.frontegg_jwk,
             args.frontegg_admin_role,
         ) {
-            (None, None, None, None) => {
+            (None, None, None) => {
                 return Ok(None);
             }
-            (Some(tenant_id), Some(admin_api_token_url), Some(jwk), Some(admin_role)) => {
+            (Some(tenant_id), Some(admin_api_token_url), Some(admin_role)) => {
+                let decoding_key = match (args.frontegg_jwk, args.frontegg_jwk_file) {
+                    (None, Some(path)) => {
+                        let jwk = std::fs::read(&path)
+                            .with_context(|| format!("reading {path:?} for --frontegg-jwk-file"))?;
+                        DecodingKey::from_rsa_pem(&jwk)?
+                    }
+                    (Some(jwk), None) => DecodingKey::from_rsa_pem(jwk.as_bytes())?,
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "expected exactly one of --frontegg-jwk or --frontegg-jwk-file"
+                        )
+                        .into())
+                    }
+                };
                 AuthenticationConfig {
                     admin_api_token_url,
-                    decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
+                    decoding_key,
                     tenant_id: Some(tenant_id),
                     now: mz_ore::now::SYSTEM_TIME.clone(),
                     admin_role,

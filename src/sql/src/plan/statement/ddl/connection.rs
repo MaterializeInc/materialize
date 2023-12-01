@@ -15,6 +15,7 @@ use array_concat::concat_arrays;
 use itertools::Itertools;
 use mz_ore::str::StrExt;
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::ConnectionOptionName::*;
 use mz_sql_parser::ast::{
     ConnectionOption, ConnectionOptionName, CreateConnectionType, KafkaBroker,
     KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
@@ -69,77 +70,89 @@ generate_extracted_config!(
     (Port, u16)
 );
 
+/// Options which cannot be changed using ALTER CONNECTION.
+pub(crate) const INALTERABLE_OPTIONS: &[ConnectionOptionName] = &[ProgressTopic];
+
+/// Options of which only one may be specified.
+pub(crate) const MUTUALLY_EXCLUSIVE_SETS: &[&[ConnectionOptionName]] = &[&[Broker, Brokers]];
+
+pub(super) fn validate_options_per_connection_type(
+    t: CreateConnectionType,
+    mut options: BTreeSet<ConnectionOptionName>,
+) -> Result<(), PlanError> {
+    use mz_sql_parser::ast::ConnectionOptionName::*;
+    let permitted_options = match t {
+        CreateConnectionType::Aws => [
+            AccessKeyId,
+            SecretAccessKey,
+            Token,
+            Endpoint,
+            Region,
+            RoleArn,
+        ]
+        .as_slice(),
+        CreateConnectionType::AwsPrivatelink => &[AvailabilityZones, Port, ServiceName],
+        CreateConnectionType::Csr => &[
+            AwsPrivatelink,
+            Password,
+            Port,
+            SshTunnel,
+            SslCertificate,
+            SslCertificateAuthority,
+            SslKey,
+            Url,
+            User,
+        ],
+        CreateConnectionType::Kafka => &[
+            Broker,
+            Brokers,
+            ProgressTopic,
+            SshTunnel,
+            SslKey,
+            SslCertificate,
+            SslCertificateAuthority,
+            SaslMechanisms,
+            SaslUsername,
+            SaslPassword,
+            SecurityProtocol,
+        ],
+        CreateConnectionType::Postgres => &[
+            AwsPrivatelink,
+            Database,
+            Host,
+            Password,
+            Port,
+            SshTunnel,
+            SslCertificate,
+            SslCertificateAuthority,
+            SslKey,
+            SslMode,
+            User,
+        ],
+        CreateConnectionType::Ssh => &[Host, Port, User],
+    };
+
+    for o in permitted_options {
+        options.remove(o);
+    }
+
+    if !options.is_empty() {
+        sql_bail!(
+            "{} connections do not support {} values",
+            t,
+            options.iter().join(", ")
+        )
+    }
+
+    Ok(())
+}
+
 impl ConnectionOptionExtracted {
-    fn ensure_only_valid_options(
-        mut seen: BTreeSet<ConnectionOptionName>,
+    pub(super) fn ensure_only_valid_options(
+        &self,
         t: CreateConnectionType,
     ) -> Result<(), PlanError> {
-        use mz_sql_parser::ast::ConnectionOptionName::*;
-
-        let permitted_options = match t {
-            CreateConnectionType::Aws => [
-                AccessKeyId,
-                SecretAccessKey,
-                Token,
-                Endpoint,
-                Region,
-                RoleArn,
-            ]
-            .as_slice(),
-            CreateConnectionType::AwsPrivatelink => &[AvailabilityZones, Port, ServiceName],
-            CreateConnectionType::Csr => &[
-                AwsPrivatelink,
-                Password,
-                Port,
-                SshTunnel,
-                SslCertificate,
-                SslCertificateAuthority,
-                SslKey,
-                Url,
-                User,
-            ],
-            CreateConnectionType::Kafka => &[
-                Broker,
-                Brokers,
-                ProgressTopic,
-                SshTunnel,
-                SslKey,
-                SslCertificate,
-                SslCertificateAuthority,
-                SaslMechanisms,
-                SaslUsername,
-                SaslPassword,
-                SecurityProtocol,
-            ],
-            CreateConnectionType::Postgres => &[
-                AwsPrivatelink,
-                Database,
-                Host,
-                Password,
-                Port,
-                SshTunnel,
-                SslCertificate,
-                SslCertificateAuthority,
-                SslKey,
-                SslMode,
-                User,
-            ],
-            CreateConnectionType::Ssh => &[Host, Port, User],
-        };
-
-        for o in permitted_options {
-            seen.remove(o);
-        }
-
-        if !seen.is_empty() {
-            sql_bail!(
-                "{} connections do not support {} values",
-                t,
-                seen.iter().join(", ")
-            )
-        }
-
-        Ok(())
+        validate_options_per_connection_type(t, self.seen.clone())
     }
 
     pub fn try_into_connection(
@@ -147,7 +160,7 @@ impl ConnectionOptionExtracted {
         scx: &StatementContext,
         connection_type: CreateConnectionType,
     ) -> Result<Connection<ReferencedConnection>, PlanError> {
-        Self::ensure_only_valid_options(self.seen.clone(), connection_type)?;
+        self.ensure_only_valid_options(connection_type)?;
 
         let connection: Connection<ReferencedConnection> = match connection_type {
             CreateConnectionType::Aws => {

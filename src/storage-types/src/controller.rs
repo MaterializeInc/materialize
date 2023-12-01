@@ -311,6 +311,7 @@ impl TxnsCodecRow {
     pub fn desc() -> RelationDesc {
         RelationDesc::empty()
             .with_column("shard_id", ScalarType::String.nullable(false))
+            .with_column("ts", ScalarType::UInt64.nullable(false))
             .with_column("batch", ScalarType::Bytes.nullable(true))
     }
 }
@@ -328,11 +329,14 @@ impl TxnsCodec for TxnsCodecRow {
 
     fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
         let row = match &e {
-            TxnsEntry::Register(data_id) => {
-                Row::pack([Datum::from(data_id.to_string().as_str()), Datum::Null])
-            }
-            TxnsEntry::Append(data_id, batch) => Row::pack([
+            TxnsEntry::Register(data_id, ts) => Row::pack([
                 Datum::from(data_id.to_string().as_str()),
+                Datum::from(u64::from_le_bytes(*ts)),
+                Datum::Null,
+            ]),
+            TxnsEntry::Append(data_id, ts, batch) => Row::pack([
+                Datum::from(data_id.to_string().as_str()),
+                Datum::from(u64::from_le_bytes(*ts)),
                 Datum::from(batch.as_slice()),
             ]),
         };
@@ -343,12 +347,14 @@ impl TxnsCodec for TxnsCodecRow {
         let mut datums = row.0.as_ref().expect("valid entry").iter();
         let data_id = datums.next().expect("valid entry").unwrap_str();
         let data_id = data_id.parse::<ShardId>().expect("valid entry");
+        let ts = datums.next().expect("valid entry");
+        let ts = u64::to_le_bytes(ts.unwrap_uint64());
         let batch = datums.next().expect("valid entry");
         assert!(datums.next().is_none());
         if batch.is_null() {
-            TxnsEntry::Register(data_id)
+            TxnsEntry::Register(data_id, ts)
         } else {
-            TxnsEntry::Append(data_id, batch.unwrap_bytes().to_vec())
+            TxnsEntry::Append(data_id, ts, batch.unwrap_bytes().to_vec())
         }
     }
 

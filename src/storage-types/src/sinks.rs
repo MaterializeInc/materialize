@@ -76,7 +76,10 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
         let compatibility_checks = [
             (from == &other.from, "from"),
             (from_desc == &other.from_desc, "from_desc"),
-            (connection == &other.connection, "connection"),
+            (
+                connection.alter_compatible(id, &other.connection).is_ok(),
+                "connection",
+            ),
             (envelope == &other.envelope, "envelope"),
             (status_id == &other.status_id, "status_id"),
             (
@@ -283,6 +286,29 @@ pub enum StorageSinkConnection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaSinkConnection<C>),
 }
 
+impl<C: ConnectionAccess> StorageSinkConnection<C> {
+    /// Determines if `self` is compatible with another `StorageSinkConnection`,
+    /// in such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// CONNECTION`).
+    pub fn alter_compatible(
+        &self,
+        id: GlobalId,
+        other: &StorageSinkConnection<C>,
+    ) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+        match (self, other) {
+            (StorageSinkConnection::Kafka(s), StorageSinkConnection::Kafka(o)) => {
+                s.alter_compatible(id, o)?
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnection, R>
     for StorageSinkConnection<ReferencedConnection>
 {
@@ -422,6 +448,81 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_options: BTreeMap<String, StringOrSecret>,
 }
 
+impl<C: ConnectionAccess> KafkaSinkConnection<C> {
+    /// Determines if `self` is compatible with another `StorageSinkConnection`,
+    /// in such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// CONNECTION`).
+    pub fn alter_compatible(
+        &self,
+        id: GlobalId,
+        other: &KafkaSinkConnection<C>,
+    ) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+        let KafkaSinkConnection {
+            connection_id,
+            // The details of the Kafka connection itself may change
+            connection: _,
+            format,
+            relation_key_indices,
+            key_desc_and_indices,
+            value_desc,
+            topic,
+            consistency_config,
+            partition_count,
+            replication_factor,
+            fuel,
+            retention,
+            connection_options,
+        } = self;
+
+        let compatibility_checks = [
+            (connection_id == &other.connection_id, "connection_id"),
+            (format.alter_compatible(id, &other.format).is_ok(), "format"),
+            (
+                relation_key_indices == &other.relation_key_indices,
+                "relation_key_indices",
+            ),
+            (
+                key_desc_and_indices == &other.key_desc_and_indices,
+                "key_desc_and_indices",
+            ),
+            (value_desc == &other.value_desc, "value_desc"),
+            (topic == &other.topic, "topic"),
+            (
+                consistency_config == &other.consistency_config,
+                "consistency_config",
+            ),
+            (partition_count == &other.partition_count, "partition_count"),
+            (
+                replication_factor == &other.replication_factor,
+                "replication_factor",
+            ),
+            (fuel == &other.fuel, "fuel"),
+            (retention == &other.retention, "retention"),
+            (
+                connection_options == &other.connection_options,
+                "connection_options",
+            ),
+        ];
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "KafkaSinkConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlter { id });
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
     for KafkaSinkConnection<ReferencedConnection>
 {
@@ -544,114 +645,71 @@ impl RustType<ProtoKafkaSinkConnectionRetention> for KafkaSinkConnectionRetentio
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum KafkaSinkAvroFormatState<C: ConnectionAccess = InlinedConnection> {
-    /// If we haven't yet communicated with the CSR, we don't yet know if we
-    /// have a schema and value ID. It's possible that this schema was already
-    /// published.
-    UnpublishedMaybe {
+pub enum KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
+    Avro {
         key_schema: Option<String>,
         value_schema: String,
         csr_connection: C::Csr,
     },
-    /// After communicating with the CSR, the IDs we've been given for the
-    /// schemas.
-    Published {
-        key_schema_id: Option<i32>,
-        value_schema_id: i32,
-    },
-}
-
-impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkAvroFormatState, R>
-    for KafkaSinkAvroFormatState<ReferencedConnection>
-{
-    fn into_inline_connection(self, r: R) -> KafkaSinkAvroFormatState {
-        match self {
-            Self::UnpublishedMaybe {
-                key_schema,
-                value_schema,
-                csr_connection,
-            } => KafkaSinkAvroFormatState::UnpublishedMaybe {
-                key_schema,
-                value_schema,
-                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
-            },
-            Self::Published {
-                key_schema_id,
-                value_schema_id,
-            } => KafkaSinkAvroFormatState::Published {
-                key_schema_id,
-                value_schema_id,
-            },
-        }
-    }
-}
-
-impl RustType<proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState> for KafkaSinkAvroFormatState {
-    fn into_proto(&self) -> proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState {
-        use proto_kafka_sink_format::proto_kafka_sink_avro_format_state::{
-            Kind, ProtoPublished, ProtoUnpublishedMaybe,
-        };
-        use proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState;
-
-        ProtoKafkaSinkAvroFormatState {
-            kind: Some(match self {
-                KafkaSinkAvroFormatState::UnpublishedMaybe {
-                    key_schema,
-                    value_schema,
-                    csr_connection,
-                } => Kind::UnpublishedMaybe(ProtoUnpublishedMaybe {
-                    key_schema: key_schema.clone(),
-                    value_schema: value_schema.clone(),
-                    csr_connection: Some(csr_connection.into_proto()),
-                }),
-                KafkaSinkAvroFormatState::Published {
-                    key_schema_id,
-                    value_schema_id,
-                } => Kind::Published(ProtoPublished {
-                    key_schema_id: *key_schema_id,
-                    value_schema_id: *value_schema_id,
-                }),
-            }),
-        }
-    }
-
-    fn from_proto(
-        proto: proto_kafka_sink_format::ProtoKafkaSinkAvroFormatState,
-    ) -> Result<Self, TryFromProtoError> {
-        use proto_kafka_sink_format::proto_kafka_sink_avro_format_state::Kind;
-
-        let kind = proto.kind.ok_or_else(|| {
-            TryFromProtoError::missing_field("ProtoKafkaSinkAvroFormatState::kind")
-        })?;
-
-        Ok(match kind {
-            Kind::UnpublishedMaybe(proto) => Self::UnpublishedMaybe {
-                key_schema: proto.key_schema,
-                value_schema: proto.value_schema,
-                csr_connection: proto
-                    .csr_connection
-                    .into_rust_if_some("ProtoKafkaSinkAvroFormatState::csr_connection")?,
-            },
-            Kind::Published(proto) => Self::Published {
-                key_schema_id: proto.key_schema_id,
-                value_schema_id: proto.value_schema_id,
-            },
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
-    Avro(KafkaSinkAvroFormatState<C>),
     Json,
 }
 
-impl KafkaSinkFormat {
+impl<C: ConnectionAccess> KafkaSinkFormat<C> {
     pub fn get_format_name(&self) -> &str {
         match self {
-            Self::Avro(_) => "avro",
+            Self::Avro { .. } => "avro",
             Self::Json => "json",
         }
+    }
+
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+
+        match (self, other) {
+            (
+                Self::Avro {
+                    key_schema,
+                    value_schema,
+                    // Connections may change
+                    csr_connection: _,
+                },
+                Self::Avro {
+                    key_schema: other_key_schema,
+                    value_schema: other_value_schema,
+                    csr_connection: _,
+                },
+            ) => {
+                let compatibility_checks = [
+                    (key_schema == other_key_schema, "key_schema"),
+                    (value_schema == other_value_schema, "value_schema"),
+                ];
+                for (compatible, field) in compatibility_checks {
+                    if !compatible {
+                        tracing::warn!(
+                            "KafkaSinkAvroFormatState::Avro incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                            self,
+                            other
+                        );
+
+                        return Err(StorageError::InvalidAlter { id });
+                    }
+                }
+            }
+            (s, o) => {
+                if s != o {
+                    tracing::warn!(
+                        "KafkaSinkFormat incompatible\nself:\n{:#?}\n\nother:{:#?}",
+                        s,
+                        o
+                    );
+                    return Err(StorageError::InvalidAlter { id });
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -660,7 +718,15 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormat, R>
 {
     fn into_inline_connection(self, r: R) -> KafkaSinkFormat {
         match self {
-            Self::Avro(avro) => KafkaSinkFormat::Avro(avro.into_inline_connection(r)),
+            Self::Avro {
+                key_schema,
+                value_schema,
+                csr_connection,
+            } => KafkaSinkFormat::Avro {
+                key_schema,
+                value_schema,
+                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
+            },
             Self::Json => KafkaSinkFormat::Json,
         }
     }
@@ -671,7 +737,15 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
         use proto_kafka_sink_format::Kind;
         ProtoKafkaSinkFormat {
             kind: Some(match self {
-                Self::Avro(avro) => Kind::Avro(avro.into_proto()),
+                Self::Avro {
+                    key_schema,
+                    value_schema,
+                    csr_connection,
+                } => Kind::Avro(proto_kafka_sink_format::ProtoKafkaSinkAvroFormat {
+                    key_schema: key_schema.clone(),
+                    value_schema: value_schema.clone(),
+                    csr_connection: Some(csr_connection.into_proto()),
+                }),
                 Self::Json => Kind::Json(()),
             }),
         }
@@ -684,7 +758,13 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaSinkFormat::kind"))?;
 
         Ok(match kind {
-            Kind::Avro(avro) => Self::Avro(avro.into_rust()?),
+            Kind::Avro(proto) => Self::Avro {
+                key_schema: proto.key_schema,
+                value_schema: proto.value_schema,
+                csr_connection: proto
+                    .csr_connection
+                    .into_rust_if_some("ProtoKafkaSinkAvroFormat::csr_connection")?,
+            },
             Kind::Json(()) => Self::Json,
         })
     }

@@ -98,7 +98,7 @@ mod format;
 mod parser;
 mod util;
 
-pub use crate::action::Config;
+pub use crate::action::{CatalogConfig, Config};
 pub use crate::error::Error;
 
 /// Runs a testdrive script stored in a file.

@@ -72,8 +72,7 @@ which has been tried and tested in production environments.
      ...
    ```
 
-1. Then, configure the `queries` that the Prometheus SQL Exporter should run at
-   the specified `interval` to export metrics from Materialize.
+1. Then, configure the `queries` that the Prometheus SQL Exporter should run at the specified `interval`. Take [these considerations](#considerations) into account when exporting metrics from Materialize.
 
    ```yaml
     ...
@@ -157,3 +156,13 @@ defined in the sample `config.yml`.
     <br>
 
     <img width="1728" alt="Template Datadog monitoring dashboard" src="https://user-images.githubusercontent.com/11491779/216036715-9a4b4db7-8f93-4b6a-ac21-f7eb5a01d151.png">
+
+## Considerations
+
+Before adding a custom query, make sure to consider the following:
+
+1. The label set cannot repeat across rows within the results of the same query.
+2. Columns must not contain `NULL` values.
+3. Value columns must be of type `float`.
+4. The Datadog agent is subject to a limit of 2000 metrics.
+5. Queries can impact cluster performance.

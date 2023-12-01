@@ -411,19 +411,13 @@ where
                         };
                         compact_reqs.push(req);
                     }
-                    let mut writer_maintenance = WriterMaintenance {
+                    let writer_maintenance = WriterMaintenance {
                         routine,
                         compaction: compact_reqs,
                     };
 
                     if !writer_was_present {
                         metrics.state.writer_added.inc();
-                    }
-
-                    // Slightly unfortunate: as the only non-apply_unbatched_idempotent_cmd user,
-                    // compare_and_append has to have its own check for maybe_become_tombstone.
-                    if let Some(tombstone_maintenance) = self.maybe_become_tombstone().await {
-                        writer_maintenance.routine.merge(tombstone_maintenance);
                     }
                     return Ok(Ok((seqno, writer_maintenance)));
                 }
@@ -646,10 +640,12 @@ where
         (seqno, maintenance)
     }
 
-    pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
-        if !self.applier.since_upper_both_empty() {
-            return None;
-        }
+    pub fn is_tombstone(&self) -> bool {
+        self.applier.is_tombstone()
+    }
+
+    pub async fn become_tombstone(&mut self) -> Result<RoutineMaintenance, InvalidUsage<T>> {
+        self.applier.check_since_upper_both_empty()?;
 
         let metrics = Arc::clone(&self.applier.metrics);
         let mut retry = self
@@ -666,18 +662,18 @@ where
                 })
                 .await;
             let err = match res {
-                Ok((_seqno, _res, maintenance)) => return Some(maintenance),
+                Ok((_seqno, _res, maintenance)) => return Ok(maintenance),
                 Err(err) => err,
             };
             if retry.attempt() >= INFO_MIN_ATTEMPTS {
                 info!(
-                    "maybe_become_tombstone received an indeterminate error, retrying in {:?}: {}",
+                    "become_tombstone received an indeterminate error, retrying in {:?}: {}",
                     retry.next_sleep(),
                     err
                 );
             } else {
                 debug!(
-                    "maybe_become_tombstone received an indeterminate error, retrying in {:?}: {}",
+                    "become_tombstone received an indeterminate error, retrying in {:?}: {}",
                     retry.next_sleep(),
                     err
                 );
@@ -958,11 +954,8 @@ where
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             match self.applier.apply_unbatched_cmd(cmd, &mut work_fn).await {
-                Ok((seqno, x, mut maintenance)) => match x {
+                Ok((seqno, x, maintenance)) => match x {
                     Ok(x) => {
-                        if let Some(tombstone_maintenance) = self.maybe_become_tombstone().await {
-                            maintenance.merge(tombstone_maintenance);
-                        }
                         return (seqno, x, maintenance);
                     }
                     Err(NoOpStateTransition(x)) => {
@@ -1989,6 +1982,24 @@ pub mod datadriven {
         let (_, maintenance) = datadriven.machine.expire_writer(&writer_id).await;
         datadriven.routine.push(maintenance);
         Ok(format!("{} ok\n", datadriven.machine.seqno()))
+    }
+
+    pub(crate) async fn finalize(
+        datadriven: &mut MachineState,
+        _args: DirectiveArgs<'_>,
+    ) -> anyhow::Result<String> {
+        let maintenance = datadriven.machine.become_tombstone().await?;
+        datadriven.routine.push(maintenance);
+        Ok(format!("{} ok\n", datadriven.machine.seqno()))
+    }
+
+    pub(crate) fn is_finalized(
+        datadriven: &mut MachineState,
+        _args: DirectiveArgs<'_>,
+    ) -> anyhow::Result<String> {
+        let seqno = datadriven.machine.seqno();
+        let tombstone = datadriven.machine.is_tombstone();
+        Ok(format!("{seqno} {tombstone}\n"))
     }
 
     pub async fn compare_and_append(

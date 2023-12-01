@@ -74,7 +74,6 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 datadriven = "0.6.0"
-mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
 
 [package.metadata.cargo-udeps.ignore]

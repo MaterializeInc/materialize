@@ -31,6 +31,7 @@ date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 # Docker Compose run, which can leave old containers or volumes around that will
 # interfere with this build.
 ci_collapsed_heading ":docker: Purging containers and volumes from previous builds"
+sudo systemctl restart docker
 mzcompose --mz-quiet kill
 mzcompose --mz-quiet rm --force -v
 mzcompose --mz-quiet down --volumes
@@ -74,6 +75,7 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     mzcompose cp materialized:/usr/local/bin/environmentd coverage/ || true
     mzcompose cp materialized:/usr/local/bin/clusterd coverage/ || true
     mzcompose cp testdrive:/usr/local/bin/testdrive coverage/ || true
+    mzcompose cp balancerd:/usr/local/bin/balancerd coverage/ || true
 fi
 
 ci_uncollapsed_heading ":docker: Running \`mzcompose run ${run_args[*]}\`"

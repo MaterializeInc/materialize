@@ -46,7 +46,7 @@ def cluster() -> str:
 class Identifiers(Check):
     def _can_run(self, e: Executor) -> bool:
         # CREATE ROLE not compatible with older releases
-        return self.base_version >= MzVersion.parse("0.47.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.47.0-dev")
 
     IDENT_KEYS = [
         "db",

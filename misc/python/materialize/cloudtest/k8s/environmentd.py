@@ -33,15 +33,10 @@ from kubernetes.client import (
 )
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
-from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
-
-try:
-    from semver.version import Version
-except ImportError:
-    from semver import VersionInfo as Version  # type: ignore
-
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
+from materialize.mz_version import MzVersion
+from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 
 
 class EnvironmentdService(K8sService):
@@ -234,6 +229,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self._meets_minimum_version("0.63.0-dev"):
             args += ["--secrets-controller=kubernetes"]
 
+        if self._meets_minimum_version("0.79.0-dev"):
+            args += [
+                f"--timestamp-oracle-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=tsoracle"
+            ]
+
         return args
 
     def env_vars(self) -> list[V1EnvVar]:
@@ -307,11 +307,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self.tag is None:
             return default
         try:
-            tag_version = Version.parse(self.tag.removeprefix("v"))
+            tag_version = MzVersion.parse_mz(self.tag)
         except ValueError:
             return default
 
-        cmp_version = Version.parse(version)
+        cmp_version = MzVersion.parse_without_prefix(version)
         return bool(operator(tag_version, cmp_version))
 
     def _meets_minimum_version(self, version: str) -> bool:

@@ -8,8 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{raw, MetricsRegistry, UIntGauge};
+use mz_repr::SharedRow;
 use prometheus::core::{AtomicF64, GenericCounter};
 use prometheus::Histogram;
 
@@ -49,6 +51,11 @@ pub struct ComputeMetrics {
     pub(crate) timely_step_duration_seconds: Histogram,
 
     pub(crate) delayed_time_seconds_total: raw::CounterVec,
+
+    /// Heap capacity of the shared row
+    pub(crate) shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
+
+    pub(crate) persist_peek_seconds: Histogram,
 }
 
 impl ComputeMetrics {
@@ -95,6 +102,17 @@ impl ComputeMetrics {
                 help: "The total time dataflow outputs were delayed relative to their inputs.",
                 const_labels: {"cluster" => "compute"},
                 var_labels: ["worker_id"],
+            )),
+            shared_row_heap_capacity_bytes: registry.register(metric!(
+                name: "mz_dataflow_shared_row_heap_capacity_bytes",
+                help: "The heap capacity of the shared row.",
+                var_labels: ["worker_id"],
+            )),
+
+            persist_peek_seconds: registry.register(metric!(
+                name: "mz_persist_peek_seconds",
+                help: "Time spent in (experimental) Persist fast-path peeks.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             )),
         }
     }
@@ -169,6 +187,16 @@ impl ComputeMetrics {
                 .with_label_values(&[&worker])
                 .inc();
         }
+    }
+
+    /// Record the heap capacity of the shared row.
+    pub fn record_shared_row_metrics(&self, worker_id: usize) {
+        let worker = worker_id.to_string();
+
+        let binding = SharedRow::get();
+        self.shared_row_heap_capacity_bytes
+            .with_label_values(&[&worker])
+            .set(u64::cast_from(binding.borrow().heap_capacity()));
     }
 }
 

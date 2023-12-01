@@ -645,8 +645,7 @@ async fn purify_create_source(
                             Ident::new(&table.namespace)?,
                             Ident::new(&table.name)?,
                         ]);
-                        let subsource_name = Ident::new(&table.name)?;
-                        let subsource_name = UnresolvedItemName::unqualified(subsource_name);
+                        let subsource_name = subsource_name_gen(source_name, &table.name)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }

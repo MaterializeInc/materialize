@@ -38,6 +38,7 @@ class Executor:
     reconnect_next: bool
     rollback_next: bool
     last_log: str
+    action_run_since_last_commit_rollback: bool
 
     def __init__(self, rng: random.Random, cur: pg8000.Cursor, db: "Database"):
         self.rng = rng
@@ -48,6 +49,7 @@ class Executor:
         self.reconnect_next = True
         self.rollback_next = True
         self.last_log = ""
+        self.action_run_since_last_commit_rollback = False
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -93,3 +95,4 @@ class Executor:
             self.cur.execute(query)
         except Exception as e:
             raise QueryError(str(e), query)
+        self.action_run_since_last_commit_rollback = True

@@ -81,6 +81,8 @@ mod client;
 mod error;
 mod metrics;
 
+use std::path::PathBuf;
+
 pub use auth::{
     Authentication, AuthenticationConfig, Claims, ExchangePasswordForTokenResponse,
     ValidatedApiTokenResponse, REFRESH_SUFFIX,
@@ -99,7 +101,7 @@ pub struct FronteggCliArgs {
     #[clap(
         long,
         env = "FRONTEGG_TENANT",
-        requires_all = &["frontegg-jwk", "frontegg-api-token-url", "frontegg-admin-role"],
+        requires_all = &["frontegg-api-token-url", "frontegg-admin-role"],
         value_name = "UUID",
     )]
     frontegg_tenant: Option<Uuid>,
@@ -107,6 +109,10 @@ pub struct FronteggCliArgs {
     /// key. Can optionally be base64 encoded with the URL-safe alphabet.
     #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-tenant")]
     frontegg_jwk: Option<String>,
+    /// Path to JWK used to validate JWTs during Frontegg authentication as a PEM public
+    /// key.
+    #[clap(long, env = "FRONTEGG_JWK_FILE", requires = "frontegg-tenant")]
+    frontegg_jwk_file: Option<PathBuf>,
     /// The full URL (including path) to the Frontegg api-token endpoint.
     #[clap(long, env = "FRONTEGG_API_TOKEN_URL", requires = "frontegg-tenant")]
     frontegg_api_token_url: Option<String>,

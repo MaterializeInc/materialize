@@ -87,6 +87,8 @@ CREATE SOURCE kafka_upsert
 Note that:
 
 - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
+- This envelope can lead to high memory utilization in the cluster maintaining
+  the source. To reduce memory utilization, consider [enabling spill to disk](#spilling-to-disk).
 
 #### Null keys
 
@@ -123,6 +125,56 @@ Any materialized view defined on top of this source will be incrementally update
 
 For more details and a step-by-step guide on using Kafka+Debezium for Change Data Capture (CDC), check [Using Debezium](/integrations/debezium/).
 
+Note that:
+
+- This envelope can lead to high memory utilization in the cluster maintaining
+  the source. To reduce memory utilization, consider [enabling spill to disk](#spilling-to-disk).
+
+### Spilling to disk
+
+Kafka sources that use `ENVELOPE UPSERT` or `ENVELOPE DEBEZIUM` require storing
+the current value for _each key_ in the source to produce retractions when
+keys are updated. Depending on the size of the key space, this can lead to high
+memory utilization in the cluster maintaining the source.
+
+To avoid sizing up, you can attach disk storage to the cluster maintaining these
+sources. This allows Materialize to process data sets larger than memory by
+automatically offloading state to disk (aka spilling to disk).
+
+#### Enabling disk storage
+
+{{< note >}}
+Enabling spill to disk trades off performance for cost, so you should expect
+slower ingestion and rehydration speeds in clusters with this feature enabled.
+See the [reference documentation](/sql/create-cluster/#disk) for more details.
+{{< /note >}}
+
+To create a new cluster with spill to disk enabled, use the [`DISK` option](/sql/create-cluster/#disk):
+
+```sql
+CREATE CLUSTER cluster_with_disk,
+  SIZE = '<size>',
+  DISK = true;
+```
+
+Alternatively, you can attach disk storage to an existing cluster using the [`ALTER CLUSTER`](/sql/alter-cluster/) command:
+
+```sql
+ALTER CLUSTER cluster_with_disk SET (DISK = true);
+```
+
+Once a cluster is configured to spill to disk, any Kafka source being maintained
+in that cluster that uses `ENVELOPE UPSERT` or `ENVELOPE DEBEZIUM` will
+automatically benefit from this feature:
+
+```sql
+CREATE SOURCE kafka_repl
+  IN CLUSTER cluster_with_disk
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  ENVELOPE DEBEZIUM;
+```
+
 ### Exposing source metadata
 
 In addition to the message value, Materialize can expose the message key, headers and other source metadata fields to SQL.
@@ -150,50 +202,41 @@ Note that:
 
 #### Headers
 
-Message headers can be exposed via the `INCLUDE HEADERS` option. They are included
-as a column (named `headers` by default) containing a [`list`](/sql/types/list/)
-of records of type `(key text, value bytea)`.
+Message headers can be exposed via the `INCLUDE HEADER key AS name` option.
+The `bytea` value of the header is automatically parsed into an UTF-8 string. To expose the raw `bytea` instead, the `BYTES` option can be used.
 
-The following example demonstrates use of the `INCLUDE HEADERS` option.
 
 ```sql
 CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  INCLUDE HEADERS
+  INCLUDE HEADER 'c_id' AS client_id, HEADER 'key' AS encryption_key BYTES,
   ENVELOPE NONE
   WITH (SIZE = '3xsmall');
 ```
 
-To retrieve the value of an individual header in a message, you can use standard
-SQL techniques for working with [`list`](/sql/types/list) and
-[`bytea`](/sql/types/bytea) types. The following example parses the UTF-8
-encoded `client_id` header of the messages from the Kafka topic. Messages
-without a `client_id` header result in null values (`"\N"`) for the parsed
-attribute.
+Headers can be queried as any other column in the source:
 
 ```sql
 SELECT
     id,
     seller,
     item,
-    (
-        SELECT convert_from((h).value, 'utf8') AS client_id
-        FROM unnest(headers) AS h
-        WHERE (h).key = 'client_id'
-    )
+    client_id::numeric,
+    encryption_key
 FROM kafka_metadata;
 
- id | seller |        item        | client_id
-----+--------+--------------------+-----------
-  2 |   1592 | Custom Art         |        23
-  7 |   1509 | Custom Art         |        42
-  3 |   1411 | City Bar Crawl     |      "\N"
+ id | seller |        item        | client_id |    encryption_key
+----+--------+--------------------+-----------+----------------------
+  2 |   1592 | Custom Art         |        23 | \x796f75207769736821
+  3 |   1411 | City Bar Crawl     |        42 | \x796f75207769736821
 ```
 
 Note that:
 
 - The `DEBEZIUM` envelope is incompatible with this option.
+- Messages that do not contain all header keys as specified in the source DDL will cause an error that prevents further querying the source.
+- Header values containing badly formed UTF-8 strings will cause an error in the source that prevents querying it, unless the `BYTES` option is specified.
 
 #### Partition, offset, timestamp
 

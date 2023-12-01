@@ -23,18 +23,23 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
+use mz_sql::session::vars::TimestampOracleImpl;
 use mz_storage_types::sources::Timeline;
 use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::catalog::CatalogItem;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
+use crate::coord::timestamp_oracle::batching_oracle::BatchingTimestampOracle;
 use crate::coord::timestamp_oracle::catalog_oracle::{
     CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
     TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
 };
-use crate::coord::timestamp_oracle::{self, TimestampOracle};
+use crate::coord::timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
+};
+use crate::coord::timestamp_oracle::{self, ShareableTimestampOracle, TimestampOracle};
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
 use crate::AdapterError;
@@ -114,6 +119,18 @@ impl Coordinator {
             .as_ref()
     }
 
+    #[allow(unused)]
+    pub(crate) fn get_shared_timestamp_oracle(
+        &self,
+        timeline: &Timeline,
+    ) -> Option<Arc<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
+        self.global_timelines
+            .get(timeline)
+            .expect("all timelines have a timestamp oracle")
+            .oracle
+            .get_shared()
+    }
+
     /// Returns a reference to the timestamp oracle used for reads and writes
     /// from/to a local input.
     fn get_local_timestamp_oracle(&self) -> &dyn TimestampOracle<Timestamp> {
@@ -179,7 +196,10 @@ impl Coordinator {
             timeline,
             Timestamp::minimum(),
             self.catalog().config().now.clone(),
+            self.timestamp_oracle_impl,
             timestamp_persistence,
+            self.timestamp_oracle_url.clone(),
+            &self.timestamp_oracle_metrics,
             &mut self.global_timelines,
         )
         .await
@@ -191,34 +211,84 @@ impl Coordinator {
         timeline: &'a Timeline,
         initially: Timestamp,
         now: NowFn,
+        timestamp_oracle_impl: TimestampOracleImpl,
         timestamp_persistence: P,
+        timestamp_oracle_url: Option<String>,
+        metrics: &Arc<timestamp_oracle::metrics::Metrics>,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
     ) -> &'a mut TimelineState<Timestamp>
     where
         P: TimestampPersistence<mz_repr::Timestamp> + 'static,
     {
         if !global_timelines.contains_key(timeline) {
-            let oracle = if timeline == &Timeline::EpochMilliseconds {
-                CatalogTimestampOracle::new(
-                    initially,
-                    move || (now)().into(),
-                    *TIMESTAMP_PERSIST_INTERVAL,
-                    timestamp_persistence,
-                )
-                .await
+            info!(
+                "opening a new {:?} TimestampOracle for timeline {:?}",
+                timestamp_oracle_impl, timeline,
+            );
+
+            let now_fn = if timeline == &Timeline::EpochMilliseconds {
+                now
             } else {
-                CatalogTimestampOracle::new(
-                    initially,
-                    Timestamp::minimum,
-                    *TIMESTAMP_PERSIST_INTERVAL,
-                    timestamp_persistence,
-                )
-                .await
+                // Timelines that are not `EpochMilliseconds` don't have an
+                // "external" clock that wants to drive forward timestamps in
+                // addition to the rule that write timestamps must be strictly
+                // monotonically increasing.
+                //
+                // Passing in a clock that always yields the minimum takes the
+                // clock out of the equation and makes timestamps advance only
+                // by the rule about strict monotonicity mentioned above.
+                NowFn::from(|| Timestamp::minimum().into())
             };
+
+            let oracle = match timestamp_oracle_impl {
+                TimestampOracleImpl::Postgres => {
+                    let timestamp_oracle_url = timestamp_oracle_url.expect("missing --timestamp-oracle-url even though the crdb-backed timestamp oracle was configured");
+                    let oracle_config = PostgresTimestampOracleConfig::new(
+                        &timestamp_oracle_url,
+                        Arc::clone(metrics),
+                    );
+
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
+                        PostgresTimestampOracle::open(
+                            oracle_config,
+                            timeline.to_string(),
+                            initially,
+                            now_fn,
+                        )
+                        .await,
+                    );
+
+                    let shared_oracle = oracle
+                        .get_shared()
+                        .expect("postgres timestamp oracle is shareable");
+
+                    let batching_oracle =
+                        BatchingTimestampOracle::new(Arc::clone(metrics), shared_oracle);
+
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> =
+                        Box::new(batching_oracle);
+
+                    oracle
+                }
+                TimestampOracleImpl::Catalog => {
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
+                        CatalogTimestampOracle::new(
+                            initially,
+                            now_fn,
+                            *TIMESTAMP_PERSIST_INTERVAL,
+                            timestamp_persistence,
+                        )
+                        .await,
+                    );
+
+                    oracle
+                }
+            };
+
             global_timelines.insert(
                 timeline.clone(),
                 TimelineState {
-                    oracle: Box::new(oracle),
+                    oracle,
                     read_holds: ReadHolds::new(),
                 },
             );

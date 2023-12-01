@@ -40,6 +40,7 @@ use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::metrics::ShardMetrics;
+use crate::internal::paths::BlobKey;
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::iter::Consolidator;
@@ -1000,7 +1001,7 @@ impl Timings {
 #[derive(Debug)]
 enum CompactionPart<'a, T> {
     Queued(&'a HollowBatchPart),
-    Prefetched(usize, JoinHandle<Result<EncodedPart<T>, anyhow::Error>>),
+    Prefetched(usize, JoinHandle<Result<EncodedPart<T>, BlobKey>>),
 }
 
 impl<'a, T: Timestamp + Lattice + Codec64> CompactionPart<'a, T> {
@@ -1018,8 +1019,8 @@ impl<'a, T: Timestamp + Lattice + Codec64> CompactionPart<'a, T> {
         metrics: &Metrics,
         shard_metrics: &ShardMetrics,
         part_desc: &Description<T>,
-    ) -> Result<EncodedPart<T>, anyhow::Error> {
-        match self {
+    ) -> anyhow::Result<EncodedPart<T>> {
+        let result = match self {
             CompactionPart::Prefetched(_, task) => {
                 if task.is_finished() {
                     metrics.compaction.parts_prefetched.inc();
@@ -1041,7 +1042,8 @@ impl<'a, T: Timestamp + Lattice + Codec64> CompactionPart<'a, T> {
                 )
                 .await
             }
-        }
+        };
+        result.map_err(|blob_key| anyhow!("failed to fetch part for shard: {blob_key}"))
     }
 }
 

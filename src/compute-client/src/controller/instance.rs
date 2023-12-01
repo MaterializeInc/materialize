@@ -40,7 +40,9 @@ use crate::controller::{
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
 use crate::metrics::UIntGauge;
-use crate::protocol::command::{ComputeCommand, ComputeParameters, InstanceConfig, Peek};
+use crate::protocol::command::{
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
+};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
@@ -882,10 +884,19 @@ where
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
+        peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
-        let since = self.compute.collection(id)?.read_capabilities.frontier();
+        let since = match &peek_target {
+            PeekTarget::Index { .. } => self.compute.collection(id)?.read_capabilities.frontier(),
+            PeekTarget::Persist { .. } => self
+                .storage_controller
+                .collection(id)
+                .map_err(|_| PeekError::CollectionMissing(id))?
+                .implied_capability
+                .borrow(),
+        };
         if !since.less_equal(&timestamp) {
-            Err(PeekError::SinceViolation(id))?;
+            return Err(PeekError::SinceViolation(id));
         }
 
         if let Some(target) = target_replica {
@@ -897,13 +908,18 @@ where
         // Install a compaction hold on `id` at `timestamp`.
         let mut updates = BTreeMap::new();
         updates.insert(id, ChangeBatch::new_from(timestamp.clone(), 1));
-        self.update_read_capabilities(&mut updates);
+        match &peek_target {
+            PeekTarget::Index { .. } => self.update_read_capabilities(&mut updates),
+            PeekTarget::Persist { .. } => self
+                .storage_controller
+                .update_read_capabilities(&mut updates),
+        };
 
         let otel_ctx = OpenTelemetryContext::obtain();
         self.compute.peeks.insert(
             uuid,
             PendingPeek {
-                target: id,
+                target: peek_target.clone(),
                 time: timestamp.clone(),
                 target_replica,
                 // TODO(guswynn): can we just hold the `tracing::Span` here instead?
@@ -913,7 +929,6 @@ where
         );
 
         self.compute.send(ComputeCommand::Peek(Peek {
-            id,
             literal_constraints,
             uuid,
             timestamp,
@@ -922,6 +937,7 @@ where
             // Obtain an `OpenTelemetryContext` from the thread-local tracing
             // tree to forward it on to the compute worker.
             otel_ctx,
+            target: peek_target,
         }));
 
         Ok(())
@@ -1214,9 +1230,14 @@ where
         // to avoid the edge case that caused #16615.
         self.compute.send(ComputeCommand::CancelPeek { uuid });
 
-        let update = (peek.target, ChangeBatch::new_from(peek.time, -1));
+        let update = (peek.target.id(), ChangeBatch::new_from(peek.time, -1));
         let mut updates = [update].into();
-        self.update_read_capabilities(&mut updates);
+        match &peek.target {
+            PeekTarget::Index { .. } => self.update_read_capabilities(&mut updates),
+            PeekTarget::Persist { .. } => self
+                .storage_controller
+                .update_read_capabilities(&mut updates),
+        }
     }
 
     pub fn handle_response(
@@ -1399,8 +1420,8 @@ where
 
 #[derive(Debug)]
 struct PendingPeek<T> {
-    /// ID of the collection targeted by this peek.
-    target: GlobalId,
+    /// Information about the collection targeted by the peek.
+    target: PeekTarget,
     /// The peek time.
     time: T,
     /// For replica-targeted peeks, this specifies the replica whose response we should pass on.

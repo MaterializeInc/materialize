@@ -34,6 +34,7 @@ import yaml
 from materialize import buildkite, mzbuild, spawn
 from materialize.ci_util.trim_pipeline import permit_rerunning_successful_steps
 from materialize.mzcompose.composition import Composition
+from materialize.ui import UIError
 
 from .deploy.deploy_util import rust_version
 
@@ -116,7 +117,6 @@ so it is executed.""",
             if "group" in step:
                 for inner_step in step.get("steps", []):
                     visit(inner_step)
-
     else:
 
         def visit(step: dict[str, Any]) -> None:
@@ -142,6 +142,16 @@ so it is executed.""",
             del step["inputs"]
         if "coverage" in step:
             del step["coverage"]
+        if (
+            "timeout_in_minutes" not in step
+            and "prompt" not in step
+            and "wait" not in step
+            and "group" not in step
+            and not step.get("async")
+        ):
+            raise UIError(
+                f"Every step should have an explicit timeout_in_minutes value, missing in: {step}"
+            )
 
     for step in pipeline["steps"]:
         visit(step)

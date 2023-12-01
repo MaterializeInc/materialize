@@ -50,11 +50,6 @@ pub struct StorageParameters {
     pub delay_sources_past_rehydration: bool,
     /// Configuration ratio to shrink upsert buffers by.
     pub shrink_upsert_unused_buffers_by_ratio: usize,
-    /// Whether to garbage-collect old statement log entries on startup.
-    pub truncate_statement_log: bool,
-    /// How long entries in the statement log should be retained, in seconds.
-    /// Ignored if `truncate_statement_log` is false.
-    pub statement_logging_retention_time_seconds: u64,
     /// Whether or not to record errors by namespace in the `details`
     /// column of the status history tables.
     pub record_namespaced_errors: bool,
@@ -78,8 +73,6 @@ impl Default for StorageParameters {
             grpc_client: Default::default(),
             delay_sources_past_rehydration: Default::default(),
             shrink_upsert_unused_buffers_by_ratio: Default::default(),
-            truncate_statement_log: Default::default(),
-            statement_logging_retention_time_seconds: Default::default(),
             record_namespaced_errors: true,
         }
     }
@@ -167,8 +160,6 @@ impl StorageParameters {
             grpc_client,
             delay_sources_past_rehydration,
             shrink_upsert_unused_buffers_by_ratio,
-            statement_logging_retention_time_seconds,
-            truncate_statement_log,
             record_namespaced_errors,
         }: StorageParameters,
     ) {
@@ -187,8 +178,6 @@ impl StorageParameters {
         self.grpc_client.update(grpc_client);
         self.delay_sources_past_rehydration = delay_sources_past_rehydration;
         self.shrink_upsert_unused_buffers_by_ratio = shrink_upsert_unused_buffers_by_ratio;
-        self.statement_logging_retention_time_seconds = statement_logging_retention_time_seconds;
-        self.truncate_statement_log = truncate_statement_log;
         self.record_namespaced_errors = record_namespaced_errors;
     }
 }
@@ -219,8 +208,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             shrink_upsert_unused_buffers_by_ratio: u64::cast_from(
                 self.shrink_upsert_unused_buffers_by_ratio,
             ),
-            truncate_statement_log: self.truncate_statement_log,
-            statement_logging_retention_time_seconds: self.statement_logging_retention_time_seconds,
             record_namespaced_errors: self.record_namespaced_errors,
         }
     }
@@ -266,9 +253,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             shrink_upsert_unused_buffers_by_ratio: usize::cast_from(
                 proto.shrink_upsert_unused_buffers_by_ratio,
             ),
-            truncate_statement_log: proto.truncate_statement_log,
-            statement_logging_retention_time_seconds: proto
-                .statement_logging_retention_time_seconds,
             record_namespaced_errors: proto.record_namespaced_errors,
         })
     }

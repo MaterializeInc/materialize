@@ -73,10 +73,14 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_sink_doc_on_option": "true",
     "enable_assert_not_null": "true",
     "enable_specialized_arrangements": "true",
-    "persist_fast_path_limit": "1000",
+    # TODO(def-,bkirwi): Reenable before this is used in production, #22042
+    # "persist_fast_path_limit": "1000",
     "enable_alter_swap": "true",
     "enable_rename_schema": "true",
     "enable_eager_delta_joins": "false",
+    "timestamp_oracle": "postgres",
+    "default_idle_arrangement_merge_effort": "0",
+    "default_arrangement_exert_proportionality": "16",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

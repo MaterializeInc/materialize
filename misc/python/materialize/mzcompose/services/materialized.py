@@ -124,7 +124,7 @@ class Materialized(Service):
             and "latest" not in image
             and "devel" not in image
             and "unstable" not in image
-            and MzVersion.parse_mz(image.split(":")[1]) < MzVersion.parse("0.41.0")
+            and MzVersion.parse_mz(image.split(":")[1]) < MzVersion.parse_mz("v0.41.0")
             else "1"
             if default_size == 1
             else f"{default_size}-1"
@@ -147,6 +147,9 @@ class Materialized(Service):
                 "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
                 "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
                 "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
+            ]
+            environment += [
+                "MZ_TIMESTAMP_ORACLE_URL=postgres://root@cockroach:26257?options=--search_path=tsoracle"
             ]
 
         command += [
@@ -193,7 +196,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_graph,
                 "command": command,
-                "ports": [6875, 6876, 6877, 6878, 26257],
+                "ports": [6875, 6876, 6877, 6878, 6880, 6881, 26257],
                 "environment": environment,
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],

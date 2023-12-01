@@ -111,7 +111,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Each entry in the vector names a collection and provides a frontier after which
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-    CreateSinks(Vec<CreateSinkCommand<T>>),
+    RunSinks(Vec<RunSinkCommand<T>>),
 }
 
 /// A command that starts ingesting the given ingestion description
@@ -122,12 +122,6 @@ pub struct RunIngestionCommand {
     /// The description of what source type should be ingested and what post-processing steps must
     /// be applied to the data before writing them down into the storage collection
     pub description: IngestionDescription<CollectionMetadata>,
-    /// Whether or not this ingestion command should be allowed to/required to update an existing
-    /// ingestion.
-    ///
-    /// Essentially, if update, the command came from `ALTER SOURCE`; if not, it came from `CREATE
-    /// SOURCE`.
-    pub update: bool,
 }
 
 impl Arbitrary for RunIngestionCommand {
@@ -138,13 +132,8 @@ impl Arbitrary for RunIngestionCommand {
         (
             any::<GlobalId>(),
             any::<IngestionDescription<CollectionMetadata>>(),
-            any::<bool>(),
         )
-            .prop_map(|(id, description, update)| Self {
-                id,
-                description,
-                update,
-            })
+            .prop_map(|(id, description)| Self { id, description })
             .boxed()
     }
 }
@@ -154,7 +143,6 @@ impl RustType<ProtoRunIngestionCommand> for RunIngestionCommand {
         ProtoRunIngestionCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
-            update: self.update,
         }
     }
 
@@ -164,37 +152,36 @@ impl RustType<ProtoRunIngestionCommand> for RunIngestionCommand {
             description: proto
                 .description
                 .into_rust_if_some("ProtoRunIngestionCommand::description")?,
-            update: proto.update,
         })
     }
 }
 
-impl RustType<ProtoCreateSinkCommand> for CreateSinkCommand<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoCreateSinkCommand {
-        ProtoCreateSinkCommand {
+impl RustType<ProtoRunSinkCommand> for RunSinkCommand<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoRunSinkCommand {
+        ProtoRunSinkCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoCreateSinkCommand) -> Result<Self, TryFromProtoError> {
-        Ok(CreateSinkCommand {
-            id: proto.id.into_rust_if_some("ProtoCreateSinkCommand::id")?,
+    fn from_proto(proto: ProtoRunSinkCommand) -> Result<Self, TryFromProtoError> {
+        Ok(RunSinkCommand {
+            id: proto.id.into_rust_if_some("ProtoRunSinkCommand::id")?,
             description: proto
                 .description
-                .into_rust_if_some("ProtoCreateSinkCommand::description")?,
+                .into_rust_if_some("ProtoRunSinkCommand::description")?,
         })
     }
 }
 
 /// A command that starts exporting the given sink description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct CreateSinkCommand<T> {
+pub struct RunSinkCommand<T> {
     pub id: GlobalId,
     pub description: StorageSinkDesc<MetadataFilled, T>,
 }
 
-impl Arbitrary for CreateSinkCommand<mz_repr::Timestamp> {
+impl Arbitrary for RunSinkCommand<mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -230,7 +217,7 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 StorageCommand::RunIngestions(sources) => CreateSources(ProtoCreateSources {
                     sources: sources.into_proto(),
                 }),
-                StorageCommand::CreateSinks(sinks) => CreateSinks(ProtoCreateSinks {
+                StorageCommand::RunSinks(sinks) => RunSinks(ProtoRunSinks {
                     sinks: sinks.into_proto(),
                 }),
             }),
@@ -257,8 +244,8 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
             }
-            Some(CreateSinks(ProtoCreateSinks { sinks })) => {
-                Ok(StorageCommand::CreateSinks(sinks.into_rust()?))
+            Some(RunSinks(ProtoRunSinks { sinks })) => {
+                Ok(StorageCommand::RunSinks(sinks.into_rust()?))
             }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageCommand::kind",
@@ -277,8 +264,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
             proptest::collection::vec(any::<RunIngestionCommand>(), 1..4)
                 .prop_map(StorageCommand::RunIngestions)
                 .boxed(),
-            proptest::collection::vec(any::<CreateSinkCommand<mz_repr::Timestamp>>(), 1..4)
-                .prop_map(StorageCommand::CreateSinks)
+            proptest::collection::vec(any::<RunSinkCommand<mz_repr::Timestamp>>(), 1..4)
+                .prop_map(StorageCommand::RunSinks)
                 .boxed(),
             proptest::collection::vec(
                 (
@@ -317,8 +304,8 @@ pub struct SourceStatisticsUpdate {
     pub updates_committed: u64,
     pub bytes_received: u64,
     pub envelope_state_bytes: u64,
-    pub envelope_state_count: u64,
-    pub rehydration_latency_ms: Option<u64>,
+    pub envelope_state_records: u64,
+    pub rehydration_latency_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -348,8 +335,11 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.updates_committed));
         packer.push(Datum::from(self.bytes_received));
         packer.push(Datum::from(self.envelope_state_bytes));
-        packer.push(Datum::from(self.envelope_state_count));
-        packer.push(Datum::from(self.rehydration_latency_ms));
+        packer.push(Datum::from(self.envelope_state_records));
+        packer.push(Datum::from(
+            self.rehydration_latency_ms
+                .map(chrono::Duration::milliseconds),
+        ));
     }
 }
 impl PackableStats for SinkStatisticsUpdate {
@@ -361,6 +351,49 @@ impl PackableStats for SinkStatisticsUpdate {
         packer.push(Datum::from(self.messages_committed));
         packer.push(Datum::from(self.bytes_staged));
         packer.push(Datum::from(self.bytes_committed));
+    }
+}
+
+/// A source or sink status update.
+///
+/// Represents a status update for a given object type. The inner value for each
+/// variant should be able to be packed into a status row that conforms to the schema
+/// for the object's status history relation.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StatusUpdate {
+    pub id: GlobalId,
+    pub status: String,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub error: Option<String>,
+    pub hints: BTreeSet<String>,
+    pub namespaced_errors: BTreeMap<String, String>,
+}
+
+impl RustType<proto_storage_response::ProtoStatusUpdate> for StatusUpdate {
+    fn into_proto(&self) -> proto_storage_response::ProtoStatusUpdate {
+        proto_storage_response::ProtoStatusUpdate {
+            id: Some(self.id.into_proto()),
+            status: self.status.clone(),
+            timestamp: Some(self.timestamp.into_proto()),
+            error: self.error.clone(),
+            hints: self.hints.iter().cloned().collect(),
+            namespaced_errors: self.namespaced_errors.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto_storage_response::ProtoStatusUpdate,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(StatusUpdate {
+            id: proto.id.into_rust_if_some("ProtoStatusUpdate::id")?,
+            timestamp: proto
+                .timestamp
+                .into_rust_if_some("ProtoStatusUpdate::timestamp")?,
+            status: proto.status,
+            error: proto.error,
+            hints: proto.hints.into_iter().collect(),
+            namespaced_errors: proto.namespaced_errors,
+        })
     }
 }
 
@@ -377,6 +410,9 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 
     /// A list of statistics updates, currently only for sources.
     StatisticsUpdates(Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>),
+    /// A list of status updates for sources and sinks. Periodically sent from
+    /// storage workers to convey the latest status information about an object.
+    StatusUpdates(Vec<StatusUpdate>),
 }
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
@@ -384,7 +420,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
         use proto_storage_response::Kind::*;
         use proto_storage_response::{
             ProtoDroppedIds, ProtoSinkStatisticsUpdate, ProtoSourceStatisticsUpdate,
-            ProtoStatisticsUpdates,
+            ProtoStatisticsUpdates, ProtoStatusUpdates,
         };
         ProtoStorageResponse {
             kind: Some(match self {
@@ -405,7 +441,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                                 updates_committed: update.updates_committed,
                                 bytes_received: update.bytes_received,
                                 envelope_state_bytes: update.envelope_state_bytes,
-                                envelope_state_count: update.envelope_state_count,
+                                envelope_state_records: update.envelope_state_records,
                                 rehydration_latency_ms: update.rehydration_latency_ms,
                             })
                             .collect(),
@@ -422,13 +458,16 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             .collect(),
                     })
                 }
+                StorageResponse::StatusUpdates(updates) => StatusUpdates(ProtoStatusUpdates {
+                    updates: updates.into_proto(),
+                }),
             }),
         }
     }
 
     fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
         use proto_storage_response::Kind::*;
-        use proto_storage_response::ProtoDroppedIds;
+        use proto_storage_response::{ProtoDroppedIds, ProtoStatusUpdates};
         match proto.kind {
             Some(DroppedIds(ProtoDroppedIds { ids })) => {
                 Ok(StorageResponse::DroppedIds(ids.into_rust()?))
@@ -452,7 +491,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             updates_committed: update.updates_committed,
                             bytes_received: update.bytes_received,
                             envelope_state_bytes: update.envelope_state_bytes,
-                            envelope_state_count: update.envelope_state_count,
+                            envelope_state_records: update.envelope_state_records,
                             rehydration_latency_ms: update.rehydration_latency_ms,
                         })
                     })
@@ -474,6 +513,9 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                     })
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
             )),
+            Some(StatusUpdates(ProtoStatusUpdates { updates })) => {
+                Ok(StorageResponse::StatusUpdates(updates.into_rust()?))
+            }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageResponse::kind",
             )),
@@ -540,22 +582,17 @@ where
                 // Similarly, we don't reset state here like compute, because,
                 // until we are required to manage multiple replicas, we can handle
                 // keeping track of state across restarts of storage server(s).
-                Ok(())
             }
             StorageCommand::RunIngestions(ingestions) => ingestions
                 .iter()
-                .try_for_each(|i| self.insert_new_uppers(i.description.subsource_ids(), i.update)),
-            StorageCommand::CreateSinks(exports) => exports
-                .iter()
-                .try_for_each(|e| self.insert_new_uppers([e.id], false)),
+                .for_each(|i| self.insert_new_uppers(i.description.subsource_ids())),
+            StorageCommand::RunSinks(exports) => {
+                exports.iter().for_each(|e| self.insert_new_uppers([e.id]))
+            }
             StorageCommand::InitializationComplete
             | StorageCommand::UpdateConfiguration(_)
-            | StorageCommand::AllowCompaction(_) => {
-                // Other commands have no known impact on frontier tracking.
-                Ok(())
-            }
-        }
-        .map_err(|id| panic!("Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command));
+            | StorageCommand::AllowCompaction(_) => {}
+        };
     }
 
     /// Shared implementation for commands that install uppers with controllable behavior with
@@ -563,29 +600,19 @@ where
     ///
     /// If any ID was previously tracked in `self` and `skip_existing` is `false`, we return the ID
     /// as an error.
-    fn insert_new_uppers<I: IntoIterator<Item = GlobalId>>(
-        &mut self,
-        ids: I,
-        skip_existing: bool,
-    ) -> Result<(), GlobalId> {
+    fn insert_new_uppers<I: IntoIterator<Item = GlobalId>>(&mut self, ids: I) {
         for id in ids {
-            if self.uppers.contains_key(&id) && skip_existing {
-                continue;
-            }
+            self.uppers.entry(id).or_insert_with(|| {
+                let mut frontier = MutableAntichain::new();
+                // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
+                // merging the types that compute and storage use.
+                #[allow(clippy::as_conversions)]
+                frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
 
-            let mut frontier = MutableAntichain::new();
-            // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
-            // merging the types that compute and storage use.
-            #[allow(clippy::as_conversions)]
-            frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-            let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
-            let previous = self.uppers.insert(id, (frontier, part_frontiers));
-            if previous.is_some() {
-                return Err(id);
-            }
+                (frontier, part_frontiers)
+            });
         }
-
-        Ok(())
     }
 }
 
@@ -684,6 +711,9 @@ where
                     source_stats,
                     sink_stats,
                 )))
+            }
+            StorageResponse::StatusUpdates(updates) => {
+                Some(Ok(StorageResponse::StatusUpdates(updates)))
             }
         }
     }

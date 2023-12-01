@@ -18,6 +18,8 @@ use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{Collection, ExchangeData};
 use mz_compute_types::plan::reduce::{
     reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
@@ -31,17 +33,15 @@ use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::Columnation;
+use timely::container::columnation::{Columnation, CopyRegion};
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 use tracing::warn;
 
-use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, HeapSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
-use crate::render::context::{
-    Arrangement, CollectionBundle, Context, KeyValArrangement, SpecializedArrangement,
-};
+use crate::render::context::{Arrangement, CollectionBundle, Context, SpecializedArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
 use crate::render::ArrangementFlavor;
@@ -50,8 +50,8 @@ use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
+    T: Timestamp + Lattice + Columnation,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
@@ -456,17 +456,21 @@ where
     }
 
     /// Build the dataflow to compute the set of distinct keys.
-    fn build_distinct<S, V>(
+    fn build_distinct<Tr, S, V>(
         &self,
         collection: Collection<S, (Row, V), Diff>,
         tag: &str,
     ) -> (
-        KeyValArrangement<S, Row, V>,
+        Arranged<S, TraceAgent<Tr>>,
         Collection<S, DataflowError, Diff>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
+        Tr: Trace + TraceReader<Key = Row, Val = V, Time = G::Timestamp, Diff = Diff> + 'static,
+        Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((Row, V), G::Timestamp, Diff)>,
         V: Columnation + Default + ExchangeData + IntoRowByTypes,
+        Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
 
@@ -476,28 +480,28 @@ where
         );
 
         let (output, errors) = collection
-            .mz_arrange::<RowSpine<_, _, _, _>>(&input_name)
-            .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>(
-            &output_name,
-            "DistinctByErrorCheck",
-            |_key, _input, output| {
-                // We're pushing a unit value here because the key is implicitly added by the
-                // arrangement, and the permutation logic takes care of using the key part of the
-                // output.
-                output.push((V::default(), 1));
-            },
-            move |key, input: &[(_, Diff)], output| {
-                for (_, count) in input.iter() {
-                    if count.is_positive() {
-                        continue;
+            .mz_arrange::<Tr>(&input_name)
+            .reduce_pair::<_, Tr, _, ErrValSpine<_, _, _>>(
+                &output_name,
+                "DistinctByErrorCheck",
+                |_key, _input, output| {
+                    // We're pushing a unit value here because the key is implicitly added by the
+                    // arrangement, and the permutation logic takes care of using the key part of the
+                    // output.
+                    output.push((V::default(), 1));
+                },
+                move |key, input: &[(_, Diff)], output| {
+                    for (_, count) in input.iter() {
+                        if count.is_positive() {
+                            continue;
+                        }
+                        let message = "Non-positive multiplicity in DistinctBy";
+                        error_logger.log(message, &format!("row={key:?}, count={count}"));
+                        output.push((EvalError::Internal(message.to_string()).into(), 1));
+                        return;
                     }
-                    let message = "Non-positive multiplicity in DistinctBy";
-                    error_logger.log(message, &format!("row={key:?}, count={count}"));
-                    output.push((EvalError::Internal(message.to_string()).into(), 1));
-                    return;
-                }
-            },
-        );
+                },
+            );
         (output, errors.as_collection(|_k, v| v.clone()))
     }
 
@@ -592,7 +596,7 @@ where
         if distinct {
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_, Result<(), String>>(partial, None)
+                    .build_reduce_inaccumulable_distinct::<_, Result<(), String>, RowSpine<_, _, _, _>>(partial, None)
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .map_fallible("Demux Errors", move |(key, result)| match result {
                         Ok(()) => Ok(key),
@@ -602,7 +606,10 @@ where
                 partial = oks;
             } else {
                 partial = self
-                    .build_reduce_inaccumulable_distinct::<_, ()>(partial, Some(" [val: empty]"))
+                    .build_reduce_inaccumulable_distinct::<_, (), RowKeySpine<_, _, _>>(
+                        partial,
+                        Some(" [val: empty]"),
+                    )
                     .as_collection(|k, _| k.clone());
             }
         }
@@ -663,14 +670,20 @@ where
         }
     }
 
-    fn build_reduce_inaccumulable_distinct<S, R>(
+    fn build_reduce_inaccumulable_distinct<S, V, Tr>(
         &self,
         input: Collection<S, (Row, Row), Diff>,
         name_tag: Option<&str>,
-    ) -> KeyValArrangement<S, (Row, Row), R>
+    ) -> Arranged<S, TraceAgent<Tr>>
     where
         S: Scope<Timestamp = G::Timestamp>,
-        R: MaybeValidatingRow<(), String>,
+        V: MaybeValidatingRow<(), String>,
+        Tr: Trace
+            + TraceReader<Key = (Row, Row), Val = V, Time = G::Timestamp, Diff = Diff>
+            + 'static,
+        Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = (((Row, Row), V), G::Timestamp, Diff)>,
+        Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
 
@@ -681,11 +694,11 @@ where
 
         let input: KeyCollection<_, _, _> = input.into();
         input
-            .mz_arrange::<RowSpine<(Row, Row), _, _, _>>(
+            .mz_arrange::<RowKeySpine<(Row, Row), _, _>>(
                 "Arranged ReduceInaccumulable Distinct [val: empty]",
             )
-            .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>(&output_name, move |_, source, t| {
-                if let Some(err) = R::into_error() {
+            .mz_reduce_abelian::<_, Tr>(&output_name, move |_, source, t| {
+                if let Some(err) = V::into_error() {
                     for (value, count) in source.iter() {
                         if count.is_positive() {
                             continue;
@@ -697,7 +710,7 @@ where
                         return;
                     }
                 }
-                t.push((R::ok(()), 1))
+                t.push((V::ok(()), 1))
             })
     }
 
@@ -1513,7 +1526,7 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
 /// point representation has less precision than a double. It is entirely possible
 /// that the values of the accumulator overflow, thus we have to use wrapping arithmetic
 /// to preserve group guarantees.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum Accum {
     /// Accumulates boolean values.
     Bool {
@@ -1755,6 +1768,25 @@ impl Multiply<Diff> for Accum {
     }
 }
 
+impl Columnation for Accum {
+    type InnerRegion = CopyRegion<Self>;
+}
+
+impl HeapSize for (Vec<Accum>, i64) {
+    #[inline]
+    fn estimate_size<C>(&self, mut callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        let size_of_accum = std::mem::size_of::<Accum>();
+        callback(
+            self.0.len() * size_of_accum,
+            self.0.capacity() * size_of_accum,
+            usize::from(self.0.capacity() > 0),
+        )
+    }
+}
+
 /// Monoids for in-place compaction of monotonic streams.
 mod monoids {
 
@@ -1778,12 +1810,24 @@ mod monoids {
     use mz_ore::soft_panic_or_log;
     use mz_repr::{Datum, Diff, Row};
     use serde::{Deserialize, Serialize};
+    use timely::container::columnation::{Columnation, Region};
+
+    use crate::extensions::arrange::HeapSize;
 
     /// A monoid containing a single-datum row.
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
     pub enum ReductionMonoid {
         Min(Row),
         Max(Row),
+    }
+
+    impl ReductionMonoid {
+        pub fn finalize(&self) -> &Row {
+            use ReductionMonoid::*;
+            match self {
+                Min(row) | Max(row) => row,
+            }
+        }
     }
 
     impl Multiply<Diff> for ReductionMonoid {
@@ -1839,7 +1883,6 @@ mod monoids {
                 }
             }
         }
-
         fn is_zero(&self) -> bool {
             // It totally looks like we could return true here for `Datum::Null`, but don't do this!
             // DD uses true results of this method to make stuff disappear. This makes sense when
@@ -1847,6 +1890,90 @@ mod monoids {
             // We don't want funny stuff, like disappearing, happening to reduction results even
             // when they are null. (This would confuse, e.g., `ReduceCollation` for null inputs.)
             false
+        }
+    }
+
+    impl Columnation for ReductionMonoid {
+        type InnerRegion = ReductionMonoidRegion;
+    }
+
+    /// Region for [`ReductionMonoid`]. This region is special in that it stores both enum variants
+    /// in the same backing region. Alternatively, it could store it in two regions, but we select
+    /// the former for simplicity reasons.
+    #[derive(Default)]
+    pub struct ReductionMonoidRegion {
+        inner: <Row as Columnation>::InnerRegion,
+    }
+
+    impl Region for ReductionMonoidRegion {
+        type Item = ReductionMonoid;
+
+        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+            use ReductionMonoid::*;
+            match item {
+                Min(row) => Min(self.inner.copy(row)),
+                Max(row) => Max(self.inner.copy(row)),
+            }
+        }
+
+        fn clear(&mut self) {
+            self.inner.clear();
+        }
+
+        fn reserve_items<'a, I>(&mut self, items: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self::Item> + Clone,
+        {
+            self.inner
+                .reserve_items(items.map(ReductionMonoid::finalize));
+        }
+
+        fn reserve_regions<'a, I>(&mut self, regions: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = &'a Self> + Clone,
+        {
+            self.inner.reserve_regions(regions.map(|r| &r.inner));
+        }
+
+        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.inner.heap_size(callback);
+        }
+    }
+
+    impl HeapSize for Vec<ReductionMonoid> {
+        #[inline]
+        fn estimate_size<C>(&self, mut callback: C)
+        where
+            C: FnMut(usize, usize, usize),
+        {
+            // We only expect as many elements in the `Vec` as there are hierarchical aggregates
+            // in one query. Thus, we deem it safe to crawl the vector to get a good estimate of
+            // the row sizes contained in the monoids.
+            let size_of_monoid = std::mem::size_of::<ReductionMonoid>();
+            let vec_size = self.len() * size_of_monoid;
+            let vec_capacity = self.capacity() * size_of_monoid;
+            let vec_allocation = usize::from(self.capacity() > 0);
+
+            let mut row_size = 0;
+            let mut row_capacity = 0;
+            let mut row_allocations = 0;
+            for monoid in self.iter() {
+                match monoid {
+                    ReductionMonoid::Min(row) | ReductionMonoid::Max(row) => {
+                        row_size += row.heap_size();
+                        let cap = row.heap_capacity();
+                        row_capacity += cap;
+                        row_allocations += usize::from(cap > 0);
+                    }
+                };
+            }
+            callback(
+                vec_size + row_size,
+                vec_capacity + row_capacity,
+                vec_allocation + row_allocations,
+            )
         }
     }
 
@@ -1909,15 +2036,6 @@ mod monoids {
             | AggregateFunc::FirstValue { .. }
             | AggregateFunc::LastValue { .. }
             | AggregateFunc::WindowAggregate { .. } => None,
-        }
-    }
-
-    impl ReductionMonoid {
-        pub fn finalize(&self) -> &Row {
-            use ReductionMonoid::*;
-            match &self {
-                Min(row) | Max(row) => row,
-            }
         }
     }
 }

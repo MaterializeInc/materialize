@@ -164,12 +164,14 @@ pub struct Config {
     /// one.
     ///
     /// If specified, this overrides the value stored in Launch Darkly (and
-    /// mirrored to the catalog stash's "config" collection).
+    /// mirrored to the catalog storage's "config" collection).
     pub enable_persist_txn_tables_cli: Option<bool>,
 
     // === Adapter options. ===
     /// Catalog configuration.
     pub catalog_config: CatalogConfig,
+    /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
+    pub timestamp_oracle_url: Option<String>,
 
     // === Bootstrap options. ===
     /// The cloud ID of this environment.
@@ -259,6 +261,8 @@ pub enum CatalogConfig {
     Persist {
         /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
         persist_clients: Arc<PersistClientCache>,
+        /// Persist catalog metrics.
+        metrics: Arc<mz_catalog::durable::Metrics>,
     },
     /// The catalog contents are stored in both persist and the stash and their contents are
     /// compared. This is mostly used for testing purposes.
@@ -405,14 +409,15 @@ impl Listeners {
             .await?;
 
             if !openable_adapter_storage.is_initialized().await? {
-                tracing::info!("Stash doesn't exist so there's no current deploy generation. We won't wait to be leader");
+                tracing::info!("Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader");
+                openable_adapter_storage.expire().await;
                 break 'leader_promotion;
             }
-            // TODO: once all stashes have a deploy_generation, don't need to handle the Option
-            let stash_generation = openable_adapter_storage.get_deployment_generation().await?;
-            tracing::info!("Found stash generation {stash_generation:?}");
-            if stash_generation < Some(deploy_generation) {
-                tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
+            // TODO: once all catalogs have a deploy_generation, don't need to handle the Option
+            let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
+            tracing::info!("Found catalog generation {catalog_generation:?}");
+            if catalog_generation < Some(deploy_generation) {
+                tracing::info!("Catalog generation {catalog_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
                 match openable_adapter_storage
                     .open_savepoint(
                         boot_ts.clone(),
@@ -429,7 +434,7 @@ impl Listeners {
                     Ok(adapter_storage) => Box::new(adapter_storage).expire().await,
                     Err(e) => {
                         return Err(
-                            anyhow!(e).context("Stash upgrade would have failed with this error")
+                            anyhow!(e).context("Catalog upgrade would have failed with this error")
                         )
                     }
                 }
@@ -446,10 +451,12 @@ impl Listeners {
                         "internal http server closed its end of promote_leader"
                     ));
                 }
-            } else if stash_generation == Some(deploy_generation) {
-                tracing::info!("Server requested generation {deploy_generation} which is equal to stash's generation");
+            } else if catalog_generation == Some(deploy_generation) {
+                tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
+                openable_adapter_storage.expire().await;
             } else {
-                mz_ore::halt!("Server started with requested generation {deploy_generation} but stash was already at {stash_generation:?}. Deploy generations must increase monotonically");
+                openable_adapter_storage.expire().await;
+                mz_ore::halt!("Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically");
             }
         }
 
@@ -505,7 +512,7 @@ impl Listeners {
             enable_persist_txn_tables = value;
         }
         info!(
-            "enable_persist_txn_tables value of {} computed from stash {:?} and flag {:?}",
+            "enable_persist_txn_tables value of {} computed from catalog {:?} and flag {:?}",
             enable_persist_txn_tables,
             enable_persist_txn_tables_stash_ld,
             config.enable_persist_txn_tables_cli,
@@ -537,6 +544,7 @@ impl Listeners {
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             dataflow_client: controller,
             storage: adapter_storage,
+            timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
             build_info: &BUILD_INFO,
@@ -721,7 +729,10 @@ async fn catalog_opener(
                 },
             ))
         }
-        CatalogConfig::Persist { persist_clients } => {
+        CatalogConfig::Persist {
+            persist_clients,
+            metrics,
+        } => {
             info!("Using persist backed catalog");
             let persist_client = persist_clients
                 .open(controller_config.persist_location.clone())
@@ -731,6 +742,7 @@ async fn catalog_opener(
                 mz_catalog::durable::persist_backed_catalog_state(
                     persist_client,
                     environment_id.organization_id(),
+                    Arc::clone(metrics),
                 )
                 .await,
             )

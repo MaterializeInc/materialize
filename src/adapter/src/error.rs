@@ -229,6 +229,9 @@ pub enum AdapterError {
     ///
     /// The map keys are role names and values are detailed error messages.
     DependentObject(BTreeMap<String, Vec<String>>),
+    /// When performing an `ALTER` of some variety, re-planning the statement
+    /// errored.
+    InvalidAlter(&'static str, PlanError),
 }
 
 impl AdapterError {
@@ -313,6 +316,7 @@ impl AdapterError {
                 storage_error.source().map(|source_error| source_error.to_string_with_causes())
             }
             AdapterError::ReadOnlyTransaction => Some("SELECT queries cannot be combined with other query types, including SUBSCRIBE.".into()),
+            AdapterError::InvalidAlter(_, e) => e.detail(),
             _ => None,
         }
     }
@@ -373,6 +377,7 @@ impl AdapterError {
                 "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
                     .into(),
             ),
+            AdapterError::InvalidAlter(_, e) => e.hint(),
             _ => None,
         }
     }
@@ -477,6 +482,7 @@ impl AdapterError {
                 VarError::RequiresUnsafeMode { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
                 VarError::RequiresFeatureFlag { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             },
+            AdapterError::InvalidAlter(_, _) => SqlState::FEATURE_NOT_SUPPORTED,
         }
     }
 
@@ -698,6 +704,9 @@ impl fmt::Display for AdapterError {
                     "{role_str} \"{}\" cannot be dropped because some objects depend on it",
                     dependent_objects.keys().join(", ")
                 )
+            }
+            AdapterError::InvalidAlter(t, e) => {
+                write!(f, "invalid ALTER {t}: {e}")
             }
         }
     }

@@ -834,20 +834,24 @@ impl<'a> Runner<'a> {
             )
             .await?
         {
-            match (row.get("name"), row.get("size")) {
-                ("r1", "1") => needs_default_replica = false,
-                (name, _) => {
-                    inner
-                        .system_client
-                        .batch_execute(&format!("DROP CLUSTER REPLICA default.{name}"))
-                        .await?
-                }
+            let name: &str = row.get("name");
+            let size: &str = row.get("size");
+            if name == "r1" && size == self.config.replicas.to_string() {
+                needs_default_replica = false;
+            } else {
+                inner
+                    .system_client
+                    .batch_execute(&format!("DROP CLUSTER REPLICA default.{}", name))
+                    .await?;
             }
         }
         if needs_default_replica {
             inner
                 .system_client
-                .batch_execute("CREATE CLUSTER REPLICA default.r1 SIZE '1'")
+                .batch_execute(&format!(
+                    "CREATE CLUSTER REPLICA default.r1 SIZE '{}'",
+                    self.config.replicas
+                ))
                 .await?;
         }
 
@@ -902,7 +906,7 @@ impl<'a> RunnerInner<'a> {
         let temp_dir = tempfile::tempdir()?;
         let scratch_dir = tempfile::tempdir()?;
         let environment_id = EnvironmentId::for_tests();
-        let (consensus_uri, adapter_stash_url, storage_stash_url) = {
+        let (consensus_uri, adapter_stash_url, storage_stash_url, timestamp_oracle_url) = {
             let postgres_url = &config.postgres_url;
             info!(%postgres_url, "starting server");
             let (client, conn) = Retry::default()
@@ -926,15 +930,18 @@ impl<'a> RunnerInner<'a> {
                 .batch_execute(
                     "DROP SCHEMA IF EXISTS sqllogictest_adapter CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
+                     DROP SCHEMA IF EXISTS sqllogictest_tsoracle CASCADE;
                      CREATE SCHEMA IF NOT EXISTS sqllogictest_consensus;
                      CREATE SCHEMA sqllogictest_adapter;
-                     CREATE SCHEMA sqllogictest_storage;",
+                     CREATE SCHEMA sqllogictest_storage;
+                     CREATE SCHEMA sqllogictest_tsoracle;",
                 )
                 .await?;
             (
                 format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_adapter"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_tsoracle"),
             )
         };
 
@@ -978,6 +985,7 @@ impl<'a> RunnerInner<'a> {
         };
         let server_config = mz_environmentd::Config {
             catalog_config,
+            timestamp_oracle_url: Some(timestamp_oracle_url),
             controller: ControllerConfig {
                 build_info: &mz_environmentd::BUILD_INFO,
                 orchestrator,
@@ -1015,8 +1023,8 @@ impl<'a> RunnerInner<'a> {
             now,
             environment_id,
             cluster_replica_sizes: Default::default(),
-            bootstrap_default_cluster_replica_size: "1".into(),
-            bootstrap_builtin_cluster_replica_size: "1".into(),
+            bootstrap_default_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_builtin_cluster_replica_size: config.replicas.to_string(),
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
                 params.insert(
@@ -1749,6 +1757,7 @@ pub struct RunConfig<'a> {
     ///   shut down, and may panic if their storage is delete out from under them.
     /// - It's safe for different databases to reference the same state: all data is scoped by UUID.
     pub persist_dir: TempDir,
+    pub replicas: usize,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
@@ -1824,7 +1833,7 @@ pub async fn run_string(
     // Transactions are currently relatively slow. Since sqllogictest runs in a single connection
     // there should be no difference in having longer running transactions.
     let mut in_transaction = false;
-    writeln!(runner.config.stdout, "==> {}", source);
+    writeln!(runner.config.stdout, "--- {}", source);
 
     for record in parser.parse_records()? {
         // In maximal-verbosity mode, print the query before attempting to run
@@ -1901,7 +1910,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
     let mut buf = RewriteBuffer::new(&input);
 
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
-    writeln!(runner.config.stdout, "==> {}", filename.display());
+    writeln!(runner.config.stdout, "--- {}", filename.display());
     let mut in_transaction = false;
 
     fn append_values_output(

@@ -48,7 +48,7 @@ class Scenario:
         self.rng = None if seed is None else Random(seed)
         self._base_version = MzVersion.parse_cargo()
 
-        check_classes = []
+        filtered_check_classes = []
 
         for check_class in self.checks():
             if (
@@ -56,12 +56,15 @@ class Scenario:
                 and not check_class.externally_idempotent
             ):
                 continue
-            check_classes.append(check_class)
+            filtered_check_classes.append(check_class)
 
         # Use base_version() here instead of _base_version so that overwriting
         # upgrade scenarios can specify another base version.
         self.check_objects = [
-            check_class(self.base_version(), self.rng) for check_class in check_classes
+            check_class(self.base_version(), self.rng)
+            for check_class in filtered_check_classes
+            # TODO: improve
+            if not check_class.__name__.endswith("Base")
         ]
 
     def checks(self) -> list[type[Check]]:

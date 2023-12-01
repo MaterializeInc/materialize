@@ -10,14 +10,15 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use std::any::Any;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
@@ -69,7 +70,6 @@ impl Coordinator {
                 Command::Startup {
                     cancel_tx,
                     tx,
-                    set_setting_keys,
                     user,
                     conn_id,
                     secret_key,
@@ -82,7 +82,6 @@ impl Coordinator {
                     self.handle_startup(
                         cancel_tx,
                         tx,
-                        set_setting_keys,
                         user,
                         conn_id,
                         secret_key,
@@ -127,9 +126,10 @@ impl Coordinator {
                     schema,
                     name,
                     conn_id,
+                    received_at,
                     tx,
                 } => {
-                    self.handle_append_webhook(database, schema, name, conn_id, tx);
+                    self.handle_append_webhook(database, schema, name, conn_id, received_at, tx);
                 }
 
                 Command::GetSystemVars { conn_id, tx } => {
@@ -235,7 +235,6 @@ impl Coordinator {
         &mut self,
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
-        set_setting_keys: Vec<String>,
         user: User,
         conn_id: ConnectionId,
         secret_key: u32,
@@ -246,22 +245,17 @@ impl Coordinator {
         // Early return if successful, otherwise cleanup any possible state.
         match self.handle_startup_inner(&user, &conn_id).await {
             Ok(role_id) => {
-                let mut session_vars = Vec::new();
-                if !set_setting_keys
-                    .iter()
-                    .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
-                {
-                    let default = self
-                        .catalog()
-                        .state()
-                        .system_config()
-                        .statement_logging_default_sample_rate();
-                    session_vars.push((
-                        STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
-                        OwnedVarInput::Flat(default.to_string()),
-                    ));
-                }
-                let role_vars = self
+                let mut session_defaults: Vec<(_, Box<dyn Any + Send + Sync>)> = Vec::new();
+                let default = self
+                    .catalog()
+                    .state()
+                    .system_config()
+                    .statement_logging_default_sample_rate();
+                session_defaults.push((
+                    STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
+                    Box::new(default),
+                ));
+                let role_defaults = self
                     .catalog()
                     .get_role(&role_id)
                     .vars()
@@ -296,8 +290,8 @@ impl Coordinator {
                 let resp = Ok(StartupResponse {
                     role_id,
                     write_notify: notify,
-                    session_vars,
-                    role_vars,
+                    session_defaults,
+                    role_defaults,
                     catalog: self.owned_catalog(),
                 });
                 if tx.send(resp).is_err() {
@@ -841,6 +835,7 @@ impl Coordinator {
         schema: String,
         name: String,
         conn_id: ConnectionId,
+        received_at: DateTime<Utc>,
         tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     ) {
         /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
@@ -853,7 +848,7 @@ impl Coordinator {
             schema: String,
             name: String,
             conn_id: ConnectionId,
-            now_fn: NowFn,
+            received_at: DateTime<Utc>,
         ) -> Result<AppendWebhookResponse, PartialItemName> {
             // Resolve our collection.
             let name = PartialItemName {
@@ -895,7 +890,7 @@ impl Coordinator {
                         AppendWebhookValidator::new(
                             validation,
                             coord.caching_secrets_reader.clone(),
-                            now_fn,
+                            received_at,
                         )
                     });
                     (body, headers.clone(), validator)
@@ -917,15 +912,14 @@ impl Coordinator {
             })
         }
 
-        // Get our current clock for any sources that might use time based validation.
-        let now_fn = self.catalog.config().now.clone();
-        let response = resolve(self, database, schema, name, conn_id, now_fn).map_err(|name| {
-            AdapterError::UnknownWebhookSource {
-                database: name.database.expect("provided"),
-                schema: name.schema.expect("provided"),
-                name: name.item,
-            }
-        });
+        let response =
+            resolve(self, database, schema, name, conn_id, received_at).map_err(|name| {
+                AdapterError::UnknownWebhookSource {
+                    database: name.database.expect("provided"),
+                    schema: name.schema.expect("provided"),
+                    name: name.item,
+                }
+            });
         let _ = tx.send(response);
     }
 }

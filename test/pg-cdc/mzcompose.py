@@ -17,7 +17,8 @@ SERVICES = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),
     Testdrive(),
     TestCerts(),
-    Postgres(),
+    # Set the max slot WAL keep size to 10MB
+    Postgres(extra_command=["-c", "max_slot_wal_keep_size=10"]),
 ]
 
 

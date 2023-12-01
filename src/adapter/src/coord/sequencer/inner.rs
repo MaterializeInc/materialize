@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
@@ -25,7 +25,7 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
     RowSetFinishing,
 };
-use mz_ore::collections::CollectionExt;
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert, task};
@@ -51,9 +51,10 @@ use mz_sql::names::{
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_sql::plan::{
-    AlterOptionParameter, ExplainSinkSchemaPlan, Explainee, Index, IndexOption, MaterializedView,
-    MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
-    SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
+    AlterConnectionAction, AlterConnectionPlan, AlterOptionParameter, ExplainSinkSchemaPlan,
+    Explainee, Index, IndexOption, MaterializedView, MutationKind, Params, Plan,
+    PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
+    SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -62,9 +63,9 @@ use mz_sql::session::vars::{
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOptionName, CreateSourceConnection, CreateSourceSubsource,
-    DeferredItemName, PgConfigOption, PgConfigOptionName, ReferencedSubsources, Statement,
-    TransactionMode, WithOptionValue,
+    AlterSourceAddSubsourceOptionName, ConnectionOption, ConnectionOptionName,
+    CreateSourceConnection, CreateSourceSubsource, DeferredItemName, PgConfigOption,
+    PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{
@@ -93,18 +94,15 @@ use crate::coord::dataflows::{
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PeekDataflowPlan, PeekPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
-use crate::coord::sequencer::old_optimizer_api::{
-    PeekStageDeprecated, PeekStageValidateDeprecated,
-};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
 };
 use crate::coord::{
-    peek, Coordinator, CreateConnectionValidationReady, ExecuteContext, Message, PeekStage,
-    PeekStageFinish, PeekStageOptimize, PeekStageTimestamp, PeekStageValidate, PendingRead,
-    PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext,
-    TargetCluster,
+    peek, AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady,
+    ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
+    PeekStageRealTimeRecency, PeekStageTimestamp, PeekStageValidate, PendingRead, PendingReadTxn,
+    PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
@@ -455,30 +453,6 @@ impl Coordinator {
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection),
-            Err(err) => Err(err),
-        }
-    }
-
-    pub(super) async fn sequence_rotate_keys(
-        &mut self,
-        session: &Session,
-        id: GlobalId,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let secret = self.secrets_controller.reader().read(id).await?;
-        let previous_key_set = SshKeyPairSet::from_bytes(&secret)?;
-        let new_key_set = previous_key_set.rotate()?;
-        self.secrets_controller
-            .ensure(id, &new_key_set.to_bytes())
-            .await?;
-
-        let ops = vec![catalog::Op::UpdateRotatedKeys {
-            id,
-            previous_public_key_pair: previous_key_set.public_keys(),
-            new_public_key_pair: new_key_set.public_keys(),
-        }];
-
-        match self.catalog_transact(Some(session), ops).await {
-            Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),
             Err(err) => Err(err),
         }
     }
@@ -895,11 +869,6 @@ impl Coordinator {
 
         let mut ops = vec![];
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
         ops.extend(
             drop_ids
                 .iter()
@@ -909,59 +878,35 @@ impl Coordinator {
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
         let raw_expr = view.expr.clone();
-        if enable_unified_optimizer_api {
-            // Collect optimizer parameters.
-            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-            // Build an optimizer for this VIEW.
-            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+        // Collect optimizer parameters.
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-            let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+        // Build an optimizer for this VIEW.
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
-            let view = catalog::View {
-                create_sql: view.create_sql.clone(),
-                raw_expr,
-                desc: RelationDesc::new(optimized_expr.typ(), view.column_names.clone()),
-                optimized_expr,
-                conn_id: if view.temporary {
-                    Some(session.conn_id().clone())
-                } else {
-                    None
-                },
-                resolved_ids,
-            };
-            ops.push(catalog::Op::CreateItem {
-                id: view_id,
-                oid: view_oid,
-                name: name.clone(),
-                item: CatalogItem::View(view),
-                owner_id: *session.current_role_id(),
-            });
-        } else {
-            let decorrelated_expr = raw_expr.clone().lower(self.catalog().system_config())?;
-            let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
-            let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
-            let view = catalog::View {
-                create_sql: view.create_sql.clone(),
-                raw_expr,
-                optimized_expr,
-                desc,
-                conn_id: if view.temporary {
-                    Some(session.conn_id().clone())
-                } else {
-                    None
-                },
-                resolved_ids,
-            };
-            ops.push(catalog::Op::CreateItem {
-                id: view_id,
-                oid: view_oid,
-                name: name.clone(),
-                item: CatalogItem::View(view),
-                owner_id: *session.current_role_id(),
-            });
-        }
+        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+        let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+
+        let view = catalog::View {
+            create_sql: view.create_sql.clone(),
+            raw_expr,
+            desc: RelationDesc::new(optimized_expr.typ(), view.column_names.clone()),
+            optimized_expr,
+            conn_id: if view.temporary {
+                Some(session.conn_id().clone())
+            } else {
+                None
+            },
+            resolved_ids,
+        };
+        ops.push(catalog::Op::CreateItem {
+            id: view_id,
+            oid: view_oid,
+            name: name.clone(),
+            item: CatalogItem::View(view),
+            owner_id: *session.current_role_id(),
+        });
 
         Ok(ops)
     }
@@ -1111,7 +1056,7 @@ impl Coordinator {
                 )
                 .await;
 
-                self.ship_dataflow_new(df_desc, cluster_id).await;
+                self.ship_dataflow(df_desc, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -1216,7 +1161,7 @@ impl Coordinator {
                 let since = self.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since);
 
-                self.ship_dataflow_new(df_desc, cluster_id).await;
+                self.ship_dataflow(df_desc, cluster_id).await;
 
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
@@ -1286,9 +1231,26 @@ impl Coordinator {
         plan::DropObjectsPlan {
             drop_ids,
             object_type,
-            referenced_ids: _,
+            referenced_ids,
         }: plan::DropObjectsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let referenced_ids_hashset = referenced_ids.iter().collect::<HashSet<_>>();
+        let mut objects = Vec::new();
+        for obj_id in &drop_ids {
+            if !referenced_ids_hashset.contains(obj_id) {
+                let object_info = ErrorMessageObjectDescription::from_id(
+                    obj_id,
+                    &self.catalog().for_session(session),
+                )
+                .to_string();
+                objects.push(object_info);
+            }
+        }
+
+        if !objects.is_empty() {
+            session.add_notice(AdapterNotice::CascadeDroppedObject { objects });
+        }
+
         let DropOps {
             ops,
             dropped_active_db,
@@ -1336,7 +1298,7 @@ impl Coordinator {
                 if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
                     let grantor_name = catalog.get_role(&privilege.grantor).name();
                     let object_description =
-                        ErrorMessageObjectDescription::from_id(object_id, catalog);
+                        ErrorMessageObjectDescription::from_sys_id(object_id, catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
@@ -1347,7 +1309,7 @@ impl Coordinator {
                 if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
                     let grantee_name = catalog.get_role(&privilege.grantee).name();
                     let object_description =
-                        ErrorMessageObjectDescription::from_id(object_id, catalog);
+                        ErrorMessageObjectDescription::from_sys_id(object_id, catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
@@ -1363,7 +1325,7 @@ impl Coordinator {
         for entry in self.catalog.entries() {
             let id = SystemObjectId::Object(entry.id().into());
             if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
-                let object_description = ErrorMessageObjectDescription::from_id(&id, &catalog);
+                let object_description = ErrorMessageObjectDescription::from_sys_id(&id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
@@ -1381,7 +1343,7 @@ impl Coordinator {
             let database_id = SystemObjectId::Object(database.id().into());
             if let Some(role_name) = dropped_roles.get(&database.owner_id) {
                 let object_description =
-                    ErrorMessageObjectDescription::from_id(&database_id, &catalog);
+                    ErrorMessageObjectDescription::from_sys_id(&database_id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
@@ -1400,7 +1362,7 @@ impl Coordinator {
                 );
                 if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
                     let object_description =
-                        ErrorMessageObjectDescription::from_id(&schema_id, &catalog);
+                        ErrorMessageObjectDescription::from_sys_id(&schema_id, &catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
@@ -1419,7 +1381,7 @@ impl Coordinator {
             let cluster_id = SystemObjectId::Object(cluster.id().into());
             if let Some(role_name) = dropped_roles.get(&cluster.owner_id) {
                 let object_description =
-                    ErrorMessageObjectDescription::from_id(&cluster_id, &catalog);
+                    ErrorMessageObjectDescription::from_sys_id(&cluster_id, &catalog);
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
@@ -1437,7 +1399,7 @@ impl Coordinator {
                     let replica_id =
                         SystemObjectId::Object((replica.cluster_id(), replica.replica_id()).into());
                     let object_description =
-                        ErrorMessageObjectDescription::from_id(&replica_id, &catalog);
+                        ErrorMessageObjectDescription::from_sys_id(&replica_id, &catalog);
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
@@ -1511,7 +1473,7 @@ impl Coordinator {
                 .collect();
             for invalid_revoke in invalid_revokes {
                 let object_description =
-                    ErrorMessageObjectDescription::from_id(&invalid_revoke, &session_catalog);
+                    ErrorMessageObjectDescription::from_sys_id(&invalid_revoke, &session_catalog);
                 session.add_notice(AdapterNotice::CannotRevoke { object_description });
             }
         }
@@ -2158,40 +2120,17 @@ impl Coordinator {
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
-        if enable_unified_optimizer_api {
-            self.sequence_peek_stage(
-                ctx,
-                PeekStage::Validate(PeekStageValidate {
-                    plan,
-                    target_cluster,
-                }),
-            )
-            .await;
-        } else {
-            // Allow while the introduction of the new optimizer API in
-            // #20569 is in progress.
-            #[allow(deprecated)]
-            self.sequence_peek_stage_deprecated(
-                ctx,
-                PeekStageDeprecated::Validate(PeekStageValidateDeprecated {
-                    plan,
-                    target_cluster,
-                }),
-            )
-            .await;
-        }
+        self.sequence_peek_stage(
+            ctx,
+            PeekStage::Validate(PeekStageValidate {
+                plan,
+                target_cluster,
+            }),
+        )
+        .await;
     }
 
     /// Processes as many peek stages as possible.
-    ///
-    /// WARNING! This should mirror the semantics of `sequence_peek_stage_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_peek_stage(
         &mut self,
@@ -2215,16 +2154,23 @@ impl Coordinator {
                 PeekStage::Validate(stage) => {
                     let next =
                         return_if_err!(self.peek_stage_validate(ctx.session_mut(), stage), ctx);
-                    (ctx, PeekStage::Optimize(next))
+
+                    (ctx, PeekStage::Timestamp(next))
+                }
+                PeekStage::Timestamp(stage) => {
+                    self.peek_stage_timestamp(ctx, stage).await;
+                    return;
                 }
                 PeekStage::Optimize(stage) => {
                     self.peek_stage_optimize(ctx, stage).await;
                     return;
                 }
-                PeekStage::Timestamp(stage) => match self.peek_stage_timestamp(ctx, stage) {
-                    Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
-                    None => return,
-                },
+                PeekStage::RealTimeRecency(stage) => {
+                    match self.peek_stage_real_time_recency(ctx, stage) {
+                        Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
+                        None => return,
+                    }
+                }
                 PeekStage::Finish(stage) => {
                     let res = self.peek_stage_finish(&mut ctx, stage).await;
                     ctx.retire(res);
@@ -2235,10 +2181,6 @@ impl Coordinator {
     }
 
     /// Do some simple validation. We must defer most of it until after any off-thread work.
-    ///
-    /// WARNING! This should mirror the semantics of `peek_stage_validate_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     fn peek_stage_validate(
         &mut self,
         session: &Session,
@@ -2246,7 +2188,7 @@ impl Coordinator {
             plan,
             target_cluster,
         }: PeekStageValidate,
-    ) -> Result<PeekStageOptimize, AdapterError> {
+    ) -> Result<PeekStageTimestamp, AdapterError> {
         let plan::SelectPlan {
             source,
             when,
@@ -2322,7 +2264,7 @@ impl Coordinator {
             role_metadata: session.role_metadata().clone(),
         };
 
-        Ok(PeekStageOptimize {
+        Ok(PeekStageTimestamp {
             validity,
             source,
             copy_to,
@@ -2335,9 +2277,80 @@ impl Coordinator {
         })
     }
 
-    /// WARNING! This should mirror the semantics of `peek_stage_optimize_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
+    /// Determine a linearized read timestamp (from a `TimestampOracle`), if
+    /// needed.
+    async fn peek_stage_timestamp(
+        &mut self,
+        ctx: ExecuteContext,
+        PeekStageTimestamp {
+            validity,
+            source,
+            copy_to,
+            source_ids,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+            optimizer,
+        }: PeekStageTimestamp,
+    ) {
+        let isolation_level = ctx.session.vars().transaction_isolation().clone();
+        let linearized_timeline =
+            Coordinator::get_linearized_timeline(&isolation_level, &when, &timeline_context);
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+
+        let build_optimize_stage = move |oracle_read_ts: Option<Timestamp>| -> PeekStageOptimize {
+            PeekStageOptimize {
+                validity,
+                source,
+                copy_to,
+                source_ids,
+                when,
+                target_replica,
+                timeline_context,
+                oracle_read_ts,
+                in_immediate_multi_stmt_txn,
+                optimizer,
+            }
+        };
+
+        match linearized_timeline {
+            Some(timeline) => {
+                let shared_oracle = self.get_shared_timestamp_oracle(&timeline);
+
+                if let Some(shared_oracle) = shared_oracle {
+                    // We can do it in an async task, because we can ship off
+                    // the timetamp oracle.
+                    mz_ore::task::spawn(|| "linearized timestamp task", async move {
+                        let oracle_read_ts = shared_oracle.read_ts().await;
+                        let stage = build_optimize_stage(Some(oracle_read_ts));
+
+                        let stage = PeekStage::Optimize(stage);
+                        // Ignore errors if the coordinator has shut down.
+                        let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+                    });
+                } else {
+                    // Timestamp oracle can't be shipped to an async task, we
+                    // have to do it here.
+                    let oracle = self.get_timestamp_oracle(&timeline);
+                    let oracle_read_ts = oracle.read_ts().await;
+                    let stage = build_optimize_stage(Some(oracle_read_ts));
+
+                    let stage = PeekStage::Optimize(stage);
+                    // Ignore errors if the coordinator has shut down.
+                    let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+                }
+            }
+            None => {
+                let stage = build_optimize_stage(None);
+                let stage = PeekStage::Optimize(stage);
+                // Ignore errors if the coordinator has shut down.
+                let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+            }
+        }
+    }
+
     async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
@@ -2360,6 +2373,7 @@ impl Coordinator {
                     &stage.when,
                     stage.optimizer.cluster_id(),
                     &stage.timeline_context,
+                    stage.oracle_read_ts.clone(),
                     None,
                 )
                 .await
@@ -2381,7 +2395,7 @@ impl Coordinator {
             || "optimize peek",
             move || match Self::optimize_peek(ctx.session(), stats, id_bundle, stage) {
                 Ok(stage) => {
-                    let stage = PeekStage::Timestamp(stage);
+                    let stage = PeekStage::RealTimeRecency(stage);
                     // Ignore errors if the coordinator has shut down.
                     let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
                 }
@@ -2390,9 +2404,6 @@ impl Coordinator {
         );
     }
 
-    /// WARNING! This should mirror the semantics of `optimize_peek_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     fn optimize_peek(
         session: &Session,
         stats: Box<dyn StatisticsOracle>,
@@ -2405,15 +2416,16 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             in_immediate_multi_stmt_txn,
             mut optimizer,
         }: PeekStageOptimize,
-    ) -> Result<PeekStageTimestamp, AdapterError> {
+    ) -> Result<PeekStageRealTimeRecency, AdapterError> {
         let local_mir_plan = optimizer.optimize(source)?;
         let local_mir_plan = local_mir_plan.resolve(session, stats);
         let global_mir_plan = optimizer.optimize(local_mir_plan)?;
 
-        Ok(PeekStageTimestamp {
+        Ok(PeekStageRealTimeRecency {
             validity,
             copy_to,
             source_ids,
@@ -2421,20 +2433,18 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             in_immediate_multi_stmt_txn,
             optimizer,
             global_mir_plan,
         })
     }
 
-    /// WARNING! This should mirror the semantics of `peek_stage_timestamp_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
-    fn peek_stage_timestamp(
+    fn peek_stage_real_time_recency(
         &mut self,
         ctx: ExecuteContext,
-        PeekStageTimestamp {
+        PeekStageRealTimeRecency {
             validity,
             copy_to,
             source_ids,
@@ -2442,10 +2452,11 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             in_immediate_multi_stmt_txn,
             optimizer,
             global_mir_plan,
-        }: PeekStageTimestamp,
+        }: PeekStageRealTimeRecency,
     ) -> Option<(ExecuteContext, PeekStageFinish)> {
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {
@@ -2459,6 +2470,7 @@ impl Coordinator {
                         when,
                         target_replica,
                         timeline_context,
+                        oracle_read_ts: oracle_read_ts.clone(),
                         source_ids,
                         in_immediate_multi_stmt_txn,
                         optimizer,
@@ -2488,6 +2500,7 @@ impl Coordinator {
                     when,
                     target_replica,
                     timeline_context,
+                    oracle_read_ts,
                     source_ids,
                     real_time_recency_ts: None,
                     optimizer,
@@ -2497,9 +2510,6 @@ impl Coordinator {
         }
     }
 
-    /// WARNING! This should mirror the semantics of `peek_stage_finish_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_finish(
         &mut self,
@@ -2511,6 +2521,7 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             source_ids,
             real_time_recency_ts,
             mut optimizer,
@@ -2526,6 +2537,7 @@ impl Coordinator {
                 ctx.session_mut(),
                 &when,
                 timeline_context,
+                oracle_read_ts,
                 source_ids,
                 &id_bundle,
                 real_time_recency_ts,
@@ -2582,16 +2594,13 @@ impl Coordinator {
 
     /// Determines the query timestamp and acquires read holds on dependent sources
     /// if necessary.
-    ///
-    /// WARNING! This should mirror the semantics of `sequence_peek_timestamp_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     async fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,
         when: &QueryWhen,
         cluster_id: ClusterId,
         timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         source_bundle: &CollectionIdBundle,
         source_ids: &BTreeSet<GlobalId>,
         real_time_recency_ts: Option<Timestamp>,
@@ -2606,7 +2615,7 @@ impl Coordinator {
                 // Use the transaction's timestamp if it exists and this isn't an AS OF query.
                 Some(
                     determination @ TimestampDetermination {
-                        timestamp_context: TimestampContext::TimelineTimestamp(_, _),
+                        timestamp_context: TimestampContext::TimelineTimestamp { .. },
                         ..
                     },
                 ) if in_immediate_multi_stmt_txn => (determination, None),
@@ -2632,6 +2641,7 @@ impl Coordinator {
                             when,
                             cluster_id,
                             &timeline_context,
+                            oracle_read_ts,
                             real_time_recency_ts,
                         )
                         .await?;
@@ -2706,14 +2716,12 @@ impl Coordinator {
         Ok(determination)
     }
 
-    /// WARNING! This should mirror the semantics of `plan_peek_deprecated`.
-    ///
-    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     async fn plan_peek(
         &mut self,
         session: &mut Session,
         when: &QueryWhen,
         timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
         id_bundle: &CollectionIdBundle,
         real_time_recency_ts: Option<Timestamp>,
@@ -2727,6 +2735,7 @@ impl Coordinator {
                 when,
                 optimizer.cluster_id(),
                 timeline_context,
+                oracle_read_ts,
                 id_bundle,
                 &source_ids,
                 real_time_recency_ts,
@@ -2798,8 +2807,6 @@ impl Coordinator {
         }
     }
 
-    /// This should mirror the operational semantics of
-    /// `Coordinator::sequence_subscribe_deprecated`.
     pub(super) async fn sequence_subscribe(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -2887,6 +2894,7 @@ impl Coordinator {
         // MIR ⇒ MIR optimization (global)
         let global_mir_plan = optimizer.optimize(from)?;
         // Timestamp selection
+        let oracle_read_ts = self.oracle_read_ts(&ctx.session, &timeline, &when).await;
         let as_of = self
             .determine_timestamp(
                 ctx.session(),
@@ -2894,6 +2902,7 @@ impl Coordinator {
                 &when,
                 cluster_id,
                 &timeline,
+                oracle_read_ts,
                 None,
             )
             .await?
@@ -2946,7 +2955,7 @@ impl Coordinator {
 
         let (df_desc, _df_meta) = global_lir_plan.unapply();
 
-        self.ship_dataflow_new(df_desc, cluster_id).await;
+        self.ship_dataflow(df_desc, cluster_id).await;
 
         if let Some(target) = target_replica {
             self.controller
@@ -3168,11 +3177,6 @@ impl Coordinator {
         // we aren't storing this clone in a `Subscriber`, so we should be fine.
         let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
         let pipeline_result = match stmt {
             plan::ExplaineeStatement::Query {
                 raw_plan,
@@ -3180,39 +3184,20 @@ impl Coordinator {
                 desc,
                 broken,
             } => {
-                if enable_unified_optimizer_api {
-                    // Please see the doc comment on `explain_query_optimizer_pipeline` for more
-                    // information regarding its subtleties.
-                    self.explain_query_optimizer_pipeline(
-                        raw_plan,
-                        broken,
-                        target_cluster,
-                        ctx.session_mut(),
-                        row_set_finishing,
-                        desc,
-                        &config,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                } else {
-                    // Allow while the introduction of the new optimizer API in
-                    // #20569 is in progress.
-                    #[allow(deprecated)]
-                    // Please see the doc comment on `explain_query_optimizer_pipeline` for more
-                    // information regarding its subtleties.
-                    self.explain_query_optimizer_pipeline_deprecated(
-                        raw_plan,
-                        broken,
-                        target_cluster,
-                        ctx.session_mut(),
-                        &Some(row_set_finishing),
-                        &config,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                }
+                // Please see the doc comment on `explain_query_optimizer_pipeline` for more
+                // information regarding its subtleties.
+                self.explain_query_optimizer_pipeline(
+                    raw_plan,
+                    broken,
+                    target_cluster,
+                    ctx.session_mut(),
+                    row_set_finishing,
+                    desc,
+                    &config,
+                    root_dispatch,
+                )
+                .with_subscriber(&optimizer_trace)
+                .await
             }
             plan::ExplaineeStatement::CreateMaterializedView {
                 name,
@@ -3450,12 +3435,18 @@ impl Coordinator {
                 .sufficient_collections(&source_ids);
 
             // Acquire a timestamp (necessary for loading statistics).
+            let when = QueryWhen::Immediately;
+            let oracle_read_ts = self
+                .oracle_read_ts(session, &timeline_context, &when)
+                .with_subscriber(root_dispatch.clone())
+                .await;
             let timestamp_ctx = self
                 .sequence_peek_timestamp(
                     session,
-                    &QueryWhen::Immediately,
+                    &when,
                     target_cluster_id,
                     timeline_context,
+                    oracle_read_ts,
                     &id_bundle,
                     &source_ids,
                     None, // no real-time recency
@@ -3840,24 +3831,14 @@ impl Coordinator {
     > {
         let plan::ExplainTimestampPlan { format, raw_plan } = plan;
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
+        // Collect optimizer parameters.
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-        let optimized_plan = if enable_unified_optimizer_api {
-            // Collect optimizer parameters.
-            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+        // Build an optimizer for this VIEW.
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
-            // Build an optimizer for this VIEW.
-            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
-
-            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-            optimizer.optimize(raw_plan)?
-        } else {
-            let decorrelated_plan = raw_plan.lower(self.catalog().system_config())?;
-            self.view_optimizer.optimize(decorrelated_plan)?
-        };
+        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+        let optimized_plan = optimizer.optimize(raw_plan)?;
 
         let source_ids = optimized_plan.depends_on();
         let cluster = self
@@ -3955,12 +3936,16 @@ impl Coordinator {
         let source_ids = source.depends_on();
         let timeline_context = self.validate_timeline_context(source_ids.clone())?;
 
+        let when = QueryWhen::Immediately;
+        let oracle_read_ts = self.oracle_read_ts(session, &timeline_context, &when).await;
+
         let determination = self
             .sequence_peek_timestamp(
                 session,
-                &QueryWhen::Immediately,
+                &when,
                 cluster_id,
                 timeline_context,
+                oracle_read_ts,
                 &id_bundle,
                 &source_ids,
                 real_time_recency_ts,
@@ -3982,17 +3967,12 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::InsertPlan,
     ) {
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
         let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
             let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
             OptimizedMirRelationExpr(expr)
-        } else if enable_unified_optimizer_api {
+        } else {
             // Collect optimizer parameters.
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
@@ -4001,9 +3981,6 @@ impl Coordinator {
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
             return_if_err!(optimizer.optimize(plan.values), ctx)
-        } else {
-            let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
-            return_if_err!(self.view_optimizer.optimize(expr), ctx)
         };
 
         match optimized_mir.into_inner() {
@@ -4349,13 +4326,17 @@ impl Coordinator {
             // Note: It's only OK for the write to have a greater timestamp than the read
             // because the write lock prevents any other writes from happening in between
             // the read and write.
-            if let Some(TimestampContext::TimelineTimestamp(timeline, read_ts)) = timestamp_context
+            if let Some(TimestampContext::TimelineTimestamp {
+                timeline,
+                chosen_ts: chosen_read_ts,
+                oracle_ts: _,
+            }) = timestamp_context
             {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 let result = strict_serializable_reads_tx.send(PendingReadTxn {
                     txn: PendingRead::ReadThenWrite {
                         tx,
-                        timestamp: (read_ts, timeline),
+                        timestamp: (chosen_read_ts, timeline),
                     },
                     created: Instant::now(),
                     num_requeues: 0,
@@ -4629,6 +4610,299 @@ impl Coordinator {
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Sink))
+    }
+
+    pub(super) async fn sequence_alter_connection(
+        &mut self,
+        ctx: ExecuteContext,
+        AlterConnectionPlan { id, action }: AlterConnectionPlan,
+    ) {
+        match action {
+            AlterConnectionAction::RotateKeys => {
+                let r = self.sequence_rotate_keys(ctx.session(), id).await;
+                ctx.retire(r);
+            }
+            AlterConnectionAction::AlterOptions {
+                set_options,
+                drop_options,
+                validate,
+            } => {
+                self.sequence_alter_connection_options(ctx, id, set_options, drop_options, validate)
+                    .await
+            }
+        }
+    }
+
+    async fn sequence_rotate_keys(
+        &mut self,
+        session: &Session,
+        id: GlobalId,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let secret = self.secrets_controller.reader().read(id).await?;
+        let previous_key_set = SshKeyPairSet::from_bytes(&secret)?;
+        let new_key_set = previous_key_set.rotate()?;
+        self.secrets_controller
+            .ensure(id, &new_key_set.to_bytes())
+            .await?;
+
+        let ops = vec![catalog::Op::UpdateRotatedKeys {
+            id,
+            previous_public_key_pair: previous_key_set.public_keys(),
+            new_public_key_pair: new_key_set.public_keys(),
+        }];
+
+        match self.catalog_transact(Some(session), ops).await {
+            Ok(_) => Ok(ExecuteResponse::AlteredObject(ObjectType::Connection)),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn sequence_alter_connection_options(
+        &mut self,
+        mut ctx: ExecuteContext,
+        id: GlobalId,
+        set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<mz_sql::names::Aug>>>,
+        drop_options: BTreeSet<ConnectionOptionName>,
+        validate: bool,
+    ) {
+        let cur_entry = self.catalog().get_entry(&id);
+        let cur_conn = cur_entry.connection().expect("known to be connection");
+
+        let inner = || -> Result<catalog::Connection, AdapterError> {
+            // Parse statement.
+            let create_conn_stmt = match mz_sql::parse::parse(&cur_conn.create_sql)
+                .expect("invalid create sql persisted to catalog")
+                .into_element()
+                .ast
+            {
+                Statement::CreateConnection(stmt) => stmt,
+                _ => unreachable!("proved type is source"),
+            };
+
+            let catalog = self.catalog().for_system_session();
+
+            // Resolve items in statement
+            let (mut create_conn_stmt, resolved_ids) =
+                mz_sql::names::resolve(&catalog, create_conn_stmt)
+                    .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
+
+            // Retain options that are neither set nor dropped.
+            create_conn_stmt
+                .values
+                .retain(|o| !set_options.contains_key(&o.name) && !drop_options.contains(&o.name));
+
+            // Set new values
+            create_conn_stmt.values.extend(
+                set_options
+                    .into_iter()
+                    .map(|(name, value)| ConnectionOption { name, value }),
+            );
+
+            // Open a new catalog, which we will use to re-plan our
+            // statement with the desired config.
+            let mut catalog = self.catalog().for_system_session();
+            catalog.mark_id_unresolvable_for_replanning(id);
+
+            // Re-define our source in terms of the amended statement
+            let plan = match mz_sql::plan::plan(
+                None,
+                &catalog,
+                Statement::CreateConnection(create_conn_stmt),
+                &Params::empty(),
+                &resolved_ids,
+            )
+            .map_err(|e| AdapterError::InvalidAlter("CONNECTION", e))?
+            {
+                Plan::CreateConnection(plan) => plan,
+                _ => unreachable!("create source plan is only valid response"),
+            };
+
+            // Parse statement.
+            let create_conn_stmt = match mz_sql::parse::parse(&plan.connection.create_sql)
+                .expect("invalid create sql persisted to catalog")
+                .into_element()
+                .ast
+            {
+                Statement::CreateConnection(stmt) => stmt,
+                _ => unreachable!("proved type is source"),
+            };
+
+            let catalog = self.catalog().for_system_session();
+
+            // Resolve items in statement
+            let (_, new_deps) = mz_sql::names::resolve(&catalog, create_conn_stmt)
+                .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
+
+            Ok(catalog::Connection {
+                create_sql: plan.connection.create_sql,
+                connection: plan.connection.connection,
+                resolved_ids: new_deps,
+            })
+        };
+
+        let conn = match inner() {
+            Ok(conn) => conn,
+            Err(e) => {
+                return ctx.retire(Err(e));
+            }
+        };
+
+        if validate {
+            let connection = conn
+                .connection
+                .clone()
+                .into_inline_connection(self.catalog().state());
+
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let transient_revision = self.catalog().transient_revision();
+            let conn_id = ctx.session().conn_id().clone();
+            let connection_context = self.connection_context.clone();
+            let otel_ctx = OpenTelemetryContext::obtain();
+            let role_metadata = ctx.session().role_metadata().clone();
+
+            task::spawn(
+                || format!("validate_alter_connection:{conn_id}"),
+                async move {
+                    let dependency_ids = conn.resolved_ids.0.clone();
+                    let result = match connection.validate(id, &connection_context).await {
+                        Ok(()) => Ok(conn),
+                        Err(err) => Err(err.into()),
+                    };
+
+                    // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
+                    let result = internal_cmd_tx.send(Message::AlterConnectionValidationReady(
+                        AlterConnectionValidationReady {
+                            ctx,
+                            result,
+                            connection_gid: id,
+                            plan_validity: PlanValidity {
+                                transient_revision,
+                                dependency_ids,
+                                cluster_id: None,
+                                replica_id: None,
+                                role_metadata,
+                            },
+                            otel_ctx,
+                        },
+                    ));
+                    if let Err(e) = result {
+                        tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
+                },
+            );
+        } else {
+            let result = self
+                .sequence_alter_connection_stage_finish(ctx.session_mut(), id, conn)
+                .await;
+            ctx.retire(result);
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn sequence_alter_connection_stage_finish(
+        &mut self,
+        session: &mut Session,
+        id: GlobalId,
+        mut connection: catalog::Connection,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        match &mut connection.connection {
+            mz_storage_types::connections::Connection::Ssh(ref mut ssh) => {
+                // Retain the connection's current SSH keys
+                let current_ssh = match &self
+                    .catalog
+                    .get_entry(&id)
+                    .connection()
+                    .expect("known to be Connection")
+                    .connection
+                {
+                    mz_storage_types::connections::Connection::Ssh(ssh) => ssh,
+                    _ => unreachable!(),
+                };
+
+                ssh.public_keys = current_ssh.public_keys.clone();
+            }
+            _ => {}
+        };
+
+        let ops = vec![catalog::Op::UpdateItem {
+            id,
+            name: self.catalog.get_entry(&id).name().clone(),
+            to_item: CatalogItem::Connection(connection.clone()),
+        }];
+
+        self.catalog_transact(Some(session), ops).await?;
+
+        match connection.connection {
+            mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
+                let spec = VpcEndpointConfig {
+                    aws_service_name: privatelink.service_name.to_owned(),
+                    availability_zone_ids: privatelink.availability_zones.to_owned(),
+                };
+                self.cloud_resource_controller
+                    .as_ref()
+                    .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
+                    .ensure_vpc_endpoint(id, spec)
+                    .await?;
+            }
+            _ => {}
+        };
+
+        let entry = self.catalog().get_entry(&id);
+
+        let mut connections = VecDeque::new();
+        connections.push_front(entry.id());
+
+        let mut sources = BTreeMap::new();
+        let mut sinks = BTreeMap::new();
+
+        while let Some(id) = connections.pop_front() {
+            for id in self.catalog.get_entry(&id).used_by() {
+                let entry = self.catalog.get_entry(id);
+                match entry.item_type() {
+                    CatalogItemType::Connection => connections.push_back(*id),
+                    CatalogItemType::Source => {
+                        let ingestion =
+                            match &entry.source().expect("known to be source").data_source {
+                                DataSourceDesc::Ingestion(ingestion) => ingestion
+                                    .clone()
+                                    .into_inline_connection(self.catalog().state()),
+                                _ => unreachable!("only ingestions reference connections"),
+                            };
+
+                        sources.insert(*id, ingestion);
+                    }
+                    CatalogItemType::Sink => {
+                        let export = entry.sink().expect("known to be sink");
+                        sinks.insert(
+                            *id,
+                            export
+                                .connection
+                                .clone()
+                                .into_inline_connection(self.catalog().state()),
+                        );
+                    }
+                    t => unreachable!("connection dependency not expected on {}", t),
+                }
+            }
+        }
+
+        if !sources.is_empty() {
+            self.controller
+                .storage
+                .alter_collection(sources)
+                .await
+                .expect("altering collection after txn must succeed");
+        }
+
+        if !sinks.is_empty() {
+            self.controller
+                .storage
+                .update_export_connection(sinks)
+                .await
+                .expect("altering exports after txn must succeed")
+        }
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
 
     pub(super) async fn sequence_alter_source(
@@ -5364,7 +5638,7 @@ impl Coordinator {
                 let non_applicable_privileges = acl_mode.difference(applicable_privileges);
                 if !non_applicable_privileges.is_empty() {
                     let object_description =
-                        ErrorMessageObjectDescription::from_id(&target_id, &catalog);
+                        ErrorMessageObjectDescription::from_sys_id(&target_id, &catalog);
                     warnings.push(AdapterNotice::NonApplicablePrivilegeTypes {
                         non_applicable_privileges,
                         object_description,

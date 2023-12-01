@@ -10,7 +10,9 @@
 #![allow(missing_docs)]
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
+use anyhow::Context;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
 use mz_frontegg_auth::{Authentication, AuthenticationConfig};
@@ -36,7 +38,7 @@ pub struct Args {
     /// get a DNS address. The first IP that address resolves to is the proxy destinaiton.
     #[clap(long,
         value_name = "HOST.{}.NAME:PORT",
-        requires_all = &["frontegg-jwk", "frontegg-api-token-url", "frontegg-admin-role"],
+        requires_all = &["frontegg-api-token-url", "frontegg-admin-role"],
     )]
     frontegg_resolver_template: Option<String>,
     /// HTTPS resolver address template. `{}` is replaced with the first subdomain of the HTTPS SNI
@@ -49,6 +51,13 @@ pub struct Args {
     /// key. Can optionally be base64 encoded with the URL-safe alphabet.
     #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-resolver-template")]
     frontegg_jwk: Option<String>,
+    /// Path of JWK used to validate JWTs during Frontegg authentication as a PEM public key.
+    #[clap(
+        long,
+        env = "FRONTEGG_JWK_FILE",
+        requires = "frontegg-resolver-template"
+    )]
+    frontegg_jwk_file: Option<PathBuf>,
     /// The full URL (including path) to the Frontegg api-token endpoint.
     #[clap(
         long,
@@ -72,9 +81,18 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
             let auth = Authentication::new(
                 AuthenticationConfig {
                     admin_api_token_url: args.frontegg_api_token_url.expect("clap enforced"),
-                    decoding_key: DecodingKey::from_rsa_pem(
-                        args.frontegg_jwk.expect("clap enforced").as_bytes(),
-                    )?,
+                    decoding_key: match (args.frontegg_jwk, args.frontegg_jwk_file) {
+                        (None, Some(path)) => {
+                            let jwk = std::fs::read(&path).with_context(|| {
+                                format!("read {path:?} for --frontegg-jwk-file")
+                            })?;
+                            DecodingKey::from_rsa_pem(&jwk)?
+                        }
+                        (Some(jwk), None) => DecodingKey::from_rsa_pem(jwk.as_bytes())?,
+                        _ => anyhow::bail!(
+                            "exactly one of --frontegg-jwk or --frontegg-jwk-file must be present"
+                        ),
+                    },
                     tenant_id: None,
                     now: mz_ore::now::SYSTEM_TIME.clone(),
                     admin_role: args.frontegg_admin_role.expect("clap enforced"),

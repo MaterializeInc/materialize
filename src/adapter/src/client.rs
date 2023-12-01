@@ -18,6 +18,7 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
+use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
@@ -144,13 +145,7 @@ impl Client {
     /// Returns a new client that is bound to the session and a response
     /// containing various details about the startup.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn startup(
-        &self,
-        session: Session,
-        // keys of settings that were set on statup, and thus should not be
-        // overridden by defaults.
-        set_setting_keys: Vec<String>,
-    ) -> Result<SessionClient, AdapterError> {
+    pub async fn startup(&self, session: Session) -> Result<SessionClient, AdapterError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
         // connection. The coordinator will send a canceled message on it if a
@@ -170,7 +165,6 @@ impl Client {
         self.send(Command::Startup {
             cancel_tx: Arc::clone(&cancel_tx),
             tx,
-            set_setting_keys,
             user,
             conn_id,
             secret_key,
@@ -198,8 +192,8 @@ impl Client {
         let StartupResponse {
             role_id,
             write_notify,
-            session_vars,
-            role_vars,
+            session_defaults,
+            role_defaults,
             catalog,
         } = response;
 
@@ -208,31 +202,60 @@ impl Client {
         // block the coordinator on a Builtin Table write.
         write_notify.await;
 
-        client.session().initialize_role_metadata(role_id);
-        let vars_mut = client.session().vars_mut();
-        for (name, val) in session_vars {
-            vars_mut
-                .set(None, &name, val.borrow(), false)
-                .expect("constrained to be valid");
+        let session = client.session();
+        session.initialize_role_metadata(role_id);
+        let vars_mut = session.vars_mut();
+        for (name, val) in session_defaults {
+            vars_mut.set_default(&name, val);
         }
-        for (name, val) in role_vars {
+        for (name, val) in role_defaults {
             if let Err(err) = vars_mut.set_role_default(&name, val.borrow()) {
                 // Note: erroring here is unexpected, but we don't want to panic if somehow our
                 // assumptions are wrong.
                 tracing::error!("failed to set peristed role default, {err:?}");
             }
         }
-        client
-            .session()
+        session
             .vars_mut()
             .end_transaction(EndTransactionAction::Commit);
 
-        let catalog = catalog.for_session(client.session());
+        let catalog = catalog.for_session(session);
         if catalog.active_database().is_none() {
-            let db = client.session().vars().database().into();
-            client
-                .session()
-                .add_notice(AdapterNotice::UnknownSessionDatabase(db));
+            let db = session.vars().database().into();
+            session.add_notice(AdapterNotice::UnknownSessionDatabase(db));
+        }
+
+        if session.vars().welcome_message() {
+            // Emit a welcome message, optimized for readability by humans using
+            // interactive tools. If you change the message, make sure that it
+            // formats nicely in both `psql` and the console's SQL shell.
+            session.add_notice(AdapterNotice::Welcome(format!(
+                "connected to Materialize v{}
+  Org ID: {}
+  Region: {}
+  User: {}
+  Cluster: {}
+  Database: {}
+  {}
+
+Issue a SQL query to get started. Need help?
+  View documentation: https://materialize.com/s/docs
+  Join our Slack community: https://materialize.com/s/chat
+    ",
+                session.vars().build_info().semver_version(),
+                self.environment_id.organization_id(),
+                self.environment_id.region(),
+                session.vars().user().name,
+                session.vars().cluster(),
+                session.vars().database(),
+                match session.vars().search_path() {
+                    [schema] => format!("Schema: {}", schema),
+                    schemas => format!(
+                        "Search path: {}",
+                        schemas.iter().map(|id| id.to_string()).join(", ")
+                    ),
+                },
+            )));
         }
 
         Ok(client)
@@ -252,7 +275,7 @@ impl Client {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(conn_id, SUPPORT_USER.clone());
-        let mut session_client = self.startup(session, vec![]).await?;
+        let mut session_client = self.startup(session).await?;
 
         // Parse the SQL statement.
         let stmts = mz_sql::parse::parse(sql)?;
@@ -284,12 +307,18 @@ impl Client {
         &self.metrics
     }
 
+    /// The current time according to the [`Client`].
+    pub fn now(&self) -> DateTime<Utc> {
+        to_datetime((self.now)())
+    }
+
     pub async fn append_webhook(
         &self,
         database: String,
         schema: String,
         name: String,
         conn_id: ConnectionId,
+        received_at: DateTime<Utc>,
     ) -> Result<AppendWebhookResponse, AdapterError> {
         let (tx, rx) = oneshot::channel();
 
@@ -299,6 +328,7 @@ impl Client {
             schema,
             name,
             conn_id,
+            received_at,
             tx,
         });
 

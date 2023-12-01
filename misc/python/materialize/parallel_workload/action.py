@@ -43,6 +43,7 @@ from materialize.parallel_workload.database import (
     ClusterReplica,
     Database,
     DBObject,
+    Index,
     KafkaSink,
     KafkaSource,
     PostgresSource,
@@ -238,6 +239,7 @@ class SQLsmithAction(Action):
 
         if not self.queries:
             self.composition.silent = True
+            seed = self.rng.randrange(2**31)
             try:
                 result = self.composition.run(
                     "sqlsmith",
@@ -246,11 +248,16 @@ class SQLsmithAction(Action):
                     "--read-state",
                     "--dry-run",
                     "--max-queries=100",
+                    f"--seed={seed}",
                     stdin=exe.db.sqlsmith_state,
                     capture=True,
                     capture_stderr=True,
                     rm=True,
                 )
+                if result.returncode != 0:
+                    raise ValueError(
+                        f"SQLsmith failed: {result.returncode} (seed {seed})\nStderr: {result.stderr}\nState: {exe.db.sqlsmith_state}"
+                    )
                 try:
                     data = json.loads(result.stdout)
                 except:
@@ -415,35 +422,41 @@ class CreateIndexAction(Action):
         columns = self.rng.sample(obj.columns, len(obj.columns))
         columns_str = "_".join(column.name() for column in columns)
         # columns_str may exceed 255 characters, so it is converted to a positive number with hash
-        index_name = f"idx_{obj.name()}_{abs(hash(columns_str))}"
+        index = Index(f"idx_{obj.name()}_{abs(hash(columns_str))}")
         index_elems = []
         for column in columns:
             order = self.rng.choice(["ASC", "DESC"])
             index_elems.append(f"{column.name(True)} {order}")
         index_str = ", ".join(index_elems)
-        query = f"CREATE INDEX {identifier(index_name)} ON {obj} ({index_str})"
+        query = f"CREATE INDEX {index} ON {obj} ({index_str})"
         exe.execute(query)
         with exe.db.lock:
-            exe.db.indexes.add(index_name)
+            exe.db.indexes.add(index)
         return True
 
 
 class DropIndexAction(Action):
     def run(self, exe: Executor) -> bool:
-        if not exe.db.indexes:
-            return False
-        index_name = self.rng.choice(list(exe.db.indexes))
-        query = f"DROP INDEX {identifier(index_name)}"
-        try:
-            exe.execute(query)
-        except QueryError as e:
-            # expected, see #20465
-            if exe.db.scenario != Scenario.Kill or (
-                "unknown catalog item" not in e.msg and "unknown schema" not in e.msg
-            ):
-                raise e
-        exe.db.indexes.remove(index_name)
-        return True
+        with exe.db.lock:
+            if not exe.db.indexes:
+                return False
+            index = self.rng.choice(list(exe.db.indexes))
+        with index.lock:
+            if index not in exe.db.indexes:
+                return False
+
+            query = f"DROP INDEX {index}"
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if exe.db.scenario != Scenario.Kill or (
+                    "unknown catalog item" not in e.msg
+                    and "unknown schema" not in e.msg
+                ):
+                    raise e
+            exe.db.indexes.remove(index)
+            return True
 
 
 class CreateTableAction(Action):
@@ -452,8 +465,12 @@ class CreateTableAction(Action):
             return False
         table_id = exe.db.table_id
         exe.db.table_id += 1
-        table = Table(self.rng, table_id, self.rng.choice(exe.db.schemas))
-        table.create(exe)
+        schema = self.rng.choice(exe.db.schemas)
+        with schema.lock:
+            if schema not in exe.db.schemas:
+                return False
+            table = Table(self.rng, table_id, schema)
+            table.create(exe)
         exe.db.tables.append(table)
         return True
 
@@ -711,10 +728,14 @@ class TransactionIsolationAction(Action):
 
 class CommitRollbackAction(Action):
     def run(self, exe: Executor) -> bool:
+        if not exe.action_run_since_last_commit_rollback:
+            return False
+
         if self.rng.random() < 0.7:
             exe.commit()
         else:
             exe.rollback()
+        exe.action_run_since_last_commit_rollback = False
         return True
 
 
@@ -733,14 +754,18 @@ class CreateViewAction(Action):
         )
         if self.rng.choice([True, False]) or base_object2 == base_object:
             base_object2 = None
-        view = View(
-            self.rng,
-            view_id,
-            base_object,
-            base_object2,
-            self.rng.choice(exe.db.schemas),
-        )
-        view.create(exe)
+        schema = self.rng.choice(exe.db.schemas)
+        with schema.lock:
+            if schema not in exe.db.schemas:
+                return False
+            view = View(
+                self.rng,
+                view_id,
+                base_object,
+                base_object2,
+                schema,
+            )
+            view.create(exe)
         exe.db.views.append(view)
         return True
 
@@ -1588,9 +1613,9 @@ write_action_list = ActionList(
         (InsertAction, 50),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (HttpPostAction, 50),
-        (CommitRollbackAction, 100),
+        (CommitRollbackAction, 10),
         (ReconnectAction, 1),
-        (SourceInsertAction, 100),
+        (SourceInsertAction, 50),
     ],
     autocommit=False,
 )

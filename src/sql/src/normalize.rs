@@ -427,17 +427,19 @@ pub fn create_statement(
         Statement::CreateConnection(CreateConnectionStatement {
             name,
             connection_type: _,
-            values: _,
+            values,
             with_options,
             if_not_exists,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
 
+            values.sort();
+
             // Validation only occurs once during planning and should not be
             // considered part of the statement's AST/canonical representation.
             with_options
-                .retain(|o| o.name != mz_sql_parser::ast::CreateConnectionOptionName::Validate)
+                .retain(|o| o.name != mz_sql_parser::ast::CreateConnectionOptionName::Validate);
         }
 
         _ => unreachable!(),
@@ -503,7 +505,7 @@ macro_rules! generate_extracted_config {
         paste::paste! {
             #[derive(Debug)]
             pub struct [<$option_ty Extracted>] {
-                seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>,
+                pub(crate) seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>,
                 $(
                     pub(crate) [<$option_name:snake>]: generate_extracted_config!(
                         @ifty $allow_multiple,

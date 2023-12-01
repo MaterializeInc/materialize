@@ -42,7 +42,7 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
+    AlterSourceAddSubsourceOption, ConnectionOptionName, CreateSourceSubsource, QualifiedReplica,
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -143,6 +143,7 @@ pub enum Plan {
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSetCluster(AlterSetClusterPlan),
     AlterSink(AlterSinkPlan),
+    AlterConnection(AlterConnectionPlan),
     AlterSource(AlterSourcePlan),
     PurifiedAlterSource {
         // The `ALTER SOURCE` plan
@@ -170,7 +171,6 @@ pub enum Plan {
     Execute(ExecutePlan),
     Deallocate(DeallocatePlan),
     Raise(RaisePlan),
-    RotateKeys(RotateKeysPlan),
     GrantRole(GrantRolePlan),
     RevokeRole(RevokeRolePlan),
     GrantPrivileges(GrantPrivilegesPlan),
@@ -189,7 +189,7 @@ impl Plan {
             StatementKind::AlterCluster => {
                 vec![PlanKind::AlterNoop, PlanKind::AlterCluster]
             }
-            StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::RotateKeys],
+            StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::AlterConnection],
             StatementKind::AlterDefaultPrivileges => vec![PlanKind::AlterDefaultPrivileges],
             StatementKind::AlterIndex => vec![
                 PlanKind::AlterIndexResetOptions,
@@ -372,6 +372,7 @@ impl Plan {
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
             Plan::AlterSink(_) => "alter sink",
+            Plan::AlterConnection(_) => "alter connection",
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterItemSwap(_) => "swap item",
@@ -411,7 +412,6 @@ impl Plan {
             Plan::Execute(_) => "execute",
             Plan::Deallocate(_) => "deallocate",
             Plan::Raise(_) => "raise",
-            Plan::RotateKeys(_) => "rotate keys",
             Plan::GrantRole(_) => "grant role",
             Plan::RevokeRole(_) => "revoke role",
             Plan::GrantPrivileges(_) => "grant privilege",
@@ -1022,6 +1022,22 @@ pub struct AlterSinkPlan {
 }
 
 #[derive(Debug)]
+pub enum AlterConnectionAction {
+    RotateKeys,
+    AlterOptions {
+        set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<Aug>>>,
+        drop_options: BTreeSet<ConnectionOptionName>,
+        validate: bool,
+    },
+}
+
+#[derive(Debug)]
+pub struct AlterConnectionPlan {
+    pub id: GlobalId,
+    pub action: AlterConnectionAction,
+}
+
+#[derive(Debug)]
 pub enum AlterSourceAction {
     Resize(AlterOptionParameter),
     DropSubsourceExports {
@@ -1135,11 +1151,6 @@ pub struct AlterOwnerPlan {
     pub id: ObjectId,
     pub object_type: ObjectType,
     pub new_owner: RoleId,
-}
-
-#[derive(Debug)]
-pub struct RotateKeysPlan {
-    pub id: GlobalId,
 }
 
 #[derive(Debug)]

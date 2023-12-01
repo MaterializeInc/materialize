@@ -13,6 +13,7 @@ from materialize import MZ_ROOT
 from materialize.mzcompose import (
     loader,
 )
+from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.service import (
     Service,
 )
@@ -23,11 +24,15 @@ class SshBastionHost(Service):
         self,
         name: str = "ssh-bastion-host",
         max_startups: str | None = None,
+        aliases: list[str] | None = None,
     ) -> None:
         setup_path = os.path.relpath(
             MZ_ROOT / "misc" / "images" / "sshd" / "setup.sh",
             loader.composition_path,
         )
+
+        if aliases is None:
+            aliases = ["other_ssh_bastion"]
 
         super().__init__(
             name=name,
@@ -41,6 +46,7 @@ class SshBastionHost(Service):
                     *([f"MAX_STARTUPS={max_startups}"] if max_startups else []),
                 ],
                 "volumes": [f"{setup_path}:/etc/entrypoint.d/setup.sh"],
+                "networks": {"default": {"aliases": aliases}},
                 "healthcheck": {
                     "test": "[ -f /var/run/sshd/sshd.pid ]",
                     "timeout": "5s",
@@ -49,3 +55,30 @@ class SshBastionHost(Service):
                 },
             },
         )
+
+
+def setup_default_ssh_test_connection(c: Composition, ssh_tunnel_name: str) -> None:
+
+    c.sql(
+        f"""
+            CREATE CONNECTION IF NOT EXISTS {ssh_tunnel_name} TO SSH TUNNEL (
+            HOST 'ssh-bastion-host',
+            USER 'mz',
+            PORT 22)
+        """
+    )
+
+    public_key = c.sql_query(
+        f"""
+            select public_key_1 from mz_ssh_tunnel_connections ssh \
+            join mz_connections c on c.id = ssh.id
+            where c.name = '{ssh_tunnel_name}';
+        """
+    )[0][0]
+
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' >> /etc/authorized_keys/mz",
+    )

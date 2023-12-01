@@ -276,7 +276,8 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-Using different SSH tunnels for each broker:
+Using different SSH tunnels for each broker, with a default for brokers that are
+not listed:
 
 ```sql
 CREATE CONNECTION ssh1 TO SSH TUNNEL (HOST 'ssh1', ...);
@@ -286,9 +287,8 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 BROKERS (
     'broker1:9092' USING SSH TUNNEL ssh1,
     'broker2:9092' USING SSH TUNNEL ssh2
-    -- Add all Kafka brokers here. Connections to advertised brokers that are
-    -- not listed here will not be tunneled.
     )
+    SSH TUNNEL ssh_1
 );
 ```
 
@@ -407,7 +407,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     PORT <SSH_BASTION_PORT>
 );
 
-CREATE CONNECTION csr_privatelink TO CONFLUENT SCHEMA REGISTRY (
+CREATE CONNECTION csr_ssh TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://my-confluent-schema-registry:8081',
     SSH TUNNEL ssh_connection
 );

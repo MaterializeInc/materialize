@@ -171,12 +171,13 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         frontier: Antichain<T>,
     },
 
-    /// `Peek` instructs the replica to perform a peek at an index.
+    /// `Peek` instructs the replica to perform a peek on a collection: either an index or a
+    /// Persist-backed collection.
     ///
     /// The [`Peek`] description must have the following properties:
     ///
-    ///   * The target index has previously been created by a corresponding `CreateDataflow`
-    ///     command.
+    ///   * If targeting an index, it has previously been created by a corresponding `CreateDataflow`
+    ///     command. (If targeting a persist collection, that collection should exist.)
     ///   * The [`Peek::uuid`] is unique, i.e., the UUIDs of peeks a replica gets instructed to
     ///     perform do not repeat (within a single protocol iteration).
     ///
@@ -477,10 +478,37 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     }
 }
 
-/// Peek at an arrangement.
+/// Metadata specific to the peek variant.
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum PeekTarget {
+    /// This peek is against an index. Since this should be held in memory on
+    /// the target cluster, no additional coordinates are necessary.
+    Index {
+        /// The id of the (possibly transient) index.
+        id: GlobalId,
+    },
+    /// This peek is against a Persist collection.
+    Persist {
+        /// The id of the backing Persist collection.
+        id: GlobalId,
+        /// The identifying metadata of the Persist shard.
+        metadata: CollectionMetadata,
+    },
+}
+
+impl PeekTarget {
+    pub fn id(&self) -> GlobalId {
+        match self {
+            PeekTarget::Index { id, .. } => *id,
+            PeekTarget::Persist { id, .. } => *id,
+        }
+    }
+}
+
+/// Peek a collection, either in an arrangement or Persist.
 ///
-/// This request elicits data from the worker, by naming an
-/// arrangement and some actions to apply to the results before
+/// This request elicits data from the worker, by naming the
+/// collection and some actions to apply to the results before
 /// returning them.
 ///
 /// The `timestamp` member must be valid for the arrangement that
@@ -491,9 +519,9 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
 /// correctly answer the `Peek`.
 #[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Peek<T = mz_repr::Timestamp> {
-    /// The identifier of the arrangement.
-    pub id: GlobalId,
-    /// If `Some`, then look up only the given keys from the arrangement (instead of a full scan).
+    /// Target-specific metadata.
+    pub target: PeekTarget,
+    /// If `Some`, then look up only the given keys from the collection (instead of a full scan).
     /// The vector is never empty.
     #[proptest(strategy = "proptest::option::of(proptest::collection::vec(any::<Row>(), 1..5))")]
     pub literal_constraints: Option<Vec<Row>>,
@@ -502,7 +530,7 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// Used in responses and cancellation requests.
     #[proptest(strategy = "any_uuid()")]
     pub uuid: Uuid,
-    /// The logical timestamp at which the arrangement is queried.
+    /// The logical timestamp at which the collection is queried.
     pub timestamp: T,
     /// Actions to apply to the result set before returning them.
     pub finishing: RowSetFinishing,
@@ -518,7 +546,7 @@ pub struct Peek<T = mz_repr::Timestamp> {
 impl RustType<ProtoPeek> for Peek {
     fn into_proto(&self) -> ProtoPeek {
         ProtoPeek {
-            id: Some(self.id.into_proto()),
+            id: Some(self.target.id().into_proto()),
             key: match &self.literal_constraints {
                 // In the Some case, the vector is never empty, so it's safe to encode None as an
                 // empty vector, and Some(vector) as just the vector.
@@ -533,12 +561,23 @@ impl RustType<ProtoPeek> for Peek {
             finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
             otel_ctx: self.otel_ctx.clone().into(),
+            target: Some(match &self.target {
+                PeekTarget::Index { id } => proto_peek::Target::Index(ProtoIndexTarget {
+                    id: Some(id.into_proto()),
+                }),
+
+                PeekTarget::Persist { id, metadata } => {
+                    proto_peek::Target::Persist(ProtoPersistTarget {
+                        id: Some(id.into_proto()),
+                        metadata: Some(metadata.into_proto()),
+                    })
+                }
+            }),
         }
     }
 
     fn from_proto(x: ProtoPeek) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            id: x.id.into_rust_if_some("ProtoPeek::id")?,
             literal_constraints: {
                 let vec: Vec<Row> = x.key.into_rust()?;
                 if vec.is_empty() {
@@ -554,6 +593,18 @@ impl RustType<ProtoPeek> for Peek {
                 .map_filter_project
                 .into_rust_if_some("ProtoPeek::map_filter_project")?,
             otel_ctx: x.otel_ctx.into(),
+            target: match x.target {
+                Some(proto_peek::Target::Index(target)) => PeekTarget::Index {
+                    id: target.id.into_rust_if_some("ProtoIndexTarget::id")?,
+                },
+                Some(proto_peek::Target::Persist(target)) => PeekTarget::Persist {
+                    id: target.id.into_rust_if_some("ProtoIndexTarget::id")?,
+                    metadata: target.metadata.into_rust_if_some("ProtoPeek::target")?,
+                },
+                None => PeekTarget::Index {
+                    id: x.id.into_rust_if_some("ProtoPeek::id")?,
+                },
+            },
         })
     }
 }

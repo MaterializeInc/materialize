@@ -209,7 +209,7 @@ class PgCdcBase:
                       - materialize.public.postgres_source_tablea{self.suffix}_primary_idx (*** full scan ***)
                     """
                 )
-                if self.base_version >= MzVersion.parse("0.50.0-dev")
+                if self.base_version >= MzVersion.parse_mz("v0.50.0-dev")
                 else ""
             )
         )

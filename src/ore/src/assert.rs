@@ -92,6 +92,19 @@ macro_rules! soft_assert_eq {
     }}
 }
 
+/// Asserts that two values are not equal if soft assertions are enabled.
+///
+/// Soft assertions have a small runtime cost even when disabled. See
+/// [`ore::assert`](crate::assert#Soft-assertions) for details.
+#[macro_export]
+macro_rules! soft_assert_ne {
+    ($cond:expr, $($arg:tt)+) => {{
+        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+            assert_ne!($cond, $($arg)+);
+        }
+    }}
+}
+
 /// Asserts that a condition is true if soft assertions are enabled, or logs
 /// an error if soft assertions are disabled and the condition is false.
 #[macro_export]

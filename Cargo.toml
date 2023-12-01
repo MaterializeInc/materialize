@@ -28,6 +28,7 @@ members = [
     "src/expr-test-util",
     "src/frontegg-auth",
     "src/frontegg-client",
+    "src/frontegg-mock",
     "src/http-util",
     "src/interchange",
     "src/kafka-util",
@@ -112,14 +113,10 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-# 1.72.0 has a compile time performance regression:
-# https://github.com/rust-lang/rust/issues/115283, so don't use it.
-rust-version = "1.71.0"
+rust-version = "1.74.0"
 
 [profile.dev]
-# TODO(gusywnn|benesch): incremental is still not reliable as of rust 1.72
-# in our workspace.
-incremental = false
+split-debuginfo = "unpacked"
 
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even
@@ -182,6 +179,8 @@ tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opent
 
 # Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
 # it into a release.
+# Also bumps lru to 0.12.0
+# Needs a more complex update to 2.0.0, with a custom TLS connector.
 launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk" }
 
 # Waiting on https://github.com/AltSysrq/proptest/pull/264.
@@ -196,13 +195,6 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 # a release.
 openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 
-# Waiting for a new release of kube-client compatible with base64 0.21.0
-kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4" }
-kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4" }
-
-# Waiting on `lru` dep to update to `0.11.0`
-mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git" }
-
 # Removes dependencies required for WASM support that create duplicated deps.
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
@@ -210,3 +202,6 @@ reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.gi
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.
 columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
+
+[workspace.metadata.vet]
+store = { path = "misc/cargo-vet" }

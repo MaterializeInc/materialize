@@ -19,6 +19,7 @@ use itertools::Itertools;
 use postgres_openssl::MakeTlsConnector;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
@@ -38,7 +39,7 @@ use crate::durable::objects::{
     TimelineTimestamp, TimestampValue,
 };
 use crate::durable::transaction::{Transaction, TransactionBatch};
-use crate::durable::upgrade::upgrade;
+use crate::durable::upgrade::stash::upgrade;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DebugCatalogState, DurableCatalogError,
     DurableCatalogState, Epoch, OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
@@ -411,7 +412,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
         })
     }
 
-    async fn expire(self) {
+    async fn expire(self: Box<Self>) {
         // Nothing to release in the stash.
     }
 }
@@ -751,177 +752,193 @@ impl DurableCatalogState for Connection {
             Ok(())
         }
 
-        // The with_transaction fn below requires a Fn that can be cloned,
-        // meaning anything it closes over must be Clone. TransactionBatch
-        // implements Clone, thus, the Arcs here aren't strictly necessary.
-        // However, using an Arc means that we never clone the TransactionBatch
-        // (which would happen at least one time when the txn starts), and
-        // instead only clone the Arc.
-        let txn_batch = Arc::new(txn_batch);
-        let is_initialized = is_stash_initialized(&mut self.stash).await?;
+        async fn commit_transaction_inner(
+            catalog: &mut Connection,
+            txn_batch: TransactionBatch,
+        ) -> Result<(), CatalogError> {
+            // The with_transaction fn below requires a Fn that can be cloned,
+            // meaning anything it closes over must be Clone. TransactionBatch
+            // implements Clone, thus, the Arcs here aren't strictly necessary.
+            // However, using an Arc means that we never clone the TransactionBatch
+            // (which would happen at least one time when the txn starts), and
+            // instead only clone the Arc.
+            let txn_batch = Arc::new(txn_batch);
+            let is_initialized = is_stash_initialized(&mut catalog.stash).await?;
 
-        // Before doing anything else, set the connection timeout if it changed.
-        if let Some(connection_timeout) = txn_batch.connection_timeout {
-            self.stash.set_connect_timeout(connection_timeout).await;
-        }
+            // Before doing anything else, set the connection timeout if it changed.
+            if let Some(connection_timeout) = txn_batch.connection_timeout {
+                catalog.stash.set_connect_timeout(connection_timeout).await;
+            }
 
-        self.stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    let mut batches = Vec::new();
+            catalog
+                .stash
+                .with_transaction(move |tx| {
+                    Box::pin(async move {
+                        let mut batches = Vec::new();
 
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &DATABASES_COLLECTION,
-                        &txn_batch.databases,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &SCHEMAS_COLLECTION,
-                        &txn_batch.schemas,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &ITEM_COLLECTION,
-                        &txn_batch.items,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &COMMENTS_COLLECTION,
-                        &txn_batch.comments,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &ROLES_COLLECTION,
-                        &txn_batch.roles,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &CLUSTER_COLLECTION,
-                        &txn_batch.clusters,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &CLUSTER_REPLICA_COLLECTION,
-                        &txn_batch.cluster_replicas,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-                        &txn_batch.introspection_sources,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &ID_ALLOCATOR_COLLECTION,
-                        &txn_batch.id_allocator,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &CONFIG_COLLECTION,
-                        &txn_batch.configs,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &SETTING_COLLECTION,
-                        &txn_batch.settings,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &TIMESTAMP_COLLECTION,
-                        &txn_batch.timestamps,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &SYSTEM_GID_MAPPING_COLLECTION,
-                        &txn_batch.system_gid_mapping,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &SYSTEM_CONFIGURATION_COLLECTION,
-                        &txn_batch.system_configurations,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &DEFAULT_PRIVILEGES_COLLECTION,
-                        &txn_batch.default_privileges,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &SYSTEM_PRIVILEGES_COLLECTION,
-                        &txn_batch.system_privileges,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &AUDIT_LOG_COLLECTION,
-                        &txn_batch.audit_log_updates,
-                        is_initialized,
-                    )
-                    .await?;
-                    add_batch(
-                        &tx,
-                        &mut batches,
-                        &STORAGE_USAGE_COLLECTION,
-                        &txn_batch.storage_usage_updates,
-                        is_initialized,
-                    )
-                    .await?;
-                    tx.append(batches).await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &DATABASES_COLLECTION,
+                            &txn_batch.databases,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &SCHEMAS_COLLECTION,
+                            &txn_batch.schemas,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &ITEM_COLLECTION,
+                            &txn_batch.items,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &COMMENTS_COLLECTION,
+                            &txn_batch.comments,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &ROLES_COLLECTION,
+                            &txn_batch.roles,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &CLUSTER_COLLECTION,
+                            &txn_batch.clusters,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &CLUSTER_REPLICA_COLLECTION,
+                            &txn_batch.cluster_replicas,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
+                            &txn_batch.introspection_sources,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &ID_ALLOCATOR_COLLECTION,
+                            &txn_batch.id_allocator,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &CONFIG_COLLECTION,
+                            &txn_batch.configs,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &SETTING_COLLECTION,
+                            &txn_batch.settings,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &TIMESTAMP_COLLECTION,
+                            &txn_batch.timestamps,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &SYSTEM_GID_MAPPING_COLLECTION,
+                            &txn_batch.system_gid_mapping,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &SYSTEM_CONFIGURATION_COLLECTION,
+                            &txn_batch.system_configurations,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &DEFAULT_PRIVILEGES_COLLECTION,
+                            &txn_batch.default_privileges,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &SYSTEM_PRIVILEGES_COLLECTION,
+                            &txn_batch.system_privileges,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &AUDIT_LOG_COLLECTION,
+                            &txn_batch.audit_log_updates,
+                            is_initialized,
+                        )
+                        .await?;
+                        add_batch(
+                            &tx,
+                            &mut batches,
+                            &STORAGE_USAGE_COLLECTION,
+                            &txn_batch.storage_usage_updates,
+                            is_initialized,
+                        )
+                        .await?;
+                        tx.append(batches).await?;
 
-                    Ok(())
+                        Ok(())
+                    })
                 })
-            })
-            .await?;
+                .await?;
 
-        Ok(())
+            Ok(())
+        }
+        self.stash.metrics.catalog_transaction_commits.inc();
+        let counter = self
+            .stash
+            .metrics
+            .catalog_transaction_commit_latency_seconds
+            .clone();
+        commit_transaction_inner(self, txn_batch)
+            .wall_time()
+            .inc_by(counter)
+            .await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1152,7 +1169,7 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
         self.openable_connection.trace().await
     }
 
-    async fn expire(self) {
+    async fn expire(self: Box<Self>) {
         self.openable_connection.expire().await
     }
 }

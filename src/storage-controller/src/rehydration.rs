@@ -15,8 +15,7 @@
 //! with the underlying client, it will reconnect the client and replay the
 //! command stream.
 
-use std::collections::btree_map::Entry;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
 use std::time::Duration;
 
@@ -25,6 +24,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::{Stream, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_types::Codec64;
@@ -32,7 +32,7 @@ use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::{
-    CreateSinkCommand, RunIngestionCommand, StorageClient, StorageCommand, StorageGrpcClient,
+    RunIngestionCommand, RunSinkCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
 use mz_storage_client::metrics::RehydratingStorageClientMetrics;
@@ -69,6 +69,7 @@ where
         metrics: RehydratingStorageClientMetrics,
         envd_epoch: NonZeroI64,
         grpc_client_params: GrpcClientParameters,
+        now: NowFn,
     ) -> RehydratingStorageClient<T> {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
@@ -85,6 +86,7 @@ where
             config: Default::default(),
             metrics,
             grpc_client_params,
+            now,
         };
         let task = mz_ore::task::spawn(|| "rehydration", async move { task.run().await });
         RehydratingStorageClient {
@@ -136,7 +138,10 @@ enum RehydrationCommand<T> {
 }
 
 /// A task that manages rehydration.
-struct RehydrationTask<T> {
+struct RehydrationTask<T>
+where
+    T: Timestamp + Lattice + Codec64,
+{
     /// The build information for this process.
     build_info: &'static BuildInfo,
     /// A channel upon which commands intended for the storage replica are
@@ -147,7 +152,7 @@ struct RehydrationTask<T> {
     /// The sources that have been observed.
     sources: BTreeMap<GlobalId, RunIngestionCommand>,
     /// The exports that have been observed.
-    sinks: BTreeMap<GlobalId, CreateSinkCommand<T>>,
+    sinks: BTreeMap<GlobalId, RunSinkCommand<T>>,
     /// The upper frontier information received.
     uppers: BTreeMap<GlobalId, Antichain<T>>,
     /// The since frontiers that have been observed.
@@ -163,6 +168,8 @@ struct RehydrationTask<T> {
     metrics: RehydratingStorageClientMetrics,
     /// gRPC client parameters.
     grpc_client_params: GrpcClientParameters,
+    /// A function that returns the current time.
+    now: NowFn,
 }
 
 enum RehydrationTaskState<T: Timestamp + Lattice> {
@@ -206,14 +213,22 @@ where
     }
 
     async fn step_await_address(&mut self) -> RehydrationTaskState<T> {
+        if self.initialized {
+            self.update_paused_statuses();
+        }
+
         loop {
             match self.command_rx.recv().await {
                 None => break RehydrationTaskState::Done,
                 Some(RehydrationCommand::Connect { location }) => {
-                    break RehydrationTaskState::Rehydrate { location }
+                    break RehydrationTaskState::Rehydrate { location };
                 }
                 Some(RehydrationCommand::Send(command)) => {
                     self.absorb_command(&command);
+
+                    if self.initialized {
+                        self.update_paused_statuses();
+                    }
                 }
                 Some(RehydrationCommand::Reset) => {}
             }
@@ -244,7 +259,9 @@ where
                     Ok(RehydrationCommand::Send(command)) => {
                         self.absorb_command(&command);
                     }
-                    Ok(RehydrationCommand::Reset) => return RehydrationTaskState::AwaitAddress,
+                    Ok(RehydrationCommand::Reset) => {
+                        return RehydrationTaskState::AwaitAddress;
+                    }
                     Err(TryRecvError::Disconnected) => return RehydrationTaskState::Done,
                     Err(TryRecvError::Empty) => break,
                 }
@@ -313,7 +330,7 @@ where
             timely_command,
             StorageCommand::UpdateConfiguration(self.config.clone()),
             StorageCommand::RunIngestions(self.sources.values().cloned().collect()),
-            StorageCommand::CreateSinks(self.sinks.values().cloned().collect()),
+            StorageCommand::RunSinks(self.sinks.values().cloned().collect()),
             StorageCommand::AllowCompaction(
                 self.sinces
                     .iter()
@@ -361,6 +378,45 @@ where
                 self.send_response(location, client, response)
             }
         }
+    }
+
+    /// Sets the status to paused for sources/sinks this task manages.
+    fn update_paused_statuses(&self) {
+        // If the `response_tx` is closed, then we no longer need to report on this
+        // object.
+        let _ = self.response_tx.send(StorageResponse::StatusUpdates(
+            self.sources
+                .keys()
+                .map(|id| mz_storage_client::client::StatusUpdate {
+                    id: *id,
+                    status: "paused".to_string(),
+                    timestamp: mz_ore::now::to_datetime((self.now)()),
+                    error: None,
+                    hints: BTreeSet::from([
+                        "There is currently no replica running this source".to_string()
+                    ]),
+                    namespaced_errors: Default::default(),
+                })
+                .collect(),
+        ));
+
+        // If the `response_tx` is closed, then we no longer need to report on this
+        // object.
+        let _ = self.response_tx.send(StorageResponse::StatusUpdates(
+            self.sinks
+                .keys()
+                .map(|id| mz_storage_client::client::StatusUpdate {
+                    id: *id,
+                    status: "paused".to_string(),
+                    timestamp: mz_ore::now::to_datetime((self.now)()),
+                    error: None,
+                    hints: BTreeSet::from([
+                        "There is currently no replica running this source".to_string()
+                    ]),
+                    namespaced_errors: Default::default(),
+                })
+                .collect(),
+        ));
     }
 
     async fn send_commands(
@@ -413,30 +469,21 @@ where
             }
             StorageCommand::RunIngestions(ingestions) => {
                 for ingestion in ingestions {
-                    let prev = self.sources.insert(ingestion.id, ingestion.clone());
-                    assert!(
-                        prev.is_some() == ingestion.update,
-                        "can only and must update source if RunIngestion is update"
-                    );
+                    self.sources.insert(ingestion.id, ingestion.clone());
 
                     for id in ingestion.description.subsource_ids() {
-                        match self.uppers.entry(id) {
-                            Entry::Occupied(_) => {
-                                assert!(ingestion.update, "tried to re-insert frontier for {}", id)
-                            }
-                            Entry::Vacant(v) => {
-                                v.insert(Antichain::from_elem(T::minimum()));
-                            }
-                        };
+                        self.uppers
+                            .entry(id)
+                            .or_insert(Antichain::from_elem(T::minimum()));
                     }
                 }
             }
-            StorageCommand::CreateSinks(exports) => {
+            StorageCommand::RunSinks(exports) => {
                 for export in exports {
                     self.sinks.insert(export.id, export.clone());
-                    // Initialize the uppers we are tracking
                     self.uppers
-                        .insert(export.id, Antichain::from_elem(T::minimum()));
+                        .entry(export.id)
+                        .or_insert(Antichain::from_elem(T::minimum()));
                 }
             }
             StorageCommand::AllowCompaction(frontiers) => {
@@ -491,6 +538,10 @@ where
             StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
                 // Just forward it along.
                 Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats))
+            }
+            StorageResponse::StatusUpdates(updates) => {
+                // Just forward it along.
+                Some(StorageResponse::StatusUpdates(updates))
             }
         }
     }

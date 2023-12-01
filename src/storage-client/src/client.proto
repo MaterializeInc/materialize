@@ -12,6 +12,7 @@
 syntax = "proto3";
 
 import "proto/src/proto.proto";
+import "proto/src/chrono.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "cluster-client/src/client.proto";
@@ -37,22 +38,27 @@ message ProtoAllowCompaction {
 }
 
 message ProtoRunIngestionCommand {
+    reserved 3;
+    reserved "update";
+
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_storage_types.sources.ProtoIngestionDescription description = 2;
-    bool update = 3;
 }
 
 message ProtoCreateSources {
     repeated ProtoRunIngestionCommand sources = 1;
 }
 
-message ProtoCreateSinkCommand {
+message ProtoRunSinkCommand {
+    reserved 3;
+    reserved "update";
+
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_storage_types.sinks.ProtoStorageSinkDesc description = 2;
 }
 
-message ProtoCreateSinks {
-    repeated ProtoCreateSinkCommand sinks = 1;
+message ProtoRunSinks {
+    repeated ProtoRunSinkCommand sinks = 1;
 }
 
 message ProtoFrontierUppersKind {
@@ -75,7 +81,7 @@ message ProtoStorageCommand {
         ProtoCreateSources create_sources = 1;
         ProtoAllowCompaction allow_compaction = 2;
         google.protobuf.Empty initialization_complete = 3;
-        ProtoCreateSinks create_sinks = 4;
+        ProtoRunSinks run_sinks = 4;
         mz_storage_types.parameters.ProtoStorageParameters update_configuration = 5;
     }
 }
@@ -90,8 +96,8 @@ message ProtoStorageResponse {
         uint64 updates_committed = 6;
         uint64 bytes_received = 7;
         uint64 envelope_state_bytes = 8;
-        uint64 envelope_state_count = 9;
-        optional uint64 rehydration_latency_ms = 10;
+        uint64 envelope_state_records = 9;
+        optional int64 rehydration_latency_ms = 10;
     }
     message ProtoSinkStatisticsUpdate {
         mz_repr.global_id.ProtoGlobalId id = 1;
@@ -106,6 +112,19 @@ message ProtoStorageResponse {
         repeated ProtoSinkStatisticsUpdate sink_updates = 2;
     }
 
+    message ProtoStatusUpdate {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        string status = 2;
+        mz_proto.chrono.ProtoNaiveDateTime timestamp = 3;
+        optional string error = 4;
+        repeated string hints = 5;
+        map<string, string> namespaced_errors = 6;
+    }
+
+    message ProtoStatusUpdates {
+        repeated ProtoStatusUpdate updates = 1;
+    }
+
     message ProtoDroppedIds {
         repeated mz_repr.global_id.ProtoGlobalId ids = 1;
     }
@@ -114,5 +133,6 @@ message ProtoStorageResponse {
         ProtoFrontierUppersKind frontier_uppers = 1;
         ProtoDroppedIds dropped_ids = 2;
         ProtoStatisticsUpdates stats = 3;
+        ProtoStatusUpdates status_updates = 4;
     }
 }

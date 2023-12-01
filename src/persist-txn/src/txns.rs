@@ -27,7 +27,7 @@ use tracing::{debug, instrument};
 
 use crate::txn_cache::TxnsCache;
 use crate::txn_write::Txn;
-use crate::{TxnsCodec, TxnsCodecDefault};
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
 /// An interface for atomic multi-shard writes.
 ///
@@ -212,7 +212,8 @@ where
             .iter()
             .map(|data_write| {
                 let data_id = data_write.shard_id();
-                (data_id, C::encode(crate::TxnsEntry::Register(data_id)))
+                let entry = TxnsEntry::Register(data_id, T::encode(&register_ts));
+                (data_id, C::encode(entry))
             })
             .collect::<Vec<_>>();
         let data_ids_debug = || {
@@ -309,7 +310,7 @@ where
         loop {
             self.txns_cache.update_ge(&txns_upper).await;
 
-            let (key, val) = C::encode(crate::TxnsEntry::Register(data_id));
+            let (key, val) = C::encode(TxnsEntry::Register(data_id, T::encode(&forget_ts)));
             let updates = if self.txns_cache.registered_at(&data_id, &txns_upper) {
                 vec![((&key, &val), &forget_ts, -1)]
             } else {
@@ -382,7 +383,7 @@ where
         // won't get around to telling the caller that it's safe to use this
         // shard directly again. Presumably it will retry at some point.
         let () = crate::empty_caa(
-            || format!("txns {:.9} forget fill", data_id.to_string()),
+            || format!("data {:.9} forget fill", data_id.to_string()),
             self.datas.get_write(&data_id).await,
             forget_ts,
         )
@@ -390,6 +391,107 @@ where
         self.datas.data_write.remove(&data_id);
 
         Ok(())
+    }
+
+    /// Forgets, at the given timestamp, every data shard that is registered.
+    /// Returns the ids of the forgotten shards. See [Self::forget].
+    #[instrument(level = "debug", skip_all, fields(ts = ?forget_ts))]
+    pub async fn forget_all(&mut self, forget_ts: T) -> Result<Vec<ShardId>, T> {
+        let mut txns_upper = self
+            .txns_write
+            .shared_upper()
+            .into_option()
+            .expect("txns should not be closed");
+        let registered = loop {
+            self.txns_cache.update_ge(&txns_upper).await;
+
+            let registered = self.txns_cache.all_registered_at(&txns_upper);
+            let data_ids_debug = || {
+                registered
+                    .iter()
+                    .map(|x| format!("{:.9}", x.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            let updates = registered
+                .iter()
+                .map(|data_id| {
+                    C::encode(crate::TxnsEntry::Register(*data_id, T::encode(&forget_ts)))
+                })
+                .collect::<Vec<_>>();
+            let updates = updates
+                .iter()
+                .map(|(key, val)| ((key, val), &forget_ts, -1))
+                .collect::<Vec<_>>();
+
+            // If the txns_upper has passed forget_ts, we can no longer write.
+            if forget_ts < txns_upper {
+                debug!(
+                    "txns forget_all {} at {:?} mismatch current={:?}",
+                    data_ids_debug(),
+                    forget_ts,
+                    txns_upper,
+                );
+                return Err(txns_upper);
+            }
+
+            // Ensure the latest write has been applied, so we don't run into
+            // any issues trying to apply it later.
+            //
+            // NB: It's _very_ important for correctness to get this from the
+            // unapplied batches (which compact themselves naturally) and not
+            // from the writes (which are artificially compacted based on when
+            // we need reads for).
+            let data_latest_unapplied = self.txns_cache.unapplied_batches.values().last();
+            if let Some((_, _, latest_write)) = data_latest_unapplied {
+                debug!(
+                    "txns forget_all {} applying latest write {:?}",
+                    data_ids_debug(),
+                    latest_write,
+                );
+                let latest_write = latest_write.clone();
+                let _tidy = self.apply_le(&latest_write).await;
+            }
+            let res = crate::small_caa(
+                || format!("txns forget_all {}", data_ids_debug()),
+                &mut self.txns_write,
+                &updates,
+                txns_upper,
+                forget_ts.step_forward(),
+            )
+            .await;
+            match res {
+                Ok(()) => {
+                    debug!(
+                        "txns forget_all {} at {:?} success",
+                        data_ids_debug(),
+                        forget_ts
+                    );
+                    break registered;
+                }
+                Err(new_txns_upper) => {
+                    txns_upper = new_txns_upper;
+                    continue;
+                }
+            }
+        };
+
+        // We know above that we've applied the latest write, so go ahead and
+        // fill the time between that and forget_ts with empty updates. It's
+        // fine if we get interrupted between the forget CaA and here, we just
+        // won't get around to telling the caller that it's safe to use this
+        // shard directly again.
+        for data_id in registered.iter() {
+            let () = crate::empty_caa(
+                || format!("data {:.9} forget_all fill", data_id.to_string()),
+                self.datas.get_write(data_id).await,
+                forget_ts.clone(),
+            )
+            .await;
+            self.datas.data_write.remove(data_id);
+        }
+
+        Ok(registered)
     }
 
     /// "Applies" all committed txns <= the given timestamp, ensuring that reads
@@ -430,7 +532,7 @@ where
                     // NB: Protos are not guaranteed to exactly roundtrip the
                     // encoded bytes, so we intentionally use the raw batch so that
                     // it definitely retracts.
-                    ret.push((batch_raw.clone(), data_id));
+                    ret.push((batch_raw.clone(), (T::encode(commit_ts), data_id)));
                 }
                 (data_write, ret)
             });
@@ -512,7 +614,7 @@ where
 /// a normal txn with [Txn::tidy].
 #[derive(Debug, Default)]
 pub struct Tidy {
-    pub(crate) retractions: BTreeMap<Vec<u8>, ShardId>,
+    pub(crate) retractions: BTreeMap<Vec<u8>, ([u8; 8], ShardId)>,
 }
 
 impl Tidy {
@@ -693,7 +795,7 @@ mod tests {
     /// bug that looks like an incorrect usage).
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
-    #[should_panic(expected = "assertion failed")]
+    #[should_panic(expected = "left: [(\"foo\", 2, 1)]\n right: [(\"foo\", 2, 2)]")]
     async fn incorrect_usage_register_write_same_time() {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
@@ -762,8 +864,9 @@ mod tests {
         // Can register and forget an already registered and forgotten shard.
         txns.register(7, [writer(&client, d0).await]).await.unwrap();
         txns.apply_le(&7).await;
-        assert_eq!(txns.forget(8, d0).await, Ok(()));
-        txns.apply_le(&8).await;
+        let mut forget_expected = vec![d0, d1];
+        forget_expected.sort();
+        assert_eq!(txns.forget_all(8).await, Ok(forget_expected));
 
         // Close shard to writes
         d0_write
@@ -772,8 +875,8 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let () = log.assert_snapshot(d0, 7).await;
-        let () = log.assert_snapshot(d1, 7).await;
+        let () = log.assert_snapshot(d0, 8).await;
+        let () = log.assert_snapshot(d1, 8).await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -811,19 +914,19 @@ mod tests {
         // timestamp.
         let mut ts = 0;
         while ts < 32 {
-            info!("{} direct", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
+            info!("{} direct", ts);
+            txns.begin().commit_at(&mut txns, ts).await.unwrap();
             write_directly(ts, &mut d0_write, &[&format!("d{}", ts)], &log).await;
             step_some_past(&mut subs, ts).await;
             if ts % 11 == 0 {
-                // ts - 1 because we just wrote directly, which doesn't advance txns
-                txns.compact_to(ts - 1).await;
+                txns.compact_to(ts).await;
             }
 
-            info!("{} register", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
+            info!("{} register", ts);
             txns.register(ts, [writer(&client, d0).await])
                 .await
                 .unwrap();
@@ -832,9 +935,9 @@ mod tests {
                 txns.compact_to(ts).await;
             }
 
-            info!("{} txns", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
+            info!("{} txns", ts);
             txns.expect_commit_at(ts, d0, &[&format!("t{}", ts)], &log)
                 .await;
             step_some_past(&mut subs, ts).await;
@@ -842,9 +945,9 @@ mod tests {
                 txns.compact_to(ts).await;
             }
 
-            info!("{} forget", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
+            info!("{} forget", ts);
             txns.forget(ts, d0).await.unwrap();
             step_some_past(&mut subs, ts).await;
             if ts % 11 == 0 {

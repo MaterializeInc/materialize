@@ -101,11 +101,13 @@ use std::path::Path;
 use mz_environmentd::test_util;
 use mz_pgrepr::Interval;
 
-#[mz_ore::test]
-fn test_pg_timezone_abbrevs() {
-    let config = test_util::Config::default().unsafe_mode();
-    let server = test_util::start_server(config).unwrap();
-    let mut client = server.connect(postgres::NoTls).unwrap();
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_pg_timezone_abbrevs() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start()
+        .await;
+    let client = server.connect().await.unwrap();
 
     // These are either not present in postgres or differ from postgres. Allowlist them because
     // there are perhaps differences in the timezone databases we use.
@@ -170,11 +172,13 @@ fn test_pg_timezone_abbrevs() {
             .batch_execute(&format!(
                 "SET unsafe_new_transaction_wall_time = '{date} 00:00:00 UTC'"
             ))
+            .await
             .unwrap();
 
         let mut mismatches = Vec::new();
         for row in client
             .query(&format!("SELECT * FROM pg_timezone_{name}"), &[])
+            .await
             .unwrap()
         {
             let (key, mz_entry) = match name {

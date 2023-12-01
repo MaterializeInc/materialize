@@ -408,7 +408,9 @@ class WebhookSource(DBObject):
                 "map_length(HEADERS) = map_length(HEADERS)",
             ]
             if "timestamp" in self.explicit_include_headers:
-                exprs.append("(headers->'timestamp'::text)::timestamp <= now()")
+                exprs.append(
+                    "(headers->'timestamp'::text)::timestamp + INTERVAL '10s' >= now()"
+                )
             self.check_expr = " AND ".join(
                 rng.sample(exprs, k=rng.randint(1, len(exprs)))
             )
@@ -482,7 +484,12 @@ class KafkaSource(DBObject):
             KafkaColumn(field.name, field.data_type, False, self) for field in fields
         ]
         self.executor = KafkaExecutor(
-            self.source_id, ports, fields, schema.db.name(), schema.name()
+            self.source_id,
+            ports,
+            fields,
+            schema.db.name(),
+            schema.name(),
+            cluster.name(),
         )
         workload = rng.choice(list(WORKLOADS))(None)
         for transaction_def in workload.cycle:
@@ -606,7 +613,12 @@ class PostgresSource(DBObject):
             PostgresColumn(field.name, field.data_type, False, self) for field in fields
         ]
         self.executor = PgExecutor(
-            self.source_id, ports, fields, schema.db.name(), schema.name()
+            self.source_id,
+            ports,
+            fields,
+            schema.db.name(),
+            schema.name(),
+            cluster.name(),
         )
         self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
         self.lock = threading.Lock()
@@ -619,6 +631,21 @@ class PostgresSource(DBObject):
 
     def create(self, exe: Executor) -> None:
         self.executor.create()
+
+
+class Index:
+    _name: str
+    lock: threading.Lock
+
+    def __init__(self, name: str):
+        self._name = name
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return self._name
+
+    def __str__(self) -> str:
+        return identifier(self.name())
 
 
 class Role:
@@ -733,7 +760,7 @@ class Database:
     role_id: int
     clusters: list[Cluster]
     cluster_id: int
-    indexes: set[str]
+    indexes: set[Index]
     webhook_sources: list[WebhookSource]
     webhook_source_id: int
     kafka_sources: list[KafkaSource]

@@ -114,6 +114,13 @@ true
 true
 true
 
+# Errors should always be returned even when the limit is small
+statement ok
+CREATE MATERIALIZED VIEW erroring AS SELECT 10.0 / (value - 1) FROM numbers;
+
+query error db error: ERROR: Evaluation error: division by zero
+SELECT * FROM erroring LIMIT 10;
+
 # Does not apply when the limit is high, or when mixed with features
 # that might require a full scan.
 

@@ -12,6 +12,7 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::rc::Rc;
+use std::str::{self};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -54,11 +55,9 @@ use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::kafka::metrics::KafkaPartitionMetrics;
-use crate::source::types::{SourceReaderMetrics, SourceRender};
+use crate::metrics::kafka::KafkaPartitionMetrics;
+use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
-
-mod metrics;
 
 #[derive(Default)]
 struct HealthStatus {
@@ -415,8 +414,7 @@ impl SourceRender for KafkaSourceConnection {
             };
             let partition_ids = start_offsets.keys().copied().collect();
 
-            let source_metrics = SourceReaderMetrics::new(&config.base_metrics, config.id);
-            let offset_commit_metrics = source_metrics.offset_commit_metrics();
+            let offset_commit_metrics = config.metrics.get_offset_commit_metrics(config.id);
 
             let mut reader = KafkaSourceReader {
                 topic_name: topic.clone(),
@@ -436,8 +434,7 @@ impl SourceRender for KafkaSourceConnection {
                     .map(|(_name, kind)| kind)
                     .collect(),
                 _metadata_thread_handle: metadata_thread_handle,
-                partition_metrics: KafkaPartitionMetrics::new(
-                    config.base_metrics.clone(),
+                partition_metrics: config.metrics.get_kafka_partition_metrics(
                     partition_ids,
                     topic.clone(),
                     config.id,
@@ -587,7 +584,9 @@ impl SourceRender for KafkaSourceConnection {
                             if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid].data;
-                                data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
+                                let msg =
+                                    msg.map_err(|e| SourceReaderError::other_definite(e.into()));
+                                data_output.give(part_cap, ((0, msg), time, diff)).await;
                             }
                         }
                     }
@@ -607,7 +606,9 @@ impl SourceRender for KafkaSourceConnection {
                             Ok(Some((msg, time, diff))) => {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid].data;
-                                data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
+                                let msg =
+                                    msg.map_err(|e| SourceReaderError::other_definite(e.into()));
+                                data_output.give(part_cap, ((0, msg), time, diff)).await;
                             }
                             Ok(None) => continue,
                             Err(err) => {
@@ -920,10 +921,10 @@ impl KafkaSourceReader {
     /// past the expected offset and seeks the consumer if it is not.
     fn handle_message(
         &mut self,
-        message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+        message: Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
         (partition, offset): (PartitionId, MzOffset),
     ) -> Option<(
-        SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+        Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
         Partitioned<PartitionId, MzOffset>,
         Diff,
     )> {
@@ -980,7 +981,7 @@ fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     metadata_columns: &[KafkaMetadataKind],
 ) -> (
-    SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+    Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
     (PartitionId, MzOffset),
 ) {
     let pid = msg.partition();
@@ -1011,6 +1012,41 @@ fn construct_source_message(
                     .into();
                 packer.push(d)
             }
+            KafkaMetadataKind::Header { key, use_bytes } => {
+                match msg.headers() {
+                    Some(headers) => {
+                        let d = headers
+                            .iter()
+                            .filter(|header| header.key == key)
+                            .last()
+                            .map(|header| match header.value {
+                                Some(v) => {
+                                    if *use_bytes {
+                                        Ok(Datum::Bytes(v))
+                                    } else {
+                                        match str::from_utf8(v) {
+                                            Ok(str) => Ok(Datum::String(str)),
+                                            Err(_) => Err(KafkaHeaderParseError::Utf8Error {
+                                                key: key.clone(),
+                                                raw: v.to_vec(),
+                                            }),
+                                        }
+                                    }
+                                }
+                                None => Ok(Datum::Null),
+                            })
+                            .unwrap_or(Err(KafkaHeaderParseError::KeyNotFound {
+                                key: key.clone(),
+                            }));
+                        match d {
+                            Ok(d) => packer.push(d),
+                            //abort with a definite error when the header is not found or cannot be parsed correctly
+                            Err(err) => return (Err(err), (pid, offset.into())),
+                        }
+                    }
+                    None => packer.push(Datum::Null),
+                }
+            }
             KafkaMetadataKind::Headers => {
                 packer.push_list_with(|r| {
                     if let Some(headers) = msg.headers() {
@@ -1037,7 +1073,7 @@ fn construct_source_message(
         value: msg.payload().map(|p| p.to_vec()),
         metadata,
     };
-    (msg, (pid, offset.into()))
+    (Ok(msg), (pid, offset.into()))
 }
 
 /// Wrapper around a partition containing the underlying consumer
@@ -1074,7 +1110,7 @@ impl PartitionConsumer {
         &mut self,
     ) -> Result<
         Option<(
-            SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+            Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
             (PartitionId, MzOffset),
         )>,
         KafkaError,
@@ -1248,4 +1284,12 @@ fn fetch_partition_info<C: ClientContext>(
         result.insert(pid, watermarks);
     }
     Ok(result)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KafkaHeaderParseError {
+    #[error("A header with key '{key}' was not found in the message headers")]
+    KeyNotFound { key: String },
+    #[error("Found ill-formed byte sequence in header '{key}' that cannot be decoded as valid utf-8 (original bytes: {raw:x?})")]
+    Utf8Error { key: String, raw: Vec<u8> },
 }

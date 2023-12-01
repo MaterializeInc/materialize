@@ -32,8 +32,8 @@ use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
-use crate::internal::paths::PartialBatchKey;
-use crate::read::{LeasedReaderId, ReadHandle};
+use crate::internal::paths::{BlobKey, PartialBatchKey};
+use crate::read::LeasedReaderId;
 use crate::stats::PartStats;
 use crate::ShardId;
 
@@ -65,19 +65,6 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    pub(crate) async fn new(handle: ReadHandle<K, V, T, D>) -> Self {
-        let b = BatchFetcher {
-            blob: Arc::clone(&handle.blob),
-            metrics: Arc::clone(&handle.metrics),
-            shard_metrics: Arc::clone(&handle.machine.applier.shard_metrics),
-            shard_id: handle.machine.shard_id(),
-            schemas: handle.schemas.clone(),
-            _phantom: PhantomData,
-        };
-        handle.expire().await;
-        b
-    }
-
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
     pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
         LeasedBatchPart::from(x, Arc::clone(&self.metrics))
@@ -89,23 +76,17 @@ where
     /// returned value.
     pub async fn fetch_leased_part(
         &self,
-        part: LeasedBatchPart<T>,
-    ) -> (
-        LeasedBatchPart<T>,
-        Result<FetchedPart<K, V, T, D>, InvalidUsage<T>>,
-    ) {
+        part: &LeasedBatchPart<T>,
+    ) -> Result<FetchedPart<K, V, T, D>, InvalidUsage<T>> {
         if &part.shard_id != &self.shard_id {
             let batch_shard = part.shard_id.clone();
-            return (
-                part,
-                Err(InvalidUsage::BatchNotFromThisShard {
-                    batch_shard,
-                    handle_shard: self.shard_id.clone(),
-                }),
-            );
+            return Err(InvalidUsage::BatchNotFromThisShard {
+                batch_shard,
+                handle_shard: self.shard_id.clone(),
+            });
         }
 
-        let (part, fetched_part) = fetch_leased_part(
+        let fetched_part = fetch_leased_part(
             part,
             self.blob.as_ref(),
             Arc::clone(&self.metrics),
@@ -115,7 +96,7 @@ where
             self.schemas.clone(),
         )
         .await;
-        (part, Ok(fetched_part))
+        Ok(fetched_part)
     }
 }
 
@@ -194,14 +175,14 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
 /// Note to check the `LeasedBatchPart` documentation for how to handle the
 /// returned value.
 pub(crate) async fn fetch_leased_part<K, V, T, D>(
-    part: LeasedBatchPart<T>,
+    part: &LeasedBatchPart<T>,
     blob: &(dyn Blob + Send + Sync),
     metrics: Arc<Metrics>,
     read_metrics: &ReadMetrics,
     shard_metrics: &ShardMetrics,
     reader_id: Option<&LeasedReaderId>,
     schemas: Schemas<K, V>,
-) -> (LeasedBatchPart<T>, FetchedPart<K, V, T, D>)
+) -> FetchedPart<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -220,7 +201,7 @@ where
         &part.desc,
     )
     .await
-    .unwrap_or_else(|err| {
+    .unwrap_or_else(|blob_key| {
         // Ideally, readers should never encounter a missing blob. They place a seqno
         // hold as they consume their snapshot/listen, preventing any blobs they need
         // from being deleted by garbage collection, and all blob implementations are
@@ -234,7 +215,7 @@ where
             reader_id
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "batch fetcher".to_string()),
-            err
+            blob_key
         )
     });
     let fetched_part = FetchedPart {
@@ -251,7 +232,7 @@ where
         _phantom: PhantomData,
     };
 
-    (part, fetched_part)
+    fetched_part
 }
 
 pub(crate) async fn fetch_batch_part<T>(
@@ -262,29 +243,21 @@ pub(crate) async fn fetch_batch_part<T>(
     read_metrics: &ReadMetrics,
     key: &PartialBatchKey,
     registered_desc: &Description<T>,
-) -> Result<EncodedPart<T>, anyhow::Error>
+) -> Result<EncodedPart<T>, BlobKey>
 where
     T: Timestamp + Lattice + Codec64,
 {
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
+    let blob_key = key.complete(shard_id);
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
         shard_metrics.blob_gets.inc();
-        blob.get(&key.complete(shard_id)).await
+        blob.get(&blob_key).await
     })
     .instrument(get_span.clone())
-    .await;
+    .await
+    .ok_or(blob_key)?;
 
-    let value = match value {
-        Some(v) => v,
-        None => {
-            return Err(anyhow!(
-                "unexpected missing blob: {} for shard: {}",
-                key,
-                shard_id
-            ))
-        }
-    };
     drop(get_span);
 
     read_metrics.part_count.inc();
@@ -357,7 +330,6 @@ pub(crate) enum SerdeLeasedBatchPartMetadata {
 ///
 /// `LeasedBatchPart` may only be dropped if it:
 /// - Does not have a leased `SeqNo (i.e. `self.leased_seqno.is_none()`)
-/// - Is consumed through `self.get_droppable_part()`
 ///
 /// In any other circumstance, dropping `LeasedBatchPart` panics.
 #[derive(Debug)]
@@ -417,7 +389,7 @@ where
     /// operator to safely expire leases.
     ///
     /// The part's `reader_id` is intentionally inaccessible, and should
-    /// be obtained from the issuing [`ReadHandle`], or one of its derived
+    /// be obtained from the issuing [`crate::ReadHandle`], or one of its derived
     /// structures, e.g. [`crate::read::Subscribe`].
     ///
     /// # Panics

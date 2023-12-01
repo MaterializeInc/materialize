@@ -2,7 +2,7 @@
 name = "mz-lsp-server"
 description = "The Materialize Language Server Protocol (LSP) Server implementation."
 license = "Apache-2.0"
-version = "0.2.1"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 
@@ -23,7 +23,6 @@ mz-sql-pretty = { path = "../sql-pretty" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
-assert_cmd = "2.0.5"
 httparse = "1.8.0"
 
 [package.metadata.cargo-udeps.ignore]

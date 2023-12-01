@@ -35,7 +35,7 @@ use mz_repr::{Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkDesc};
+use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData, SourceEnvelope};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -320,6 +320,12 @@ pub trait StorageController: Debug + Send {
         exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
+    /// For each identified export, update its `StorageSinkConnection`.
+    async fn update_export_connection(
+        &mut self,
+        exports: BTreeMap<GlobalId, StorageSinkConnection>,
+    ) -> Result<(), StorageError>;
+
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
@@ -509,6 +515,19 @@ pub trait StorageController: Debug + Send {
         type_: IntrospectionType,
         updates: Vec<(Row, Diff)>,
     );
+
+    /// Resets the txns system to a set of invariants necessary for correctness.
+    ///
+    /// Must be called on boot before create_collections or the various appends.
+    /// This is true _regardless_ of whether the persist-txn feature is on or
+    /// not. See the big comment in the impl of the method for details. Ideally,
+    /// this would have just been folded into `Controller::new`, but it needs
+    /// the timestamp and there are boot dependency issues.
+    ///
+    /// TODO: This can be removed once we've flipped to the new txns system for
+    /// good and there is no possibility of the old code running concurrently
+    /// with the new code.
+    async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -676,7 +695,7 @@ impl<T: Timestamp> CollectionState<T> {
 }
 
 /// State maintained about individual exports.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExportState<T> {
     /// Description with which the export was created
     pub description: ExportDescription<T>,

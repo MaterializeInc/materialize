@@ -23,6 +23,7 @@ import inspect
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import time
@@ -43,6 +44,7 @@ from pg8000 import Connection, Cursor
 from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
+from materialize.mzcompose.services.minio import MINIO_BLOB_URI
 from materialize.ui import UIError
 
 
@@ -164,8 +166,6 @@ class Composition:
 
         # Emit the munged configuration to a temporary file so that we can later
         # pass it to Docker Compose.
-        self.file = TemporaryFile(mode="w")
-        os.set_inheritable(self.file.fileno(), True)
         self._write_compose()
 
     def _munge_services(
@@ -235,10 +235,10 @@ class Composition:
         return deps
 
     def _write_compose(self) -> None:
-        self.file.seek(0)
-        self.file.truncate()
-        yaml.dump(self.compose, self.file)
-        self.file.flush()
+        new_file = TemporaryFile(mode="w")
+        os.set_inheritable(new_file.fileno(), True)
+        yaml.dump(self.compose, new_file)
+        self.file = new_file
 
     def invoke(
         self,
@@ -264,8 +264,6 @@ class Composition:
         if not self.silent and not silent:
             print(f"--- docker compose {' '.join(args)}", file=sys.stderr)
 
-        self.file.seek(0)
-
         stdout = None
         if capture:
             stdout = subprocess.PIPE if capture == True else capture
@@ -276,14 +274,18 @@ class Composition:
             ("--project-name", self.project_name) if self.project_name else ()
         )
 
+        # Make sure file doesn't get changed/deleted while we use it
+        file = self.file
+
         ret = None
         for retry in range(1, max_tries + 1):
+            file.seek(0)
             try:
                 ret = subprocess.run(
                     [
                         "docker",
                         "compose",
-                        f"-f/dev/fd/{self.file.fileno()}",
+                        f"-f/dev/fd/{file.fileno()}",
                         "--project-directory",
                         self.path,
                         *project_name_args,
@@ -487,10 +489,17 @@ class Composition:
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> Connection:
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
-        conn = pg8000.connect(host="localhost", user=user, password=password, port=port)
+        conn = pg8000.connect(
+            host="localhost",
+            user=user,
+            password=password,
+            port=port,
+            ssl_context=ssl_context,
+        )
         conn.autocommit = True
         return conn
 
@@ -500,9 +509,10 @@ class Composition:
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
-        conn = self.sql_connection(service, user, port, password)
+        conn = self.sql_connection(service, user, port, password, ssl_context)
         return conn.cursor()
 
     def sql(
@@ -780,6 +790,12 @@ class Composition:
                 "Sanity Restart skipped because Mz not in services or `sanity_restart` label not set"
             )
 
+    def capture_logs(self) -> None:
+        # Capture logs into services.log since they will be lost otherwise
+        # after dowing a composition.
+        with open(MZ_ROOT / "services.log", "a") as f:
+            self.invoke("logs", "--no-color", capture=f)
+
     def down(
         self,
         destroy_volumes: bool = True,
@@ -798,12 +814,7 @@ class Composition:
         """
         if sanity_restart_mz:
             self.sanity_restart_mz()
-
-        # Capture logs into services.log since they will be lost otherwise
-        # after dowing a composition.
-        with open(MZ_ROOT / "services.log", "a") as f:
-            self.invoke("logs", "--no-color", capture=f)
-
+        self.capture_logs()
         self.invoke(
             "down",
             *(["--volumes"] if destroy_volumes else []),
@@ -865,6 +876,7 @@ class Composition:
                 service. Note that this does not destroy any named volumes
                 attached to the service.
         """
+        self.capture_logs()
         self.invoke(
             "rm",
             "--force",
@@ -970,3 +982,63 @@ class Composition:
             self.exec(service, *args_with_source, stdin=input)
         else:
             self.run(service, *args_with_source, stdin=input)
+
+    def enable_minio_versioning(self) -> None:
+        self.up("minio")
+        self.up("mc", persistent=True)
+        self.exec(
+            "mc",
+            "mc",
+            "alias",
+            "set",
+            "persist",
+            "http://minio:9000/",
+            "minioadmin",
+            "minioadmin",
+        )
+
+        self.exec("mc", "mc", "version", "enable", "persist/persist")
+
+    def backup_crdb(self) -> None:
+        self.up("mc", persistent=True)
+        self.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
+        self.exec(
+            "cockroach",
+            "cockroach",
+            "sql",
+            "--insecure",
+            "-e",
+            """
+                CREATE EXTERNAL CONNECTION backup_bucket
+                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
+                BACKUP INTO 'external://backup_bucket';
+                DROP EXTERNAL CONNECTION backup_bucket;
+            """,
+        )
+
+    def restore_mz(self) -> None:
+        self.kill("materialized")
+        self.exec(
+            "cockroach",
+            "cockroach",
+            "sql",
+            "--insecure",
+            "-e",
+            """
+                DROP DATABASE defaultdb;
+                CREATE EXTERNAL CONNECTION backup_bucket
+                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
+                RESTORE DATABASE defaultdb
+                FROM LATEST IN 'external://backup_bucket';
+                DROP EXTERNAL CONNECTION backup_bucket;
+            """,
+        )
+        self.run(
+            "persistcli",
+            "admin",
+            "--commit",
+            "restore-blob",
+            f"--blob-uri={MINIO_BLOB_URI}",
+            "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
+        )
+        self.up("materialized")

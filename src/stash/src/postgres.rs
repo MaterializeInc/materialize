@@ -447,7 +447,7 @@ pub struct Stash {
     nonce: [u8; 16],
     pub(crate) sinces_tx: mpsc::UnboundedSender<ConsolidateRequest>,
     pub(crate) collections: BTreeMap<String, Id>,
-    metrics: Arc<Metrics>,
+    pub metrics: Arc<Metrics>,
 }
 
 #[derive(Debug)]
@@ -536,6 +536,7 @@ impl Stash {
     }
 
     /// Sets `client` to a new connection to the Postgres server.
+    #[tracing::instrument(name = "stash::connect", level = "debug", skip_all)]
     async fn connect(&mut self) -> Result<(), StashError> {
         let (mut client, connection) = self.config.lock().await.connect(self.tls.clone()).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {

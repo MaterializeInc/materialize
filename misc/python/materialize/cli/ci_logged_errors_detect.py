@@ -11,6 +11,7 @@
 # associated open GitHub issues in Materialize repository.
 
 import argparse
+import mmap
 import os
 import re
 import sys
@@ -25,9 +26,9 @@ CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
 
 # Unexpected failures, report them
 ERROR_RE = re.compile(
-    r"""
-    ( panicked\ at
-    | segfault\ at
+    rb"""
+    ^ .*
+    ( segfault\ at
     | trap\ invalid\ opcode
     | general\ protection
     | has\ overflowed\ its\ stack
@@ -52,18 +53,26 @@ ERROR_RE = re.compile(
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
-    | unrecognized\ configuration\ parameter
-    | Coordinator\ is\ stuck
+    | environmentd .* unrecognized\ configuration\ parameter
     )
+    .* $
     """,
-    re.VERBOSE,
+    re.VERBOSE | re.MULTILINE,
 )
+
+# Panics are multiline and our log lines of multiple services are interleaved,
+# making them complex to handle in regular expressions, thus handle them
+# separately.
+PANIC_START_RE = re.compile(rb"^(?P<service>.*) \| thread '.*' panicked at ")
+SERVICES_LOG_LINE_RE = re.compile(rb"^(?P<service>.*) \| (?P<msg>.*)$")
 
 # Expected failures, don't report them
 IGNORE_RE = re.compile(
-    r"""
+    rb"""
     # Expected in restart test
     ( restart-materialized-1\ \ \|\ thread\ 'coordinator'\ panicked\ at\ 'can't\ persist\ timestamp
+    # Expected in restart test
+    | restart-materialized-1\ *|\ thread\ 'coordinator'\ panicked\ at\ 'external\ operation\ .*\ failed\ unrecoverably.*
     # Expected in cluster test
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
     # Emitted by tests employing explicit mz_panic()
@@ -82,7 +91,7 @@ IGNORE_RE = re.compile(
     | larger\ sizes\ prevent\ running\ out\ of\ memory
     )
     """,
-    re.VERBOSE,
+    re.VERBOSE | re.MULTILINE,
 )
 
 
@@ -94,10 +103,9 @@ class KnownIssue:
 
 
 class ErrorLog:
-    def __init__(self, line: str, file: str, line_nr: int):
-        self.line = line
+    def __init__(self, match: bytes, file: str):
+        self.match = match
         self.file = file
-        self.line_nr = line_nr
 
 
 def main() -> int:
@@ -122,6 +130,9 @@ def annotate_errors(errors: list[str], title: str, style: str) -> None:
     suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
 
     error_str = "\n".join(f"* {error}" for error in errors)
+    # 400 Bad Request: The annotation body must be less than 1 MB
+    if len(error_str) > 900_000:
+        error_str = error_str[:900_000] + "..."
 
     if style == "info":
         markdown = f"""<details><summary>{suite_name}: {title}</summary>
@@ -181,7 +192,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
             linked_file = error.file
 
         for issue in known_issues:
-            match = issue.regex.search(error.line)
+            match = issue.regex.search(error.match)
             if match and issue.info["state"] == "open":
                 if issue.apply_to and issue.apply_to not in (
                     step_key.lower(),
@@ -191,13 +202,13 @@ def annotate_logged_errors(log_files: list[str]) -> int:
 
                 if issue.info["number"] not in already_reported_issue_numbers:
                     known_errors.append(
-                        f"[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}) in {linked_file}:{error.line_nr}:  \n``{error.line}``"
+                        f"[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}) in {linked_file}:  \n``{error.match.decode('utf-8')}``"
                     )
                     already_reported_issue_numbers.add(issue.info["number"])
                 break
         else:
             for issue in known_issues:
-                match = issue.regex.search(error.line)
+                match = issue.regex.search(error.match)
                 if match and issue.info["state"] == "closed":
                     if issue.apply_to and issue.apply_to not in (
                         step_key.lower(),
@@ -207,13 +218,13 @@ def annotate_logged_errors(log_files: list[str]) -> int:
 
                     if issue.info["number"] not in already_reported_issue_numbers:
                         unknown_errors.append(
-                            f"Potential regression [{issue.info['title']} (#{issue.info['number']}, closed)]({issue.info['html_url']}) in {linked_file}:{error.line_nr}:  \n``{error.line}``"
+                            f"Potential regression [{issue.info['title']} (#{issue.info['number']}, closed)]({issue.info['html_url']}) in {linked_file}:  \n``{error.match.decode('utf-8')}``"
                         )
                         already_reported_issue_numbers.add(issue.info["number"])
                     break
             else:
                 unknown_errors.append(
-                    f"Unknown error in {linked_file}:{error.line_nr}:  \n``{error.line}``"
+                    f"Unknown error in {linked_file}:  \n``{error.match.decode('utf-8')}``"
                 )
 
     annotate_errors(
@@ -235,18 +246,49 @@ def annotate_logged_errors(log_files: list[str]) -> int:
 def get_error_logs(log_files: list[str]) -> list[ErrorLog]:
     error_logs = []
     for log_file in log_files:
-        with open(log_file) as f:
-            for line_nr, line in enumerate(f):
-                if ERROR_RE.search(line) and not IGNORE_RE.search(line):
-                    # environmentd segfaults during normal shutdown in coverage builds, see #20016
-                    # Ignoring this in regular ways would still be quite spammy.
-                    if (
-                        "environmentd" in line
-                        and "segfault at" in line
-                        and ui.env_is_truthy("CI_COVERAGE_ENABLED")
-                    ):
-                        continue
-                    error_logs.append(ErrorLog(line, log_file, line_nr + 1))
+        with open(log_file, "r+") as f:
+            try:
+                data = mmap.mmap(f.fileno(), 0)
+            except ValueError:
+                # empty file, ignore
+                continue
+            for match in ERROR_RE.finditer(data):
+                if IGNORE_RE.search(match.group(0)):
+                    continue
+                # environmentd segfaults during normal shutdown in coverage builds, see #20016
+                # Ignoring this in regular ways would still be quite spammy.
+                if (
+                    b"environmentd" in match.group(0)
+                    and b"segfault at" in match.group(0)
+                    and ui.env_is_truthy("CI_COVERAGE_ENABLED")
+                ):
+                    continue
+                error_logs.append(ErrorLog(match.group(0), log_file))
+            open_panics = {}
+            for line in iter(data.readline, b""):
+                line = line.rstrip(b"\n")
+                if match := PANIC_START_RE.match(line):
+                    service = match.group("service")
+                    assert (
+                        service not in open_panics
+                    ), f"Two panics of same service {service} interleaving: {line}"
+                    open_panics[service] = line
+                elif open_panics:
+                    if match := SERVICES_LOG_LINE_RE.match(line):
+                        # Handling every services.log line here, filter to
+                        # handle only the ones which are currently in a panic
+                        # handler:
+                        if panic_start := open_panics.get(match.group("service")):
+                            del open_panics[match.group("service")]
+                            if IGNORE_RE.search(match.group(0)):
+                                continue
+                            error_logs.append(
+                                ErrorLog(
+                                    panic_start + b" " + match.group("msg"), log_file
+                                )
+                            )
+            assert not open_panics, f"Panic log never finished: {open_panics}"
+
     # TODO: Only report multiple errors once?
     return error_logs
 
@@ -290,7 +332,7 @@ def get_known_issues_from_github() -> tuple[list[KnownIssue], list[str]]:
         matches_apply_to = CI_APPLY_TO.findall(issue["body"])
         for match in matches:
             try:
-                regex_pattern = re.compile(match.strip())
+                regex_pattern = re.compile(match.strip().encode("utf-8"))
             except:
                 unknown_errors.append(
                     "[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}): Invalid regex in ci-regexp: {match.strip()}, ignoring"

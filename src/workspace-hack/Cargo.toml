@@ -22,7 +22,6 @@ aws-sig-auth = { version = "0.55.1", default-features = false, features = ["sign
 aws-sigv4 = { version = "0.55.1", features = ["sign-eventstream"] }
 aws-smithy-http = { version = "0.55.2", default-features = false, features = ["event-stream", "rt-tokio"] }
 axum = { version = "0.6.20", features = ["headers", "ws"] }
-base64 = { version = "0.21.0", features = ["alloc"] }
 bstr = { version = "0.2.14" }
 byteorder = { version = "1.4.3" }
 bytes = { version = "1.4.0", features = ["serde"] }
@@ -51,13 +50,13 @@ hashbrown = { version = "0.14.0", features = ["raw"] }
 hyper = { version = "0.14.25", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
-k8s-openapi = { version = "0.19.0", features = ["schemars", "v1_25"] }
-kube = { version = "0.85.0", features = ["derive", "runtime", "ws"] }
-kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
-kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "schema", "ws"] }
+k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_26"] }
+kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
+kube-client = { version = "0.87.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
+kube-core = { version = "0.87.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-lru = { version = "0.11.0" }
+lru = { version = "0.12.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.8", features = ["net", "os-ext"] }
@@ -75,7 +74,7 @@ phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.4" }
-proc-macro2 = { version = "1.0.66", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.69", features = ["span-locations"] }
 prost = { version = "0.11.9", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", default-features = false, features = ["serde"] }
 prost-types = { version = "0.11.9" }
@@ -98,7 +97,7 @@ smallvec = { version = "1.10.0", default-features = false, features = ["const_ge
 socket2 = { version = "0.4.9", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.18", features = ["extra-traits", "full", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.39", features = ["extra-traits", "full", "visit-mut"] }
 textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git", default-features = false, features = ["bincode", "getopts"] }
@@ -119,6 +118,7 @@ uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
+zstd-sys = { version = "2.0.9", features = ["std"] }
 
 [build-dependencies]
 ahash = { version = "0.8.0" }
@@ -129,11 +129,10 @@ aws-sig-auth = { version = "0.55.1", default-features = false, features = ["sign
 aws-sigv4 = { version = "0.55.1", features = ["sign-eventstream"] }
 aws-smithy-http = { version = "0.55.2", default-features = false, features = ["event-stream", "rt-tokio"] }
 axum = { version = "0.6.20", features = ["headers", "ws"] }
-base64 = { version = "0.21.0", features = ["alloc"] }
 bstr = { version = "0.2.14" }
 byteorder = { version = "1.4.3" }
 bytes = { version = "1.4.0", features = ["serde"] }
-cc = { version = "1.0.78", default-features = false, features = ["parallel"] }
+cc = { version = "1.0.83", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.25", default-features = false, features = ["alloc", "clock", "serde"] }
 clap = { version = "3.2.24", features = ["derive", "env", "wrap_help"] }
 console = { version = "0.15.5", default-features = false, features = ["ansi-parsing", "unicode-width"] }
@@ -159,13 +158,13 @@ hashbrown = { version = "0.14.0", features = ["raw"] }
 hyper = { version = "0.14.25", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
-k8s-openapi = { version = "0.19.0", features = ["schemars", "v1_25"] }
-kube = { version = "0.85.0", features = ["derive", "runtime", "ws"] }
-kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
-kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4", default-features = false, features = ["jsonpatch", "schema", "ws"] }
+k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_26"] }
+kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
+kube-client = { version = "0.87.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
+kube-core = { version = "0.87.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-lru = { version = "0.11.0" }
+lru = { version = "0.12.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.8", features = ["net", "os-ext"] }
@@ -183,7 +182,7 @@ phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.4" }
-proc-macro2 = { version = "1.0.66", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.69", features = ["span-locations"] }
 prost = { version = "0.11.9", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", default-features = false, features = ["serde"] }
 prost-types = { version = "0.11.9" }
@@ -206,7 +205,7 @@ smallvec = { version = "1.10.0", default-features = false, features = ["const_ge
 socket2 = { version = "0.4.9", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.18", features = ["extra-traits", "full", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.39", features = ["extra-traits", "full", "visit-mut"] }
 textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
@@ -228,6 +227,7 @@ uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
+zstd-sys = { version = "2.0.9", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }

@@ -1184,7 +1184,7 @@ pub struct LazyPartStats {
 }
 
 impl LazyPartStats {
-    pub fn encode(x: &PartStats, map_proto: impl FnOnce(&mut ProtoStructStats)) -> Self {
+    pub(crate) fn encode(x: &PartStats, map_proto: impl FnOnce(&mut ProtoStructStats)) -> Self {
         let PartStats { key } = x;
         let mut proto_stats = ProtoStructStats::from_rust(key);
         map_proto(&mut proto_stats);

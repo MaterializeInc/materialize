@@ -71,6 +71,7 @@ statement_timeout                   "10 s"                  "Sets the maximum al
 TimeZone                            UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
 unsafe_new_transaction_wall_time    ""                      "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. If not set, uses the system's clock."
+welcome_message                     on                      "Whether to send a notice with a welcome message after a successful connection (Materialize)."
 enable_consolidate_after_union_negate on                    "consolidation after Unions that have a Negated input (Materialize)."
 enable_sink_doc_on_option           on                     "Whether DOC ON option for sinks is allowed (Materialize)."
 enable_eager_delta_joins            off                    "Plan delta joins when it would require no more arrangements than a differential join."

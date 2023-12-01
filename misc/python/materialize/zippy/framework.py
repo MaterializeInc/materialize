@@ -10,9 +10,12 @@
 import random
 from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import TypeVar, Union
+from typing import TYPE_CHECKING, TypeVar, Union
 
 from materialize.mzcompose.composition import Composition
+
+if TYPE_CHECKING:
+    from materialize.zippy.scenarios import Scenario
 
 
 class Capability:
@@ -74,13 +77,16 @@ class Capabilities:
         ]
         return matches
 
+    def get_capability_names(self, capability: type[T]) -> list[str]:
+        return [t.name for t in self.get(capability)]
+
     def get_free_capability_name(
         self, capability: type[T], max_objects: int
     ) -> str | None:
         all_object_names = [
             capability.format_str().format(i) for i in range(0, max_objects)
         ]
-        existing_object_names = [t.name for t in self.get(capability)]
+        existing_object_names = self.get_capability_names(capability)
         remaining_object_names = set(all_object_names) - set(existing_object_names)
         return (
             random.choice(list(remaining_object_names))
@@ -149,19 +155,11 @@ class ActionFactory:
         return set()
 
 
-class Scenario:
-    def bootstrap(self) -> list[ActionOrFactory]:
-        return []
-
-    def config(self) -> dict[ActionOrFactory, float]:
-        assert False
-
-
 class Test:
     """A Zippy test, consisting of a sequence of actions."""
 
     def __init__(
-        self, scenario: Scenario, actions: int, max_execution_time: timedelta
+        self, scenario: "Scenario", actions: int, max_execution_time: timedelta
     ) -> None:
         """Generate a new Zippy test.
 
@@ -171,18 +169,22 @@ class Test:
         """
         self._scenario = scenario
         self._actions: list[Action] = []
+        self._final_actions: list[Action] = []
         self._capabilities = Capabilities()
-        self._config = self._scenario.config()
-        self._max_execution_time = max_execution_time
+        self._config: dict[ActionOrFactory, float] = self._scenario.config()
+        self._max_execution_time: timedelta = max_execution_time
 
         for action_or_factory in self._scenario.bootstrap():
-            self.append_actions(action_or_factory)
+            self._actions.extend(self.generate_actions(action_or_factory))
 
         while len(self._actions) < actions:
             action_or_factory = self._pick_action_or_factory()
-            self.append_actions(action_or_factory)
+            self._actions.extend(self.generate_actions(action_or_factory))
 
-    def append_actions(self, action_def: ActionOrFactory) -> None:
+        for action_or_factory in self._scenario.finalization():
+            self._final_actions.extend(self.generate_actions(action_or_factory))
+
+    def generate_actions(self, action_def: ActionOrFactory) -> list[Action]:
         if isinstance(action_def, ActionFactory):
             actions = action_def.new(capabilities=self._capabilities)
         elif issubclass(action_def, Action):
@@ -191,12 +193,13 @@ class Test:
             assert False
 
         for action in actions:
-            self._actions.append(action)
             print("test:", action)
             self._capabilities._extend(action.provides())
             print(" - ", self._capabilities, action.provides())
             self._capabilities._remove(action.withholds())
             print(" - ", self._capabilities, action.withholds())
+
+        return actions
 
     def run(self, c: Composition) -> None:
         """Run the Zippy test."""
@@ -209,6 +212,10 @@ class Test:
                     f"--- Desired execution time of {self._max_execution_time} has been reached."
                 )
                 break
+
+        for action in self._final_actions:
+            print(action)
+            action.run(c)
 
     def _pick_action_or_factory(self) -> ActionOrFactory:
         """Select the next Action to run in the Test"""

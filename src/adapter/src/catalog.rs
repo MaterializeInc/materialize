@@ -433,7 +433,7 @@ impl Catalog {
         let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let environmentd_id = Uuid::new_v4();
-        let catalog = Self::open_debug_catalog(
+        let catalog = match Self::open_debug_catalog(
             &debug_stash_factory,
             persist_client,
             environmentd_id,
@@ -441,7 +441,13 @@ impl Catalog {
             None,
         )
         .await
-        .expect("unable to open debug stash");
+        {
+            Ok(catalog) => catalog,
+            Err(err) => {
+                debug_stash_factory.drop().await;
+                panic!("unable to open debug stash: {err}");
+            }
+        };
         let res = f(catalog).await;
         debug_stash_factory.drop().await;
         res
@@ -473,7 +479,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now, environment_id).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
     /// Opens a debug stash backed catalog at `url`, using `schema` as the connection's search_path.
@@ -500,7 +506,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now, environment_id).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
     /// Opens a read only debug stash backed catalog defined by `stash_config`.
@@ -517,10 +523,56 @@ impl Catalog {
         let storage = openable_storage
             .open_read_only(now(), &test_bootstrap_args())
             .await?;
-        Self::open_debug_stash_catalog(storage, now, environment_id).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
-    async fn open_debug_stash_catalog(
+    /// Opens a read only debug persist backed catalog defined by `persist_client` and
+    /// `organization_id`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_persist_catalog_config(
+        persist_client: PersistClient,
+        now: NowFn,
+        environment_id: EnvironmentId,
+    ) -> Result<Catalog, anyhow::Error> {
+        let openable_storage = Box::new(
+            mz_catalog::durable::test_persist_backed_catalog_state(
+                persist_client,
+                environment_id.organization_id(),
+            )
+            .await,
+        );
+        let storage = openable_storage
+            .open_read_only(now(), &test_bootstrap_args())
+            .await?;
+        Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
+    }
+
+    /// Opens a read only debug persist backed catalog defined by `stash_config`, `persist_client`
+    /// and `organization_id`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_shadow_catalog_config(
+        stash_config: StashConfig,
+        persist_client: PersistClient,
+        now: NowFn,
+        environment_id: EnvironmentId,
+    ) -> Result<Catalog, anyhow::Error> {
+        let openable_storage = Box::new(
+            mz_catalog::durable::shadow_catalog_state(
+                stash_config,
+                persist_client,
+                environment_id.organization_id(),
+            )
+            .await,
+        );
+        let storage = openable_storage
+            .open_read_only(now(), &test_bootstrap_args())
+            .await?;
+        Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
+    }
+
+    async fn open_debug_catalog_inner(
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
         environment_id: Option<EnvironmentId>,
@@ -1117,7 +1169,7 @@ impl Catalog {
 
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
-        // indeterminate stash state, which we only reconcile during catalog
+        // indeterminate catalog state, which we only reconcile during catalog
         // init.
         tx.commit()
             .await
@@ -2741,7 +2793,7 @@ impl Catalog {
                                 }))
                             })?;
 
-                        // Update the Stash and Builtin Tables.
+                        // Update the catalog storage and Builtin Tables.
                         if !new_entry.item().is_temporary() {
                             tx.update_item(*id, new_entry.clone().into())?;
                         }
@@ -3200,7 +3252,7 @@ impl Catalog {
         let var = state.get_system_configuration(name)?;
         tx.upsert_system_config(name, var.value())?;
         // This mirrors the `enabled_persist_txn_tables` "system var" into the
-        // catalog stash "config" collection so that we can toggle the flag with
+        // catalog storage "config" collection so that we can toggle the flag with
         // Launch Darkly, but use it in boot before Launch Darkly is available.
         if name == ENABLE_PERSIST_TXN_TABLES.name() {
             tx.set_enable_persist_txn_tables(
@@ -4445,7 +4497,7 @@ mod tests {
             )
             .await
             .expect("unable to open debug catalog");
-            // Re-opening the same stash resets the transient_revision to 1.
+            // Re-opening the same catalog resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
         }

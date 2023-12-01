@@ -2247,7 +2247,7 @@ impl<'a> Parser<'a> {
 
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_connection_option)?;
+            let options = self.parse_comma_separated(Parser::parse_create_connection_option)?;
             self.expect_token(&Token::RParen)?;
             options
         } else {
@@ -2263,7 +2263,9 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_connection_option_name(&mut self) -> Result<CreateConnectionOptionName, ParserError> {
+    fn parse_create_connection_option_name(
+        &mut self,
+    ) -> Result<CreateConnectionOptionName, ParserError> {
         let name = match self.expect_one_of_keywords(&[VALIDATE])? {
             VALIDATE => CreateConnectionOptionName::Validate,
             _ => unreachable!(),
@@ -2272,8 +2274,10 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses a single valid option in the WITH block of a create source
-    fn parse_connection_option(&mut self) -> Result<CreateConnectionOption<Raw>, ParserError> {
-        let name = self.parse_connection_option_name()?;
+    fn parse_create_connection_option(
+        &mut self,
+    ) -> Result<CreateConnectionOption<Raw>, ParserError> {
+        let name = self.parse_create_connection_option_name()?;
         Ok(CreateConnectionOption {
             name,
             value: self.parse_optional_option_value()?,
@@ -2353,6 +2357,7 @@ impl<'a> Parser<'a> {
         let name = match self.expect_one_of_keywords(&[
             ACKS,
             CLIENT,
+            COMPRESSION,
             ENABLE,
             FETCH,
             GROUP,
@@ -2369,6 +2374,10 @@ impl<'a> Parser<'a> {
             CLIENT => {
                 self.expect_keyword(ID)?;
                 KafkaConfigOptionName::ClientId
+            }
+            COMPRESSION => {
+                self.expect_keyword(TYPE)?;
+                KafkaConfigOptionName::CompressionType
             }
             ENABLE => {
                 self.expect_keyword(IDEMPOTENCE)?;
@@ -2424,54 +2433,118 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_connection_option_name(&mut self) -> Result<ConnectionOptionName, ParserError> {
+        Ok(
+            match self.expect_one_of_keywords(&[
+                ACCESS,
+                AVAILABILITY,
+                AWS,
+                BROKER,
+                BROKERS,
+                DATABASE,
+                ENDPOINT,
+                HOST,
+                PASSWORD,
+                PORT,
+                PROGRESS,
+                REGION,
+                ROLE,
+                SASL,
+                SECRET,
+                SECURITY,
+                SERVICE,
+                SSH,
+                SSL,
+                TOKEN,
+                URL,
+                USER,
+                USERNAME,
+            ])? {
+                ACCESS => {
+                    self.expect_keywords(&[KEY, ID])?;
+                    ConnectionOptionName::AccessKeyId
+                }
+                AVAILABILITY => {
+                    self.expect_keyword(ZONES)?;
+                    ConnectionOptionName::AvailabilityZones
+                }
+                AWS => {
+                    self.expect_keyword(PRIVATELINK)?;
+                    ConnectionOptionName::AwsPrivatelink
+                }
+                BROKER => ConnectionOptionName::Broker,
+                BROKERS => ConnectionOptionName::Brokers,
+                DATABASE => ConnectionOptionName::Database,
+                ENDPOINT => ConnectionOptionName::Endpoint,
+                HOST => ConnectionOptionName::Host,
+                PASSWORD => ConnectionOptionName::Password,
+                PORT => ConnectionOptionName::Port,
+                PROGRESS => {
+                    self.expect_keyword(TOPIC)?;
+                    ConnectionOptionName::ProgressTopic
+                }
+                SECURITY => {
+                    self.expect_keyword(PROTOCOL)?;
+                    ConnectionOptionName::SecurityProtocol
+                }
+                REGION => ConnectionOptionName::Region,
+                ROLE => {
+                    self.expect_keyword(ARN)?;
+                    ConnectionOptionName::RoleArn
+                }
+                SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
+                    MECHANISMS => ConnectionOptionName::SaslMechanisms,
+                    PASSWORD => ConnectionOptionName::SaslPassword,
+                    USERNAME => ConnectionOptionName::SaslUsername,
+                    _ => unreachable!(),
+                },
+                SECRET => {
+                    self.expect_keywords(&[ACCESS, KEY])?;
+                    ConnectionOptionName::SecretAccessKey
+                }
+                SERVICE => {
+                    self.expect_keyword(NAME)?;
+                    ConnectionOptionName::ServiceName
+                }
+                SSH => {
+                    self.expect_keyword(TUNNEL)?;
+                    ConnectionOptionName::SshTunnel
+                }
+                SSL => match self.expect_one_of_keywords(&[CERTIFICATE, MODE, KEY])? {
+                    CERTIFICATE => {
+                        if self.parse_keyword(AUTHORITY) {
+                            ConnectionOptionName::SslCertificateAuthority
+                        } else {
+                            ConnectionOptionName::SslCertificate
+                        }
+                    }
+                    KEY => ConnectionOptionName::SslKey,
+                    MODE => ConnectionOptionName::SslMode,
+                    _ => unreachable!(),
+                },
+                TOKEN => ConnectionOptionName::Token,
+                URL => ConnectionOptionName::Url,
+                USER | USERNAME => ConnectionOptionName::User,
+                _ => unreachable!(),
+            },
+        )
+    }
+
     fn parse_connection_option_unified(&mut self) -> Result<ConnectionOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[
-            ACCESS,
-            AVAILABILITY,
-            AWS,
-            BROKER,
-            BROKERS,
-            DATABASE,
-            ENDPOINT,
-            HOST,
-            PASSWORD,
-            PORT,
-            PROGRESS,
-            REGION,
-            ROLE,
-            SASL,
-            SECRET,
-            SECURITY,
-            SERVICE,
-            SSH,
-            SSL,
-            TOKEN,
-            URL,
-            USER,
-            USERNAME,
-        ])? {
-            ACCESS => {
-                self.expect_keywords(&[KEY, ID])?;
-                ConnectionOptionName::AccessKeyId
-            }
-            AVAILABILITY => {
-                self.expect_keyword(ZONES)?;
-                ConnectionOptionName::AvailabilityZones
-            }
-            AWS => {
-                self.expect_keyword(PRIVATELINK)?;
+        let name = match self.parse_connection_option_name()? {
+            ConnectionOptionName::AwsPrivatelink => {
                 return Ok(ConnectionOption {
                     name: ConnectionOptionName::AwsPrivatelink,
                     value: Some(self.parse_object_option_value()?),
                 });
             }
-            BROKER => {
+            ConnectionOptionName::Broker => {
                 return Ok(ConnectionOption {
                     name: ConnectionOptionName::Broker,
                     value: Some(self.parse_kafka_broker()?),
                 });
             }
-            BROKERS => {
+            ConnectionOptionName::Brokers => {
                 let _ = self.consume_token(&Token::Eq);
                 let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
                 let brokers = self.parse_comma_separated(Parser::parse_kafka_broker)?;
@@ -2485,61 +2558,13 @@ impl<'a> Parser<'a> {
                     value: Some(WithOptionValue::Sequence(brokers)),
                 });
             }
-            DATABASE => ConnectionOptionName::Database,
-            ENDPOINT => ConnectionOptionName::Endpoint,
-            HOST => ConnectionOptionName::Host,
-            PASSWORD => ConnectionOptionName::Password,
-            PORT => ConnectionOptionName::Port,
-            PROGRESS => {
-                self.expect_keyword(TOPIC)?;
-                ConnectionOptionName::ProgressTopic
-            }
-            SECURITY => {
-                self.expect_keyword(PROTOCOL)?;
-                ConnectionOptionName::SecurityProtocol
-            }
-            REGION => ConnectionOptionName::Region,
-            ROLE => {
-                self.expect_keyword(ARN)?;
-                ConnectionOptionName::RoleArn
-            }
-            SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
-                MECHANISMS => ConnectionOptionName::SaslMechanisms,
-                PASSWORD => ConnectionOptionName::SaslPassword,
-                USERNAME => ConnectionOptionName::SaslUsername,
-                _ => unreachable!(),
-            },
-            SECRET => {
-                self.expect_keywords(&[ACCESS, KEY])?;
-                ConnectionOptionName::SecretAccessKey
-            }
-            SERVICE => {
-                self.expect_keyword(NAME)?;
-                ConnectionOptionName::ServiceName
-            }
-            SSH => {
-                self.expect_keyword(TUNNEL)?;
+            ConnectionOptionName::SshTunnel => {
                 return Ok(ConnectionOption {
                     name: ConnectionOptionName::SshTunnel,
                     value: Some(self.parse_object_option_value()?),
                 });
             }
-            SSL => match self.expect_one_of_keywords(&[CERTIFICATE, MODE, KEY])? {
-                CERTIFICATE => {
-                    if self.parse_keyword(AUTHORITY) {
-                        ConnectionOptionName::SslCertificateAuthority
-                    } else {
-                        ConnectionOptionName::SslCertificate
-                    }
-                }
-                KEY => ConnectionOptionName::SslKey,
-                MODE => ConnectionOptionName::SslMode,
-                _ => unreachable!(),
-            },
-            TOKEN => ConnectionOptionName::Token,
-            URL => ConnectionOptionName::Url,
-            USER | USERNAME => ConnectionOptionName::User,
-            _ => unreachable!(),
+            name => name,
         };
         Ok(ConnectionOption {
             name,
@@ -3449,7 +3474,13 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
+        // For historical reasons, the parentheses around the options can be
+        // omitted.
+        let paren = self.consume_token(&Token::LParen);
         let options = self.parse_comma_separated(Parser::parse_cluster_option)?;
+        if paren {
+            let _ = self.consume_token(&Token::RParen);
+        }
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
             options,
@@ -3589,8 +3620,13 @@ impl<'a> Parser<'a> {
         let of_cluster = self.parse_identifier()?;
         self.expect_token(&Token::Dot)?;
         let name = self.parse_identifier()?;
-
+        // For historical reasons, the parentheses around the options can be
+        // omitted.
+        let paren = self.consume_token(&Token::LParen);
         let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+        if paren {
+            let _ = self.consume_token(&Token::RParen);
+        }
         Ok(Statement::CreateClusterReplica(
             CreateClusterReplicaStatement {
                 of_cluster,
@@ -3617,24 +3653,47 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_alias(&mut self) -> Result<Option<Ident>, ParserError> {
+        self.parse_keyword(AS)
+            .then(|| self.parse_identifier())
+            .transpose()
+    }
+
     fn parse_source_include_metadata(&mut self) -> Result<Vec<SourceIncludeMetadata>, ParserError> {
         if self.parse_keyword(INCLUDE) {
             self.parse_comma_separated(|parser| {
-                let ty = match parser
-                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS])?
+                let metadata = match parser
+                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS, HEADER])?
                 {
-                    KEY => SourceIncludeMetadataType::Key,
-                    TIMESTAMP => SourceIncludeMetadataType::Timestamp,
-                    PARTITION => SourceIncludeMetadataType::Partition,
-                    OFFSET => SourceIncludeMetadataType::Offset,
-                    HEADERS => SourceIncludeMetadataType::Headers,
+                    KEY => SourceIncludeMetadata::Key {
+                        alias: parser.parse_alias()?,
+                    },
+                    TIMESTAMP => SourceIncludeMetadata::Timestamp {
+                        alias: parser.parse_alias()?,
+                    },
+                    PARTITION => SourceIncludeMetadata::Partition {
+                        alias: parser.parse_alias()?,
+                    },
+                    OFFSET => SourceIncludeMetadata::Offset {
+                        alias: parser.parse_alias()?,
+                    },
+                    HEADERS => SourceIncludeMetadata::Headers {
+                        alias: parser.parse_alias()?,
+                    },
+                    HEADER => {
+                        let key: String = parser.parse_literal_string()?;
+                        parser.expect_keyword(AS)?;
+                        let alias = parser.parse_identifier()?;
+                        let use_bytes = parser.parse_keyword(BYTES);
+                        SourceIncludeMetadata::Header {
+                            alias,
+                            key,
+                            use_bytes,
+                        }
+                    }
                     _ => unreachable!("only explicitly allowed items can be parsed"),
                 };
-                let alias = parser
-                    .parse_keyword(AS)
-                    .then(|| parser.parse_identifier())
-                    .transpose()?;
-                Ok(SourceIncludeMetadata { ty, alias })
+                Ok(metadata)
             })
         } else {
             Ok(vec![])
@@ -4663,7 +4722,7 @@ impl<'a> Parser<'a> {
 
         Ok(
             match self
-                .expect_one_of_keywords(&[RENAME, ROTATE, OWNER])
+                .expect_one_of_keywords(&[RENAME, OWNER, ROTATE, SET, RESET, DROP])
                 .map_no_statement_parser_err()?
             {
                 RENAME => {
@@ -4680,11 +4739,6 @@ impl<'a> Parser<'a> {
                         to_item_name,
                     })
                 }
-                ROTATE => {
-                    self.expect_keyword(KEYS)
-                        .map_parser_err(StatementKind::AlterConnection)?;
-                    Statement::AlterConnection(AlterConnectionStatement { name, if_exists })
-                }
                 OWNER => {
                     self.expect_keyword(TO)
                         .map_parser_err(StatementKind::AlterOwner)?;
@@ -4699,9 +4753,71 @@ impl<'a> Parser<'a> {
                         new_owner,
                     })
                 }
-                _ => unreachable!(),
+                _ => {
+                    self.prev_token();
+                    let actions = self
+                        .parse_comma_separated(Parser::parse_alter_connection_action)
+                        .map_parser_err(StatementKind::AlterConnection)?;
+
+                    let with_options = if self.parse_keyword(WITH) {
+                        self.expect_token(&Token::LParen)
+                            .map_parser_err(StatementKind::AlterConnection)?;
+                        let options = self
+                            .parse_comma_separated(Parser::parse_alter_connection_option)
+                            .map_parser_err(StatementKind::AlterConnection)?;
+                        self.expect_token(&Token::RParen)
+                            .map_parser_err(StatementKind::AlterConnection)?;
+                        options
+                    } else {
+                        vec![]
+                    };
+
+                    Statement::AlterConnection(AlterConnectionStatement {
+                        name,
+                        if_exists,
+                        actions,
+                        with_options,
+                    })
+                }
             },
         )
+    }
+
+    fn parse_alter_connection_action(&mut self) -> Result<AlterConnectionAction<Raw>, ParserError> {
+        let r = match self.expect_one_of_keywords(&[ROTATE, SET, RESET, DROP])? {
+            ROTATE => {
+                self.expect_keyword(KEYS)?;
+                AlterConnectionAction::RotateKeys
+            }
+            SET => {
+                self.expect_token(&Token::LParen)?;
+                let option = self.parse_connection_option_unified()?;
+                self.expect_token(&Token::RParen)?;
+                AlterConnectionAction::SetOption(option)
+            }
+            DROP | RESET => {
+                self.expect_token(&Token::LParen)?;
+                let option = self.parse_connection_option_name()?;
+                self.expect_token(&Token::RParen)?;
+                AlterConnectionAction::DropOption(option)
+            }
+            _ => unreachable!(),
+        };
+
+        Ok(r)
+    }
+
+    /// Parses a single valid option in the WITH block of a create source
+    fn parse_alter_connection_option(&mut self) -> Result<AlterConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[VALIDATE])? {
+            VALIDATE => AlterConnectionOptionName::Validate,
+            _ => unreachable!(),
+        };
+
+        Ok(AlterConnectionOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     fn parse_alter_role(&mut self) -> Result<Statement<Raw>, ParserError> {

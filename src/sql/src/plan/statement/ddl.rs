@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::iter;
 
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
@@ -31,13 +31,14 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterAction, AlterClusterStatement, AlterRoleOption, AlterRoleStatement,
-    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
-    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
+    AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
+    AlterConnectionOptionName, AlterRoleOption, AlterRoleStatement, AlterSetClusterStatement,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, CommentObjectType, CommentStatement,
+    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
+    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
+    DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
     MaterializedViewOptionName, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
     UnresolvedSchemaName, Value,
 };
@@ -45,8 +46,8 @@ use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
-    KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
+    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionRetention, KafkaSinkFormat,
+    SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -78,8 +79,7 @@ use crate::ast::{
     IndexOptionName, KafkaConfigOptionName, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
     ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
-    SourceIncludeMetadata, SourceIncludeMetadataType, Statement, TableConstraint,
-    UnresolvedDatabaseName, ViewDefinition,
+    SourceIncludeMetadata, Statement, TableConstraint, UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
@@ -96,15 +96,16 @@ use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
 use crate::plan::query::{scalar_type_from_catalog, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
+use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
-    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter,
-    AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan,
-    AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
+    AlterOptionParameter, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
+    AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
     AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
@@ -112,8 +113,8 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
-    Source, SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
+    SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
     WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
@@ -587,7 +588,7 @@ pub fn plan_create_source(
     if !matches!(connection, CreateSourceConnection::Kafka { .. })
         && include_metadata
             .iter()
-            .any(|sic| sic.ty == SourceIncludeMetadataType::Headers)
+            .any(|sic| matches!(sic, SourceIncludeMetadata::Headers { .. }))
     {
         // TODO(guswynn): should this be `bail_unsupported!`?
         sql_bail!("INCLUDE HEADERS with non-Kafka sources not supported");
@@ -683,36 +684,47 @@ pub fn plan_create_source(
 
             let metadata_columns = include_metadata
                 .into_iter()
-                .flat_map(|item| match item.ty {
-                    SourceIncludeMetadataType::Timestamp => {
-                        let name = match item.alias.as_ref() {
+                .flat_map(|item| match item {
+                    SourceIncludeMetadata::Timestamp { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "timestamp".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Timestamp))
                     }
-                    SourceIncludeMetadataType::Partition => {
-                        let name = match item.alias.as_ref() {
+                    SourceIncludeMetadata::Partition { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "partition".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Partition))
                     }
-                    SourceIncludeMetadataType::Offset => {
-                        let name = match item.alias.as_ref() {
+                    SourceIncludeMetadata::Offset { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "offset".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Offset))
                     }
-                    SourceIncludeMetadataType::Headers => {
-                        let name = match item.alias.as_ref() {
+                    SourceIncludeMetadata::Headers { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "headers".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Headers))
                     }
-                    SourceIncludeMetadataType::Key => {
+                    SourceIncludeMetadata::Header {
+                        alias,
+                        key,
+                        use_bytes,
+                    } => Some((
+                        alias.to_string(),
+                        KafkaMetadataKind::Header {
+                            key: key.clone(),
+                            use_bytes: *use_bytes,
+                        },
+                    )),
+                    SourceIncludeMetadata::Key { .. } => {
                         // handled below
                         None
                     }
@@ -1822,14 +1834,14 @@ fn get_key_envelope(
 ) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
         .iter()
-        .find(|i| i.ty == SourceIncludeMetadataType::Key);
+        .find(|i| matches!(i, SourceIncludeMetadata::Key { .. }));
     if matches!(envelope, Envelope::Debezium { .. }) && key_definition.is_some() {
         sql_bail!(
             "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys."
         );
     }
-    if let Some(kd) = key_definition {
-        match (&kd.alias, encoding) {
+    if let Some(SourceIncludeMetadata::Key { alias }) = key_definition {
+        match (alias, encoding) {
             (Some(name), SourceDataEncoding::KeyValue { .. }) => {
                 Ok(KeyEnvelope::Named(name.as_str().to_string()))
             }
@@ -2485,9 +2497,7 @@ fn kafka_sink_builder(
     sink_from: GlobalId,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
-    // Get Kafka connection + progress topic
-    //
-    // TODO: In ALTER CONNECTION, the progress topic must be immutable
+    // Get Kafka connection + progress topic.
     let (connection, progress_topic) = match item.connection()? {
         Connection::Kafka(connection) => {
             let id = item.id();
@@ -2506,7 +2516,10 @@ fn kafka_sink_builder(
 
     // Starting offsets are allowed with feature flags mode, as they are a simple,
     // useful way to specify where to start reading a topic.
-    const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[KafkaConfigOptionName::Topic];
+    const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[
+        KafkaConfigOptionName::Topic,
+        KafkaConfigOptionName::CompressionType,
+    ];
 
     if let Some(op) = options
         .iter()
@@ -2619,11 +2632,11 @@ fn kafka_sink_builder(
                 .key_writer_schema()
                 .map(|key_schema| key_schema.to_string());
 
-            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
+            KafkaSinkFormat::Avro {
                 key_schema,
                 value_schema,
                 csr_connection,
-            })
+            }
         }
         Some(Format::Json) => KafkaSinkFormat::Json,
         Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
@@ -4766,6 +4779,192 @@ pub fn plan_alter_secret(
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
 }
 
+pub fn describe_alter_connection(
+    _: &StatementContext,
+    _: AlterConnectionStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+generate_extracted_config!(AlterConnectionOption, (Validate, bool));
+
+pub fn plan_alter_connection(
+    scx: &StatementContext,
+    stmt: AlterConnectionStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let AlterConnectionStatement {
+        name,
+        if_exists,
+        actions,
+        with_options,
+    } = stmt;
+    let conn_name = normalize::unresolved_item_name(name)?;
+    let entry = match scx.catalog.resolve_item(&conn_name) {
+        Ok(entry) => entry,
+        Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: conn_name.to_string(),
+                object_type: ObjectType::Sink,
+            });
+
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Connection,
+            }));
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let connection = entry.connection()?;
+
+    if actions
+        .iter()
+        .any(|action| matches!(action, AlterConnectionAction::RotateKeys))
+    {
+        if actions.len() > 1 {
+            sql_bail!("cannot specify any other actions alongside ALTER CONNECTION...ROTATE KEYS");
+        }
+
+        if !with_options.is_empty() {
+            sql_bail!(
+                "ALTER CONNECTION...ROTATE KEYS does not support WITH ({})",
+                with_options.iter().map(|o| o.to_ast_string()).join(", ")
+            );
+        }
+
+        if !matches!(connection, Connection::Ssh(_)) {
+            sql_bail!(
+                "{} is not an SSH connection",
+                scx.catalog.resolve_full_name(entry.name())
+            )
+        }
+
+        return Ok(Plan::AlterConnection(AlterConnectionPlan {
+            id: entry.id(),
+            action: crate::plan::AlterConnectionAction::RotateKeys,
+        }));
+    }
+
+    let options = AlterConnectionOptionExtracted::try_from(with_options)?;
+    if options.validate.is_some() {
+        scx.require_feature_flag(&vars::ENABLE_CONNECTION_VALIDATION_SYNTAX)?;
+    }
+
+    let validate = match options.validate {
+        Some(val) => val,
+        None => {
+            scx.catalog
+                .system_vars()
+                .enable_default_connection_validation()
+                && connection.validate_by_default()
+        }
+    };
+
+    let connection_type = match connection {
+        Connection::Aws(_) => CreateConnectionType::Aws,
+        Connection::AwsPrivatelink(_) => CreateConnectionType::AwsPrivatelink,
+        Connection::Kafka(_) => CreateConnectionType::Kafka,
+        Connection::Csr(_) => CreateConnectionType::Csr,
+        Connection::Postgres(_) => CreateConnectionType::Postgres,
+        Connection::Ssh(_) => CreateConnectionType::Ssh,
+    };
+
+    // Collect all options irrespective of action taken on them.
+    let specified_options: BTreeSet<_> = actions
+        .iter()
+        .map(|action: &AlterConnectionAction<Aug>| match action {
+            AlterConnectionAction::SetOption(option) => option.name.clone(),
+            AlterConnectionAction::DropOption(name) => name.clone(),
+            AlterConnectionAction::RotateKeys => unreachable!(),
+        })
+        .collect();
+
+    for invalid in INALTERABLE_OPTIONS {
+        if specified_options.contains(invalid) {
+            sql_bail!("cannot ALTER {} option {}", connection_type, invalid);
+        }
+    }
+
+    connection::validate_options_per_connection_type(connection_type, specified_options)?;
+
+    // Partition operations into set and drop
+    let (set_options_vec, mut drop_options): (Vec<_>, BTreeSet<_>) =
+        actions.into_iter().partition_map(|action| match action {
+            AlterConnectionAction::SetOption(option) => Either::Left(option),
+            AlterConnectionAction::DropOption(name) => Either::Right(name),
+            AlterConnectionAction::RotateKeys => unreachable!(),
+        });
+
+    let set_options: BTreeMap<_, _> = set_options_vec
+        .clone()
+        .into_iter()
+        .map(|option| (option.name, option.value))
+        .collect();
+
+    // Type check values + avoid duplicates; we don't want to e.g. let users
+    // drop and set the same option in the same statement, so treating drops as
+    // sets here is fine.
+    let connection_options_extracted =
+        connection::ConnectionOptionExtracted::try_from(set_options_vec)?;
+
+    let duplicates: Vec<_> = connection_options_extracted
+        .seen
+        .intersection(&drop_options)
+        .collect();
+
+    if !duplicates.is_empty() {
+        sql_bail!(
+            "cannot both SET and DROP/RESET options {}",
+            duplicates
+                .iter()
+                .map(|option| option.to_string())
+                .join(", ")
+        )
+    }
+
+    for mutually_exclusive_options in MUTUALLY_EXCLUSIVE_SETS {
+        let set_options_count = mutually_exclusive_options
+            .iter()
+            .filter(|o| set_options.contains_key(o))
+            .count();
+        let drop_options_count = mutually_exclusive_options
+            .iter()
+            .filter(|o| drop_options.contains(o))
+            .count();
+
+        // Disallow setting _and_ resetting mutually exclusive options
+        if set_options_count > 0 && drop_options_count > 0 {
+            sql_bail!(
+                "cannot both SET and DROP/RESET mutually exclusive {} options {}",
+                connection_type,
+                mutually_exclusive_options
+                    .iter()
+                    .map(|option| option.to_string())
+                    .join(", ")
+            )
+        }
+
+        // If any option is either set or dropped, ensure all mutually exclusive
+        // options are dropped. We do this "behind the scenes", even though we
+        // disallow users from performing the same action because this is the
+        // mechanism by which we overwrite values elsewhere in the code.
+        if set_options_count > 0 || drop_options_count > 0 {
+            drop_options.extend(mutually_exclusive_options.iter().cloned());
+        }
+
+        // n.b. if mutually exclusive options are set, those will error when we
+        // try to replan the connection.
+    }
+
+    Ok(Plan::AlterConnection(AlterConnectionPlan {
+        id: entry.id(),
+        action: crate::plan::AlterConnectionAction::AlterOptions {
+            set_options,
+            drop_options,
+            validate,
+        },
+    }))
+}
+
 pub fn describe_alter_sink(
     _: &StatementContext,
     _: AlterSinkStatement<Aug>,
@@ -4845,13 +5044,6 @@ pub fn describe_alter_source(
     _: AlterSourceStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     // TODO: put the options here, right?
-    Ok(StatementDesc::new(None))
-}
-
-pub fn describe_alter_connection(
-    _: &StatementContext,
-    _: AlterConnectionStatement,
-) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
@@ -5037,37 +5229,6 @@ pub fn plan_alter_system_reset_all(
     Ok(Plan::AlterSystemResetAll(AlterSystemResetAllPlan {}))
 }
 
-pub fn plan_alter_connection(
-    scx: &mut StatementContext,
-    stmt: AlterConnectionStatement,
-) -> Result<Plan, PlanError> {
-    let AlterConnectionStatement { name, if_exists } = stmt;
-    let name = normalize::unresolved_item_name(name)?;
-    let entry = match scx.catalog.resolve_item(&name) {
-        Ok(connection) => connection,
-        Err(_) if if_exists => {
-            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: name.to_string(),
-                object_type: ObjectType::Connection,
-            });
-
-            return Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::Connection,
-            }));
-        }
-        Err(e) => return Err(e.into()),
-    };
-    if !matches!(entry.connection()?, Connection::Ssh(_)) {
-        sql_bail!(
-            "{} is not an SSH connection",
-            scx.catalog.resolve_full_name(entry.name())
-        )
-    }
-
-    let id = entry.id();
-    Ok(Plan::RotateKeys(RotateKeysPlan { id }))
-}
-
 pub fn describe_alter_role(
     _: &StatementContext,
     _: AlterRoleStatement<Aug>,
@@ -5229,7 +5390,7 @@ pub fn plan_comment(
         }
     };
 
-    // Note: the `mz_comments` table uses an `Int4` for the column position, but in the Stash we
+    // Note: the `mz_comments` table uses an `Int4` for the column position, but in the catalog storage we
     // store a `usize` which would be a `Uint8`. We guard against a safe conversion here because
     // it's the easiest place to raise an error.
     //

@@ -443,6 +443,9 @@ pub struct Args {
     /// The backing durable store of the catalog.
     #[clap(long, arg_enum, env = "CATALOG_STORE", default_value("stash"))]
     catalog_store: CatalogKind,
+    /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
+    #[clap(long, env = "TIMESTAMP_ORACLE_URL", value_name = "POSTGRES_URL")]
+    timestamp_oracle_url: Option<String>,
 
     // === Bootstrap options. ===
     #[clap(
@@ -941,7 +944,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             CatalogKind::Stash => CatalogConfig::Stash {
                 url: args.adapter_stash_url.expect("required for stash catalog"),
             },
-            CatalogKind::Persist => CatalogConfig::Persist { persist_clients },
+            CatalogKind::Persist => CatalogConfig::Persist {
+                persist_clients,
+                metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
+            },
             CatalogKind::Shadow => CatalogConfig::Shadow {
                 url: args.adapter_stash_url.expect("required for shadow catalog"),
                 persist_clients,
@@ -953,6 +959,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 frontegg,
                 cors_allowed_origin,
                 catalog_config,
+                timestamp_oracle_url: args.timestamp_oracle_url,
                 controller,
                 secrets_controller,
                 cloud_resource_controller,
@@ -1024,6 +1031,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     println!(
         " Internal HTTP address: {}",
         server.internal_http_local_addr()
+    );
+    println!(
+        " Balancerd SQL address: {}",
+        server.balancer_sql_local_addr()
+    );
+    println!(
+        " Balancerd HTTP address: {}",
+        server.balancer_http_local_addr()
     );
     println!(
         " Internal Persist PubSub address: {}",

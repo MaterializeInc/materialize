@@ -10,10 +10,7 @@
 import os
 import random
 
-from materialize.mzcompose import (
-    DEFAULT_MZ_ENVIRONMENT_ID,
-    DEFAULT_MZ_VOLUMES,
-)
+from materialize.mzcompose import DEFAULT_MZ_VOLUMES
 from materialize.mzcompose.service import (
     Service,
     ServiceDependency,
@@ -36,11 +33,11 @@ class Testdrive(Service):
         default_timeout: str | None = None,
         seed: int | None = None,
         consistent_seed: bool = False,
-        validate_postgres_stash: str | None = None,
+        postgres_stash: str | None = None,
+        validate_catalog_store: str | None = None,
         entrypoint: list[str] | None = None,
         entrypoint_extra: list[str] = [],
         environment: list[str] | None = None,
-        environment_id: str | None = None,
         volumes_extra: list[str] = [],
         volume_workdir: str = ".:/workdir",
         propagate_uid_gid: bool = True,
@@ -91,10 +88,13 @@ class Testdrive(Service):
         if aws_endpoint and not aws_region:
             entrypoint.append(f"--aws-endpoint={aws_endpoint}")
 
-        if validate_postgres_stash:
+        if postgres_stash:
             entrypoint.append(
-                f"--validate-postgres-stash=postgres://root@{validate_postgres_stash}:26257?options=--search_path=adapter"
+                f"--postgres-stash=postgres://root@{postgres_stash}:26257?options=--search_path=adapter"
             )
+
+        if validate_catalog_store:
+            entrypoint.append(f"--validate-catalog-store={validate_catalog_store}")
 
         if no_reset:
             entrypoint.append("--no-reset")
@@ -143,10 +143,6 @@ class Testdrive(Service):
             entrypoint.append(
                 "--persist-consensus-url=postgres://root@materialized:26257?options=--search_path=consensus"
             )
-
-        if not environment_id:
-            environment_id = DEFAULT_MZ_ENVIRONMENT_ID
-        entrypoint.append(f"--environment-id={environment_id}")
 
         entrypoint.extend(entrypoint_extra)
 

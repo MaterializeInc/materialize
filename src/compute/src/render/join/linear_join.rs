@@ -24,11 +24,12 @@ use mz_repr::fixed_length::IntoRowByTypes;
 use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use timely::container::columnation::Columnation;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::{Refines, Timestamp};
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::{HeapSize, MzArrange};
 use crate::render::context::{
     ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
     SpecializedArrangementImport,
@@ -81,8 +82,8 @@ impl LinearJoinSpec {
     where
         G: Scope,
         G::Timestamp: Lattice,
-        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, R = Diff> + Clone + 'static,
-        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
         L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
         I: IntoIterator,
         I::Item: Data,
@@ -125,8 +126,8 @@ impl LinearJoinSpec {
 enum JoinedFlavor<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
+    T: Timestamp + Lattice + Columnation,
 {
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
@@ -139,8 +140,8 @@ where
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
+    T: Timestamp + Lattice + Columnation,
 {
     pub(crate) fn render_join(
         &mut self,
@@ -409,8 +410,8 @@ where
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, R = Diff> + Clone + 'static,
-        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
         K: Data + IntoRowByTypes,
         V1: Data + IntoRowByTypes,
         V2: Data + IntoRowByTypes,

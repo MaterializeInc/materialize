@@ -20,6 +20,7 @@ steps:
   - wait: ~
 
   - command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.trim_pipeline nightly
+    timeout_in_minutes: 10
     if: build.source == "ui"
     agents:
       queue: linux
@@ -27,6 +28,7 @@ steps:
   - wait: ~
 
   - id: closed-issues-detect
+    timeout_in_minutes: 10
     label: Detect references to already closed issues
     command: bin/ci-builder run stable bin/ci-closed-issues-detect
     agents:
@@ -81,6 +83,7 @@ steps:
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
+    timeout_in_minutes: 60
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
@@ -90,6 +93,7 @@ steps:
 
   - id: kafka-multi-broker
     label: Kafka multi-broker test
+    timeout_in_minutes: 10
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
@@ -326,6 +330,17 @@ steps:
               composition: zippy
               args: [--scenario=KafkaSources, --actions=10000, --cockroach-tag=latest, --max-execution-time=30m]
 
+      - id: zippy-alter-connection
+        label: "Zippy w/ alter connection"
+        timeout_in_minutes: 120
+        agents:
+          queue: linux-x86_64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
+
   - group: Secrets
     key: secrets
     steps:
@@ -411,6 +426,7 @@ steps:
 
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous"
+        skip: "To be addressed with #23608"
         timeout_in_minutes: 60
         artifact_paths: junit_*.xml
         agents:
@@ -571,7 +587,7 @@ steps:
 
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix"
-        timeout_in_minutes: 360
+        timeout_in_minutes: 600
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
@@ -584,7 +600,7 @@ steps:
         label: "Platform checks upgrade in Cloudtest/K8s"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
@@ -816,6 +832,7 @@ steps:
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"
+    timeout_in_minutes: 15
     artifact_paths: junit_*.xml
     agents:
       queue: linux-x86_64
@@ -825,6 +842,7 @@ steps:
 
   - id: pubsub-disruption
     label: "PubSub disruption"
+    timeout_in_minutes: 15
     artifact_paths: junit_*.xml
     agents:
       queue: builder-linux-x86_64
@@ -904,6 +922,7 @@ steps:
         label: "Parallel Workload (cancel)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
+        skip: "TODO(def-): Reenable when #2392 is fixed"
         agents:
           queue: builder-linux-x86_64
         plugins:
@@ -926,6 +945,7 @@ steps:
         label: "Parallel Workload (backup & restore)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
+        skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
           queue: builder-linux-x86_64
         plugins:
@@ -935,6 +955,7 @@ steps:
 
   - id: incident-70
     label: "Test for incident 70"
+    timeout_in_minutes: 15
     skip: "Affected by #15209"
     agents:
       queue: linux-x86_64-large
@@ -944,17 +965,9 @@ steps:
           composition: cluster
           run: test-incident-70
 
-  - id: incident-72-remediation
-    label: "Remediation of incident 72"
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: incident-72
-
   - id: balancerd
     label: "Tests for balancerd"
+    timeout_in_minutes: 15
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
@@ -967,6 +980,7 @@ steps:
 
   - id: analyze
     label: Analyze tests
+    timeout_in_minutes: 15
     plugins:
       - junit-annotate#v2.0.2:
           artifacts: "*junit_*.xml"

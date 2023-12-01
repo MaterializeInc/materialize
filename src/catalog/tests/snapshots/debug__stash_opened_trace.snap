@@ -612,7 +612,7 @@ Trace {
                         key: "user_version",
                     },
                     ConfigValue {
-                        value: 43,
+                        value: 44,
                     },
                 ),
                 "-9223372036854775808",

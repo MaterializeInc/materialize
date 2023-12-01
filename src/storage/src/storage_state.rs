@@ -75,7 +75,6 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -95,8 +94,8 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
-    RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand,
-    StorageResponse,
+    RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StatusUpdate,
+    StorageCommand, StorageResponse,
 };
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
@@ -113,12 +112,10 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 use tracing::{info, trace, warn};
 
-use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{
     self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
 };
-use crate::sink::SinkBaseMetrics;
-use crate::source::metrics::SourceBaseMetrics;
+use crate::metrics::StorageMetrics;
 use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
@@ -156,9 +153,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             ResponseSender,
             crossbeam_channel::Sender<std::thread::Thread>,
         )>,
-        decode_metrics: DecodeMetrics,
-        source_metrics: SourceBaseMetrics,
-        sink_metrics: SinkBaseMetrics,
+        metrics: StorageMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
         instance_context: StorageInstanceContext,
@@ -210,13 +205,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let storage_state = StorageState {
             source_uppers: BTreeMap::new(),
             source_tokens: BTreeMap::new(),
-            decode_metrics,
+            metrics,
             reported_frontiers: BTreeMap::new(),
             ingestions: BTreeMap::new(),
             exports: BTreeMap::new(),
             now,
-            source_metrics,
-            sink_metrics,
             timely_worker_index: timely_worker.index(),
             timely_worker_peers: timely_worker.peers(),
             connection_context,
@@ -228,6 +221,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             dropped_ids: BTreeSet::new(),
             source_statistics: BTreeMap::new(),
             sink_statistics: BTreeMap::new(),
+            object_status_updates: Default::default(),
             internal_cmd_tx: command_sequencer,
             async_worker,
             dataflow_parameters: DataflowParameters::new(
@@ -262,8 +256,8 @@ pub struct StorageState {
     pub source_uppers: BTreeMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
     /// Handles to created sources, keyed by ID
     pub source_tokens: BTreeMap<GlobalId, Rc<dyn Any>>,
-    /// Decoding metrics reported by all dataflows.
-    pub decode_metrics: DecodeMetrics,
+    /// Metrics for storage objects.
+    pub metrics: StorageMetrics,
     /// Tracks the conditional write frontiers we have reported.
     pub reported_frontiers: BTreeMap<GlobalId, Antichain<Timestamp>>,
     /// Descriptions of each installed ingestion.
@@ -272,10 +266,6 @@ pub struct StorageState {
     pub exports: BTreeMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
     /// Undocumented
     pub now: NowFn,
-    /// Metrics for the source-specific side of dataflows.
-    pub source_metrics: SourceBaseMetrics,
-    /// Undocumented
-    pub sink_metrics: SinkBaseMetrics,
     /// Index of the associated timely dataflow worker.
     pub timely_worker_index: usize,
     /// Peers in the associated timely dataflow worker.
@@ -305,6 +295,12 @@ pub struct StorageState {
     /// The same as `source_statistics`, but for sinks.
     pub sink_statistics:
         BTreeMap<GlobalId, StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>>,
+
+    /// Status updates reported by health operators.
+    ///
+    /// **NOTE**: Operators that append to this collection should take care to only add new
+    /// status updates if the status of the ingestion/export in question has _changed_.
+    pub object_status_updates: Rc<RefCell<Vec<StatusUpdate>>>,
 
     /// Sender for cluster-internal storage commands. These can be sent from
     /// within workers/operators and will be distributed to all workers. For
@@ -539,6 +535,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
             self.report_frontier_progress(&response_tx);
 
+            // Report status updates if any are present
+            if self.storage_state.object_status_updates.borrow().len() > 0 {
+                self.send_storage_response(
+                    &response_tx,
+                    StorageResponse::StatusUpdates(self.storage_state.object_status_updates.take()),
+                );
+            }
+
             // Note: this interval configures the level of granularity we expect statistics
             // (at least with this implementation) to have. We expect a statistic in the
             // system tables to be only accurate to within this interval + whatever
@@ -709,7 +713,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // the internal command fabric, to ensure consistent
                     // ordering of dataflow rendering across all workers.
                     if self.timely_worker.index() == 0 {
-                        internal_cmd_tx.broadcast(InternalStorageCommand::CreateSinkDataflow(
+                        internal_cmd_tx.broadcast(InternalStorageCommand::RunSinkDataflow(
                             id,
                             sink_description,
                         ));
@@ -755,7 +759,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         StorageStatistics::<SourceStatisticsUpdate, SourceStatisticsMetrics>::new(
                             *export_id,
                             self.storage_state.timely_worker_index,
-                            &self.storage_state.source_metrics,
+                            &self.storage_state.metrics.source_statistics,
                             ingestion_id,
                             &export.storage_metadata.data_shard,
                         );
@@ -812,7 +816,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     source_resume_uppers,
                 );
             }
-            InternalStorageCommand::CreateSinkDataflow(sink_id, sink_description) => {
+            InternalStorageCommand::RunSinkDataflow(sink_id, sink_description) => {
                 info!(
                     "worker {}/{} trying to (re-)start sink {sink_id}",
                     self.timely_worker.index(),
@@ -837,7 +841,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 let stats = StorageStatistics::<SinkStatisticsUpdate, SinkStatisticsMetrics>::new(
                     sink_id,
                     self.storage_state.timely_worker_index,
-                    &self.storage_state.sink_metrics,
+                    &self.storage_state.metrics.sink_statistics,
                 );
                 self.storage_state.sink_statistics.insert(sink_id, stats);
 
@@ -1009,6 +1013,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         let mut drop_commands = BTreeSet::new();
         let mut running_ingestion_descriptions = self.storage_state.ingestions.clone();
+        let mut running_exports_descriptions = self.storage_state.exports.clone();
 
         for command in &mut commands {
             match command {
@@ -1041,13 +1046,26 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     }
                 }
-                StorageCommand::InitializationComplete
-                | StorageCommand::UpdateConfiguration(_)
-                | StorageCommand::CreateSinks(_) => (),
+                StorageCommand::RunSinks(exports) => {
+                    // Ensure that exports are forward-rolling alter compatible.
+                    for export in exports {
+                        let prev = running_exports_descriptions
+                            .insert(export.id, export.description.clone());
+
+                        if let Some(prev_export) = prev {
+                            prev_export
+                                .alter_compatible(export.id, &export.description)
+                                .expect("only alter compatible ingestions permitted");
+                        }
+                    }
+                }
+                StorageCommand::InitializationComplete | StorageCommand::UpdateConfiguration(_) => {
+                    ()
+                }
             }
         }
 
-        let mut seen_most_recent_ingestion = BTreeSet::new();
+        let mut seen_most_recent_definition = BTreeSet::new();
 
         // We iterate over this backward to ensure that we keep only the most recent ingestion
         // description.
@@ -1072,43 +1090,41 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             let running_ingestion =
                                 self.storage_state.ingestions.get(&ingestion.id);
 
-                            // Ingestion statements are only considered updates if they are
-                            // currently running.
-                            ingestion.update = running_ingestion.is_some();
-
                             // We keep only:
                             // - The most recent version of the ingestion, which
                             //   is why these commands are run in reverse.
                             // - Ingestions whose descriptions are not exactly
                             //   those that are currently running.
-                            seen_most_recent_ingestion.insert(ingestion.id)
+                            seen_most_recent_definition.insert(ingestion.id)
                                 && running_ingestion != Some(&ingestion.description)
                         }
                     })
                 }
-                StorageCommand::CreateSinks(exports) => {
+                StorageCommand::RunSinks(exports) => {
                     exports.retain_mut(|export| {
-                        if drop_commands.remove(&export.id) {
+                        if drop_commands.remove(&export.id)
+                            // If there were multiple `RunSinks` in the command
+                            // stream, we want to ensure none of them are
+                            // retained.
+                            || self.storage_state.dropped_ids.contains(&export.id)
+                        {
                             // Make sure that we report back that the ID was
                             // dropped.
                             self.storage_state.dropped_ids.insert(export.id);
 
                             false
-                        } else if let Some(existing) = self.storage_state.exports.get(&export.id) {
-                            expected_objects.insert(export.id);
-                            // If we've been asked to create an export that is
-                            // already installed, the descriptions must be
-                            // compatible.
-                            //
-                            // TODO(ALTER CONNECTION): we will need to update
-                            // the stored connection description if it's
-                            // changed.
-                            existing
-                                .alter_compatible(export.id, &export.description)
-                                .expect("reconciled sinks must have compatible descriptions");
-                            false
                         } else {
-                            true
+                            expected_objects.insert(export.id);
+
+                            let running_sink = self.storage_state.exports.get(&export.id);
+
+                            // We keep only:
+                            // - The most recent version of the sink, which
+                            //   is why these commands are run in reverse.
+                            // - Sinks whose descriptions are not exactly
+                            //   those that are currently running.
+                            seen_most_recent_definition.insert(export.id)
+                                && running_sink != Some(&export.description)
                         }
                     })
                 }
@@ -1227,31 +1243,16 @@ impl StorageState {
                 }
             }
             StorageCommand::RunIngestions(ingestions) => {
-                for RunIngestionCommand {
-                    id,
-                    description,
-                    update,
-                } in ingestions
-                {
+                for RunIngestionCommand { id, description } in ingestions {
                     // Remember the ingestion description to facilitate possible
                     // reconciliation later.
-                    let prev = self.ingestions.insert(id, description.clone());
-
-                    assert!(
-                        prev.is_some() == update,
-                        "can only and must update reported frontiers if RunIngestion is update"
-                    );
+                    self.ingestions.insert(id, description.clone());
 
                     // Initialize shared frontier reporting.
                     for id in description.subsource_ids() {
-                        match self.reported_frontiers.entry(id) {
-                            Entry::Occupied(_) => {
-                                assert!(update, "tried to re-insert frontier for {}", id)
-                            }
-                            Entry::Vacant(v) => {
-                                v.insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
-                            }
-                        };
+                        self.reported_frontiers
+                            .entry(id)
+                            .or_insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
                     }
 
                     // This needs to be done by one worker, which will broadcasts a
@@ -1269,33 +1270,36 @@ impl StorageState {
                     }
                 }
             }
-            StorageCommand::CreateSinks(exports) => {
+            StorageCommand::RunSinks(exports) => {
                 for export in exports {
                     // Remember the sink description to facilitate possible
                     // reconciliation later.
-                    self.exports.insert(export.id, export.description.clone());
+                    let prev = self.exports.insert(export.id, export.description.clone());
 
-                    self.reported_frontiers.insert(
-                        export.id,
-                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
-                    );
-
-                    self.sink_handles.insert(
-                        export.id,
-                        SinkHandle::new(
+                    // New sink, add state.
+                    if prev.is_none() {
+                        self.reported_frontiers.insert(
                             export.id,
-                            &export.description.from_storage_metadata,
-                            export.description.from_storage_metadata.data_shard,
-                            export.description.as_of.frontier.clone(),
-                            Arc::clone(&self.persist_clients),
-                        ),
-                    );
+                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                        );
+
+                        self.sink_handles.insert(
+                            export.id,
+                            SinkHandle::new(
+                                export.id,
+                                &export.description.from_storage_metadata,
+                                export.description.from_storage_metadata.data_shard,
+                                export.description.as_of.frontier.clone(),
+                                Arc::clone(&self.persist_clients),
+                            ),
+                        );
+                    }
 
                     // This needs to be broadcast by one worker and go through the internal command
                     // fabric, to ensure consistent ordering of dataflow rendering across all
                     // workers.
                     if worker_index == 0 {
-                        internal_cmd_tx.broadcast(InternalStorageCommand::CreateSinkDataflow(
+                        internal_cmd_tx.broadcast(InternalStorageCommand::RunSinkDataflow(
                             export.id,
                             export.description,
                         ));

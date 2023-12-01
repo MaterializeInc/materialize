@@ -18,9 +18,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use mz_ore::cast::CastLossy;
-use mz_ore::metrics::{CounterVecExt, GaugeVecExt};
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
-use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_operators::persist_source;
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::controller::CollectionMetadata;
@@ -120,8 +118,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         worker_count: scope.peers(),
         encoding: description.desc.encoding.clone(),
         now: storage_state.now.clone(),
-        // TODO(guswynn): avoid extra clones here
-        base_metrics: storage_state.source_metrics.clone(),
+        metrics: storage_state.metrics.clone(),
         as_of: as_of.clone(),
         resume_uppers,
         source_resume_uppers,
@@ -322,7 +319,7 @@ where
                     key_encoding,
                     value_encoding,
                     dataflow_debug_name.clone(),
-                    storage_state.decode_metrics.clone(),
+                    storage_state.metrics.decode_defs.clone(),
                     storage_state.connection_context.clone(),
                 ),
                 SourceType::Row(source) => (
@@ -423,39 +420,14 @@ where
                                                 let (feedback_handle, feedback_data) =
                                                     scope.feedback(Default::default());
 
-                                                let backpressure_metrics =
-                                                    Some(BackpressureMetrics {
-                                                        emitted_bytes: Arc::new(
-                                                            base_source_config
-                                                                .base_metrics
-                                                                .upsert_backpressure_specific
-                                                                .emitted_bytes
-                                                                .get_delete_on_drop_counter(vec![
-                                                                    id.to_string(),
-                                                                    scope.index().to_string(),
-                                                                ]),
-                                                        ),
-                                                        last_backpressured_bytes: Arc::new(
-                                                            base_source_config
-                                                                .base_metrics
-                                                                .upsert_backpressure_specific
-                                                                .last_backpressured_bytes
-                                                                .get_delete_on_drop_gauge(vec![
-                                                                    id.to_string(),
-                                                                    scope.index().to_string(),
-                                                                ]),
-                                                        ),
-                                                        retired_bytes: Arc::new(
-                                                            base_source_config
-                                                                .base_metrics
-                                                                .upsert_backpressure_specific
-                                                                .retired_bytes
-                                                                .get_delete_on_drop_counter(vec![
-                                                                    id.to_string(),
-                                                                    scope.index().to_string(),
-                                                                ]),
-                                                        ),
-                                                    });
+                                                // TODO(guswynn): cleanup
+                                                let backpressure_metrics = Some(
+                                                    base_source_config.metrics.get_backpressure_metrics(
+                                                        id,
+                                                        scope.index(),
+                                                    ),
+                                                );
+
                                                 (
                                                     Some(feedback_handle),
                                                     Some(persist_source::FlowControl {

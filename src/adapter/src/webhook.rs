@@ -12,7 +12,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use anyhow::Context;
-use mz_ore::now::{to_datetime, NowFn};
+use chrono::{DateTime, Utc};
 use mz_repr::{ColumnType, Datum, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
@@ -47,19 +47,19 @@ pub enum AppendWebhookError {
 pub struct AppendWebhookValidator {
     validation: WebhookValidation,
     secrets_reader: CachingSecretsReader,
-    now_fn: NowFn,
+    received_at: DateTime<Utc>,
 }
 
 impl AppendWebhookValidator {
     pub fn new(
         validation: WebhookValidation,
         secrets_reader: CachingSecretsReader,
-        now_fn: NowFn,
+        received_at: DateTime<Utc>,
     ) -> Self {
         AppendWebhookValidator {
             validation,
             secrets_reader,
-            now_fn,
+            received_at,
         }
     }
 
@@ -71,7 +71,7 @@ impl AppendWebhookValidator {
         let AppendWebhookValidator {
             validation,
             secrets_reader,
-            now_fn,
+            received_at,
         } = self;
 
         let WebhookValidation {
@@ -103,9 +103,7 @@ impl AppendWebhookValidator {
         // boundary errors, and this shouldn't be too computationally expensive.
         prep_scalar_expr(
             &mut expression,
-            ExprPrepStyle::WebhookValidation {
-                now: to_datetime(now_fn()),
-            },
+            ExprPrepStyle::WebhookValidation { now: received_at },
         )
         .map_err(|err| {
             tracing::error!(?err, "failed to evaluate current time");

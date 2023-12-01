@@ -12,7 +12,8 @@
 #![allow(missing_docs)]
 
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::ord::{ColKeySpine, ColValSpine};
+use differential_dataflow::trace::implementations::ord::ColKeySpine;
+use differential_dataflow::trace::implementations::ord_neu::ColValSpine;
 
 use mz_ore::num::Overflowing;
 use mz_repr::{Diff, Row, Timestamp};
@@ -23,6 +24,7 @@ pub type RowKeySpine<K, T, R> = ColKeySpine<K, T, R, Overflowing<u32>>;
 pub type ErrSpine<K, T, R> = ColKeySpine<K, T, R, Overflowing<u32>>;
 pub type ErrValSpine<K, T, R> = ColValSpine<K, DataflowError, T, R, Overflowing<u32>>;
 pub type TraceRowHandle<K, V, T, R> = TraceAgent<RowSpine<K, V, T, R>>;
+pub type TraceKeyHandle<K, T, R> = TraceAgent<RowKeySpine<K, T, R>>;
 pub type TraceErrHandle<K, T, R> = TraceAgent<ErrSpine<K, T, R>>;
 pub type KeysValsHandle = TraceRowHandle<Row, Row, Timestamp, Diff>;
 pub type ErrsHandle = TraceErrHandle<DataflowError, Timestamp, Diff>;

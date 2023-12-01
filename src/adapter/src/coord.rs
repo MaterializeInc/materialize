@@ -69,6 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::Neg;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -89,18 +90,18 @@ use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::stack;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationType, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
@@ -109,12 +110,11 @@ use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
-use mz_sql::session::vars::ConnectionCounter;
+use mz_sql::session::vars::{self, ConnectionCounter};
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::Timeline;
-use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
@@ -128,7 +128,7 @@ use uuid::Uuid;
 
 use crate::catalog::{
     self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, DataSourceDesc, Source,
+    ClusterReplicaSizeMap, Connection, DataSourceDesc, Source,
 };
 use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -138,9 +138,11 @@ use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
-use crate::coord::sequencer::old_optimizer_api::PeekStageDeprecated;
 use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
+use crate::coord::timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
+};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -180,6 +182,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     ControllerReady,
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
+    AlterConnectionValidationReady(AlterConnectionValidationReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
@@ -230,10 +233,6 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stage: PeekStage,
     },
-    PeekStageDeprecatedReady {
-        ctx: ExecuteContext,
-        stage: PeekStageDeprecated,
-    },
     DrainStatementLog,
 }
 
@@ -273,8 +272,8 @@ impl Message {
                 "execute_single_statement_transaction"
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
-            Message::PeekStageDeprecatedReady { .. } => "peek_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
+            Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
         }
     }
 }
@@ -298,14 +297,17 @@ pub type PurifiedStatementReady = BackgroundWorkResult<(
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct CreateConnectionValidationReady {
+pub struct ValidationReady<T> {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
-    pub result: Result<CreateConnectionPlan, AdapterError>,
+    pub result: Result<T, AdapterError>,
     pub connection_gid: GlobalId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
 }
+
+pub type CreateConnectionValidationReady = ValidationReady<CreateConnectionPlan>;
+pub type AlterConnectionValidationReady = ValidationReady<Connection>;
 
 #[derive(Debug)]
 pub enum RealTimeRecencyContext {
@@ -322,27 +324,11 @@ pub enum RealTimeRecencyContext {
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
         timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
         in_immediate_multi_stmt_txn: bool,
         optimizer: optimize::peek::Optimizer,
         global_mir_plan: optimize::peek::GlobalMirPlan,
-    },
-    PeekDeprecated {
-        ctx: ExecuteContext,
-        finishing: RowSetFinishing,
-        copy_to: Option<CopyFormat>,
-        dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-        cluster_id: ClusterId,
-        when: QueryWhen,
-        target_replica: Option<ReplicaId>,
-        view_id: GlobalId,
-        index_id: GlobalId,
-        timeline_context: TimelineContext,
-        source_ids: BTreeSet<GlobalId>,
-        in_immediate_multi_stmt_txn: bool,
-        key: Vec<MirScalarExpr>,
-        typ: RelationType,
-        dataflow_metainfo: DataflowMetainfo,
     },
 }
 
@@ -351,7 +337,6 @@ impl RealTimeRecencyContext {
         match self {
             RealTimeRecencyContext::ExplainTimestamp { ctx, .. }
             | RealTimeRecencyContext::Peek { ctx, .. } => ctx,
-            RealTimeRecencyContext::PeekDeprecated { ctx, .. } => ctx,
         }
     }
 }
@@ -359,8 +344,9 @@ impl RealTimeRecencyContext {
 #[derive(Debug)]
 pub enum PeekStage {
     Validate(PeekStageValidate),
-    Optimize(PeekStageOptimize),
     Timestamp(PeekStageTimestamp),
+    Optimize(PeekStageOptimize),
+    RealTimeRecency(PeekStageRealTimeRecency),
     Finish(PeekStageFinish),
 }
 
@@ -368,8 +354,9 @@ impl PeekStage {
     fn validity(&mut self) -> Option<&mut PlanValidity> {
         match self {
             PeekStage::Validate(_) => None,
-            PeekStage::Optimize(PeekStageOptimize { validity, .. })
-            | PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
+            PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
+            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
+            | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
         }
     }
@@ -382,7 +369,7 @@ pub struct PeekStageValidate {
 }
 
 #[derive(Debug)]
-pub struct PeekStageOptimize {
+pub struct PeekStageTimestamp {
     validity: PlanValidity,
     source: MirRelationExpr,
     copy_to: Option<CopyFormat>,
@@ -395,7 +382,21 @@ pub struct PeekStageOptimize {
 }
 
 #[derive(Debug)]
-pub struct PeekStageTimestamp {
+pub struct PeekStageOptimize {
+    validity: PlanValidity,
+    source: MirRelationExpr,
+    copy_to: Option<CopyFormat>,
+    source_ids: BTreeSet<GlobalId>,
+    when: QueryWhen,
+    target_replica: Option<ReplicaId>,
+    timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
+    in_immediate_multi_stmt_txn: bool,
+    optimizer: optimize::peek::Optimizer,
+}
+
+#[derive(Debug)]
+pub struct PeekStageRealTimeRecency {
     validity: PlanValidity,
     copy_to: Option<CopyFormat>,
     source_ids: BTreeSet<GlobalId>,
@@ -403,6 +404,7 @@ pub struct PeekStageTimestamp {
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
@@ -416,6 +418,7 @@ pub struct PeekStageFinish {
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     source_ids: BTreeSet<GlobalId>,
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
@@ -513,6 +516,7 @@ impl PlanValidity {
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    pub timestamp_oracle_url: Option<String>,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,
@@ -697,7 +701,12 @@ impl PendingRead {
             PendingRead::ReadThenWrite {
                 timestamp: (timestamp, timeline),
                 ..
-            } => TimestampContext::TimelineTimestamp(timeline.clone(), timestamp.clone()),
+            } => TimestampContext::TimelineTimestamp {
+                timeline: timeline.clone(),
+                chosen_ts: timestamp.clone(),
+                oracle_ts: None, // For writes, we always pick the oracle
+                                 // timestamp!
+            },
         }
     }
 
@@ -783,20 +792,10 @@ impl Drop for ExecuteContextExtra {
     fn drop(&mut self) {
         let Self { statement_uuid } = &*self;
         if let Some(statement_uuid) = statement_uuid {
-            // TODO [btv] -- We know this is happening in prod now,
-            // seemingly only related to SUBSCRIBEs from the console.
-            //
-            // This is `error` for now until I get around to debugging
-            // the root cause, as it's not a severe enough issue to be
-            // worth breaking staging.
-            //
-            // Once all known causes of this are resolved, bump this
-            // back to a soft_assert.
-            //
             // Note: the impact when this error hits
             // is that the statement will never be marked
             // as finished in the statement log.
-            tracing::error!("execute context for statement {statement_uuid:?} dropped without being properly retired.");
+            soft_panic_or_log!("execute context for statement {statement_uuid:?} dropped without being properly retired.");
         }
     }
 }
@@ -1033,6 +1032,9 @@ pub struct Coordinator {
     /// Coordinator metrics.
     metrics: Metrics,
 
+    /// For registering new metrics.
+    timestamp_oracle_metrics: Arc<timestamp_oracle::metrics::Metrics>,
+
     /// Tracing handle.
     tracing_handle: TracingHandle,
 
@@ -1041,6 +1043,14 @@ pub struct Coordinator {
 
     /// Limit for how many conncurrent webhook requests we allow.
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
+
+    /// Implementation of
+    /// [`TimestampOracle`](crate::coord::timestamp_oracle::TimestampOracle) to
+    /// use.
+    timestamp_oracle_impl: vars::TimestampOracleImpl,
+
+    /// Postgres connection URL for the Postgres/CRDB-backed timestamp oracle.
+    timestamp_oracle_url: Option<String>,
 }
 
 impl Coordinator {
@@ -1340,7 +1350,7 @@ impl Coordinator {
                     let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
                     df_desc.set_as_of(as_of);
 
-                    self.ship_dataflow_new(df_desc, mview.cluster_id).await;
+                    self.ship_dataflow(df_desc, mview.cluster_id).await;
                 }
                 CatalogItem::Sink(sink) => {
                     let id = entry.id();
@@ -1501,6 +1511,19 @@ impl Coordinator {
     /// allows subsequent bootstrap logic to fetch metadata (such as frontiers) of arbitrary
     /// storage collections, without needing to worry about dependency order.
     async fn bootstrap_storage_collections(&mut self) {
+        // Reset the txns and table shards to a known set of invariants.
+        //
+        // TODO: This can be removed once we've flipped to the new txns system
+        // for good and there is no possibility of the old code running
+        // concurrently with the new code.
+        let init_ts = self.get_local_write_ts().await.timestamp;
+        self.controller
+            .storage
+            .init_txns(init_ts)
+            .await
+            .unwrap_or_terminate("init_txns");
+        self.apply_local_write(init_ts).await;
+
         let catalog = self.catalog();
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
@@ -1834,22 +1857,35 @@ impl Coordinator {
         // need to provide output starting from their `since`s, so these serve as upper bounds for
         // our `as_of`.
         let mut max_as_of = Antichain::new();
-        for mv_id in dependent_matviews {
-            let since = self.storage_implied_capability(mv_id);
-            let upper = self.storage_write_frontier(mv_id);
+        for mv_id in &dependent_matviews {
+            let since = self.storage_implied_capability(*mv_id);
+            let upper = self.storage_write_frontier(*mv_id);
             max_as_of.meet_assign(&since.join(upper));
         }
 
-        assert!(
+        mz_ore::soft_assert!(
             PartialOrder::less_equal(&min_as_of, &max_as_of),
-            "error bootrapping index `as_of`: min_as_of {:?} greater than max_as_of {:?}",
+            "error bootrapping index `as_of`: \
+             min_as_of {:?} greater than max_as_of {:?} \
+             (import_ids={}, export_ids={}, dependent_matviews={:?})",
             min_as_of.elements(),
             max_as_of.elements(),
+            dataflow.display_import_ids(),
+            dataflow.display_export_ids(),
+            dependent_matviews,
         );
 
-        let mut as_of = min_as_of.clone();
-        as_of.join_assign(&max_compaction_frontier);
-        as_of.meet_assign(&max_as_of);
+        // Ensure that we never select an `as_of` that's less than `min_as_of`,
+        // even if that means selecting an `as_of` that's greater than `max_as_of`.
+        // The former makes environmentd crash, the latter "only" leads to correctness bugs.
+        let as_of = if PartialOrder::less_equal(&min_as_of, &max_as_of) {
+            let mut as_of = min_as_of.clone();
+            as_of.join_assign(&max_compaction_frontier);
+            as_of.meet_assign(&max_as_of);
+            as_of
+        } else {
+            min_as_of.clone()
+        };
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
@@ -1925,9 +1961,12 @@ impl Coordinator {
         async move {
             // Watcher that listens for and reports cluster service status changes.
             let mut cluster_events = self.controller.events_stream();
+            let last_message_kind = Arc::new(Mutex::new("none"));
 
             let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
             let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
+            let last_message_kind_watchdog = Arc::clone(&last_message_kind);
+
             spawn(|| "coord watchdog", async move {
                 // Every 5 seconds, attempt to measure how long it takes for the
                 // coord select loop to be empty, because this message is the last
@@ -1951,8 +1990,12 @@ impl Coordinator {
                     let Ok(maybe_permit) = timeout else {
                         // Only log the error if we're newly stuck, to prevent logging repeatedly.
                         if !coord_stuck {
+                            let last_message = last_message_kind_watchdog
+                                .lock()
+                                .map(|g| *g)
+                                .unwrap_or("poisoned");
                             tracing::error!(
-                                "Coordinator is stuck, did not respond after {duration:?}"
+                                "Coordinator is stuck on {last_message}, did not respond after {duration:?}"
                             );
                         }
                         coord_stuck = true;
@@ -2064,6 +2107,11 @@ impl Coordinator {
                 let span = span!(Level::DEBUG, "coordinator processing", kind = msg_kind);
                 let otel_context = span.context().span().span_context().clone();
 
+                // Record the last kind of message incase we get stuck.
+                if let Ok(mut guard) = last_message_kind.lock() {
+                    *guard = msg_kind;
+                }
+
                 let start = Instant::now();
                 self.handle_message(msg)
                     // All message processing functions trace. Start a parent span for them to make
@@ -2162,6 +2210,7 @@ pub fn serve(
     Config {
         dataflow_client,
         storage,
+        timestamp_oracle_url,
         unsafe_mode,
         all_features,
         build_info,
@@ -2256,13 +2305,27 @@ pub fn serve(
         let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
         let handle = TokioHandle::current();
 
-        let initial_timestamps = catalog.get_all_persisted_timestamps().await?;
         let metrics = Metrics::register_into(&metrics_registry);
         let metrics_clone = metrics.clone();
+        let timestamp_oracle_metrics =
+            Arc::new(timestamp_oracle::metrics::Metrics::new(&metrics_registry));
         let segment_client_clone = segment_client.clone();
         let span = tracing::Span::current();
         let coord_now = now.clone();
         let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
+
+        // We get the timestamp oracle impl once on startup, to ensure that it
+        // doesn't change in between when the system var changes: all oracles must
+        // use the same impl!
+        let timestamp_oracle_impl = catalog.system_config().timestamp_oracle_impl();
+
+        let initial_timestamps = get_initial_oracle_timestamps(
+            &catalog,
+            &timestamp_oracle_url,
+            &timestamp_oracle_metrics,
+        )
+        .await?;
+
         let thread = thread::Builder::new()
             // The Coordinator thread tends to keep a lot of data on its stack. To
             // prevent a stack overflow we allocate a stack three times as big as the default
@@ -2281,7 +2344,10 @@ pub fn serve(
                         &timeline,
                         initial_timestamp,
                         coord_now.clone(),
+                        timestamp_oracle_impl,
                         persistence,
+                        timestamp_oracle_url.clone(),
+                        &timestamp_oracle_metrics,
                         &mut timestamp_oracles,
                     ));
                 }
@@ -2319,9 +2385,12 @@ pub fn serve(
                     storage_usage_collection_interval,
                     segment_client,
                     metrics,
+                    timestamp_oracle_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(),
                     webhook_concurrency_limit,
+                    timestamp_oracle_impl,
+                    timestamp_oracle_url,
                 };
                 let bootstrap = handle.block_on(async {
                     coord
@@ -2377,4 +2446,77 @@ pub fn serve(
         }
     }
     .boxed()
+}
+
+// While we have two implementations of TimestampOracle (catalog-backed and
+// postgres/crdb-backed), we determine the highest timestamp for each timeline
+// on bootstrap, to initialize the currently-configured oracle. This mostly
+// works, but there can be linearizability violations, because there is no
+// central moment where do distributed coordination for both oracle types.
+// Working around this seems prohibitively hard, maybe even impossible so we
+// have to live with this window of potential violations during the upgrade
+// window (which is the only point where we should switch oracle
+// implementations).
+//
+// NOTE: We can remove all this code, including the pre-existing code below that
+// initializes oracles on bootstrap, once we have fully migrated to the new
+// postgres/crdb-backed oracle.
+async fn get_initial_oracle_timestamps(
+    catalog: &Catalog,
+    pg_timestamp_oracle_url: &Option<String>,
+    timestamp_oracle_metrics: &Arc<timestamp_oracle::metrics::Metrics>,
+) -> Result<BTreeMap<Timeline, Timestamp>, AdapterError> {
+    let catalog_oracle_timestamps = catalog.get_all_persisted_timestamps().await?;
+    let debug_msg = || {
+        catalog_oracle_timestamps
+            .iter()
+            .map(|(timeline, ts)| format!("{:?} -> {}", timeline, ts))
+            .join(", ")
+    };
+    info!(
+        "current timestamps from the catalog-backed timestamp oracle: {}",
+        debug_msg()
+    );
+
+    let mut initial_timestamps = catalog_oracle_timestamps;
+    if let Some(timestamp_oracle_url) = pg_timestamp_oracle_url {
+        let oracle_config = PostgresTimestampOracleConfig::new(
+            timestamp_oracle_url,
+            Arc::clone(timestamp_oracle_metrics),
+        );
+        let postgres_oracle_timestamps =
+            PostgresTimestampOracle::<NowFn>::get_all_timelines(oracle_config).await?;
+
+        let debug_msg = || {
+            postgres_oracle_timestamps
+                .iter()
+                .map(|(timeline, ts)| format!("{:?} -> {}", timeline, ts))
+                .join(", ")
+        };
+        info!(
+            "current timestamps from the postgres-backed timestamp oracle: {}",
+            debug_msg()
+        );
+
+        for (timeline, ts) in postgres_oracle_timestamps {
+            let entry = initial_timestamps
+                .entry(Timeline::from_str(&timeline).expect("could not parse timeline"));
+
+            entry
+                .and_modify(|current_ts| *current_ts = std::cmp::max(*current_ts, ts))
+                .or_insert(ts);
+        }
+    } else {
+        info!("no postgres url for postgres-backed timestamp oracle configured!");
+    };
+
+    let debug_msg = || {
+        initial_timestamps
+            .iter()
+            .map(|(timeline, ts)| format!("{:?}: {}", timeline, ts))
+            .join(", ")
+    };
+    info!("initial oracle timestamps: {}", debug_msg());
+
+    Ok(initial_timestamps)
 }

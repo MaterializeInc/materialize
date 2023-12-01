@@ -31,7 +31,7 @@ PUBLISH_CRATES = ["mz-sql-lexer-wasm"]
 
 
 @dataclass(frozen=True)
-class Version:
+class NpmPackageVersion:
     rust: VersionInfo
     node: str
     is_development: bool
@@ -39,7 +39,7 @@ class Version:
 
 def generate_version(
     crate_version: VersionInfo, build_identifier: int | None
-) -> Version:
+) -> NpmPackageVersion:
     node_version = str(crate_version)
     is_development = False
     if crate_version.prerelease == "dev":
@@ -55,10 +55,12 @@ def generate_version(
         assert (
             buildkite_tag == f"v{node_version}"
         ), f"Buildkite tag ({buildkite_tag}) does not match environmentd version ({crate_version})"
-    return Version(rust=crate_version, node=node_version, is_development=is_development)
+    return NpmPackageVersion(
+        rust=crate_version, node=node_version, is_development=is_development
+    )
 
 
-def build_package(version: Version, crate_path: Path) -> Path:
+def build_package(version: NpmPackageVersion, crate_path: Path) -> Path:
     spawn.runv(["bin/wasm-build", str(crate_path)])
     package_path = crate_path / "pkg"
     shutil.copyfile(str(MZ_ROOT / "LICENSE"), str(package_path / "LICENSE"))
@@ -76,7 +78,7 @@ def build_package(version: Version, crate_path: Path) -> Path:
     return package_path
 
 
-def release_package(version: Version, package_path: Path) -> None:
+def release_package(version: NpmPackageVersion, package_path: Path) -> None:
     with open(package_path / "package.json") as package_file:
         package = json.load(package_file)
     name = package["name"]
@@ -105,7 +107,7 @@ def release_package(version: Version, package_path: Path) -> None:
 
 
 def build_all(
-    workspace: cargo.Workspace, version: Version, *, do_release: bool = True
+    workspace: cargo.Workspace, version: NpmPackageVersion, *, do_release: bool = True
 ) -> None:
     for crate_name in PUBLISH_CRATES:
         crate_path = workspace.all_crates[crate_name].path
@@ -136,7 +138,7 @@ def get_latest_version(name: str) -> VersionInfo | None:
     return VersionInfo.parse(version)
 
 
-def version_exists_in_npm(name: str, version: Version) -> bool:
+def version_exists_in_npm(name: str, version: NpmPackageVersion) -> bool:
     res = _query_npm_version(name, version.node)
     if res.status_code == 404:
         # This is a new package
@@ -191,6 +193,8 @@ if __name__ == "__main__":
     if args.do_release and "NPM_TOKEN" not in os.environ:
         raise ValueError("'NPM_TOKEN' must be set")
     workspace = cargo.Workspace(MZ_ROOT)
-    crate_version = workspace.crates["mz-environmentd"].version
+    crate_version = VersionInfo.parse(
+        workspace.crates["mz-environmentd"].version_string
+    )
     version = generate_version(crate_version, build_id)
     build_all(workspace, version, do_release=args.do_release)

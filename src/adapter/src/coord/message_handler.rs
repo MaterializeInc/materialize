@@ -10,7 +10,7 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{btree_map, BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use futures::future::LocalBoxFuture;
@@ -32,7 +32,6 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::Command;
 use crate::coord::appends::Deferred;
-use crate::coord::sequencer::old_optimizer_api::{PeekStageDeprecated, PeekStageFinishDeprecated};
 use crate::coord::{
     Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
@@ -40,6 +39,8 @@ use crate::coord::{
 use crate::session::Session;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
+
+use super::AlterConnectionValidationReady;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
@@ -64,6 +65,9 @@ impl Coordinator {
                 }
                 Message::CreateConnectionValidationReady(ready) => {
                     self.message_create_connection_validation_ready(ready).await
+                }
+                Message::AlterConnectionValidationReady(ready) => {
+                    self.message_alter_connection_validation_ready(ready).await
                 }
                 Message::WriteLockGrant(write_lock_guard) => {
                     self.message_write_lock_grant(write_lock_guard).await;
@@ -129,12 +133,6 @@ impl Coordinator {
                 }
                 Message::PeekStageReady { ctx, stage } => {
                     self.sequence_peek_stage(ctx, stage).await;
-                }
-                Message::PeekStageDeprecatedReady { ctx, stage } => {
-                    // Allow while the introduction of the new optimizer API in
-                    // #20569 is in progress.
-                    #[allow(deprecated)]
-                    self.sequence_peek_stage_deprecated(ctx, stage).await;
                 }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
@@ -503,6 +501,41 @@ impl Coordinator {
         ctx.retire(result);
     }
 
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    async fn message_alter_connection_validation_ready(
+        &mut self,
+        AlterConnectionValidationReady {
+            mut ctx,
+            result,
+            connection_gid,
+            mut plan_validity,
+            otel_ctx,
+        }: AlterConnectionValidationReady,
+    ) {
+        otel_ctx.attach_as_parent();
+
+        // Ensure that all dependencies still exist after validation, as a
+        // `DROP SECRET` may have sneaked in.
+        //
+        // WARNING: If we support `ALTER SECRET`, we'll need to also check
+        // for connectors that were altered while we were purifying.
+        if let Err(e) = plan_validity.check(self.catalog()) {
+            return ctx.retire(Err(e));
+        }
+
+        let conn = match result {
+            Ok(ok) => ok,
+            Err(e) => {
+                return ctx.retire(Err(e));
+            }
+        };
+
+        let result = self
+            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_gid, conn)
+            .await;
+        ctx.retire(result);
+    }
+
     #[tracing::instrument(level = "debug", skip_all)]
     async fn message_write_lock_grant(
         &mut self,
@@ -584,16 +617,52 @@ impl Coordinator {
         let mut ready_txns = Vec::new();
         let mut deferred_txns = Vec::new();
 
+        // Cache for `TimestampOracle::read_ts` calls. These are somewhat
+        // expensive so we cache the value. This is correct since all we're
+        // risking is being too conservative. We will not accidentally "release"
+        // a result too early.
+        let mut cached_oracle_ts = BTreeMap::new();
+
         for mut read_txn in pending_read_txns {
-            if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
-                read_txn.txn.timestamp_context()
+            if let TimestampContext::TimelineTimestamp {
+                timeline,
+                chosen_ts,
+                oracle_ts,
+            } = read_txn.txn.timestamp_context()
             {
-                let timestamp_oracle = self.get_timestamp_oracle(&timeline);
-                let read_ts = timestamp_oracle.read_ts().await;
-                if timestamp <= read_ts {
+                let oracle_ts = match oracle_ts {
+                    Some(oracle_ts) => oracle_ts,
+                    None => {
+                        // There was no oracle timestamp, so no need to delay.
+                        ready_txns.push(read_txn);
+                        continue;
+                    }
+                };
+
+                if chosen_ts <= oracle_ts {
+                    // Chosen ts was already <= the oracle ts, so we're good
+                    // to go!
+                    ready_txns.push(read_txn);
+                    continue;
+                }
+
+                // See what the oracle timestamp is now and delay when needed.
+                let current_oracle_ts = cached_oracle_ts.entry(timeline.clone());
+                let current_oracle_ts = match current_oracle_ts {
+                    btree_map::Entry::Vacant(entry) => {
+                        let timestamp_oracle = self.get_timestamp_oracle(&timeline);
+                        let read_ts = timestamp_oracle.read_ts().await;
+                        entry.insert(read_ts.clone());
+                        read_ts
+                    }
+                    btree_map::Entry::Occupied(entry) => entry.get().clone(),
+                };
+
+                if chosen_ts <= current_oracle_ts {
                     ready_txns.push(read_txn);
                 } else {
-                    let wait = Duration::from_millis(timestamp.saturating_sub(read_ts).into());
+                    let wait =
+                        Duration::from_millis(chosen_ts.saturating_sub(current_oracle_ts).into());
                     if wait < shortest_wait {
                         shortest_wait = wait;
                     }
@@ -691,6 +760,7 @@ impl Coordinator {
                 when,
                 target_replica,
                 timeline_context,
+                oracle_read_ts,
                 source_ids,
                 in_immediate_multi_stmt_txn: _,
                 optimizer,
@@ -705,53 +775,11 @@ impl Coordinator {
                         when,
                         target_replica,
                         timeline_context,
+                        oracle_read_ts,
                         source_ids,
                         real_time_recency_ts: Some(real_time_recency_ts),
                         optimizer,
                         global_mir_plan,
-                    }),
-                )
-                .await;
-            }
-            RealTimeRecencyContext::PeekDeprecated {
-                ctx,
-                finishing,
-                copy_to,
-                dataflow,
-                cluster_id,
-                when,
-                target_replica,
-                view_id,
-                index_id,
-                timeline_context,
-                source_ids,
-                in_immediate_multi_stmt_txn: _,
-                key,
-                typ,
-                dataflow_metainfo,
-            } => {
-                // Allow while the introduction of the new optimizer API in
-                // #20569 is in progress.
-                #[allow(deprecated)]
-                self.sequence_peek_stage_deprecated(
-                    ctx,
-                    PeekStageDeprecated::Finish(PeekStageFinishDeprecated {
-                        validity,
-                        finishing,
-                        copy_to,
-                        dataflow,
-                        cluster_id,
-                        id_bundle: None,
-                        when,
-                        target_replica,
-                        view_id,
-                        index_id,
-                        timeline_context,
-                        source_ids,
-                        real_time_recency_ts: Some(real_time_recency_ts),
-                        key,
-                        typ,
-                        dataflow_metainfo,
                     }),
                 )
                 .await;

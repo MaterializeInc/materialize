@@ -419,6 +419,9 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
             }
+
+            self.metrics
+                .record_shared_row_metrics(self.timely_worker.index());
         }
     }
 

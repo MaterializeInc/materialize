@@ -999,8 +999,6 @@ div.json_widget {
     }
 
     .json {
-        display: flex;
-        position: relative;
         width: 100%;
 
         margin-top: 16px;
@@ -1012,7 +1010,7 @@ div.json_widget {
 
             border: 1px solid #E0DEE3;
             border-radius: 8px;
-            margin: 16px;
+            // margin: 16px;
             padding: 8px;
         }
 
@@ -1024,19 +1022,14 @@ div.json_widget {
         }
 
         .error {
-            position: absolute;
-            bottom: 32px;
-
-            // Hack to center the error dialog.
-            left: 50%;
-            transform: translateX(-50%);
-
-            opacity: 80%;
-            width: calc(100% - 64px);
+            opacity: 1;
+            border-color: #d33902;
+            border-style: solid;
+            border-width: thin;
+            border-radius: 8px;
 
             p {
-                background-color: rgba(229, 6, 68, 0.4);
-                border-radius: 8px;
+                background-color: rgba(229, 6, 68, 0.1);
                 font-weight: 500;
                 padding: 8px;
             }
@@ -1050,14 +1043,8 @@ div.json_widget {
             }
         }
 
-        .error-visible {
-            opacity: 1;
-            transition: opacity 100ms ease-in;
-        }
-
         .error-hidden {
-            opacity: 0;
-            transition: opacity 100ms ease-in;
+            display: none;
         }
     }
 
