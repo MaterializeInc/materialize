@@ -25,7 +25,6 @@
 use std::hash::Hash;
 use std::string::ToString;
 use std::sync::Mutex;
-use const_format::concatcp;
 
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_pgrepr::oid;
