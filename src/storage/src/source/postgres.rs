@@ -79,10 +79,8 @@
 //!             v                  v
 //! ```
 
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::Collection;
@@ -95,6 +93,7 @@ use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
+use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
@@ -130,7 +129,7 @@ impl SourceRender for PostgresSourceConnection {
         Collection<G, (usize, Result<SourceMessage<(), Row>, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
-        Rc<dyn Any>,
+        Vec<PressOnDropButton>,
     ) {
         // Determined which collections need to be snapshot and which already have been.
         let subsource_resume_uppers: BTreeMap<_, _> = config
@@ -229,8 +228,12 @@ impl SourceRender for PostgresSourceConnection {
             statuses
         });
 
-        let token = Rc::new((snapshot_token, repl_token));
-        (updates, Some(uppers), health, token)
+        (
+            updates,
+            Some(uppers),
+            health,
+            vec![snapshot_token, repl_token],
+        )
     }
 }
 

@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
@@ -40,7 +39,9 @@ use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkAsOf,
     SinkEnvelope, StorageSinkDesc,
 };
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use rdkafka::client::ClientContext;
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaError, RDKafkaErrorCode};
 use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
@@ -93,7 +94,7 @@ where
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: Collection<G, DataflowError, Diff>,
-    ) -> (Stream<G, HealthStatusMessage>, Option<Rc<dyn Any>>)
+    ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>)
     where
         G: Scope<Timestamp = Timestamp>,
     {
@@ -115,7 +116,7 @@ where
             Antichain::new()
         }));
 
-        let (health, token) = kafka(
+        let (health, tokens) = kafka(
             sinked_collection,
             sink_id,
             self.clone(),
@@ -135,7 +136,7 @@ where
             .sink_write_frontiers
             .insert(sink_id, shared_frontier);
 
-        (health, Some(token))
+        (health, tokens)
     }
 }
 
@@ -851,7 +852,7 @@ fn kafka<G>(
     metrics: &StorageMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
-) -> (Stream<G, HealthStatusMessage>, Rc<dyn Any>)
+) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -887,7 +888,7 @@ where
 
     (
         encode_health_stream.concat(&produce_health_stream),
-        Rc::new((encode_token, produce_token)),
+        vec![encode_token, produce_token],
     )
 }
 
@@ -913,7 +914,7 @@ fn produce_to_kafka<G>(
     metrics: &StorageMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
-) -> (Stream<G, HealthStatusMessage>, Rc<dyn Any>)
+) -> (Stream<G, HealthStatusMessage>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -1155,7 +1156,7 @@ where
         }
     });
 
-    (health_stream, Rc::new(button.press_on_drop()))
+    (health_stream, button.press_on_drop())
 }
 
 /// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.
@@ -1187,7 +1188,7 @@ fn encode_stream<G>(
 ) -> (
     Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>,
     Stream<G, HealthStatusMessage>,
-    Rc<dyn Any>,
+    PressOnDropButton,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1308,5 +1309,5 @@ where
         }
     });
 
-    (stream, health_stream, Rc::new(button.press_on_drop()))
+    (stream, health_stream, button.press_on_drop())
 }

@@ -9,11 +9,9 @@
 
 //! A source that reads from an a persist shard.
 
-use std::any::Any;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -37,7 +35,9 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
 use mz_timely_util::buffer::ConsolidateBuffer;
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use mz_timely_util::probe::ProbeNotify;
 use serde::{Deserialize, Serialize};
 use timely::communication::Push;
@@ -139,14 +139,16 @@ pub fn persist_source<G>(
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
-    Rc<dyn Any>,
+    Vec<PressOnDropButton>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
     let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
 
-    let (stream, token) = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
+    let mut tokens = vec![];
+
+    let stream = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
         let (flow_control, feedback_handle) = match max_inflight_bytes {
             Some(max_inflight_bytes) => {
                 let backpressure_metrics = BackpressureMetrics {
@@ -180,7 +182,7 @@ where
             None => None,
         };
 
-        let (stream, token) = persist_source_core(
+        let (stream, source_tokens) = persist_source_core(
             scope,
             source_id,
             Arc::clone(&persist_clients),
@@ -191,6 +193,7 @@ where
             flow_control,
             subscribe_sleep,
         );
+        tokens.extend(source_tokens);
 
         let stream = match feedback_handle {
             Some(feedback_handle) => {
@@ -206,13 +209,14 @@ where
             None => stream,
         };
 
-        (stream.leave(), token)
+        stream.leave()
     });
+
     // If a txns_shard was provided, then this shard is in the persist-txn
     // system. This means the "logical" upper may be ahead of the "physical"
     // upper. Render a dataflow operator that passes through the input and
     // translates the progress frontiers as necessary.
-    let (stream, txns_token) = match metadata.txns_shard {
+    let (stream, txns_tokens) = match metadata.txns_shard {
         Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _, _>(
             stream,
             &source_id.to_string(),
@@ -232,17 +236,14 @@ where
             Arc::new(metadata.relation_desc),
             Arc::new(UnitSchema),
         ),
-        None => {
-            let token: Rc<dyn Any> = Rc::new(());
-            (stream, token)
-        }
+        None => (stream, vec![]),
     };
+    tokens.extend(txns_tokens);
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((row, t.0, r)),
         Err(err) => Err((err, t.0, r)),
     });
-    let token = Rc::new((token, txns_token));
-    (ok_stream, err_stream, token)
+    (ok_stream, err_stream, tokens)
 }
 
 type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)>;
@@ -274,7 +275,7 @@ pub fn persist_source_core<'g, G>(
             Diff,
         ),
     >,
-    Rc<dyn Any>,
+    Vec<PressOnDropButton>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -286,14 +287,15 @@ where
 
     let desc_transformer = match flow_control {
         Some(flow_control) => Some(move |mut scope: _, descs: &Stream<_, _>, chosen_worker| {
-            backpressure(
+            let (stream, token) = backpressure(
                 &mut scope,
                 &format!("backpressure({source_id})"),
                 descs,
                 flow_control,
                 chosen_worker,
                 None,
-            )
+            );
+            (stream, vec![token])
         }),
         None => None,
     };
@@ -613,7 +615,7 @@ pub fn backpressure<T, G, O>(
     chosen_worker: usize,
     // A probe used to inspect this operator during unit-testing
     probe: Option<UnboundedSender<(Antichain<(T, Subtime)>, usize, usize)>>,
-) -> (Stream<G, O>, Rc<dyn Any>)
+) -> (Stream<G, O>, PressOnDropButton)
 where
     T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
     G: Scope<Timestamp = (T, Subtime)>,
@@ -864,7 +866,7 @@ where
             }
         }
     });
-    (data_stream, Rc::new(shutdown_button.press_on_drop()))
+    (data_stream, shutdown_button.press_on_drop())
 }
 
 #[cfg(test)]

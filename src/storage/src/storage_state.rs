@@ -73,7 +73,6 @@
 //! update, is that it might fill out new internal state in the mid-level
 //! clients on the way toward being run.
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -102,6 +101,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData};
 use mz_storage_types::AlterCompatible;
+use mz_timely_util::builder_async::PressOnDropButton;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -255,7 +255,9 @@ pub struct StorageState {
     /// and we should aim for that but are not there yet.
     pub source_uppers: BTreeMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
     /// Handles to created sources, keyed by ID
-    pub source_tokens: BTreeMap<GlobalId, Rc<dyn Any>>,
+    /// NB: The type of the tokens must not be changed to something other than `PressOnDropButton`
+    /// to prevent usage of custom shutdown tokens that are tricky to get right.
+    pub source_tokens: BTreeMap<GlobalId, Vec<PressOnDropButton>>,
     /// Metrics for storage objects.
     pub metrics: StorageMetrics,
     /// Tracks the conditional write frontiers we have reported.
@@ -279,7 +281,9 @@ pub struct StorageState {
     pub persist_clients: Arc<PersistClientCache>,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
-    pub sink_tokens: BTreeMap<GlobalId, SinkToken>,
+    /// NB: The type of the tokens must not be changed to something other than `PressOnDropButton`
+    /// to prevent usage of custom shutdown tokens that are tricky to get right.
+    pub sink_tokens: BTreeMap<GlobalId, Vec<PressOnDropButton>>,
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
@@ -450,15 +454,6 @@ impl SinkHandle {
         self.downgrade_tx
             .send(to)
             .expect("sending to downgrade task")
-    }
-}
-
-/// A token that keeps a sink alive.
-pub struct SinkToken(Box<dyn Any>);
-impl SinkToken {
-    /// Create new token
-    pub fn new(t: Box<dyn Any>) -> Self {
-        Self(t)
     }
 }
 

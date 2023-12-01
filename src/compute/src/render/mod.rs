@@ -100,6 +100,7 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -247,6 +248,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
 
                     // Associate returned tokens with the source identifier.
+                    let token: Rc<dyn Any> = Rc::new(token);
                     tokens.insert(*source_id, token);
                 });
             }

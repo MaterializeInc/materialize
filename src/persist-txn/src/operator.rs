@@ -26,7 +26,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_timely_util::builder_async::{
-    AsyncInputHandle, Button, Event, OperatorBuilder as AsyncOperatorBuilder,
+    AsyncInputHandle, Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use timely::communication::Pull;
 use timely::dataflow::channels::pact::Pipeline;
@@ -97,7 +97,7 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
     // TODO(txn): Get rid of these when we have a schemaless WriteHandle.
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
-) -> (Stream<G, P>, Rc<dyn Any>)
+) -> (Stream<G, P>, Vec<PressOnDropButton>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -129,11 +129,7 @@ where
         data_key_schema,
         data_val_schema,
     );
-    let token: Rc<dyn Any> = Rc::new((
-        source_button.press_on_drop(),
-        frontiers_button.press_on_drop(),
-    ));
-    (passthrough, token)
+    (passthrough, vec![source_button, frontiers_button])
 }
 
 fn txns_progress_source<K, V, T, D, P, C, G>(
@@ -142,7 +138,7 @@ fn txns_progress_source<K, V, T, D, P, C, G>(
     client: impl Future<Output = PersistClient> + 'static,
     txns_id: ShardId,
     data_id: ShardId,
-) -> (Stream<G, (TxnsEntry, T, i64)>, Button)
+) -> (Stream<G, (TxnsEntry, T, i64)>, PressOnDropButton)
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -199,7 +195,7 @@ where
             }
         }
     });
-    (txns_stream, shutdown_button)
+    (txns_stream, shutdown_button.press_on_drop())
 }
 
 fn txns_progress_frontiers<K, V, T, D, P, C, G>(
@@ -213,7 +209,7 @@ fn txns_progress_frontiers<K, V, T, D, P, C, G>(
     // TODO(txn): Get rid of these when we have a schemaless WriteHandle.
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
-) -> (Stream<G, P>, Button)
+) -> (Stream<G, P>, PressOnDropButton)
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -384,7 +380,7 @@ where
             }
         }
     });
-    (passthrough_stream, shutdown_button)
+    (passthrough_stream, shutdown_button.press_on_drop())
 }
 
 // NB: The API of this intentionally mirrors TxnsCache and TxnsRead. Consider
