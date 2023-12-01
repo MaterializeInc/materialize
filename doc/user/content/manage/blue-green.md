@@ -68,7 +68,7 @@ We highly recommend using dbt to manage deployments, but this workflow can be re
         - Indexes: index_on_mainained_view_idx
 
 ## Cutting over
-1. Wait for all views on `prod_deploy` to rehydrate. You can look at the lag in the Workflow graph in the [Materialize Console](https://console.materialize.com) to get a rough sense of when rehydration is complete. The view will appear as “caught up”, and you can compare both the `prod` and `prod_deploy` versions by viewing the Workflow graph from a common source or other upstream Materialization.
+1. Wait for all views on `prod_deploy` to hydrate. You can look at the lag in the Workflow graph in the [Materialize Console](https://console.materialize.com) to get a rough sense of when rehydration is complete. The view will appear as “caught up”, and you can compare both the `prod` and `prod_deploy` versions by viewing the Workflow graph from a common source or other upstream Materialization. (Note: we'll be adding a feature to allow programmatic hydration checks in [this tracking issue](https://github.com/MaterializeInc/materialize/issues/22166))
 2. Perform your end-to-end application tests on `prod_deploy` objects to ensure it is safe to cut over.
 3. Use the `SWAP` operation to atomically rename your objects in a way that is transparent to clients. (Under the hood, this is series of `ALTER … RENAME` operations).
 
