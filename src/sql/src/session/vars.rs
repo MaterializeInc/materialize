@@ -3719,6 +3719,11 @@ impl SystemVars {
         *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
     }
 
+    /// Returns the `enable_eager_delta_joins` configuration parameter.
+    pub fn enable_eager_delta_joins(&self) -> bool {
+        *self.expect_value(&ENABLE_EAGER_DELTA_JOINS)
+    }
+
     /// Returns the `timestamp_oracle` configuration parameter.
     pub fn timestamp_oracle_impl(&self) -> TimestampOracleImpl {
         *self.expect_value(&TIMESTAMP_ORACLE_IMPL)
