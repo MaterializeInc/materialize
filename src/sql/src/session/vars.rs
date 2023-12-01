@@ -5203,7 +5203,8 @@ pub fn is_tracing_var(name: &str) -> bool {
     name == LOGGING_FILTER.name() || name == OPENTELEMETRY_FILTER.name()
 }
 
-/// Returns whether the named variable is a compute configuration parameter.
+/// Returns whether the named variable is a compute configuration parameter
+/// (things that go in `ComputeParameters and are sent to replicas via `UpdateConfiguration`` commands).
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
@@ -5212,7 +5213,6 @@ pub fn is_compute_config_var(name: &str) -> bool {
         || name == ENABLE_JEMALLOC_PROFILING.name()
         || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
         || name == ENABLE_COLUMNATION_LGALLOC.name()
-        || name == ENABLE_EAGER_DELTA_JOINS.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
 }
