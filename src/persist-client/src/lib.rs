@@ -972,9 +972,11 @@ mod tests {
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let (mut write, mut read) = new_test_client()
-            .await
-            .expect_open::<String, String, u64, i64>(ShardId::new())
+        let client = new_test_client().await;
+        let shard_id = ShardId::new();
+        initialize_shard(&client, shard_id, Antichain::from_elem(0)).await;
+        let (mut write, mut read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
             .await;
         assert_eq!(write.upper(), &Antichain::from_elem(u64::minimum()));
         assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
@@ -1464,6 +1466,30 @@ mod tests {
         assert!(is_send_sync(read));
     }
 
+    async fn initialize_shard(
+        persist_client: &PersistClient,
+        shard_id: ShardId,
+        since: Antichain<u64>,
+    ) {
+        let mut read_handle = persist_client
+            .open_critical_since::<String, String, u64, i64, u64>(
+                shard_id,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+
+        let result = read_handle
+            .compare_and_downgrade_since(&0, (&1, &since))
+            .await
+            .expect("initializing shard");
+        assert_eq!(
+            result, since,
+            "newly-initialized shard should have the provided since"
+        );
+    }
+
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compare_and_append() {
@@ -1475,6 +1501,7 @@ mod tests {
 
         let id = ShardId::new();
         let client = new_test_client().await;
+        initialize_shard(&client, id, Antichain::from_elem(0)).await;
         let (mut write1, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;

@@ -644,15 +644,21 @@ mod tests {
         since: Antichain<u64>,
     ) {
         let mut read_handle = persist_client
-            .open_leased_reader::<String, String, u64, u64>(
+            .open_critical_since::<String, String, u64, u64, u64>(
                 shard_id,
-                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
-                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
                 Diagnostics::for_tests(),
             )
             .await
             .expect("invalid usage");
 
-        read_handle.downgrade_since(&since).await;
+        let result = read_handle
+            .compare_and_downgrade_since(&0, (&1, &since))
+            .await
+            .expect("initializing shard");
+        assert_eq!(
+            result, since,
+            "newly-initialized shard should have the provided since"
+        );
     }
 }

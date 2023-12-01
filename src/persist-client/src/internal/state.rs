@@ -1975,25 +1975,18 @@ pub(crate) mod tests {
             ))
         );
 
-        let reader = LeasedReaderId::new();
+        let reader = CriticalReaderId::new();
         // Advance the since to 2.
-        let _ = state.collections.register_leased_reader(
-            "",
-            &reader,
-            "",
-            SeqNo::minimum(),
-            Duration::from_secs(10),
-            now(),
-        );
+        let _ = state
+            .collections
+            .register_critical_reader::<u64>("", &reader, "");
         assert_eq!(
-            state.collections.downgrade_since(
+            state.collections.compare_and_downgrade_since::<u64>(
                 &reader,
-                SeqNo::minimum(),
-                None,
-                &Antichain::from_elem(2),
-                now()
+                &0,
+                (&1, &Antichain::from_elem(2))
             ),
-            Continue(Since(Antichain::from_elem(2)))
+            Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Cannot take a snapshot with as_of < shard_since.

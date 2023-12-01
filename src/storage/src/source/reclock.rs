@@ -632,6 +632,7 @@ mod tests {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::critical::CriticalReaderId;
     use mz_persist_client::rpc::PubSubClientConnection;
     use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
@@ -1462,13 +1463,30 @@ mod tests {
     async fn test_since_hold() {
         let binding_shard = ShardId::new();
 
+        let persist_location = PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        };
+
+        let persist_client = PERSIST_CACHE
+            .open(persist_location)
+            .await
+            .expect("error creating persist client");
+
+        let _since_hold = persist_client
+            .open_critical_since::<SourceData, (), Timestamp, Diff, u64>(
+                binding_shard,
+                CriticalReaderId::new(),
+                Diagnostics::from_purpose("test_since_hold"),
+            )
+            .await
+            .expect("error creating since hold");
+
         let (mut operator, _follower) =
             make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
 
         // We do multiple rounds of minting. This will downgrade the since of
-        // the internal listen. If we didn't make sure to also heartbeat the
-        // internal handle that holds back the overall remap since the checks
-        // below would fail.
+        // the internal listen.
         //
         // We do two rounds and advance the time by half the lease timeout in
         // between so that the "listen handle" will not timeout but the internal
@@ -1493,16 +1511,6 @@ mod tests {
             make_test_operator(binding_shard, Antichain::from_elem(0.into())).await;
 
         // Also manually assert the since of the remap shard.
-        let persist_location = PersistLocation {
-            blob_uri: "mem://".to_owned(),
-            consensus_uri: "mem://".to_owned(),
-        };
-
-        let persist_client = PERSIST_CACHE
-            .open(persist_location)
-            .await
-            .expect("error creating persist client");
-
         let read_handle = persist_client
             .open_leased_reader::<SourceData, (), Timestamp, Diff>(
                 binding_shard,
