@@ -22,6 +22,12 @@ SERVICES = [
 ]
 
 
+def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -> None:
+    with c.override(Postgres(extra_command=["-c", "max_replication_slots=2"])):
+        c.up("materialized", "postgres")
+        c.run("testdrive", "override/replication-slots.td")
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "filter",

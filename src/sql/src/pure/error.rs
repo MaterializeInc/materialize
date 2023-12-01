@@ -59,6 +59,8 @@ pub enum PgSourcePurificationError {
     NotPgConnection(FullItemName),
     #[error("POSTGRES CONNECTION must specify PUBLICATION")]
     ConnectionMissingPublication,
+    #[error("PostgreSQL server has insufficient number of replication slots available")]
+    InsufficientReplicationSlotsAvailable { count: usize },
 }
 
 impl PgSourcePurificationError {
@@ -110,6 +112,11 @@ impl PgSourcePurificationError {
                     "\n"
                 )
             )),
+            Self::InsufficientReplicationSlotsAvailable { count } => Some(format!(
+                "executing this statement requires {} replication slot{}",
+                count,
+                if *count == 1 { "" } else { "s" }
+            )),
             _ => None,
         }
     }
@@ -132,6 +139,9 @@ impl PgSourcePurificationError {
                 "Use the TEXT COLUMNS option naming the listed columns, and Materialize can ingest their values \
                 as text."
                     .into(),
+            ),
+            Self::InsufficientReplicationSlotsAvailable { .. } => Some(
+                "you might be able to wait for other sources to finish snapshotting and try again".into()
             ),
             _ => None,
         }

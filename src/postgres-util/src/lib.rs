@@ -98,9 +98,9 @@ pub use schemas::{get_schemas, publication_info};
 pub mod tunnel;
 #[cfg(feature = "tunnel")]
 pub use tunnel::{
-    drop_replication_slots, Config, TcpTimeoutConfig, TunnelConfig, DEFAULT_CONNECT_TIMEOUT,
-    DEFAULT_KEEPALIVE_IDLE, DEFAULT_KEEPALIVE_INTERVAL, DEFAULT_KEEPALIVE_RETRIES,
-    DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT, DEFAULT_TCP_USER_TIMEOUT,
+    available_replication_slots, drop_replication_slots, Config, TcpTimeoutConfig, TunnelConfig,
+    DEFAULT_CONNECT_TIMEOUT, DEFAULT_KEEPALIVE_IDLE, DEFAULT_KEEPALIVE_INTERVAL,
+    DEFAULT_KEEPALIVE_RETRIES, DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT, DEFAULT_TCP_USER_TIMEOUT,
 };
 
 /// An error representing pg, ssh, ssl, and other failures.

@@ -23,6 +23,30 @@ use tracing::{info, warn};
 
 use crate::PostgresError;
 
+pub async fn available_replication_slots(
+    ssh_tunnel_manager: &SshTunnelManager,
+    config: &Config,
+) -> Result<i64, PostgresError> {
+    let client = config
+        .connect("postgres_check_replication_slots", ssh_tunnel_manager)
+        .await?;
+
+    let available_replication_slots = client
+        .query_one(
+            "SELECT
+            CAST(current_setting('max_replication_slots') AS int8)
+              - (SELECT count(*) FROM pg_catalog.pg_replication_slots)
+              AS available_replication_slots;",
+            &[],
+        )
+        .await?;
+
+    let available_replication_slots: i64 =
+        available_replication_slots.get("available_replication_slots");
+
+    Ok(available_replication_slots)
+}
+
 pub async fn drop_replication_slots(
     ssh_tunnel_manager: &SshTunnelManager,
     config: Config,
