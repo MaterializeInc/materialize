@@ -1568,14 +1568,6 @@ pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
-pub const ENABLE_EAGER_DELTA_JOINS: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_eager_delta_joins"),
-    value: &false,
-    description:
-        "Plan delta joins when it would require no more arrangements than a differential join.",
-    internal: false,
-};
-
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -2146,6 +2138,14 @@ feature_flags!(
         name: enable_mz_notices,
         desc: "Populate the contents of `mz_internal.mz_notices`",
         default: true,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eager_delta_joins,
+        desc:
+            "Plan delta joins when it would require no more arrangements than a differential join.",
+        default: &false,
         internal: true,
         enable_for_item_parsing: false,
     },
@@ -2922,12 +2922,7 @@ impl SystemVars {
             .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
-            .with_var(&TIMESTAMP_ORACLE_IMPL)
-            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE)
-            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT)
-            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL)
-            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER)
-            .with_var(&ENABLE_EAGER_DELTA_JOINS);
+            .with_var(&TIMESTAMP_ORACLE_IMPL);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3719,11 +3714,6 @@ impl SystemVars {
         *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
     }
 
-    /// Returns the `enable_eager_delta_joins` configuration parameter.
-    pub fn enable_eager_delta_joins(&self) -> bool {
-        *self.expect_value(&ENABLE_EAGER_DELTA_JOINS)
-    }
-
     /// Returns the `timestamp_oracle` configuration parameter.
     pub fn timestamp_oracle_impl(&self) -> TimestampOracleImpl {
         *self.expect_value(&TIMESTAMP_ORACLE_IMPL)
@@ -3747,10 +3737,6 @@ impl SystemVars {
     /// Returns the `pg_timestamp_oracle_connection_pool_ttl_stagger` configuration parameter.
     pub fn pg_timestamp_oracle_connection_pool_ttl_stagger(&self) -> Duration {
         *self.expect_value(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER)
-
-    /// Returns the `enable_eager_delta_joins` configuration parameter.
-    pub fn enable_eager_delta_joins(&self) -> bool {
-        *self.expect_value(&ENABLE_EAGER_DELTA_JOINS)
     }
 }
 
