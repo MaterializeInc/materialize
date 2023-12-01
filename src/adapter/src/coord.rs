@@ -1157,7 +1157,7 @@ impl Coordinator {
             .entries()
             .cloned()
             .map(|entry| {
-                let remaining_deps = entry.uses().0.iter().copied().collect::<Vec<_>>();
+                let remaining_deps = entry.uses().into_iter().collect::<Vec<_>>();
                 (entry, remaining_deps)
             })
             .collect();

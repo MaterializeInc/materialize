@@ -23,6 +23,8 @@
 //! <https://materialize.com/docs/sql/system-catalog/>.
 
 use std::hash::Hash;
+use std::string::ToString;
+use std::sync::Mutex;
 
 use const_format::concatcp;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
@@ -268,9 +270,26 @@ impl Fingerprint for &BuiltinTable {
     }
 }
 
+/// Allows tests to inject arbitrary amounts of whitespace to forcibly change the fingerprint and
+/// trigger a builtin migration. Ideally this would be guarded by a `#[cfg(test)]` but unfortunately,
+/// the builtin migrations are in a different crate and would not be able to modify this value.
+/// There is an open issue to move builtin migrations to this crate:
+/// <https://github.com/MaterializeInc/materialize/issues/22593>
+pub static REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE: Mutex<
+    Option<String>,
+> = Mutex::new(None);
 impl Fingerprint for &BuiltinView {
     fn fingerprint(&self) -> String {
-        self.sql.to_string()
+        // This is only called during bootstrapping so it's not that big of a deal to lock a mutex,
+        // though it's not great.
+        let guard = REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE
+            .lock()
+            .expect("lock poisoned");
+        if let Some(whitespace) = &*guard {
+            format!("{}{}", self.sql, whitespace)
+        } else {
+            self.sql.to_string()
+        }
     }
 }
 

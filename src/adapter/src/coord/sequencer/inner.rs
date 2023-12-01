@@ -4100,10 +4100,9 @@ impl Coordinator {
                             && (
                                 // empty `uses` indicates either system func or
                                 // view created from constants
-                                entry.uses().0.is_empty()
+                                entry.uses().is_empty()
                                     || entry
                                         .uses()
-                                        .0
                                         .iter()
                                         .all(|id| validate_read_dependencies(catalog, id))
                             )
