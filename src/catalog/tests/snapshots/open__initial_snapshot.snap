@@ -955,9 +955,14 @@ Snapshot {
             value: 0,
         },
         ConfigKey {
+            key: "system_config_synced",
+        }: ConfigValue {
+            value: 0,
+        },
+        ConfigKey {
             key: "user_version",
         }: ConfigValue {
-            value: 44,
+            value: 45,
         },
     },
     settings: {},

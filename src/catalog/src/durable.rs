@@ -178,6 +178,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
         self.get_next_id(SYSTEM_REPLICA_ID_ALLOC_KEY).await
     }
 
+    /// Reports if the remote configuration was synchronized at least once.
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError>;
+
     /// Get the next user replica id without allocating it.
     async fn get_next_user_replica_id(&mut self) -> Result<u64, CatalogError> {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await

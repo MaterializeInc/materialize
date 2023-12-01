@@ -23,11 +23,10 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::ConnectionCounter;
+use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput};
 use serde::{Deserialize, Serialize};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::config::SystemParameterSyncConfig;
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -65,6 +64,9 @@ pub struct StateConfig {
     pub builtin_cluster_replica_size: String,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
+    /// A optional map of system parameters pulled from a remote frontend.
+    /// A `None` value indicates that the initial sync was skipped.
+    pub remote_system_parameters: Option<BTreeMap<String, OwnedVarInput>>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
     /// IP Addresses which will be used for egress.
@@ -73,10 +75,6 @@ pub struct StateConfig {
     pub aws_principal_context: Option<AwsPrincipalContext>,
     /// Supported AWS PrivateLink availability zone ids.
     pub aws_privatelink_availability_zones: Option<BTreeSet<String>>,
-    /// A optional frontend used to pull system parameters for initial sync in
-    /// Catalog::open. A `None` value indicates that the initial sync should be
-    /// skipped.
-    pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     /// Host name or URL for connecting to the HTTP server of this instance.
     pub http_host_name: Option<String>,
     /// Needed only for migrating PG source column metadata. If `None`, will

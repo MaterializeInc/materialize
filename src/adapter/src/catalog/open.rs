@@ -56,9 +56,7 @@ use mz_sql::names::{
     SchemaId, SchemaSpecifier,
 };
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{
-    OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
-};
+use mz_sql::session::vars::{OwnedVarInput, SystemVars, VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::Expr;
@@ -70,7 +68,6 @@ use crate::catalog::config::StateConfig;
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };
-use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::timestamp_oracle;
 use crate::AdapterError;
 
@@ -390,9 +387,8 @@ impl Catalog {
             Catalog::load_system_configuration(
                 &mut state,
                 &mut txn,
-                is_read_only,
                 config.system_parameter_defaults,
-                config.system_parameter_sync_config,
+                config.remote_system_parameters,
             )
             .await?;
 
@@ -1069,18 +1065,17 @@ impl Catalog {
     ///    storage backend.
     /// 2. Set defaults from configuration passed in the provided
     ///    `system_parameter_defaults` map.
-    /// 3. Overwrite and persist selected parameter values from the
-    ///    configuration that can be pulled from the provided
-    ///    `system_parameter_sync_config` (if present).
+    /// 3. Overwrite and persist selected parameter values in
+    ///    `remote_system_parameters` that was pulled from a remote frontend
+    ///    (if present).
     ///
     /// # Errors
     #[tracing::instrument(level = "info", skip_all)]
     async fn load_system_configuration(
         state: &mut CatalogState,
         txn: &mut Transaction<'_>,
-        is_read_only: bool,
         system_parameter_defaults: BTreeMap<String, String>,
-        system_parameter_sync_config: Option<SystemParameterSyncConfig>,
+        remote_system_parameters: Option<BTreeMap<String, OwnedVarInput>>,
     ) -> Result<(), AdapterError> {
         let system_config = txn.get_system_configurations();
 
@@ -1102,77 +1097,11 @@ impl Catalog {
                 Err(e) => return Err(e),
             };
         }
-        if let Some(system_parameter_sync_config) = system_parameter_sync_config {
-            if is_read_only {
-                tracing::info!("parameter sync on boot: skipping sync as catalog is read-only");
-            } else if !state.system_config().config_has_synced_once() {
-                tracing::info!("parameter sync on boot: start sync");
-
-                // We intentionally block initial startup, potentially forever,
-                // on initializing LaunchDarkly. This may seem scary, but the
-                // alternative is even scarier. Over time, we expect that the
-                // compiled-in default values for the system parameters will
-                // drift substantially from the defaults configured in
-                // LaunchDarkly, to the point that starting an environment
-                // without loading the latest values from LaunchDarkly will
-                // result in running an untested configuration.
-                //
-                // Note this only applies during initial startup. Restarting
-                // after we've synced once doesn't block on LaunchDarkly, as it
-                // seems reasonable to assume that the last-synced configuration
-                // was valid enough.
-                //
-                // This philosophy appears to provide a good balance between not
-                // running untested configurations in production while also not
-                // making LaunchDarkly a "tier 1" dependency for existing
-                // environments.
-                //
-                // If this proves to be an issue, we could seek to address the
-                // configuration drift in a different way--for example, by
-                // writing a script that runs in CI nightly and checks for
-                // deviation between the compiled Rust code and LaunchDarkly.
-                //
-                // If it is absolutely necessary to bring up a new environment
-                // while LaunchDarkly is down, the following manual mitigation
-                // can be performed:
-                //
-                //    1. Edit the environmentd startup parameters to omit the
-                //       LaunchDarkly configuration.
-                //    2. Boot environmentd.
-                //    3. Run `ALTER SYSTEM config_has_synced_once = true`.
-                //    4. Adjust any other parameters as necessary to avoid
-                //       running a nonstandard configuration in production.
-                //    5. Edit the environmentd startup parameters to restore the
-                //       LaunchDarkly configuration, for when LaunchDarkly comes
-                //       back online.
-                //    6. Reboot environmentd.
-
-                let mut params = SynchronizedParameters::new(state.system_config().clone());
-                let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
-                frontend.pull(&mut params);
-                let ops = params
-                    .modified()
-                    .into_iter()
-                    .map(|param| {
-                        let name = param.name;
-                        let value = param.value;
-                        tracing::info!(name, value, initial = true, "sync parameter");
-                        (name, OwnedVarInput::Flat(value))
-                    })
-                    .chain(std::iter::once({
-                        let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
-                        let value = true.to_string();
-                        tracing::info!(name, value, initial = true, "sync parameter");
-                        (name, OwnedVarInput::Flat(value))
-                    }))
-                    .collect::<Vec<_>>();
-                for (name, value) in ops {
-                    Catalog::update_system_configuration(state, txn, &name, value.borrow())?;
-                }
-                tracing::info!("parameter sync on boot: end sync");
-            } else {
-                tracing::info!("parameter sync on boot: skipping sync as config has synced once");
+        if let Some(remote_system_parameters) = remote_system_parameters {
+            for (name, value) in remote_system_parameters {
+                Catalog::update_system_configuration(state, txn, &name, value.borrow())?;
             }
+            txn.set_system_config_synced_once()?;
         }
         Ok(())
     }

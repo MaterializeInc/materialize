@@ -41,6 +41,9 @@ use crate::durable::{
 pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
 /// The key within the "config" Collection that stores the version of the catalog.
 pub(crate) const USER_VERSION_KEY: &str = "user_version";
+/// The key within the "config" Collection that stores whether the remote configuration was
+/// synchronized at least once.
+pub(crate) const SYSTEM_CONFIG_SYNCED_KEY: &str = "system_config_synced";
 
 /// The key used within the "config" collection where we store a mirror of the
 /// `enable_persist_txn_tables` "system var" value. This is mirrored so that we
@@ -585,6 +588,7 @@ pub async fn initialize(
             DEPLOY_GENERATION.to_string(),
             deploy_generation.unwrap_or(0),
         ),
+        (SYSTEM_CONFIG_SYNCED_KEY.to_string(), 0),
     ] {
         tx.insert_config(key, value)?;
     }

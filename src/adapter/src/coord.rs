@@ -110,7 +110,7 @@ use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
-use mz_sql::session::vars::{self, ConnectionCounter};
+use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
@@ -132,7 +132,7 @@ use crate::catalog::{
 };
 use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
-use crate::config::SystemParameterSyncConfig;
+use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -154,6 +154,7 @@ use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, 
 use crate::webhook::WebhookConcurrencyLimiter;
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
+use mz_catalog::durable::DurableCatalogState;
 
 pub(crate) mod dataflows;
 use self::statement_logging::{StatementLogging, StatementLoggingId};
@@ -2208,7 +2209,7 @@ impl Coordinator {
 pub fn serve(
     Config {
         dataflow_client,
-        storage,
+        mut storage,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -2267,6 +2268,8 @@ pub fn serve(
             .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
 
         info!("coordinator init: opening catalog");
+        let remote_system_parameters =
+            load_remote_system_parameters(&mut storage, system_parameter_sync_config).await?;
         let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
             Catalog::open(catalog::Config {
                 storage,
@@ -2284,11 +2287,11 @@ pub fn serve(
                     default_storage_cluster_size,
                     builtin_cluster_replica_size,
                     system_parameter_defaults,
+                    remote_system_parameters,
                     availability_zones,
                     egress_ips,
                     aws_principal_context,
                     aws_privatelink_availability_zones,
-                    system_parameter_sync_config,
                     connection_context: Some(connection_context.clone()),
                     active_connection_count,
                     http_host_name,
@@ -2518,4 +2521,77 @@ async fn get_initial_oracle_timestamps(
     info!("initial oracle timestamps: {}", debug_msg());
 
     Ok(initial_timestamps)
+}
+
+/// Potentially load system parameters from a remote frontend server.
+#[tracing::instrument(level = "info", skip_all)]
+async fn load_remote_system_parameters(
+    storage: &mut Box<dyn DurableCatalogState>,
+    system_parameter_sync_config: Option<SystemParameterSyncConfig>,
+) -> Result<Option<BTreeMap<String, OwnedVarInput>>, AdapterError> {
+    if let Some(system_parameter_sync_config) = system_parameter_sync_config {
+        tracing::info!("parameter sync on boot: start sync");
+
+        // We intentionally block initial startup, potentially forever,
+        // on initializing LaunchDarkly. This may seem scary, but the
+        // alternative is even scarier. Over time, we expect that the
+        // compiled-in default values for the system parameters will
+        // drift substantially from the defaults configured in
+        // LaunchDarkly, to the point that starting an environment
+        // without loading the latest values from LaunchDarkly will
+        // result in running an untested configuration.
+        //
+        // Note this only applies during initial startup. Restarting
+        // after we've synced once doesn't block on LaunchDarkly, as it
+        // seems reasonable to assume that the last-synced configuration
+        // was valid enough.
+        //
+        // This philosophy appears to provide a good balance between not
+        // running untested configurations in production while also not
+        // making LaunchDarkly a "tier 1" dependency for existing
+        // environments.
+        //
+        // If this proves to be an issue, we could seek to address the
+        // configuration drift in a different way--for example, by
+        // writing a script that runs in CI nightly and checks for
+        // deviation between the compiled Rust code and LaunchDarkly.
+        //
+        // If it is absolutely necessary to bring up a new environment
+        // while LaunchDarkly is down, the following manual mitigation
+        // can be performed:
+        //
+        //    1. Edit the environmentd startup parameters to omit the
+        //       LaunchDarkly configuration.
+        //    2. Boot environmentd.
+        //    3. Use the catalog-debug tool to run `edit config "{\"key\":\"system_config_synced\"}" "{\"value\": 1}"`.
+        //    4. Adjust any other parameters as necessary to avoid
+        //       running a nonstandard configuration in production.
+        //    5. Edit the environmentd startup parameters to restore the
+        //       LaunchDarkly configuration, for when LaunchDarkly comes
+        //       back online.
+        //    6. Reboot environmentd.
+        if storage.is_read_only() {
+            tracing::info!("parameter sync on boot: skipping sync as catalog is read-only");
+        } else if !storage.has_system_config_synced_once().await? {
+            let mut params = SynchronizedParameters::new(SystemVars::default());
+            let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
+            frontend.pull(&mut params);
+            let ops = params
+                .modified()
+                .into_iter()
+                .map(|param| {
+                    let name = param.name;
+                    let value = param.value;
+                    tracing::info!(name, value, initial = true, "sync parameter");
+                    (name, OwnedVarInput::Flat(value))
+                })
+                .collect();
+            tracing::info!("parameter sync on boot: end sync");
+            return Ok(Some(ops));
+        } else {
+            tracing::info!("parameter sync on boot: skipping sync as config has synced once");
+        }
+    }
+
+    Ok(None)
 }

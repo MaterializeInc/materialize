@@ -45,7 +45,9 @@ use crate::durable::impls::persist::state_update::{
     IntoStateUpdateKindBinary, StateUpdateKindBinary, StateUpdateKindSchema,
 };
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
-use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, USER_VERSION_KEY};
+use crate::durable::initialize::{
+    DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
+};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, Config, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
@@ -859,6 +861,21 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         };
         self.with_snapshot(|snapshot| {
             Ok(snapshot.id_allocator.get(&key).expect("must exist").next_id)
+        })
+        .await
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
+        let key = proto::ConfigKey {
+            key: SYSTEM_CONFIG_SYNCED_KEY.to_string(),
+        };
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .configs
+                .get(&key)
+                .map(|value| value.value > 0)
+                .unwrap_or(false))
         })
         .await
     }

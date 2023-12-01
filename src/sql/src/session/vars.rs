@@ -1223,15 +1223,6 @@ const PERSIST_ROLLUP_THRESHOLD: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
-/// Boolean flag indicating that the remote configuration was synchronized at
-/// least once with the persistent [SessionVars].
-pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("config_has_synced_once"),
-    value: &false,
-    description: "Boolean flag indicating that the remote configuration was synchronized at least once (Materialize).",
-    internal: true
-};
-
 /// Boolean flag indicating whether to enable syncing from
 /// LaunchDarkly. Can be turned off as an emergency measure to still
 /// be able to alter parameters while LD is broken.
@@ -2705,7 +2696,6 @@ impl SystemVars {
 
         let mut vars = vars
             .with_feature_flags()
-            .with_var(&CONFIG_HAS_SYNCED_ONCE)
             .with_var(&MAX_KAFKA_CONNECTIONS)
             .with_var(&MAX_POSTGRES_CONNECTIONS)
             .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
@@ -2908,9 +2898,7 @@ impl SystemVars {
     /// values on disk. Compared to [`SystemVars::iter`], this should omit vars
     /// that shouldn't be synced by SystemParameterFrontend.
     pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
-        self.iter()
-            .filter(|v| v.name() != CONFIG_HAS_SYNCED_ONCE.name)
-            .filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name)
+        self.iter().filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name)
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -3052,11 +3040,6 @@ impl SystemVars {
     /// the affected SystemVars.
     fn refresh_internal_state(&mut self) {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
-    }
-
-    /// Returns the `config_has_synced_once` configuration parameter.
-    pub fn config_has_synced_once(&self) -> bool {
-        *self.expect_value(&CONFIG_HAS_SYNCED_ONCE)
     }
 
     /// Returns the value of the `max_kafka_connections` configuration parameter.
