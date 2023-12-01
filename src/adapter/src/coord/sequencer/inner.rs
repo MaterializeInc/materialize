@@ -423,21 +423,11 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog_mut().allocate_oid()?;
-
-        match plan.connection.connection {
-            mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
-                let spec = VpcEndpointConfig {
-                    aws_service_name: privatelink.service_name.to_owned(),
-                    availability_zone_ids: privatelink.availability_zones.to_owned(),
-                };
-                self.cloud_resource_controller
-                    .as_ref()
-                    .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
-                    .ensure_vpc_endpoint(connection_gid, spec)
-                    .await?;
-            }
-            _ => {}
-        }
+        let cloud_resource_controller = self
+            .cloud_resource_controller
+            .as_ref()
+            .cloned()
+            .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?;
 
         let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
@@ -451,7 +441,27 @@ impl Coordinator {
             owner_id: *session.current_role_id(),
         }];
 
-        match self.catalog_transact(Some(session), ops).await {
+        let transact_result = self
+            .catalog_transact_with_side_effects(Some(session), ops, |_coord| async {
+                match plan.connection.connection {
+                    mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
+                        let spec = VpcEndpointConfig {
+                            aws_service_name: privatelink.service_name.to_owned(),
+                            availability_zone_ids: privatelink.availability_zones.to_owned(),
+                        };
+                        if let Err(err) = cloud_resource_controller
+                            .ensure_vpc_endpoint(connection_gid, spec)
+                            .await
+                        {
+                            tracing::warn!(?err, "failed to ensure vpc endpoint!");
+                        }
+                    }
+                    _ => {}
+                }
+            })
+            .await;
+
+        match transact_result {
             Ok(_) => Ok(ExecuteResponse::CreatedConnection),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:

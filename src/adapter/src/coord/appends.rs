@@ -372,6 +372,8 @@ impl Coordinator {
 
         // Spawn a task to do the table writes.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let apply_write_fut = self.apply_local_write_shareable(timestamp);
+
         task::spawn(
             || "group_commit_apply",
             async move {
@@ -381,15 +383,25 @@ impl Coordinator {
                     .expect("One-shot dropped while waiting")
                     .unwrap_or_terminate("cannot fail to apply appends");
 
-                // Trigger a GroupCommitApply, which will run before any user commands since we're
-                // sending it on the internal command sender.
-                if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
-                    timestamp,
-                    responses,
-                    write_lock_guard,
-                    permit,
-                )) {
-                    warn!("Server closed with non-responded writes, {e}");
+                // Apply the write by marking the timestamp as complete on the timeline.
+                //
+                // Note: `apply_write_fut` uses a "shareable timestamp oracle" under the hood,
+                // which is what allows us to move this future into a separate task. A shareable
+                // oracle isn't always available, which is why we fallback to an internal command.
+                match apply_write_fut {
+                    Some(fut) => fut.await,
+                    None => {
+                        // Trigger a GroupCommitApply, which will run before any user commands since we're
+                        // sending it on the internal command sender.
+                        if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
+                            timestamp,
+                            responses,
+                            write_lock_guard,
+                            permit,
+                        )) {
+                            warn!("Server closed with non-responded writes, {e}");
+                        }
+                    }
                 }
 
                 // Note: while technically we should have `GroupCommitApply` update the notifies, we
