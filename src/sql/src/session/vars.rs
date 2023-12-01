@@ -1078,6 +1078,31 @@ const PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Controls the check interval for connections to SSH bastions via `mz_ssh_util`.
+const SSH_CHECK_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("ssh_check_interval"),
+    value: &mz_ssh_util::tunnel::DEFAULT_CHECK_INTERVAL,
+    description: "Controls the check interval for connections to SSH bastions via `mz_ssh_util`.",
+    internal: true,
+};
+
+/// Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.
+const SSH_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("ssh_connect_timeout"),
+    value: &mz_ssh_util::tunnel::DEFAULT_CONNECT_TIMEOUT,
+    description: "Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.",
+    internal: true,
+};
+
+/// Controls the keepalive idle interval for connections to SSH bastions via `mz_ssh_util`.
+const SSH_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("ssh_keepalives_idle"),
+    value: &mz_ssh_util::tunnel::DEFAULT_KEEPALIVES_IDLE,
+    description:
+        "Controls the keepalive idle interval for connections to SSH bastions via `mz_ssh_util`.",
+    internal: true,
+};
+
 /// Controls the connection timeout to Cockroach.
 ///
 /// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
@@ -2841,6 +2866,9 @@ impl SystemVars {
             .with_var(&PG_SOURCE_KEEPALIVES_RETRIES)
             .with_var(&PG_SOURCE_TCP_USER_TIMEOUT)
             .with_var(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
+            .with_var(&SSH_CHECK_INTERVAL)
+            .with_var(&SSH_CONNECT_TIMEOUT)
+            .with_var(&SSH_KEEPALIVES_IDLE)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
@@ -3380,6 +3408,21 @@ impl SystemVars {
     /// Returns the `pg_source_snapshot_statement_timeout` configuration parameter.
     pub fn pg_source_snapshot_statement_timeout(&self) -> Duration {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
+    }
+
+    /// Returns the `ssh_check_interval` configuration parameter.
+    pub fn ssh_check_interval(&self) -> Duration {
+        *self.expect_value(&SSH_CHECK_INTERVAL)
+    }
+
+    /// Returns the `ssh_connect_timeout` configuration parameter.
+    pub fn ssh_connect_timeout(&self) -> Duration {
+        *self.expect_value(&SSH_CONNECT_TIMEOUT)
+    }
+
+    /// Returns the `ssh_keepalives_idle` configuration parameter.
+    pub fn ssh_keepalives_idle(&self) -> Duration {
+        *self.expect_value(&SSH_KEEPALIVES_IDLE)
     }
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
@@ -5296,6 +5339,9 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
         || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
         || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
+        || name == SSH_CHECK_INTERVAL.name()
+        || name == SSH_CONNECT_TIMEOUT.name()
+        || name == SSH_KEEPALIVES_IDLE.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()

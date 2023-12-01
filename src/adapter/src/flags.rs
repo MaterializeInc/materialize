@@ -161,6 +161,11 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         shrink_upsert_unused_buffers_by_ratio: config
             .storage_shrink_upsert_unused_buffers_by_ratio(),
         record_namespaced_errors: config.storage_record_source_sink_namespaced_errors(),
+        ssh_timeout_config: mz_ssh_util::tunnel::SshTimeoutConfig {
+            check_interval: config.ssh_check_interval(),
+            connect_timeout: config.ssh_connect_timeout(),
+            keepalives_idle: config.ssh_keepalives_idle(),
+        },
     }
 }
 

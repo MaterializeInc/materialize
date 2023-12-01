@@ -12,7 +12,7 @@ use std::time::Duration;
 use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_repr::GlobalId;
-use mz_ssh_util::tunnel::SshTunnelConfig;
+use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream as TokioTcpStream;
@@ -87,6 +87,7 @@ pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 pub struct Config {
     inner: tokio_postgres::Config,
     tunnel: TunnelConfig,
+    ssh_timeout_config: SshTimeoutConfig,
 }
 
 impl Config {
@@ -94,8 +95,14 @@ impl Config {
         inner: tokio_postgres::Config,
         tunnel: TunnelConfig,
         tcp_timeouts: TcpTimeoutConfig,
+        ssh_timeout_config: SshTimeoutConfig,
     ) -> Result<Self, PostgresError> {
-        let config = Self { inner, tunnel }.tcp_timeouts(tcp_timeouts);
+        let config = Self {
+            inner,
+            tunnel,
+            ssh_timeout_config,
+        }
+        .tcp_timeouts(tcp_timeouts);
 
         // Early validate that the configuration contains only a single TCP
         // server.
@@ -214,7 +221,7 @@ impl Config {
             TunnelConfig::Ssh { config } => {
                 let (host, port) = self.address()?;
                 let tunnel = ssh_tunnel_manager
-                    .connect(config.clone(), host, port)
+                    .connect(config.clone(), host, port, self.ssh_timeout_config)
                     .await
                     .map_err(PostgresError::Ssh)?;
 

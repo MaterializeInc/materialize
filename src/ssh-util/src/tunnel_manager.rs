@@ -27,7 +27,7 @@ use scopeguard::ScopeGuard;
 use tokio::sync::watch;
 use tracing::{error, info};
 
-use crate::tunnel::{SshTunnelConfig, SshTunnelHandle, SshTunnelStatus};
+use crate::tunnel::{SshTimeoutConfig, SshTunnelConfig, SshTunnelHandle, SshTunnelStatus};
 
 /// Thread-safe manager of SSH tunnel connections.
 #[derive(Debug, Clone, Default)]
@@ -50,6 +50,10 @@ impl SshTunnelManager {
         config: SshTunnelConfig,
         remote_host: &str,
         remote_port: u16,
+        // This could be held behind a lock and updated within the global `SshTunnelManager`, but
+        // requiring all configuration at connection time is more consistent with how other
+        // connections work within the workspace.
+        timeout_config: SshTimeoutConfig,
     ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
         // An SSH tunnel connection is uniquely identified by the SSH tunnel
         // configuration and the remote address.
@@ -141,7 +145,9 @@ impl SshTunnelManager {
                         "initiating new ssh tunnel ({}:{} via {}@{}:{})",
                         remote_host, remote_port, config.user, config.host, config.port,
                     );
-                    let handle = config.connect(remote_host, remote_port).await?;
+                    let handle = config
+                        .connect(remote_host, remote_port, timeout_config)
+                        .await?;
 
                     // Successful connection, so defuse the scope guard.
                     let _ = ScopeGuard::into_inner(guard);

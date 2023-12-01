@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = { version = "1.0.66" }
-mz-ore = { path = "../ore" }
+mz-ore = { path = "../ore", features = ["test"] }
 openssh = { version = "0.9.8", default-features = false, features = ["native-mux"] }
 openssh-mux-client = "0.15.5"
 openssl = { version = "0.10.48", features = ["vendored"] }

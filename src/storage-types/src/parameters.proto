@@ -35,6 +35,7 @@ message ProtoStorageParameters {
     mz_proto.ProtoDuration pg_source_snapshot_statement_timeout = 17;
     bool record_namespaced_errors = 18;
     uint64 keep_n_privatelink_status_history_entries = 19;
+    ProtoSshTimeoutConfig ssh_timeout_config = 20;
 }
 
 
@@ -44,6 +45,12 @@ message ProtoPgSourceTcpTimeouts {
     optional mz_proto.ProtoDuration keepalives_idle = 3;
     optional mz_proto.ProtoDuration keepalives_interval = 4;
     optional mz_proto.ProtoDuration tcp_user_timeout = 5;
+}
+
+message ProtoSshTimeoutConfig {
+    mz_proto.ProtoDuration check_interval = 1;
+    mz_proto.ProtoDuration connect_timeout= 2;
+    mz_proto.ProtoDuration keepalives_idle = 3;
 }
 
 message ProtoUpsertAutoSpillConfig {
