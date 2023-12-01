@@ -23,6 +23,7 @@ use mz_catalog::builtin::{
     Builtin, DataSensitivity, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
     BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
+use mz_catalog::config::StateConfig;
 use mz_catalog::durable::initialize::MZ_UNSAFE_SCHEMA_ID;
 use mz_catalog::durable::objects::{
     IntrospectionSourceIndex, SystemObjectDescription, SystemObjectMapping,
@@ -66,7 +67,6 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_types::sources::Timeline;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::config::StateConfig;
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };

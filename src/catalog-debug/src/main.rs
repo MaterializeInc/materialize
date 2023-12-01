@@ -89,8 +89,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context;
 use clap::clap_derive::ArgEnum;
 use clap::Parser;
-use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, StateConfig};
+use mz_adapter::catalog::Catalog;
 use mz_build_info::{build_info, BuildInfo};
+use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
