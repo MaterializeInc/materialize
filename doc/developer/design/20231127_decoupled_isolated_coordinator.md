@@ -116,8 +116,13 @@ messages have priorities. The coordinator has to work off all Internal Commands
 When we consider the commands that the Coordinator issues to the Controller(s),
 we can differentiate two categories:
 
-1. Deterministic Controller Commands: commands that deterministically derive
-   from the current contents of the Catalog, or changes to it.
+1. Deterministic Controller Commands: commands that derive from the current
+   contents of the Catalog, or changes to it. These are command where the
+   Coordinator first writes down changes to the Catalog and then synthesizes
+   commands to the Controller that let it know of things that it has to do
+   based on the Catalog changes. An example of this is `CREATE INDEX` where the
+   fact that the index exists is first written down in the Catalog and then a
+   corresponding `CreateDataflow` command is sent to the controller.
 2. Ephemeral Controller Commands: Ephemeral commands that arise from external
    commands. This includes Peeks (`SELECT`), for COMPUTE, and writes to tables,
    for STORAGE. These are ephemeral because they don't derive from the Catalog
