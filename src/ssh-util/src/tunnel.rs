@@ -22,6 +22,7 @@ use mz_ore::task::{self, AbortOnDropHandle};
 use openssh::{ForwardType, Session};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
 use tokio::time;
 use tracing::{info, warn};
 
@@ -30,19 +31,35 @@ use crate::keys::SshKeyPair;
 // TODO(benesch): allow configuring the following connection parameters via
 // server configuration parameters.
 
-/// How often to check whether the SSH session is still alive.
-const CHECK_INTERVAL: Duration = Duration::from_secs(30);
+pub const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The timeout to use when establishing the connection to the SSH server.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// The idle time after which the SSH control master process should send a
-/// keepalive packet to the SSH server to determine whether the server is
-/// still alive.
-///
 /// TCP idle timeouts of 30s are common in the wild. An idle timeout of 10s
 /// is comfortably beneath that threshold without being overly chatty.
-const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
+pub const DEFAULT_KEEPALIVES_IDLE: Duration = Duration::from_secs(10);
+
+/// Configuration of Ssh session and tunnel timeouts.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SshTimeoutConfig {
+    /// How often to check whether the SSH session is still alive.
+    pub check_interval: Duration,
+    /// The timeout to use when establishing the connection to the SSH server.
+    pub connect_timeout: Duration,
+    /// The idle time after which the SSH control leader process should send a
+    /// keepalive packet to the SSH server to determine whether the server is
+    /// still alive.
+    pub keepalives_idle: Duration,
+}
+
+impl Default for SshTimeoutConfig {
+    fn default() -> SshTimeoutConfig {
+        SshTimeoutConfig {
+            check_interval: DEFAULT_CHECK_INTERVAL,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            keepalives_idle: DEFAULT_KEEPALIVES_IDLE,
+        }
+    }
+}
 
 /// Specifies an SSH tunnel.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -87,6 +104,7 @@ impl SshTunnelConfig {
         &self,
         remote_host: &str,
         remote_port: u16,
+        timeout_config: SshTimeoutConfig,
     ) -> Result<SshTunnelHandle, anyhow::Error> {
         let tunnel_id = format!(
             "{}:{} via {}@{}:{}",
@@ -98,7 +116,7 @@ impl SshTunnelConfig {
         // We could probably move this into the look and use the above channel to report this
         // initial connection error, but this is simpler and easier to read!
         info!(%tunnel_id, "connecting to ssh tunnel");
-        let mut session = match connect(self).await {
+        let mut session = match connect(self, timeout_config).await {
             Ok(s) => s,
             Err(e) => {
                 warn!(%tunnel_id, "failed to connect to ssh tunnel: {}", e.display_with_causes());
@@ -125,7 +143,7 @@ impl SshTunnelConfig {
                 scopeguard::defer! {
                     info!(%tunnel_id, "terminating ssh tunnel");
                 }
-                let mut interval = time::interval(CHECK_INTERVAL);
+                let mut interval = time::interval(timeout_config.check_interval);
                 // Just in case checking takes a long time.
                 interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
                 // The first tick happens immediately.
@@ -134,7 +152,7 @@ impl SshTunnelConfig {
                     interval.tick().await;
                     if let Err(e) = session.check().await {
                         warn!(%tunnel_id, "ssh tunnel unhealthy: {}", e.display_with_causes());
-                        let s = match connect(&config).await {
+                        let s = match connect(&config, timeout_config).await {
                             Ok(s) => s,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
@@ -169,8 +187,8 @@ impl SshTunnelConfig {
 
     /// Validates the SSH configuration by establishing a connection to the intermediate SSH
     /// bastion host. It does not set up a port forwarding tunnel.
-    pub async fn validate(&self) -> Result<(), anyhow::Error> {
-        connect(self).await?;
+    pub async fn validate(&self, timeout_config: SshTimeoutConfig) -> Result<(), anyhow::Error> {
+        connect(self, timeout_config).await?;
         Ok(())
     }
 }
@@ -202,7 +220,10 @@ impl SshTunnelHandle {
     }
 }
 
-async fn connect(config: &SshTunnelConfig) -> Result<Session, anyhow::Error> {
+async fn connect(
+    config: &SshTunnelConfig,
+    timeout_config: SshTimeoutConfig,
+) -> Result<Session, anyhow::Error> {
     let tempdir = tempfile::Builder::new()
         .prefix("ssh-tunnel-key")
         .tempdir()?;
@@ -225,8 +246,8 @@ async fn connect(config: &SshTunnelConfig) -> Result<Session, anyhow::Error> {
         .user(config.user.clone())
         .port(config.port)
         .keyfile(&path)
-        .server_alive_interval(KEEPALIVE_IDLE)
-        .connect_timeout(CONNECT_TIMEOUT)
+        .server_alive_interval(timeout_config.keepalives_idle)
+        .connect_timeout(timeout_config.connect_timeout)
         .connect_mux(config.host.clone())
         .await?;
 

@@ -15,6 +15,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_service::params::GrpcClientParameters;
+use mz_ssh_util::tunnel::SshTimeoutConfig;
 use mz_tracing::params::TracingParameters;
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +55,8 @@ pub struct StorageParameters {
     /// Whether or not to record errors by namespace in the `details`
     /// column of the status history tables.
     pub record_namespaced_errors: bool,
+    /// Networking configuration for ssh connections.
+    pub ssh_timeout_config: SshTimeoutConfig,
 }
 
 // Implement `Default` manually, so that the default can match the
@@ -76,6 +79,7 @@ impl Default for StorageParameters {
             delay_sources_past_rehydration: Default::default(),
             shrink_upsert_unused_buffers_by_ratio: Default::default(),
             record_namespaced_errors: true,
+            ssh_timeout_config: Default::default(),
         }
     }
 }
@@ -167,6 +171,7 @@ impl StorageParameters {
             delay_sources_past_rehydration,
             shrink_upsert_unused_buffers_by_ratio,
             record_namespaced_errors,
+            ssh_timeout_config,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -186,6 +191,7 @@ impl StorageParameters {
         self.delay_sources_past_rehydration = delay_sources_past_rehydration;
         self.shrink_upsert_unused_buffers_by_ratio = shrink_upsert_unused_buffers_by_ratio;
         self.record_namespaced_errors = record_namespaced_errors;
+        self.ssh_timeout_config = ssh_timeout_config;
     }
 }
 
@@ -219,6 +225,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 self.shrink_upsert_unused_buffers_by_ratio,
             ),
             record_namespaced_errors: self.record_namespaced_errors,
+            ssh_timeout_config: Some(self.ssh_timeout_config.into_proto()),
         }
     }
 
@@ -267,6 +274,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 proto.shrink_upsert_unused_buffers_by_ratio,
             ),
             record_namespaced_errors: proto.record_namespaced_errors,
+            ssh_timeout_config: proto
+                .ssh_timeout_config
+                .into_rust_if_some("ProtoStorageParameters::ssh_timeout_config")?,
         })
     }
 }
@@ -289,6 +299,30 @@ impl RustType<ProtoPgSourceTcpTimeouts> for mz_postgres_util::TcpTimeoutConfig {
             keepalives_idle: proto.keepalives_idle.into_rust()?,
             keepalives_interval: proto.keepalives_interval.into_rust()?,
             tcp_user_timeout: proto.tcp_user_timeout.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoSshTimeoutConfig> for SshTimeoutConfig {
+    fn into_proto(&self) -> ProtoSshTimeoutConfig {
+        ProtoSshTimeoutConfig {
+            check_interval: Some(self.check_interval.into_proto()),
+            connect_timeout: Some(self.connect_timeout.into_proto()),
+            keepalives_idle: Some(self.keepalives_idle.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoSshTimeoutConfig) -> Result<Self, TryFromProtoError> {
+        Ok(SshTimeoutConfig {
+            check_interval: proto
+                .check_interval
+                .into_rust_if_some("ProtoSshTimeoutConfig::check_interval")?,
+            connect_timeout: proto
+                .connect_timeout
+                .into_rust_if_some("ProtoSshTimeoutConfig::connect_timeout")?,
+            keepalives_idle: proto
+                .keepalives_idle
+                .into_rust_if_some("ProtoSshTimeoutConfig::keepalives_idle")?,
         })
     }
 }

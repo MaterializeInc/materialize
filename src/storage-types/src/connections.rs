@@ -487,6 +487,7 @@ impl KafkaConnection {
                 .connection_context
                 .ssh_tunnel_manager
                 .clone(),
+            storage_configuration.parameters.ssh_timeout_config,
         );
 
         match &self.default_tunnel {
@@ -1107,6 +1108,7 @@ impl PostgresConnection<InlinedConnection> {
                 .parameters
                 .pg_source_tcp_timeouts
                 .clone(),
+            storage_configuration.parameters.ssh_timeout_config,
         )?)
     }
 
@@ -1407,6 +1409,7 @@ impl SshTunnel<InlinedConnection> {
                 },
                 remote_host,
                 remote_port,
+                storage_configuration.parameters.ssh_timeout_config,
             )
             .await
     }
@@ -1430,7 +1433,11 @@ impl SshConnection {
             user: self.user.clone(),
             key_pair,
         };
-        config.validate().await
+        // Note that we do NOT use the `SshTunnelManager` here, as we want to validate that we
+        // can actually create a new connection to the ssh bastion, without tunneling.
+        config
+            .validate(storage_configuration.parameters.ssh_timeout_config)
+            .await
     }
 
     fn validate_by_default(&self) -> bool {
