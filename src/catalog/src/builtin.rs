@@ -3661,7 +3661,13 @@ pub const PG_TIMEZONE_ABBREVS: BuiltinView = BuiltinView {
     name: "pg_timezone_abbrevs",
     schema: PG_CATALOG_SCHEMA,
     column_defs: Some("abbrev, utc_offset, is_dst"),
-    sql: mz_pgtz::abbrev::PG_CATALOG_TIMEZONE_ABBREVS_SQL,
+    sql: "SELECT
+    abbreviation AS abbrev,
+    COALESCE(utc_offset, timezone_offset(timezone_name, now()).base_utc_offset + timezone_offset(timezone_name, now()).dst_offset)
+        AS utc_offset,
+    COALESCE(dst, timezone_offset(timezone_name, now()).dst_offset <> INTERVAL '0')
+        AS is_dst
+FROM mz_catalog.mz_timezone_abbreviations",
     sensitivity: DataSensitivity::Public,
 };
 
@@ -3669,7 +3675,14 @@ pub const PG_TIMEZONE_NAMES: BuiltinView = BuiltinView {
     name: "pg_timezone_names",
     schema: PG_CATALOG_SCHEMA,
     column_defs: Some("name, abbrev, utc_offset, is_dst"),
-    sql: mz_pgtz::timezone::PG_CATALOG_TIMEZONE_NAMES_SQL,
+    sql: "SELECT
+    name,
+    timezone_offset(name, now()).abbrev,
+    timezone_offset(name, now()).base_utc_offset + timezone_offset(name, now()).dst_offset
+        AS utc_offset,
+    timezone_offset(name, now()).dst_offset <> INTERVAL '0'
+        AS is_dst
+FROM mz_catalog.mz_timezone_names",
     sensitivity: DataSensitivity::Public,
 };
 
