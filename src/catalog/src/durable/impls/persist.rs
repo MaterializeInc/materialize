@@ -617,7 +617,7 @@ impl PersistCatalogState {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn sync(&mut self, target_upper: Timestamp) -> Result<(), CatalogError> {
         self.metrics.syncs.inc();
-        let counter = self.metrics.sync_latency_duration_seconds.clone();
+        let counter = self.metrics.sync_latency_seconds.clone();
         self.sync_inner(target_upper)
             .wall_time()
             .inc_by(counter)
@@ -877,7 +877,7 @@ impl DurableCatalogState for PersistCatalogState {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
-        self.metrics.transactions.inc();
+        self.metrics.transactions_started.inc();
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
     }
@@ -920,19 +920,12 @@ impl DurableCatalogState for PersistCatalogState {
 
             Ok(())
         }
-        let counter = self
-            .metrics
-            .transaction_commit_latency_duration_seconds
-            .clone();
-        let res = commit_transaction_inner(self, txn_batch)
+        self.metrics.transaction_commits.inc();
+        let counter = self.metrics.transaction_commit_latency_seconds.clone();
+        commit_transaction_inner(self, txn_batch)
             .wall_time()
             .inc_by(counter)
-            .await;
-        self.metrics.transaction_commits_initiated.inc();
-        if let Err(_) = &res {
-            self.metrics.transaction_commit_errors.inc();
-        }
-        res
+            .await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1121,7 +1114,7 @@ async fn snapshot_binary(
     metrics: &Arc<Metrics>,
 ) -> impl Iterator<Item = StateUpdate<StateUpdateKindBinary>> + DoubleEndedIterator {
     metrics.snapshots_taken.inc();
-    let counter = metrics.snapshot_latency_duration_seconds.clone();
+    let counter = metrics.snapshot_latency_seconds.clone();
     snapshot_binary_inner(read_handle, as_of)
         .wall_time()
         .inc_by(counter)
