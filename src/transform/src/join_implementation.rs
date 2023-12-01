@@ -578,7 +578,25 @@ mod delta_queries {
                 .iter()
                 .map(|o| o.iter().skip(1).filter(|(c, _, _)| c.arranged).count())
                 .collect::<Vec<_>>();
-            let expected_differential_arrangements = inputs.len() - 1;
+            // A differential join of k relations requires k-2 arrangements of intermediate results.
+            //
+            // Consider A ⨝ B ⨝ C ⨝ D. If planned as a differential join, we might have:
+            //          A » B » C » D
+            // This corresponds to the tree:
+            //
+            // A   B
+            //  \ /
+            //   ⨝   C
+            //    \ /
+            //     ⨝   D
+            //      \ /
+            //       ⨝
+            //
+            // At the two internal joins, the differential join will need two new arrangements.
+            let expected_differential_arrangements = inputs.len() - 2;
+            // Conversely, we'll need an arrangement for k - 1 inputs for a delta join.
+            let expected_delta_arrangements = inputs.len() - 1;
+            // Looking at each possible input order, which arrangements are we missing?
             let missing_arrangements: std::collections::BTreeSet<(usize, Vec<MirScalarExpr>)> =
                 orders
                     .iter()
@@ -600,7 +618,7 @@ mod delta_queries {
                     total_orders = inputs.len(),
                     missing_orders_by_delta_path = arrangement_counts
                         .iter()
-                        .map(|count| format!("{}", expected_differential_arrangements - count))
+                        .map(|count| format!("{}", expected_delta_arrangements - count))
                         .join(" "),
                     missing_arrangements = missing_arrangements
                         .iter()
@@ -609,27 +627,27 @@ mod delta_queries {
                             key.iter().map(|k| format!("{k}")).join(" = ")
                         ))
                         .join(" "),
-                    "insufficient arrangements",
+                    "insufficient arrangements for delta join",
                 );
 
                 // Differential joins need to arrange every intermediate result: #inputs - 1 such arrangements.
                 // Delta joins only arrange inputs... if we would have fewer net arrangements, delta will be a better deal.
                 if insufficiently_arranged_orders > expected_differential_arrangements {
                     return Err(TransformError::Internal(String::from(
-                        "delta plan not viable",
+                        "delta join not viable",
                     )));
                 } else if !eager_delta_joins {
                     return Err(TransformError::Internal(String::from(
-                        "delta plan viable but not used (eager delta joins disabled)",
+                        "delta join viable but not used (eager delta joins disabled)",
                     )));
                 }
-            }
 
-            tracing::info!(
-                new_delta_input_arrangements = insufficiently_arranged_orders,
-                expected_differential_arrangements = expected_differential_arrangements,
-                "using a delta join instead of a differential join"
-            );
+                tracing::info!(
+                    new_delta_input_arrangements = insufficiently_arranged_orders,
+                    expected_differential_arrangements = expected_differential_arrangements,
+                    "eager delta join instead of a differential join"
+                );
+            }
 
             // Convert the order information into specific (input, key, characteristics) information.
             let mut orders = orders
