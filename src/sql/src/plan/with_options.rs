@@ -215,6 +215,34 @@ impl ImpliedValue for OptionalInterval {
     }
 }
 
+/// Retains the original SQL ast Value when planning WITH options.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+pub struct RetainedValue<T> {
+    pub ast: Value,
+    pub value: T,
+}
+
+impl<T> TryFromValue<Value> for RetainedValue<T>
+where
+    T: TryFromValue<Value>,
+{
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        Ok(Self {
+            ast: v.clone(),
+            value: T::try_from_value(v)?,
+        })
+    }
+    fn name() -> String {
+        "retained value".to_string()
+    }
+}
+
+impl<T> ImpliedValue for RetainedValue<T> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("unsupported implied value")
+    }
+}
+
 impl TryFromValue<Value> for String {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {

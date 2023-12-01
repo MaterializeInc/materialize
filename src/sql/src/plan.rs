@@ -42,8 +42,8 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ConnectionOptionName, CreateSourceSubsource, QualifiedReplica,
-    TransactionIsolationLevel, TransactionMode, WithOptionValue,
+    self, AlterSourceAddSubsourceOption, ConnectionOptionName, CreateSourceSubsource,
+    QualifiedReplica, TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
@@ -1545,9 +1545,13 @@ pub enum ExecuteTimeout {
 
 #[derive(Clone, Debug)]
 pub enum IndexOption {
-    /// Configures the logical compaction window for an index. `None` disables
-    /// logical compaction entirely.
-    LogicalCompactionWindow(Option<mz_repr::Timestamp>),
+    /// Configures the logical compaction window for an index. `None` disables logical compaction
+    /// entirely. Passes the original WITH option and duration for persisting to the catalog.
+    LogicalCompactionWindow {
+        window: Option<mz_repr::Timestamp>,
+        duration: Option<Duration>,
+        ast: Option<ast::Value>,
+    },
 }
 
 #[derive(Clone, Debug)]
