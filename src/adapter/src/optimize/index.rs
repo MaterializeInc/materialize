@@ -146,10 +146,7 @@ impl Optimize<Index> for Optimizer {
             .desc(&full_name)
             .expect("can only create indexes on items with a valid description");
 
-        let mut df_builder = DataflowBuilder::new(
-            state,
-            self.compute_instance.clone()
-        );
+        let mut df_builder = DataflowBuilder::new(state, self.compute_instance.clone());
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
         // In EXPLAIN mode we should configure the dataflow builder to

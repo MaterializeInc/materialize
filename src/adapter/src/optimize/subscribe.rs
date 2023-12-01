@@ -225,10 +225,8 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     non_null_assertions: vec![],
                 };
 
-                let mut df_builder = DataflowBuilder::new(
-                    self.catalog.state(),
-                    self.compute_instance.clone()
-                );
+                let mut df_builder =
+                    DataflowBuilder::new(self.catalog.state(), self.compute_instance.clone());
 
                 let mut df_desc = MirDataflowDescription::new(sink_name);
 
