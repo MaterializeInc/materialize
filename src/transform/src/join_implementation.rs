@@ -585,14 +585,19 @@ mod delta_queries {
             let insufficiently_arranged_orders = missing_arrangements.len();
 
             if insufficiently_arranged_orders > 0 {
-                ::tracing::info!("{insufficiently_arranged_orders} orders out of {} have insufficient arrangements ({}; missing {} distinct arrangements: {})",
-                    inputs.len(),
-                    arrangement_counts
+                tracing::info!(
+                    insufficiently_arranged_orders = insufficiently_arranged_orders,
+                    total_orders = inputs.len(),
+                    missing_orders_by_delta_path = arrangement_counts
                         .iter()
                         .map(|count| format!("{}", expected_number_of_arrangements - count))
                         .join(" "),
-                    missing_arrangements.len(),
-                    missing_arrangements.iter().map(|input| format!("%{input}")).join(" "));
+                    missing_arrangements = missing_arrangements
+                        .iter()
+                        .map(|input| format!("%{input}"))
+                        .join(" "),
+                    "insufficient arrangements",
+                );
 
                 // Differential joins need to arrange every intermediate result: #inputs - 1 such arrangements.
                 // Delta joins only arrange inputs... if we would have fewer net arrangements, delta will be a better deal.
@@ -607,7 +612,11 @@ mod delta_queries {
                 }
             }
 
-            ::tracing::info!("using a delta join ({insufficiently_arranged_orders} new input arrangements) instead of a differential join ({expected_number_of_arrangements} intermediate arrangements)");
+            tracing::info!(
+                new_delta_input_arrangements = insufficiently_arranged_orders,
+                expected_differential_arrangements = expected_number_of_arrangements,
+                "using a delta join instead of a differential join"
+            );
 
             // Convert the order information into specific (input, key, characteristics) information.
             let mut orders = orders
