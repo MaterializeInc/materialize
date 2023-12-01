@@ -408,9 +408,9 @@ are expected to learn about these changes and act upon them from their
 
 Client queries that spawn ephemeral controller commands (mostly DQL and
 DML-style queries) are timestamped with the timestamp (in the catalog timeline)
-as of which the query was processed. To ensure that these ephemeral controller
-commands are consistent with what the controller must know as of that
-timestamp.
+as of which the query was processed. This ensure that these ephemeral
+controller commands are consistent with what the controller must know as of
+that timestamp.
 
 ## Physical Architecture Design
 
