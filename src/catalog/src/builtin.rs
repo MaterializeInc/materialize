@@ -25,6 +25,7 @@
 use std::hash::Hash;
 use std::string::ToString;
 use std::sync::Mutex;
+use const_format::concatcp;
 
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_pgrepr::oid;
@@ -3669,6 +3670,22 @@ pub const PG_TIMEZONE_NAMES: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     column_defs: Some("name, abbrev, utc_offset, is_dst"),
     sql: mz_pgtz::timezone::PG_CATALOG_TIMEZONE_NAMES_SQL,
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_TIMEZONE_ABBREVIATIONS: BuiltinView = BuiltinView {
+    name: "mz_timezone_abbreviations",
+    schema: MZ_CATALOG_SCHEMA,
+    column_defs: Some("abbreviation, utc_offset, dst, timezone_name"),
+    sql: mz_pgtz::abbrev::MZ_CATALOG_TIMEZONE_ABBREVIATIONS_SQL,
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_TIMEZONE_NAMES: BuiltinView = BuiltinView {
+    name: "mz_timezone_names",
+    schema: MZ_CATALOG_SCHEMA,
+    column_defs: Some("name"),
+    sql: mz_pgtz::timezone::MZ_CATALOG_TIMEZONE_NAMES_SQL,
     sensitivity: DataSensitivity::Public,
 };
 
