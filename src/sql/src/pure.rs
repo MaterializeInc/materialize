@@ -575,6 +575,17 @@ async fn purify_create_source(
                 .config(&*connection_context.secrets_reader)
                 .await?;
 
+            let available_replication_slots = mz_postgres_util::available_replication_slots(
+                &connection_context.ssh_tunnel_manager,
+                &config,
+            )
+            .await?;
+
+            // We need 1 replication slot for the snapshots and 1 for the continuing replication
+            if available_replication_slots < 2 {
+                Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 2 })?;
+            }
+
             let publication_tables = mz_postgres_util::publication_info(
                 &connection_context.ssh_tunnel_manager,
                 &config,
@@ -956,6 +967,17 @@ async fn purify_alter_source(
     let config = pg_connection
         .config(&*connection_context.secrets_reader)
         .await?;
+
+    let available_replication_slots = mz_postgres_util::available_replication_slots(
+        &connection_context.ssh_tunnel_manager,
+        &config,
+    )
+    .await?;
+
+    // We need 1 additional replication slot for the snapshots
+    if available_replication_slots < 1 {
+        Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
+    }
 
     let mut publication_tables = mz_postgres_util::publication_info(
         &connection_context.ssh_tunnel_manager,
