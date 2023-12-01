@@ -399,11 +399,15 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterIndexSetOptions(plan) => {
-                    let result = self.sequence_alter_index_set_options(plan);
+                    let result = self
+                        .sequence_alter_index_set_options(ctx.session(), plan)
+                        .await;
                     ctx.retire(result);
                 }
                 Plan::AlterIndexResetOptions(plan) => {
-                    let result = self.sequence_alter_index_reset_options(plan);
+                    let result = self
+                        .sequence_alter_index_reset_options(ctx.session(), plan)
+                        .await;
                     ctx.retire(result);
                 }
                 Plan::AlterRole(plan) => {
