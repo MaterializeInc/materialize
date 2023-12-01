@@ -579,14 +579,19 @@ mod delta_queries {
                 .map(|o| o.iter().skip(1).filter(|(c, _, _)| c.arranged).count())
                 .collect::<Vec<_>>();
             let expected_differential_arrangements = inputs.len() - 1;
-            let missing_arrangements: std::collections::BTreeSet<usize> = orders
-                .iter()
-                .flat_map(|o| {
-                    o.iter()
-                        .skip(1)
-                        .filter_map(|(c, _, input)| if c.arranged { None } else { Some(*input) })
-                })
-                .collect();
+            let missing_arrangements: std::collections::BTreeSet<(usize, Vec<MirScalarExpr>)> =
+                orders
+                    .iter()
+                    .flat_map(|o| {
+                        o.iter().skip(1).filter_map(|(c, key, input)| {
+                            if c.arranged {
+                                None
+                            } else {
+                                Some((*input, key.clone()))
+                            }
+                        })
+                    })
+                    .collect();
             let insufficiently_arranged_orders = missing_arrangements.len();
 
             if insufficiently_arranged_orders > 0 {
@@ -599,7 +604,10 @@ mod delta_queries {
                         .join(" "),
                     missing_arrangements = missing_arrangements
                         .iter()
-                        .map(|input| format!("%{input}"))
+                        .map(|(input, key)| format!(
+                            "%{input}[{}]",
+                            key.iter().map(|k| format!("{k}")).join(" = ")
+                        ))
                         .join(" "),
                     "insufficient arrangements",
                 );
