@@ -50,7 +50,7 @@ structure of how sources work. Sink connections should be idempotent so
 re-running this every time we restart should be fine.
 
 Additionally, we need to ensure that we gracefully handle sink connection error
-reporting via sink sink statuses.
+reporting via sink statuses.
 
 ### Remove `prepare_export`
 
