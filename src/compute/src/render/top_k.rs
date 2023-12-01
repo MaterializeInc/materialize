@@ -31,7 +31,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 
-use crate::extensions::arrange::{HeapSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
@@ -41,7 +41,7 @@ use crate::typedefs::{RowKeySpine, RowSpine};
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp + HeapSize,
+    G::Timestamp: crate::render::RenderTimestamp,
 {
     pub(crate) fn render_topk(
         &mut self,
@@ -383,7 +383,7 @@ fn build_topk_negated_stage<G, R>(
 ) -> Collection<G, ((Row, u64), R), Diff>
 where
     G: Scope,
-    G::Timestamp: Lattice + Columnation + HeapSize,
+    G::Timestamp: Lattice + Columnation,
     R: MaybeValidatingRow<Row, Row>,
 {
     // We only want to arrange parts of the input that are not part of the actual output
@@ -649,8 +649,6 @@ pub mod monoids {
     use serde::{Deserialize, Serialize};
     use timely::container::columnation::{Columnation, Region};
 
-    use crate::extensions::arrange::HeapSize;
-
     /// A monoid containing a row and an ordering.
     #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
     pub struct Top1Monoid {
@@ -753,29 +751,6 @@ pub mod monoids {
         fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
             self.row_region.heap_size(&mut callback);
             self.order_key_region.heap_size(callback);
-        }
-    }
-
-    impl HeapSize for Top1Monoid {
-        #[inline]
-        fn estimate_size<C>(&self, mut callback: C)
-        where
-            C: FnMut(usize, usize, usize),
-        {
-            let row_size = self.row.heap_size();
-            let row_capacity = self.row.heap_capacity();
-            let row_allocation = usize::from(row_capacity > 0);
-
-            let size_of_column_order = std::mem::size_of::<ColumnOrder>();
-            let order_key_size = self.order_key.len() * size_of_column_order;
-            let order_key_capacity = self.order_key.capacity() * size_of_column_order;
-            let order_key_allocation = usize::from(order_key_capacity > 0);
-
-            callback(
-                row_size + order_key_size,
-                row_capacity + order_key_capacity,
-                row_allocation + order_key_allocation,
-            )
         }
     }
 
