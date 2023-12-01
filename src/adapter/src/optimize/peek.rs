@@ -280,11 +280,8 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
             .collect();
 
         // The assembled dataflow contains a view and an index of that view.
-        let mut df_builder = DataflowBuilder::new(
-            self.catalog.state(),
-            self.compute_instance.clone(),
-            self.config.enable_eager_delta_joins,
-        );
+        let mut df_builder =
+            DataflowBuilder::new(self.catalog.state(), self.compute_instance.clone());
 
         let debug_name = format!("oneshot-select-{}", self.select_id);
         let mut df_desc = MirDataflowDescription::new(debug_name.to_string());

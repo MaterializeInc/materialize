@@ -168,11 +168,8 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     non_null_assertions: vec![],
                 };
 
-                let mut df_builder = DataflowBuilder::new(
-                    self.catalog.state(),
-                    self.compute_instance.clone(),
-                    self.config.enable_eager_delta_joins,
-                );
+                let mut df_builder =
+                    DataflowBuilder::new(self.catalog.state(), self.compute_instance.clone());
 
                 let (df_desc, df_meta) =
                     df_builder.build_sink_dataflow(sink_name, sink_id, sink_desc)?;
@@ -213,8 +210,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
 
                 let mut df_builder = DataflowBuilder::new(
                     self.catalog.state(),
-                    self.compute_instance.clone(),
-                    self.config.enable_eager_delta_joins,
+                    self.compute_instance.clone()
                 );
 
                 let mut df_desc = MirDataflowDescription::new(sink_name);
