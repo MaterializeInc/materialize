@@ -432,6 +432,14 @@ where
         Continue(removed)
     }
 
+    fn critical_since(&self) -> Antichain<T> {
+        let mut since = Antichain::new();
+        for critical in self.critical_readers.values() {
+            since.meet_assign(&critical.since);
+        }
+        since
+    }
+
     pub fn register_leased_reader(
         &mut self,
         hostname: &str,
@@ -450,7 +458,7 @@ where
                 purpose: purpose.to_owned(),
             },
             seqno,
-            since: self.trace.since().clone(),
+            since: self.critical_since(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
