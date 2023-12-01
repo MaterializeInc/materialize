@@ -26,18 +26,20 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
-use mz_ore::{soft_assert, soft_assert_eq, soft_assert_ne};
+use mz_ore::{soft_assert, soft_assert_eq, soft_assert_ne, soft_assert_or_log, soft_panic_or_log};
+use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::Opaque;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Diff;
 use mz_storage_types::controller::EnablePersistTxnTables;
 use mz_storage_types::sources::Timeline;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
@@ -76,6 +78,8 @@ enum Mode {
 /// can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 #[derive(Debug)]
 pub struct PersistHandle {
+    /// Since handle to control compaction.
+    since_handle: SinceHandle<StateUpdateKindBinary, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
     write_handle: WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
     /// Read handle to persist.
@@ -109,6 +113,14 @@ impl PersistHandle {
         const SEED: usize = 1;
         let shard_id = Self::shard_id(organization_id, SEED);
         debug!(?shard_id, "new persist backed catalog state");
+        let since_handle = persist_client
+            .open_critical_since(
+                shard_id,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                diagnostics(),
+            )
+            .await
+            .expect("invalid usage");
         let (write_handle, read_handle) = persist_client
             .open(
                 shard_id,
@@ -119,6 +131,7 @@ impl PersistHandle {
             .await
             .expect("invalid usage");
         PersistHandle {
+            since_handle,
             write_handle,
             read_handle,
             persist_client,
@@ -203,6 +216,7 @@ impl PersistHandle {
             .expect("invalid usage");
         let mut catalog = PersistCatalogState {
             mode,
+            since_handle: self.since_handle,
             write_handle: self.write_handle,
             subscribe,
             persist_client: self.persist_client,
@@ -553,6 +567,8 @@ impl OpenableDurableCatalogState for PersistHandle {
 pub struct PersistCatalogState {
     /// The [`Mode`] that this catalog was opened in.
     mode: Mode,
+    /// Since handle to control compaction.
+    since_handle: SinceHandle<StateUpdateKindBinary, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
     write_handle: WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
     /// Subscription to catalog changes.
@@ -663,6 +679,26 @@ impl PersistCatalogState {
         }
 
         self.apply_updates(updates)?;
+
+        // Advance the since, allowing Persist to compact the data.
+        // Lag the shard's upper by 1 to keep it readable.
+        // Since nothing relies on this since being tight,
+        // we use the `maybe_` variant and do not fence.
+        let downgrade_to = Antichain::from_elem(self.upper.saturating_sub(1));
+        let opaque = i64::initial();
+        let downgrade = self
+            .since_handle
+            .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
+            .await;
+
+        match downgrade {
+            None => {}
+            Some(Err(e)) => soft_panic_or_log!("found opaque value {e}, but expected {opaque}"),
+            Some(Ok(updated)) => soft_assert_or_log!(
+                updated == downgrade_to,
+                "updated bound should match expected"
+            ),
+        }
 
         Ok(())
     }
