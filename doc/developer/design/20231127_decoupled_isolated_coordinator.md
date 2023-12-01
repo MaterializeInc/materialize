@@ -339,30 +339,41 @@ new_upper)` on TIMESTAMP ORACLE.
 
 ### The controllers, aka. STORAGE and COMPUTE
 
-The controllers remain largely as they have been previously designed, but
-query-like methods gain a new `command_as_of` parameter and we introduce a new
-`DowngradeCommandCapability` method. The controllers can be seen as consuming a
-stream of commands and `DowngradeCommandCapability` is downgrading its
-frontier. The `command_as_of` parameter on query-like operations tells the
-controller that it can only process them once its input frontier has
+The controllers remain largely as they have been previously designed, but we
+introduce a distinction between deterministic controller command and
+ephemeral/query-like controller commands. See [Controller
+Commands](#controller-commands) above.
+
+The controllers can be seen as consuming a stream of deterministic controller
+commands, in the newly introduced `"catalog"` timeline, and
+`AdvanceCatalogFrontier` is downgrading its frontier.
+
+Ephemeral/query-like commands gain a new `catalog_as_of` parameter that tells
+the controller that it can only process them once its input frontier has
 sufficiently advanced.
 
 These changes make it so that the controller knows up to which CATALOG
 timestamp it has received commands and to ensure that peeks (or other
-query-like operations) are only served once we know that controller state is up
-to date with the catalog state as of which the peek was processed.
+query-like operations) are only served once we know that controller state is
+_at least_ up to date with the catalog state as of which the peek was
+processed. Note that we say the Controller has to be _at least_ up to date with
+the `catalog_as_of`, it is okay for its catalog frontier to be beyond that.
+This has the effect that in-flight peeks can end up in a situation where a
+Controller doesn't have the collection that we are trying to query, and we
+therefore have to report back an error. This is in line with current
+Materialize behavior.
 
 As we see below in the section on ADAPTER. We replace explicit sequencing by
 decoupling using pTVCs and timestamps.
 
-- `Peek(global_id, command_as_of, ..)`: performs the peek, but _only_ once the
-  command capability has been downgraded far enough.
+- `Peek(global_id, catalog_as_of, ..)`: performs the peek, but _only_ once the
+  catalog frontier has been downgraded far enough.
 
-  It is important to note that the new `command_as_of` parameter is different
+  It is important to note that the new `catalog_as_of` parameter is different
   from an `as_of`, which latter refers to the timeline/timestamp of the object
   being queried.
 
-- `DowngradeCommandCapability(timestamp): tells the controller that it has seen
+- `AdvanceCatalogFrontier(timestamp): tells the controller that it has seen
   commands corresponding to catalog changes up to `timestamp`.
 
 (Most existing commands have been omitted for brevity!)
@@ -377,7 +388,7 @@ synthesizes commands for the controller based on differential CATALOG changes.
 To do this, the task subscribes to CATALOG, filters on changes that are
 relevant for the given controller, sends commands to the controller while
 preserving the order in which they are observed in the stream of changes, and
-synthesizes `DowngradeCommandCapability` commands when the catalog timestamp
+synthesizes `AdvanceCatalogFrontier` commands when the catalog timestamp
 advances. These commands are the commands that deterministically derive from
 CATALOG state (see Background section, above).
 
