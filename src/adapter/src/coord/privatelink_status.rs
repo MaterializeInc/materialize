@@ -10,11 +10,10 @@
 use std::num::NonZeroU32;
 use std::{collections::BTreeMap, sync::Arc};
 
-use futures::stream::StreamExt;
-use futures::FutureExt;
 use governor::{Quota, RateLimiter};
 
 use mz_cloud_resources::VpcEndpointEvent;
+use mz_ore::future::OreStreamExt;
 use mz_ore::task::spawn;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_storage_client::controller::IntrospectionType;
@@ -50,35 +49,32 @@ impl Coordinator {
                 ));
 
                 loop {
-                    // Wait for an event to become available
-                    if let Some(next_event) = stream.next().await {
-                        // Wait until we're permitted to tell the coordinator about the event
+                    // Wait for events to become available
+                    if let Some(new_events) = stream.recv_many(20).await {
+                        // Wait until we're permitted to tell the coordinator about the events
+                        // Note that the stream is backed by a https://docs.rs/kube/latest/kube/runtime/fn.watcher.html,
+                        // which means its safe for us to rate limit for an arbitrarily long time and expect the stream
+                        // to continue to work, despite not being polled
                         rate_limiter.until_ready().await;
 
                         // Events to be written, de-duped by connection_id
-                        let mut events = BTreeMap::new();
+                        let mut event_map = BTreeMap::new();
 
-                        let mut add_event = |event: VpcEndpointEvent| {
+                        for event in new_events {
                             match last_written_events.get(&event.connection_id) {
                                 // Ignore if an event with this time was already written
                                 Some(time) if time >= &event.time => {}
                                 _ => {
                                     last_written_events
                                         .insert(event.connection_id.clone(), event.time.clone());
-                                    events.insert(event.connection_id, event);
+                                    event_map.insert(event.connection_id, event);
                                 }
                             }
-                        };
-
-                        add_event(next_event);
-                        // Drain any additional events from the queue that accumulated while
-                        // waiting for the rate limiter
-                        while let Some(event) = stream.next().now_or_never().and_then(|e| e) {
-                            add_event(event);
                         }
 
                         // Send the event batch to the coordinator to be written
-                        let _ = internal_cmd_tx.send(Message::PrivateLinkVpcEndpointEvents(events));
+                        let _ =
+                            internal_cmd_tx.send(Message::PrivateLinkVpcEndpointEvents(event_map));
                     }
                 }
             });

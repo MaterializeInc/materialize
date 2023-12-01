@@ -735,14 +735,14 @@ messages and additional metadata helpful for debugging.
 ### `mz_aws_privatelink_connection_status_history`
 
 The `mz_aws_privatelink_connection_status_history` table contains a row describing
-the historical status for each PrivateLink connection.
+the historical status for each AWS PrivateLink connection in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_aws_privatelink_connection_status_history -->
 | Field             | Type                       | Meaning                                                    |
 |-------------------|----------------------------|------------------------------------------------------------|
 | `occurred_at`     | `timestamp with time zone` | Wall-clock timestamp of the status change.       |
-| `connection_id`   | `text`                     | The unique identifier of the AWS PrivateLink connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_connections)   |
-| `status`          | `text`                     | The status: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, `unknown`                        |
+| `connection_id`   | `text`                     | The unique identifier of the AWS PrivateLink connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_connections).   |
+| `status`          | `text`                     | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.                        |
 
 
 <!--

@@ -924,11 +924,34 @@ where
                             .await;
                         }
                         IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                            // Truncate the private link connection status history table and
+                            // store the latest timestamp for each id in the table.
+                            let occurred_at_col =
+                                healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                                    .get_by_name(&ColumnName::from("occurred_at"))
+                                    .expect("schema has not changed")
+                                    .0;
                             self.privatelink_status_table_latest = self
                                 .partially_truncate_status_history(
                                     IntrospectionType::PrivatelinkConnectionStatusHistory,
                                 )
-                                .await;
+                                .await
+                                .and_then(|map| {
+                                    Some(
+                                        map.into_iter()
+                                            .map(|(id, row)| {
+                                                (
+                                                    id,
+                                                    row.iter()
+                                                        .nth(occurred_at_col)
+                                                        .expect("schema has not changed")
+                                                        .unwrap_timestamptz()
+                                                        .into(),
+                                                )
+                                            })
+                                            .collect(),
+                                    )
+                                });
                         }
 
                         // Truncate compute-maintained collections.
@@ -2628,11 +2651,11 @@ where
 
     /// Effectively truncates the source status history shard except for the most recent updates
     /// from each ID.
-    /// Returns a map with the timestamp of the latest row per id
+    /// Returns a map with latest row per id
     async fn partially_truncate_status_history(
         &mut self,
         collection: IntrospectionType,
-    ) -> Option<BTreeMap<GlobalId, DateTime<Utc>>> {
+    ) -> Option<BTreeMap<GlobalId, Row>> {
         let (keep_n, occurred_at_col, id_col) = match collection {
             IntrospectionType::SourceStatusHistory => (
                 self.config.keep_n_source_status_history_entries,
@@ -2689,7 +2712,7 @@ where
             BTreeMap::new();
 
         // BTreeMap to keep track of the row with the latest timestamp for each id
-        let mut latest_row_per_id: BTreeMap<Datum, CheckedTimestamp<DateTime<Utc>>> =
+        let mut latest_row_per_id: BTreeMap<Datum, (CheckedTimestamp<DateTime<Utc>>, Vec<Datum>)> =
             BTreeMap::new();
 
         // Consolidate the snapshot, so we can process it correctly below.
@@ -2716,9 +2739,9 @@ where
             // Keep track of the timestamp of the latest row per id
             let timestamp = occurred_at.unwrap_timestamptz();
             match latest_row_per_id.get(&id) {
-                Some(existing) if existing > &timestamp => {}
+                Some(existing) if &existing.0 > &timestamp => {}
                 _ => {
-                    latest_row_per_id.insert(id, timestamp);
+                    latest_row_per_id.insert(id, (timestamp, status_row.clone()));
                 }
             }
 
@@ -2764,11 +2787,17 @@ where
         Some(
             latest_row_per_id
                 .into_iter()
-                .filter_map(|(key, timestamp)| {
+                .filter_map(|(key, (_, row_vec))| {
                     match GlobalId::from_str(key.unwrap_str()) {
-                        Ok(id) => Some((id, timestamp.into())),
+                        Ok(id) => {
+                            let mut packer = row_buf.packer();
+                            packer.extend(row_vec.into_iter());
+                            Some((id, row_buf.clone()))
+                        }
                         // Ignore any rows that can't be unwrapped correctly
                         Err(_) => None,
+                        // TODO(rjobanp): add a dropped status so we can ignore rows that are
+                        // no longer relevant (e.g. dropped connections/sources/sinks)
                     }
                 })
                 .collect(),
