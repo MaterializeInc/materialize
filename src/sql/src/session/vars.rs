@@ -1482,14 +1482,6 @@ pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
-pub const ENABLE_EAGER_DELTA_JOINS: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_eager_delta_joins"),
-    value: &false,
-    description:
-        "Plan delta joins when it would require no more arrangements than a differential join.",
-    internal: false,
-};
-
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -2068,6 +2060,14 @@ feature_flags!(
     {
         name: enable_aws_connection,
         desc: "CREATE CONNECTION ... TO AWS",
+        default: &false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_eager_delta_joins,
+        desc:
+            "Plan delta joins when it would require no more arrangements than a differential join.",
         default: &false,
         internal: true,
         enable_for_item_parsing: false,
@@ -2839,7 +2839,6 @@ impl SystemVars {
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
-            .with_var(&ENABLE_EAGER_DELTA_JOINS)
             .with_var(&TIMESTAMP_ORACLE_IMPL);
 
         for flag in PersistFeatureFlag::ALL {
@@ -3609,11 +3608,6 @@ impl SystemVars {
     /// Returns the `enable_columnation_lgalloc` configuration parameter.
     pub fn enable_columnation_lgalloc(&self) -> bool {
         *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
-    }
-
-    /// Returns the `enable_eager_delta_joins` configuration parameter.
-    pub fn enable_eager_delta_joins(&self) -> bool {
-        *self.expect_value(&ENABLE_EAGER_DELTA_JOINS)
     }
 
     /// Returns the `timestamp_oracle` configuration parameter.
