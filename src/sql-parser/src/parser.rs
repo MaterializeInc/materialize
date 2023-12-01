@@ -4235,7 +4235,7 @@ impl<'a> Parser<'a> {
         let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
         let name = self.parse_identifier().map_no_statement_parser_err()?;
         let action = self
-            .expect_one_of_keywords(&[OWNER, RENAME, RESET, SET, SWAP])
+            .expect_one_of_keywords(&[OWNER, RENAME, RESET, RESUME, SET, SUSPEND, SWAP])
             .map_no_statement_parser_err()?;
         match action {
             OWNER => {
@@ -4305,6 +4305,24 @@ impl<'a> Parser<'a> {
                     object_type,
                     name_a: UnresolvedObjectName::Cluster(name),
                     name_b,
+                }))
+            }
+            SUSPEND => Ok(Statement::AlterCluster(AlterClusterStatement {
+                if_exists,
+                name,
+                action: AlterClusterAction::Suspend,
+            })),
+            RESUME => {
+                let if_suspended = self.parse_keyword(IF);
+                if if_suspended {
+                    self.expect_keyword(SUSPENDED)
+                        .map_parser_err(StatementKind::AlterCluster)?
+                }
+
+                Ok(Statement::AlterCluster(AlterClusterStatement {
+                    if_exists,
+                    name,
+                    action: AlterClusterAction::Resume { if_suspended },
                 }))
             }
             _ => unreachable!(),

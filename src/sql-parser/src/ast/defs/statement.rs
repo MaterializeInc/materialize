@@ -1690,6 +1690,8 @@ impl_display_t!(ReplicaDefinition);
 pub enum AlterClusterAction<T: AstInfo> {
     SetOptions(Vec<ClusterOption<T>>),
     ResetOptions(Vec<ClusterOptionName>),
+    Suspend,
+    Resume { if_suspended: bool },
 }
 
 /// `ALTER CLUSTER .. SET ...`
@@ -1721,6 +1723,13 @@ impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
                 f.write_str("RESET (");
                 f.write_node(&display::comma_separated(options));
                 f.write_str(")");
+            }
+            AlterClusterAction::Suspend => f.write_str("SUSPEND"),
+            AlterClusterAction::Resume { if_suspended } => {
+                f.write_str("RESUME");
+                if *if_suspended {
+                    f.write_str(" IF SUSPENDED");
+                }
             }
         }
     }

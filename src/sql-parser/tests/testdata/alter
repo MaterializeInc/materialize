@@ -100,7 +100,7 @@ AlterObjectSwap(AlterObjectSwapStatement { object_type: Cluster, name_a: Cluster
 parse-statement
 ALTER CLUSTER cluster.too_many SWAP WITH cluster.this_wont_work
 ----
-error: Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
+error: Expected one of OWNER or RENAME or RESET or RESUME or SET or SUSPEND or SWAP, found dot
 ALTER CLUSTER cluster.too_many SWAP WITH cluster.this_wont_work
                      ^
 
@@ -117,3 +117,45 @@ ALTER SCHEMA baz RENAME to foobar
 ALTER SCHEMA baz RENAME TO foobar
 =>
 AlterObjectRename(AlterObjectRenameStatement { object_type: Schema, if_exists: false, name: Schema(UnresolvedSchemaName([Ident("baz")])), to_item_name: Ident("foobar") })
+
+parse-statement
+ALTER CLUSTER foo SUSPEND
+----
+ALTER CLUSTER foo SUSPEND
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("foo"), action: Suspend })
+
+parse-statement
+ALTER CLUSTER bar SUSPEND IF SUSPENDED
+----
+error: Expected end of statement, found IF
+ALTER CLUSTER bar SUSPEND IF SUSPENDED
+                          ^
+
+parse-statement
+ALTER CLUSTER baz RESUME
+----
+ALTER CLUSTER baz RESUME
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("baz"), action: Resume { if_suspended: false } })
+
+parse-statement
+ALTER CLUSTER baz RESUME IF SUSPENDED
+----
+ALTER CLUSTER baz RESUME IF SUSPENDED
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("baz"), action: Resume { if_suspended: true } })
+
+parse-statement
+ALTER CLUSTER baz RESUME IF
+----
+error: Expected SUSPENDED, found EOF
+ALTER CLUSTER baz RESUME IF
+                           ^
+
+parse-statement
+ALTER CLUSTER baz RESUME IF RESUME
+----
+error: Expected SUSPENDED, found RESUME
+ALTER CLUSTER baz RESUME IF RESUME
+                            ^

@@ -310,6 +310,7 @@ Replication
 Reset
 Respect
 Restrict
+Resume
 Retention
 Return
 Returning
@@ -363,6 +364,8 @@ Subsource
 Subsources
 Substring
 Superuser
+Suspend
+Suspended
 Swap
 System
 Table
