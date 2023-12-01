@@ -27,7 +27,7 @@ use crate::Codec64;
 #[derive(Debug)]
 pub struct Part {
     len: usize,
-    key: DynStructCol,
+    pub(crate) key: DynStructCol,
     val: DynStructCol,
     ts: Buffer<i64>,
     diff: Buffer<i64>,

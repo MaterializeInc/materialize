@@ -92,6 +92,7 @@ use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
+use mz_persist::indexed::encoding::SchemaId;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
 use mz_persist_types::columnar::{ColumnPush, Schema};
@@ -144,6 +145,7 @@ pub mod operators {
 pub mod iter;
 pub mod read;
 pub mod rpc;
+pub mod schema;
 pub mod stats;
 pub mod usage;
 pub mod write;
@@ -456,6 +458,7 @@ impl PersistClient {
             .await;
         maintenance.start_performing(&machine, &gc);
         let schemas = Schemas {
+            id: SchemaId::default(), // WIP plumb this in from the caller,
             key: key_schema,
             val: val_schema,
         };
@@ -510,6 +513,7 @@ impl PersistClient {
             .maybe_init_shard::<K, V, T, D>(&shard_metrics)
             .await;
         let schemas = Schemas {
+            id: SchemaId::default(), // WIP plumb this in from the caller,
             key: key_schema,
             val: val_schema,
         };
@@ -626,6 +630,7 @@ impl PersistClient {
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
         let writer_id = WriterId::new();
         let schemas = Schemas {
+            id: SchemaId::default(), // WIP plumb this in from the caller,
             key: key_schema,
             val: val_schema,
         };

@@ -25,7 +25,7 @@ use crate::stats::{DynStats, StatsFrom};
 pub struct DynColumnRef(DataType, Arc<dyn Any + Send + Sync>);
 
 impl DynColumnRef {
-    fn new<T: Data>(col: T::Col) -> Self {
+    pub(crate) fn new<T: Data>(col: T::Col) -> Self {
         DynColumnRef(col.cfg().as_type(), Arc::new(col))
     }
 

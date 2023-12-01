@@ -668,6 +668,7 @@ where
         let fake_compaction_schema = Schemas {
             key: Arc::new(VecU8Schema),
             val: Arc::new(VecU8Schema),
+            id: real_schemas.id,
         };
 
         let mut batch = BatchBuilderInternal::<Vec<u8>, Vec<u8>, T, D>::new(
@@ -799,6 +800,7 @@ where
         let fake_compaction_schema = Schemas {
             key: Arc::new(VecU8Schema),
             val: Arc::new(VecU8Schema),
+            id: real_schemas.id,
         };
 
         let mut batch = BatchBuilderInternal::<Vec<u8>, Vec<u8>, T, D>::new(
@@ -1120,6 +1122,7 @@ fn start_prefetches<T: Timestamp + Lattice + Codec64>(
 
 #[cfg(test)]
 mod tests {
+    use mz_persist::indexed::encoding::SchemaId;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use timely::progress::Antichain;
 
@@ -1172,6 +1175,7 @@ mod tests {
         let schemas = Schemas {
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
+            id: SchemaId::default(),
         };
         let res = Compactor::<String, (), u64, i64>::compact(
             CompactConfig::new(&write.cfg, &write.writer_id),
@@ -1254,6 +1258,7 @@ mod tests {
         let schemas = Schemas {
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
+            id: SchemaId::default(),
         };
         let res = Compactor::<String, (), CodecProduct, i64>::compact(
             CompactConfig::new(&write.cfg, &write.writer_id),

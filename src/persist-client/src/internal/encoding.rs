@@ -17,6 +17,7 @@ use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::halt;
+use mz_persist::indexed::encoding::SchemaId;
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist_types::stats::ProtoStructStats;
 use mz_persist_types::{Codec, Codec64};
@@ -54,6 +55,7 @@ use crate::{PersistConfig, ShardId, WriterId};
 
 #[derive(Debug)]
 pub struct Schemas<K: Codec, V: Codec> {
+    pub id: SchemaId,
     pub key: Arc<K::Schema>,
     pub val: Arc<V::Schema>,
 }
@@ -61,6 +63,7 @@ pub struct Schemas<K: Codec, V: Codec> {
 impl<K: Codec, V: Codec> Clone for Schemas<K, V> {
     fn clone(&self) -> Self {
         Self {
+            id: self.id,
             key: Arc::clone(&self.key),
             val: Arc::clone(&self.val),
         }

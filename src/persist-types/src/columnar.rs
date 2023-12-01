@@ -52,6 +52,7 @@ use std::fmt::Debug;
 
 use crate::codec_impls::UnitSchema;
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
+use crate::dyn_col::DynColumnRef;
 use crate::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use crate::part::PartBuilder;
 use crate::stats::{ColumnStats, StatsFrom};
@@ -260,6 +261,65 @@ pub trait Schema<T>: Debug + Send + Sync {
 
     /// Returns a [Self::Encoder<'a>] for the given columns.
     fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String>;
+}
+
+/// WIP
+pub fn migrate_one<C: Codec + std::fmt::Debug>(from: &C::Schema, to: &C::Schema, val: &mut C) {
+    eprintln!(
+        "migrate_one {:?}->{:?} BEFORE: {:?}",
+        from.columns(),
+        to.columns(),
+        val
+    );
+    // WIP it's wildly inefficient to do this per row. pre-compute all this
+    // per-snapshot/listen or something
+
+    let mut part = PartBuilder::new::<C, _, (), _>(from, &UnitSchema);
+    {
+        let mut part = part.get_mut();
+        let mut key = from.encoder(part.key).unwrap();
+        key.encode(val);
+        UnitSchema.encoder(part.val).unwrap().encode(&());
+        part.ts.push(0u64);
+        part.diff.push(0u64);
+    }
+    let mut part = part.finish().unwrap();
+
+    // WIP for prototyping convenience, this just assumes that the only schema
+    // change that happens is adding or removing columns from the end. but all
+    // the necessary info to do this for real is plumbed here.
+    part.key.cfg = to.columns();
+    if from.columns().cols.len() > to.columns().cols.len() {
+        // Too many columns, that's easy
+        part.key.cols.truncate(to.columns().cols.len());
+    } else if from.columns().cols.len() < to.columns().cols.len() {
+        for (_name, col_typ, _stats) in &to.columns().cols[from.columns().cols.len()..] {
+            // WIP don't hardcode the column type.
+            assert_eq!(
+                col_typ,
+                &DataType {
+                    optional: true,
+                    format: ColumnFormat::U64
+                }
+            );
+            let mut none_col = <Option<u64> as Data>::Mut::new();
+            none_col.push(None);
+            let none_col = <Option<u64> as Data>::Col::from(none_col);
+            part.key
+                .cols
+                .push(DynColumnRef::new::<Option<u64>>(none_col));
+        }
+    } else {
+        unreachable!("WIP")
+    }
+
+    to.decoder(part.key_ref()).unwrap().decode(0, val);
+    eprintln!(
+        "migrate_one {:?}->{:?} AFTER : {:?}",
+        from.columns(),
+        to.columns(),
+        val
+    );
 }
 
 /// A helper for writing tests that validate that a piece of data roundtrips

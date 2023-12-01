@@ -21,6 +21,7 @@ use differential_dataflow::lattice::Lattice;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_persist::indexed::encoding::SchemaId;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
@@ -296,6 +297,7 @@ where
             let schemas = Schemas {
                 key: Arc::clone(&key_schema),
                 val: Arc::clone(&val_schema),
+                id: SchemaId::default(), // WIP plumb this in from the caller
             };
 
             let res = Compactor::<K, V, T, D>::compact(

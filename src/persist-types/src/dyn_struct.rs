@@ -75,7 +75,7 @@ impl Default for DynStructRef<'_> {
 #[derive(Debug)]
 pub struct DynStructCol {
     len: usize,
-    cfg: DynStructCfg,
+    pub(crate) cfg: DynStructCfg,
     pub(crate) validity: Option<<bool as Data>::Col>,
     pub(crate) cols: Vec<DynColumnRef>,
 }
