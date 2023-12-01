@@ -316,7 +316,7 @@ def run(
             if thread.is_alive():
                 print(f"{thread.name} still running: {worker.exe.last_log}")
         print("Threads have not stopped within 5 minutes, exiting hard")
-        # TODO(def-): Switch to failing exit code when #23254 is fixed
+        # TODO(def-): Switch to failing exit code when #23582 is fixed
         os._exit(0)
 
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
