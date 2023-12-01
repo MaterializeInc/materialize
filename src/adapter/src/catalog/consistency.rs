@@ -24,6 +24,7 @@ use mz_sql_parser::ast::{self, Statement};
 use mz_sql_parser::parser::ParserStatementError;
 use serde::Serialize;
 
+// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use super::CatalogState;
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]

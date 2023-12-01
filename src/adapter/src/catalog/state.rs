@@ -72,6 +72,7 @@ use mz_storage_types::connections::inline::{
 };
 use mz_transform::Optimizer;
 
+// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog};
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize};

@@ -32,8 +32,6 @@ use smallvec::SmallVec;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 
-use crate::catalog;
-
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
 pub enum AdapterError {
@@ -47,7 +45,7 @@ pub enum AdapterError {
     // resolved because it prevents us from adding columns to system tables.
     AmbiguousSystemColumnReference,
     /// An error occurred in a catalog operation.
-    Catalog(catalog::Error),
+    Catalog(mz_catalog::memory::error::Error),
     /// The cached plan or descriptor changed.
     ChangedPlan,
     /// The cursor already exists.
@@ -733,15 +731,15 @@ impl From<TryFromDecimalError> for AdapterError {
     }
 }
 
-impl From<catalog::Error> for AdapterError {
-    fn from(e: catalog::Error) -> AdapterError {
+impl From<mz_catalog::memory::error::Error> for AdapterError {
+    fn from(e: mz_catalog::memory::error::Error) -> AdapterError {
         AdapterError::Catalog(e)
     }
 }
 
 impl From<mz_catalog::durable::CatalogError> for AdapterError {
     fn from(e: mz_catalog::durable::CatalogError) -> Self {
-        catalog::Error::from(e).into()
+        mz_catalog::memory::error::Error::from(e).into()
     }
 }
 
@@ -762,7 +760,7 @@ impl From<ExplainError> for AdapterError {
 
 impl From<mz_sql::catalog::CatalogError> for AdapterError {
     fn from(e: mz_sql::catalog::CatalogError) -> AdapterError {
-        AdapterError::Catalog(catalog::Error::from(e))
+        AdapterError::Catalog(mz_catalog::memory::error::Error::from(e))
     }
 }
 

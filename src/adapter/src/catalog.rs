@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// TODO(jkosh44) Move to mz_catalog crate.
+
 //! Persistent metadata storage for the coordinator.
 
 use std::borrow::Cow;
@@ -31,12 +33,11 @@ use mz_catalog::builtin::{
 use mz_catalog::durable::{
     test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig, Transaction,
 };
-pub use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
-pub use mz_catalog::memory::objects::{
+use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
+use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
-    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
-    Table, Type, View,
+    ClusterVariant, Connection, DataSourceDesc, Database, Func, Index, MaterializedView, Role,
+    Schema, Sink, Source, Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -88,6 +89,7 @@ use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnectio
 use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 
+// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config, StateConfig};
 pub use crate::catalog::open::BuiltinMigrationMetadata;
