@@ -56,8 +56,7 @@ we can deliver along the way.
 
 The choice of splitting the design into a logical and a physical architecture
 is meant to mirror [architecture-db.md](./../platform/architecture-db.md), but
-we are focusing on the ADAPTER part, which is somewhat under-specified in that
-earlier document.
+we are focusing on the ADAPTER.
 
 It is interesting to note that the proposed design is very much in line with
 the design principles laid out a while ago in
