@@ -25,6 +25,7 @@ use mz_catalog::builtin::{
     MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
+use mz_catalog::memory::objects::Table;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
@@ -345,77 +346,78 @@ impl CatalogState {
         let owner_id = entry.owner_id();
         let privileges_row = self.pack_privilege_array_row(entry.privileges());
         let privileges = privileges_row.unpack_first();
-        let mut updates = match entry.item() {
-            CatalogItem::Log(_) => self.pack_source_update(
-                id, oid, schema_id, name, "log", None, None, None, None, owner_id, privileges, diff,
-            ),
-            CatalogItem::Index(index) => {
-                self.pack_index_update(id, oid, name, owner_id, index, diff)
-            }
-            CatalogItem::Table(_) => {
-                self.pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff)
-            }
-            CatalogItem::Source(source) => {
-                let source_type = source.source_type();
-                let connection_id = source.connection_id();
-                let envelope = source.envelope();
-                let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
+        let mut updates =
+            match entry.item() {
+                CatalogItem::Log(_) => self.pack_source_update(
+                    id, oid, schema_id, name, "log", None, None, None, None, owner_id, privileges,
+                    diff, None,
+                ),
+                CatalogItem::Index(index) => {
+                    self.pack_index_update(id, oid, name, owner_id, index, diff)
+                }
+                CatalogItem::Table(table) => self
+                    .pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff, table),
+                CatalogItem::Source(source) => {
+                    let source_type = source.source_type();
+                    let connection_id = source.connection_id();
+                    let envelope = source.envelope();
+                    let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
 
-                let mut updates = self.pack_source_update(
-                    id,
-                    oid,
-                    schema_id,
-                    name,
-                    source_type,
-                    connection_id,
-                    self.get_storage_object_size(id),
-                    envelope,
-                    cluster_id.as_deref(),
-                    owner_id,
-                    privileges,
-                    diff,
-                );
+                    let mut updates = self.pack_source_update(
+                        id,
+                        oid,
+                        schema_id,
+                        name,
+                        source_type,
+                        connection_id,
+                        self.get_storage_object_size(id),
+                        envelope,
+                        cluster_id.as_deref(),
+                        owner_id,
+                        privileges,
+                        diff,
+                        source.create_sql.as_ref(),
+                    );
 
-                updates.extend(match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.connection {
-                        GenericSourceConnection::Postgres(postgres) => {
-                            self.pack_postgres_source_update(id, postgres, diff)
-                        }
-                        GenericSourceConnection::Kafka(kafka) => {
-                            self.pack_kafka_source_update(id, kafka, diff)
+                    updates.extend(match &source.data_source {
+                        DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.connection {
+                            GenericSourceConnection::Postgres(postgres) => {
+                                self.pack_postgres_source_update(id, postgres, diff)
+                            }
+                            GenericSourceConnection::Kafka(kafka) => {
+                                self.pack_kafka_source_update(id, kafka, diff)
+                            }
+                            _ => vec![],
+                        },
+                        DataSourceDesc::Webhook { .. } => {
+                            vec![self.pack_webhook_source_update(id, diff)]
                         }
                         _ => vec![],
-                    },
-                    DataSourceDesc::Webhook { .. } => {
-                        vec![self.pack_webhook_source_update(id, diff)]
-                    }
-                    _ => vec![],
-                });
+                    });
 
-                updates
-            }
-            CatalogItem::View(view) => {
-                self.pack_view_update(id, oid, schema_id, name, owner_id, privileges, view, diff)
-            }
-            CatalogItem::MaterializedView(mview) => self.pack_materialized_view_update(
-                id, oid, schema_id, name, owner_id, privileges, mview, diff,
-            ),
-            CatalogItem::Sink(sink) => {
-                self.pack_sink_update(id, oid, schema_id, name, owner_id, sink, diff)
-            }
-            CatalogItem::Type(ty) => {
-                self.pack_type_update(id, oid, schema_id, name, owner_id, privileges, ty, diff)
-            }
-            CatalogItem::Func(func) => {
-                self.pack_func_update(id, schema_id, name, owner_id, func, diff)
-            }
-            CatalogItem::Secret(_) => {
-                self.pack_secret_update(id, oid, schema_id, name, owner_id, privileges, diff)
-            }
-            CatalogItem::Connection(connection) => self.pack_connection_update(
-                id, oid, schema_id, name, owner_id, privileges, connection, diff,
-            ),
-        };
+                    updates
+                }
+                CatalogItem::View(view) => self
+                    .pack_view_update(id, oid, schema_id, name, owner_id, privileges, view, diff),
+                CatalogItem::MaterializedView(mview) => self.pack_materialized_view_update(
+                    id, oid, schema_id, name, owner_id, privileges, mview, diff,
+                ),
+                CatalogItem::Sink(sink) => {
+                    self.pack_sink_update(id, oid, schema_id, name, owner_id, sink, diff)
+                }
+                CatalogItem::Type(ty) => {
+                    self.pack_type_update(id, oid, schema_id, name, owner_id, privileges, ty, diff)
+                }
+                CatalogItem::Func(func) => {
+                    self.pack_func_update(id, schema_id, name, owner_id, func, diff)
+                }
+                CatalogItem::Secret(_) => {
+                    self.pack_secret_update(id, oid, schema_id, name, owner_id, privileges, diff)
+                }
+                CatalogItem::Connection(connection) => self.pack_connection_update(
+                    id, oid, schema_id, name, owner_id, privileges, connection, diff,
+                ),
+            };
 
         if !entry.item().is_temporary() {
             // Populate or clean up the `mz_object_dependencies` table.
@@ -466,7 +468,16 @@ impl CatalogState {
         owner_id: &RoleId,
         privileges: Datum,
         diff: Diff,
+        table: &Table,
     ) -> Vec<BuiltinTableUpdate> {
+        let redacted = table.create_sql.as_ref().map(|create_sql| {
+            mz_sql::parse::parse(create_sql)
+                .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
+                .into_element()
+                .ast
+                .to_ast_string_redacted()
+        });
+
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_TABLES),
             row: Row::pack_slice(&[
@@ -476,6 +487,16 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                if let Some(create_sql) = &table.create_sql {
+                    Datum::String(create_sql)
+                } else {
+                    Datum::Null
+                },
+                if let Some(redacted) = &redacted {
+                    Datum::String(redacted)
+                } else {
+                    Datum::Null
+                },
             ]),
             diff,
         }]
@@ -495,7 +516,15 @@ impl CatalogState {
         owner_id: &RoleId,
         privileges: Datum,
         diff: Diff,
+        create_sql: Option<&String>,
     ) -> Vec<BuiltinTableUpdate> {
+        let redacted = create_sql.map(|create_sql| {
+            let create_stmt = mz_sql::parse::parse(create_sql)
+                .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
+                .into_element()
+                .ast;
+            create_stmt.to_ast_string_redacted()
+        });
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SOURCES),
             row: Row::pack_slice(&[
@@ -510,6 +539,16 @@ impl CatalogState {
                 Datum::from(cluster_id),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                if let Some(create_sql) = create_sql {
+                    Datum::String(create_sql)
+                } else {
+                    Datum::Null
+                },
+                if let Some(redacted) = &redacted {
+                    Datum::String(redacted)
+                } else {
+                    Datum::Null
+                },
             ]),
             diff,
         }]
@@ -558,6 +597,10 @@ impl CatalogState {
         connection: &Connection,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
+        let create_stmt = mz_sql::parse::parse(&connection.create_sql)
+            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", connection.create_sql))
+            .into_element()
+            .ast;
         let mut updates = vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CONNECTIONS),
             row: Row::pack_slice(&[
@@ -579,6 +622,8 @@ impl CatalogState {
                 }),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                Datum::String(&connection.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
         }];
@@ -696,8 +741,8 @@ impl CatalogState {
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", view.create_sql))
             .into_element()
             .ast;
-        let query = match create_stmt {
-            Statement::CreateView(stmt) => stmt.definition.query,
+        let query = match &create_stmt {
+            Statement::CreateView(stmt) => &stmt.definition.query,
             _ => unreachable!(),
         };
 
@@ -716,6 +761,8 @@ impl CatalogState {
                 Datum::String(&query_string),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                Datum::String(&view.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
         }]
@@ -736,8 +783,8 @@ impl CatalogState {
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", mview.create_sql))
             .into_element()
             .ast;
-        let query = match create_stmt {
-            Statement::CreateMaterializedView(stmt) => stmt.query,
+        let query = match &create_stmt {
+            Statement::CreateMaterializedView(stmt) => &stmt.query,
             _ => unreachable!(),
         };
 
@@ -757,6 +804,8 @@ impl CatalogState {
                 Datum::String(&query_string),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                Datum::String(&mview.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
         }]
@@ -788,6 +837,11 @@ impl CatalogState {
             }
         };
 
+        let create_stmt = mz_sql::parse::parse(&sink.create_sql)
+            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", sink.create_sql))
+            .into_element()
+            .ast;
+
         let envelope = sink.envelope();
 
         updates.push(BuiltinTableUpdate {
@@ -803,6 +857,8 @@ impl CatalogState {
                 Datum::from(envelope),
                 Datum::String(&sink.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
+                Datum::String(&sink.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
         });
@@ -821,14 +877,15 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let mut updates = vec![];
 
-        let key_sqls = match mz_sql::parse::parse(&index.create_sql)
+        let create_stmt = mz_sql::parse::parse(&index.create_sql)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", index.create_sql))
             .into_element()
-            .ast
-        {
-            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => {
-                key_parts.expect("key_parts is filled in during planning")
-            }
+            .ast;
+
+        let key_sqls = match &create_stmt {
+            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts
+                .as_ref()
+                .expect("key_parts is filled in during planning"),
             _ => unreachable!(),
         };
 
@@ -841,6 +898,8 @@ impl CatalogState {
                 Datum::String(&index.on.to_string()),
                 Datum::String(&index.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
+                Datum::String(&index.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
             ]),
             diff,
         });
@@ -896,6 +955,14 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let mut out = vec![];
 
+        let redacted = typ.create_sql.as_ref().map(|create_sql| {
+            mz_sql::parse::parse(create_sql)
+                .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
+                .into_element()
+                .ast
+                .to_ast_string_redacted()
+        });
+
         out.push(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_TYPES),
             row: Row::pack_slice(&[
@@ -906,6 +973,16 @@ impl CatalogState {
                 Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                if let Some(create_sql) = &typ.create_sql {
+                    Datum::String(create_sql)
+                } else {
+                    Datum::Null
+                },
+                if let Some(redacted) = &redacted {
+                    Datum::String(redacted)
+                } else {
+                    Datum::Null
+                },
             ]),
             diff,
         });

@@ -102,6 +102,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 5  type  text
 6  owner_id  text
 7  privileges  mz_aclitem[]
+8  create_sql  text
+9  redacted_create_sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_databases' ORDER BY position
@@ -149,6 +151,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 4  on_id  text
 5  cluster_id  text
 6  owner_id  text
+7  create_sql  text
+8  redacted_create_sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_index_columns' ORDER BY position
@@ -199,6 +203,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 6  definition  text
 7  owner_id  text
 8  privileges  mz_aclitem[]
+9  create_sql  text
+10  redacted_create_sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_objects' ORDER BY position
@@ -282,6 +288,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 8  envelope_type  text
 9  cluster_id  text
 10  owner_id  text
+11  create_sql  text
+12  redacted_create_sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_sources' ORDER BY position
@@ -297,6 +305,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 9  cluster_id  text
 10  owner_id  text
 11  privileges  mz_aclitem[]
+12  create_sql  text
+13  redacted_create_sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_storage_usage' ORDER BY position
@@ -319,6 +329,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 4  name  text
 5  owner_id  text
 6  privileges  mz_aclitem[]
+7  create_sql  text
+8  redacted_create_sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_timezone_abbreviations' ORDER BY position
@@ -343,6 +355,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 5  category  text
 6  owner_id  text
 7  privileges  mz_aclitem[]
+8  create_sql  text
+9  redacted_create_sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_views' ORDER BY position
@@ -354,6 +368,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 5  definition  text
 6  owner_id  text
 7  privileges  mz_aclitem[]
+8  create_sql  text
+9  redacted_create_sql  text
 
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_catalog') ORDER BY object

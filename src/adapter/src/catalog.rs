@@ -1395,10 +1395,14 @@ impl Catalog {
                     // Since the catalog serializes the items using only their creation statement
                     // and context, we need to parse and rewrite the with options in that statement.
                     // (And then make any other changes to the source definition to match.)
-                    let mut stmt = mz_sql::parse::parse(&new_source.create_sql)
-                        .expect("invalid create sql persisted to catalog")
-                        .into_element()
-                        .ast;
+                    let mut stmt = mz_sql::parse::parse(
+                        &new_source
+                            .create_sql
+                            .expect("must exist for non-system sources"),
+                    )
+                    .expect("invalid create sql persisted to catalog")
+                    .into_element()
+                    .ast;
 
                     let create_stmt = match &mut stmt {
                         Statement::CreateSource(s) => s,
@@ -1432,7 +1436,7 @@ impl Catalog {
                     };
 
                     let create_sql = stmt.to_ast_string_stable();
-                    new_source.create_sql = create_sql;
+                    new_source.create_sql = Some(create_sql);
                     let source = CatalogEntry {
                         item: CatalogItem::Source(new_source.clone()),
                         ..(entry.clone())

@@ -815,7 +815,7 @@ impl CatalogState {
             mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
-                create_sql: table.create_sql,
+                create_sql: Some(table.create_sql),
                 desc: table.desc,
                 defaults: table.defaults,
                 conn_id: None,
@@ -829,7 +829,7 @@ impl CatalogState {
                 cluster_config,
                 ..
             }) => CatalogItem::Source(Source {
-                create_sql: source.create_sql,
+                create_sql: Some(source.create_sql),
                 data_source: match source.data_source {
                     mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
                         DataSourceDesc::ingestion(
@@ -941,7 +941,7 @@ impl CatalogState {
                 },
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
-                create_sql: typ.create_sql,
+                create_sql: Some(typ.create_sql),
                 desc: typ.inner.desc(&session_catalog)?,
                 details: CatalogTypeDetails {
                     array_id: None,

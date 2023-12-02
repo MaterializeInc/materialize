@@ -3133,6 +3133,27 @@ pub enum WithOptionValue<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if f.redacted() {
+            // When adding branches to this match statement, think about whether it is OK for us to collect
+            // the value as part of our telemetry. Check the data management policy to be sure!
+            match self {
+                WithOptionValue::Value(_) | WithOptionValue::Sequence(_) => {
+                    // These are redact-aware.
+                }
+                WithOptionValue::DataType(_)
+                | WithOptionValue::Item(_)
+                | WithOptionValue::UnresolvedItemName(_)
+                | WithOptionValue::ClusterReplicas(_) => {
+                    // These do not need redaction.
+                }
+                WithOptionValue::Secret(_)
+                | WithOptionValue::ConnectionKafkaBroker(_)
+                | WithOptionValue::Ident(_) => {
+                    f.write_str("'<REDACTED>'");
+                    return;
+                }
+            }
+        }
         match self {
             WithOptionValue::Sequence(values) => {
                 f.write_str("(");
@@ -3140,7 +3161,9 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_str(")");
             }
             WithOptionValue::Value(value) => f.write_node(value),
-            WithOptionValue::Ident(id) => f.write_node(id),
+            WithOptionValue::Ident(id) => {
+                f.write_node(id);
+            }
             WithOptionValue::DataType(typ) => f.write_node(typ),
             WithOptionValue::Secret(name) => {
                 f.write_str("SECRET ");
