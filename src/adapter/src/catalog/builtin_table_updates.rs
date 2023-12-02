@@ -52,6 +52,7 @@ use mz_storage_types::sources::{
     GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection,
 };
 
+// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{
     AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
     Database, DefaultPrivilegeObject, Func, Index, MaterializedView, Sink, Type, View,

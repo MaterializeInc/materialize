@@ -18,6 +18,9 @@ use fail::fail_point;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
+use mz_catalog::memory::objects::{
+    CatalogItem, Connection, DataSourceDesc, Index, MaterializedView, Sink,
+};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
@@ -44,7 +47,7 @@ use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
 use tracing::{event, warn, Level};
 
-use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, Op, Sink, TransactionResult};
+use crate::catalog::{CatalogState, Op, TransactionResult};
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
@@ -225,23 +228,20 @@ impl Coordinator {
                                 }
                             }
                         }
-                        CatalogItem::Sink(catalog::Sink { .. }) => {
+                        CatalogItem::Sink(Sink { .. }) => {
                             storage_sinks_to_drop.push(*id);
                         }
-                        CatalogItem::Index(catalog::Index { cluster_id, .. }) => {
+                        CatalogItem::Index(Index { cluster_id, .. }) => {
                             indexes_to_drop.push((*cluster_id, *id));
                         }
-                        CatalogItem::MaterializedView(catalog::MaterializedView {
-                            cluster_id,
-                            ..
-                        }) => {
+                        CatalogItem::MaterializedView(MaterializedView { cluster_id, .. }) => {
                             materialized_views_to_drop.push((*cluster_id, *id));
                         }
                         CatalogItem::View(_) => views_to_drop.push(*id),
                         CatalogItem::Secret(_) => {
                             secrets_to_drop.push(*id);
                         }
-                        CatalogItem::Connection(catalog::Connection { connection, .. }) => {
+                        CatalogItem::Connection(Connection { connection, .. }) => {
                             match connection {
                                 // SSH connections have an associated secret that should be dropped
                                 mz_storage_types::connections::Connection::Ssh(_) => {

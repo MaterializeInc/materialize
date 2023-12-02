@@ -13,6 +13,7 @@ use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{
     CreateReplicaConfig, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig,
@@ -31,7 +32,7 @@ use mz_sql::plan::{
 };
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 
-use crate::catalog::{ClusterConfig, ClusterVariant, ClusterVariantManaged, Op};
+use crate::catalog::Op;
 use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
@@ -535,7 +536,7 @@ impl Coordinator {
             options,
         }: AlterClusterPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use catalog::ClusterVariant::*;
+        use mz_catalog::memory::objects::ClusterVariant::*;
 
         let config = self.catalog.get_cluster(cluster_id).config.clone();
         let mut new_config = config.clone();

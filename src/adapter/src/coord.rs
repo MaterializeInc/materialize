@@ -83,7 +83,7 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
-use mz_catalog::memory::objects::CatalogEntry;
+use mz_catalog::memory::objects::{CatalogEntry, CatalogItem, Connection, DataSourceDesc, Source};
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -127,8 +127,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::catalog::{
-    self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, Connection, DataSourceDesc, Source,
+    self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
+    ClusterReplicaSizeMap,
 };
 use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -1134,7 +1134,7 @@ impl Coordinator {
         // express the entries' dependency graph.
         let mut entries_awaiting_dependencies: BTreeMap<
             GlobalId,
-            Vec<(catalog::CatalogEntry, Vec<GlobalId>)>,
+            Vec<(CatalogEntry, Vec<GlobalId>)>,
         > = BTreeMap::new();
 
         let mut loaded_items = BTreeSet::new();
@@ -1148,8 +1148,7 @@ impl Coordinator {
         //
         // This can likely be removed in the next version of Materialize
         // (v0.46).
-        let mut entries_awaiting_dependent: BTreeMap<GlobalId, Vec<catalog::CatalogEntry>> =
-            BTreeMap::new();
+        let mut entries_awaiting_dependent: BTreeMap<GlobalId, Vec<CatalogEntry>> = BTreeMap::new();
         let mut awaited_dependent_seen = BTreeSet::new();
 
         let mut unsorted_entries: VecDeque<_> = self

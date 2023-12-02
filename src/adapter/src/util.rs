@@ -291,10 +291,10 @@ impl ShouldHalt for AdapterError {
     }
 }
 
-impl ShouldHalt for crate::catalog::Error {
+impl ShouldHalt for mz_catalog::memory::error::Error {
     fn should_halt(&self) -> bool {
         match &self.kind {
-            crate::catalog::ErrorKind::Durable(e) => e.should_halt(),
+            mz_catalog::memory::error::ErrorKind::Durable(e) => e.should_halt(),
             _ => false,
         }
     }

@@ -26,6 +26,7 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
 
+// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::config::SystemParameterSyncConfig;
 
 /// Configures a catalog.

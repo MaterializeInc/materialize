@@ -50,6 +50,9 @@ use mz_sql::names::{
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::memory::objects::{
+    CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type, View,
+};
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, AlterOptionParameter, ExplainSinkSchemaPlan,
     Explainee, Index, IndexOption, MaterializedView, MutationKind, Params, Plan,
@@ -82,10 +85,7 @@ use tracing::instrument::WithSubscriber;
 use tracing::{event, warn, Level, Span};
 use tracing_core::callsite::rebuild_interest_cache;
 
-use crate::catalog::{
-    self, Catalog, CatalogItem, Cluster, ConnCatalog, Connection, DataSourceDesc,
-    UpdatePrivilegeVariant,
-};
+use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{
@@ -137,7 +137,7 @@ struct DropOps {
 // A bundle of values returned from create_source_inner
 struct CreateSourceInner {
     ops: Vec<catalog::Op>,
-    sources: Vec<(GlobalId, catalog::Source)>,
+    sources: Vec<(GlobalId, Source)>,
     if_not_exists_ids: BTreeMap<GlobalId, QualifiedItemName>,
 }
 
@@ -209,8 +209,7 @@ impl Coordinator {
                 }
             }
 
-            let source =
-                catalog::Source::new(source_id, plan, cluster_id, resolved_ids, None, false);
+            let source = Source::new(source_id, plan, cluster_id, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,
@@ -309,8 +308,9 @@ impl Coordinator {
 
                 Ok(ExecuteResponse::CreatedSource)
             }
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
             })) if if_not_exists_ids.contains_key(&id) => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: if_not_exists_ids[&id].item.clone(),
@@ -450,8 +450,9 @@ impl Coordinator {
                 }
                 Ok(ExecuteResponse::CreatedConnection)
             }
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection),
             Err(err) => Err(err),
         }
@@ -473,8 +474,9 @@ impl Coordinator {
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::DatabaseAlreadyExists { name: plan.name });
                 Ok(ExecuteResponse::CreatedDatabase)
@@ -498,8 +500,9 @@ impl Coordinator {
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::SchemaAlreadyExists {
                     name: plan.schema_name,
@@ -546,7 +549,7 @@ impl Coordinator {
             None
         };
         let table_id = self.catalog_mut().allocate_user_id().await?;
-        let table = catalog::Table {
+        let table = Table {
             create_sql: table.create_sql,
             desc: table.desc,
             defaults: table.defaults,
@@ -621,8 +624,9 @@ impl Coordinator {
 
                 Ok(ExecuteResponse::CreatedTable)
             }
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session_mut()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -651,7 +655,7 @@ impl Coordinator {
 
         let id = self.catalog_mut().allocate_user_id().await?;
         let oid = self.catalog_mut().allocate_oid()?;
-        let secret = catalog::Secret {
+        let secret = Secret {
             create_sql: secret.create_sql,
         };
 
@@ -667,8 +671,9 @@ impl Coordinator {
 
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret),
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -720,7 +725,7 @@ impl Coordinator {
             ctx
         );
 
-        let catalog_sink = catalog::Sink {
+        let catalog_sink = Sink {
             create_sql: sink.create_sql,
             from: sink.from,
             connection: sink.connection,
@@ -759,8 +764,9 @@ impl Coordinator {
 
         match result {
             Ok(()) => {}
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -834,8 +840,9 @@ impl Coordinator {
         let ops = self.generate_view_ops(session, &plan, resolved_ids).await?;
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedView),
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: plan.name.item,
@@ -888,7 +895,7 @@ impl Coordinator {
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
         let optimized_expr = optimizer.optimize(raw_expr.clone())?;
 
-        let view = catalog::View {
+        let view = View {
             create_sql: view.create_sql.clone(),
             raw_expr,
             desc: RelationDesc::new(optimized_expr.typ(), view.column_names.clone()),
@@ -996,7 +1003,7 @@ impl Coordinator {
             id,
             oid: self.catalog_mut().allocate_oid()?,
             name: name.clone(),
-            item: CatalogItem::MaterializedView(catalog::MaterializedView {
+            item: CatalogItem::MaterializedView(mz_catalog::memory::objects::MaterializedView {
                 create_sql,
                 raw_expr,
                 optimized_expr: local_mir_plan.expr(),
@@ -1060,8 +1067,9 @@ impl Coordinator {
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -1116,7 +1124,7 @@ impl Coordinator {
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
 
-        let index = catalog::Index {
+        let index = mz_catalog::memory::objects::Index {
             create_sql,
             keys,
             on,
@@ -1166,8 +1174,9 @@ impl Coordinator {
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
             }
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -1186,7 +1195,7 @@ impl Coordinator {
         plan: plan::CreateTypePlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let typ = catalog::Type {
+        let typ = Type {
             create_sql: plan.typ.create_sql,
             desc: plan.typ.inner.desc(&self.catalog().for_session(session))?,
             details: CatalogTypeDetails {
@@ -2052,10 +2061,10 @@ impl Coordinator {
                         for WriteOp { id, .. } in &mut writes.iter() {
                             // Re-verify this id exists.
                             let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
-                                AdapterError::Catalog(catalog::Error {
-                                    kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
-                                        id.to_string(),
-                                    )),
+                                AdapterError::Catalog(mz_catalog::memory::error::Error {
+                                    kind: mz_catalog::memory::error::ErrorKind::Sql(
+                                        CatalogError::UnknownItem(id.to_string()),
+                                    ),
                                 })
                             })?;
                         }
@@ -4004,11 +4013,13 @@ impl Coordinator {
                         .expect("desc called on table")
                         .arity(),
                     None => {
-                        ctx.retire(Err(AdapterError::Catalog(catalog::Error {
-                            kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
-                                plan.id.to_string(),
-                            )),
-                        })));
+                        ctx.retire(Err(AdapterError::Catalog(
+                            mz_catalog::memory::error::Error {
+                                kind: mz_catalog::memory::error::ErrorKind::Sql(
+                                    CatalogError::UnknownItem(plan.id.to_string()),
+                                ),
+                            },
+                        )));
                         return;
                     }
                 };
@@ -4075,9 +4086,13 @@ impl Coordinator {
                 .expect("desc called on table")
                 .into_owned(),
             None => {
-                ctx.retire(Err(AdapterError::Catalog(catalog::Error {
-                    kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),
-                })));
+                ctx.retire(Err(AdapterError::Catalog(
+                    mz_catalog::memory::error::Error {
+                        kind: mz_catalog::memory::error::ErrorKind::Sql(CatalogError::UnknownItem(
+                            id.to_string(),
+                        )),
+                    },
+                )));
                 return;
             }
         };
@@ -4667,7 +4682,7 @@ impl Coordinator {
         let cur_entry = self.catalog().get_entry(&id);
         let cur_conn = cur_entry.connection().expect("known to be connection");
 
-        let inner = || -> Result<catalog::Connection, AdapterError> {
+        let inner = || -> Result<Connection, AdapterError> {
             // Parse statement.
             let create_conn_stmt = match mz_sql::parse::parse(&cur_conn.create_sql)
                 .expect("invalid create sql persisted to catalog")
@@ -4732,7 +4747,7 @@ impl Coordinator {
             let (_, new_deps) = mz_sql::names::resolve(&catalog, create_conn_stmt)
                 .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
 
-            Ok(catalog::Connection {
+            Ok(Connection {
                 create_sql: plan.connection.create_sql,
                 connection: plan.connection.connection,
                 resolved_ids: new_deps,
@@ -4802,7 +4817,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         id: GlobalId,
-        mut connection: catalog::Connection,
+        mut connection: Connection,
     ) -> Result<ExecuteResponse, AdapterError> {
         match &mut connection.connection {
             mz_storage_types::connections::Connection::Ssh(ref mut ssh) => {
@@ -5113,7 +5128,7 @@ impl Coordinator {
                     ))?;
                 }
 
-                let source = catalog::Source::new(
+                let source = Source::new(
                     id,
                     plan,
                     // Use the same cluster ID.
@@ -5320,7 +5335,7 @@ impl Coordinator {
                 // Asserting that we've done the right thing with dependencies
                 // here requires mocking out objects in the catalog, which is a
                 // large task for an operation we have to cover in tests anyway.
-                let source = catalog::Source::new(
+                let source = Source::new(
                     id,
                     plan,
                     // Use the same cluster ID.
