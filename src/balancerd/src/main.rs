@@ -97,6 +97,12 @@ struct Args {
 
     #[clap(flatten)]
     tracing: TracingCliArgs,
+
+    /// Stack size of tokio threads in bytes.
+    ///
+    /// Defaults to the global default in `mz_ore::runtime`.
+    #[clap(long, env = "TOKIO_WORKER_THREAD_STACK_SIZE")]
+    tokio_worker_thread_stack_size: Option<usize>,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -107,12 +113,7 @@ enum Command {
 fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
-    // Mirror the tokio Runtime configuration in our production binaries.
-    let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(ncpus_useful)
-        .enable_all()
-        .build()
+    let runtime = mz_ore::runtime::build_tokio_runtime(args.tokio_worker_thread_stack_size, None)
         .expect("Failed building the Runtime");
 
     let (_, _tracing_guard) = runtime

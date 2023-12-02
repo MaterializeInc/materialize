@@ -159,6 +159,8 @@ pub struct PersistConfig {
     pub pubsub_state_cache_shard_ref_channel_size: usize,
     /// Backoff after an established connection to Persist PubSub service fails.
     pub pubsub_reconnect_backoff: Duration,
+    /// Thread stack size of the `IsolatedRuntime`. Defaults the default in `mz_ore::runtime`.
+    pub isolated_runtime_thread_stack_size: Option<usize>,
 }
 
 impl PersistConfig {
@@ -241,6 +243,7 @@ impl PersistConfig {
             // options, where the first is always provided and the second is
             // conditionally enabled by the process orchestrator.
             hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned()),
+            isolated_runtime_thread_stack_size: None,
         }
     }
 

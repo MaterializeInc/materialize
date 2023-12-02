@@ -36,7 +36,7 @@ futures-util = "0.3"
 h2 = "0.3.13"
 hex = "0.4.3"
 mz-build-info = { path = "../build-info" }
-mz-ore = { path = "../ore", features = ["bytes_", "test", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "bytes_", "test", "tracing_"] }
 mz-persist = { path = "../persist" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }

@@ -500,6 +500,7 @@ impl Listeners {
                         secrets_reader_aws_region: None,
                         secrets_reader_aws_prefix: None,
                     },
+                    tokio_thread_stack_size: None,
                 },
                 secrets_controller,
                 cloud_resource_controller: None,

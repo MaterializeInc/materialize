@@ -174,7 +174,7 @@ fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
     let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
     let consensus = Arc::new(MemConsensus::default());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let isolated_runtime = Arc::new(IsolatedRuntime::new());
+    let isolated_runtime = Arc::new(IsolatedRuntime::new(None));
     let pubsub_sender = PubSubClientConnection::noop().sender;
     let shared_states = Arc::new(StateCache::new(
         &cfg,
@@ -206,7 +206,7 @@ async fn create_file_pg_client(
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus);
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let isolated_runtime = Arc::new(IsolatedRuntime::new());
+    let isolated_runtime = Arc::new(IsolatedRuntime::new(None));
     let pubsub_sender = PubSubClientConnection::noop().sender;
     let shared_states = Arc::new(StateCache::new(
         &cfg,
@@ -241,7 +241,7 @@ async fn create_s3_pg_client(
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus);
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let isolated_runtime = Arc::new(IsolatedRuntime::new());
+    let isolated_runtime = Arc::new(IsolatedRuntime::new(None));
     let pubsub_sender = PubSubClientConnection::noop().sender;
     let shared_states = Arc::new(StateCache::new(
         &cfg,

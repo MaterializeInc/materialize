@@ -1620,7 +1620,7 @@ mod tests {
             blob,
             consensus,
             metrics,
-            Arc::new(IsolatedRuntime::new()),
+            Arc::new(IsolatedRuntime::new(None)),
             Arc::new(StateCache::new_no_metrics()),
             pubsub_sender,
         )

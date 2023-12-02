@@ -159,6 +159,8 @@ pub struct ControllerConfig {
     pub persist_pubsub_url: String,
     /// Arguments for secrets readers.
     pub secrets_args: SecretsReaderCliArgs,
+    /// The tokio thread stack size configuration to pass through to clusterd.
+    pub tokio_thread_stack_size: Option<usize>,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -235,6 +237,9 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
     /// Arguments for secrets readers.
     pub secrets_args: SecretsReaderCliArgs,
+
+    /// The tokio thread stack size configuration to pass through to clusterd.
+    pub tokio_thread_stack_size: Option<usize>,
 }
 
 impl<T> Controller<T> {
@@ -419,6 +424,7 @@ where
             persist_pubsub_url: config.persist_pubsub_url,
             enable_persist_txn_tables,
             secrets_args: config.secrets_args,
+            tokio_thread_stack_size: config.tokio_thread_stack_size,
         }
     }
 }
