@@ -3110,7 +3110,7 @@ pub fn plan_create_cluster(
 
         let compute = plan_compute_replica_config(
             introspection_interval,
-            introspection_debugging.unwrap_or(false),
+            introspection_debugging.unwrap_or(true),
             idle_arrangement_merge_effort,
         )?;
 
@@ -3189,7 +3189,7 @@ generate_extracted_config!(
     (Disk, bool),
     (IdleArrangementMergeEffort, u32),
     (Internal, bool, Default(false)),
-    (IntrospectionDebugging, bool, Default(false)),
+    (IntrospectionDebugging, bool, Default(true)),
     (IntrospectionInterval, OptionalInterval),
     (Size, String),
     (StorageAddresses, Vec<String>),
