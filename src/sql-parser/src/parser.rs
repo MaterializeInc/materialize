@@ -582,7 +582,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(kw) if kw.is_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
-                    "expected expression, but found reserved keyword".into(),
+                    format!("expected expression, but found reserved keyword: {kw}"),
                 ));
             }
             Token::Keyword(id) => self.parse_qualified_identifier(id.into()),

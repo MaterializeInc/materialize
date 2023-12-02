@@ -370,7 +370,7 @@ SELECT count(* ORDER BY a)
 parse-statement
 SELECT array_agg(ORDER BY a)
 ----
-error: expected expression, but found reserved keyword
+error: expected expression, but found reserved keyword: ORDER
 SELECT array_agg(ORDER BY a)
                  ^
 

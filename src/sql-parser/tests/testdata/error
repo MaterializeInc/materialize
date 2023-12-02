@@ -21,7 +21,7 @@
 parse-statement
 SELECT 1, 2, FROM a
 ----
-error: expected expression, but found reserved keyword
+error: expected expression, but found reserved keyword: FROM
 SELECT 1, 2, FROM a
              ^
 
@@ -91,7 +91,7 @@ SELECT 1 WHERE 1 < ANY SELECT 2
 parse-statement
 SELECT 1 WHERE 1 < NONE (SELECT 2)
 ----
-error: expected expression, but found reserved keyword
+error: expected expression, but found reserved keyword: SELECT
 SELECT 1 WHERE 1 < NONE (SELECT 2)
                          ^
 
