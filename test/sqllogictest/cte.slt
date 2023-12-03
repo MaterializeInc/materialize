@@ -242,3 +242,10 @@ WITH outermost(x) AS (
          UNION SELECT * FROM innermost)
 )
 SELECT * FROM outermost ORDER BY 1;
+
+# test #23629
+query I colnames
+WITH count AS (VALUES (9)) SELECT count(*) FROM count;
+----
+count
+1
