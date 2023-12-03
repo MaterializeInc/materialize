@@ -237,7 +237,7 @@ impl RelationType {
             if col1.nullable && !col2.nullable {
                 return false;
             }
-            if col1.scalar_type != col2.scalar_type {
+            if !col1.scalar_type.base_eq(&col2.scalar_type) {
                 return false;
             }
         }

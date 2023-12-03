@@ -607,3 +607,14 @@ statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit
 WITH MUTUALLY RECURSIVE (RECURSION LIMIT 0)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
+
+# Test WMR coercion
+statement ok
+CREATE TABLE y (a BIGINT);
+
+query I
+WITH MUTUALLY RECURSIVE
+    bar(x NUMERIC) as (SELECT sum(a) FROM y)
+SELECT * FROM bar
+----
+NULL
