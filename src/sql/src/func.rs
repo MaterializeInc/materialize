@@ -3668,7 +3668,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "pretty_sql" => Scalar {
             params!(String, Int32) => BinaryFunc::PrettySql => String, oid::FUNC_PRETTY_SQL;
             params!(String) => Operation::unary(|_ecx, s| {
-                let width = HirScalarExpr::literal(Datum::Int32(100), ScalarType::Int32);
+                let width = HirScalarExpr::literal(Datum::Int32(mz_sql_pretty::DEFAULT_WIDTH.try_into().expect("must fit")), ScalarType::Int32);
                 Ok(s.call_binary(width, BinaryFunc::PrettySql))
             }) => String, oid::FUNC_PRETTY_SQL_NOWIDTH;
         },

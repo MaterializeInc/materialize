@@ -17,7 +17,6 @@ use std::fmt::Write;
 
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
-use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ObjectType, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
     SystemObjectType,
@@ -117,7 +116,7 @@ fn plan_show_create(
     if item.item_type() != expect_type {
         sql_bail!("{name} is not a {expect_type}");
     }
-    let create_sql = simplify_names(scx.catalog, item.create_sql())?;
+    let create_sql = pretty_and_simplify(scx.catalog, item.create_sql())?;
     Ok(ShowCreatePlan {
         id: item.id(),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -890,10 +889,13 @@ impl<'a> ShowColumnsSelect<'a> {
     }
 }
 
-fn simplify_names(catalog: &dyn SessionCatalog, sql: &str) -> Result<String, PlanError> {
+fn pretty_and_simplify(catalog: &dyn SessionCatalog, sql: &str) -> Result<String, PlanError> {
     let parsed = parse::parse(sql)?.into_element().ast;
     let (mut resolved, _) = names::resolve(catalog, parsed)?;
     let mut simplifier = NameSimplifier { catalog };
     simplifier.visit_statement_mut(&mut resolved);
-    Ok(resolved.to_ast_string_stable())
+    Ok(mz_sql_pretty::to_pretty(
+        &resolved,
+        mz_sql_pretty::DEFAULT_WIDTH,
+    ))
 }
