@@ -61,6 +61,10 @@ pub enum PgSourcePurificationError {
     ConnectionMissingPublication,
     #[error("PostgreSQL server has insufficient number of replication slots available")]
     InsufficientReplicationSlotsAvailable { count: usize },
+    #[error("server must have wal_level >= logical, but has {wal_level}")]
+    InsufficientWalLevel {
+        wal_level: mz_postgres_util::replication::WalLevel,
+    },
 }
 
 impl PgSourcePurificationError {

@@ -32,6 +32,26 @@ impl std::str::FromStr for WalLevel {
     }
 }
 
+impl std::fmt::Display for WalLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            WalLevel::Minimal => "minimal",
+            WalLevel::Replica => "replica",
+            WalLevel::Logical => "logical",
+        };
+
+        f.write_str(s)
+    }
+}
+
+#[mz_ore::test]
+fn test_wal_level_max() {
+    // Ensure `WalLevel::Logical` is the max among all levels.
+    for o in [WalLevel::Minimal, WalLevel::Replica, WalLevel::Logical] {
+        assert_eq!(WalLevel::Logical, WalLevel::Logical.max(o))
+    }
+}
+
 pub async fn get_wal_level(
     ssh_tunnel_manager: &SshTunnelManager,
     config: &Config,
