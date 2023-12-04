@@ -31,8 +31,9 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use differential_dataflow::consolidation::consolidate;
 use differential_dataflow::lattice::Lattice;
 use futures::{future, FutureExt};
 use mz_build_info::BuildInfo;
@@ -125,19 +126,16 @@ pub struct ComputeController<T> {
     stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
-    /// The compute controller metrics
+    /// The compute controller metrics.
     metrics: ComputeControllerMetrics,
+    /// Compute controller introspection support.
+    introspection: Introspection,
 
     /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
     /// `ActiveComputeController::process`.
     response_rx: crossbeam_channel::Receiver<ComputeControllerResponse<T>>,
     /// Response sender that's passed to new `Instance`s.
     response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
-    /// Receiver for introspection updates produced by `Instance`s, to be recorded on subsequent
-    /// calls to `ActiveComputeController::process`.
-    introspection_rx: crossbeam_channel::Receiver<IntrospectionUpdates>,
-    /// Introspection updates sender that's passed to new `Instance`s.
-    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
 }
 
 impl<T> ComputeController<T> {
@@ -148,7 +146,6 @@ impl<T> ComputeController<T> {
         metrics_registry: MetricsRegistry,
     ) -> Self {
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
-        let (introspection_tx, introspection_rx) = crossbeam_channel::unbounded();
 
         Self {
             instances: BTreeMap::new(),
@@ -160,10 +157,9 @@ impl<T> ComputeController<T> {
             stashed_replica_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
+            introspection: Introspection::new(),
             response_rx,
             response_tx,
-            introspection_rx,
-            introspection_tx,
         }
     }
 
@@ -285,7 +281,7 @@ where
                 self.envd_epoch,
                 self.metrics.for_instance(id),
                 self.response_tx.clone(),
-                self.introspection_tx.clone(),
+                self.introspection.tx.clone(),
             ),
         );
 
@@ -348,10 +344,6 @@ where
             // We have responses waiting to be processed.
             return;
         }
-        if !self.introspection_rx.is_empty() {
-            // We have introspection updates waiting to be processed.
-            return;
-        }
         if self.instances.values().any(|i| i.wants_processing()) {
             // An instance requires processing.
             return;
@@ -369,17 +361,22 @@ where
             .instances
             .iter_mut()
             .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
+        let receives = future::select_all(receives);
 
-        let ((instance_id, result), _index, _remaining) = future::select_all(receives).await;
-        match result {
-            Ok((replica_id, resp)) => {
-                self.stashed_replica_response = Some((instance_id, replica_id, resp));
-            }
-            Err(_) => {
-                // There is nothing to do here. `recv` has already added the failed replica to
-                // `instance.failed_replicas`, so it will be rehydrated in the next call to
-                // `ActiveComputeController::process`.
-            }
+        tokio::select! {
+             ((instance_id, result), _index, _remaining) = receives => {
+                match result {
+                    Ok((replica_id, resp)) => {
+                        self.stashed_replica_response = Some((instance_id, replica_id, resp));
+                    }
+                    Err(_) => {
+                        // There is nothing to do here. `recv` has already added the failed replica to
+                        // `instance.failed_replicas`, so it will be rehydrated in the next call to
+                        // `ActiveComputeController::process`.
+                    }
+                }
+            },
+            () = self.introspection.sleep() => (),
         }
     }
 
@@ -617,7 +614,7 @@ where
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn record_introspection_updates(&mut self) {
-        for (type_, updates) in self.compute.introspection_rx.try_iter() {
+        for (type_, updates) in self.compute.introspection.updates_for_recording() {
             self.storage
                 .record_introspection_updates(type_, updates)
                 .await;
@@ -732,5 +729,64 @@ impl<T: Timestamp> CollectionState<T> {
         let mut state = Self::new(since, Vec::new(), Vec::new());
         state.log_collection = true;
         state
+    }
+}
+
+/// Compute controller introspection support.
+struct Introspection {
+    /// Receiver for introspection updates produced by `Instance`s.
+    rx: crossbeam_channel::Receiver<IntrospectionUpdates>,
+    /// Introspection updates sender that's passed to new `Instance`s.
+    tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    /// Time when introspection updates were last recorded.
+    last_recording: Instant,
+    /// Amount of time to sleep between recordings.
+    sleep_time: Duration,
+}
+
+impl Introspection {
+    fn new() -> Self {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        Self {
+            tx,
+            rx,
+            last_recording: Instant::now(),
+            sleep_time: Duration::from_secs(1),
+        }
+    }
+
+    /// Whether we are ready to record introspection updates.
+    fn ready_for_recording(&self) -> bool {
+        let updates_available = !self.rx.is_empty();
+        let time_elapsed = self.last_recording.elapsed() > self.sleep_time;
+        updates_available && time_elapsed
+    }
+
+    /// Sleep until it is time to record introspection updates.
+    async fn sleep(&self) {
+        while !self.ready_for_recording() {
+            tokio::time::sleep(self.sleep_time).await;
+        }
+    }
+
+    /// Return ready introspection updates for recording.
+    fn updates_for_recording(&mut self) -> impl Iterator<Item = IntrospectionUpdates> {
+        // We could return the contents of `self.rx` directly here, but to reduce the pressure on
+        // persist we spend some effort consolidating first.
+        let mut updates_by_type = BTreeMap::new();
+
+        if self.ready_for_recording() {
+            for (type_, updates) in self.rx.try_iter() {
+                updates_by_type
+                    .entry(type_)
+                    .or_insert_with(Vec::new)
+                    .extend(updates);
+            }
+            for updates in updates_by_type.values_mut() {
+                consolidate(updates);
+            }
+        }
+
+        updates_by_type.into_iter()
     }
 }
