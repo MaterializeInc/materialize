@@ -114,7 +114,7 @@ impl FronteggMockServer {
         roles: BTreeMap<String, Vec<String>>,
         now: NowFn,
         expires_in_secs: i64,
-        latency_secs: Option<u64>,
+        latency: Option<Duration>,
     ) -> Result<FronteggMockServer, anyhow::Error> {
         let (role_updates_tx, role_updates_rx) = unbounded_channel();
         let refreshes = Arc::new(Mutex::new(0u64));
@@ -128,7 +128,7 @@ impl FronteggMockServer {
             role_updates_rx: Arc::new(Mutex::new(role_updates_rx)),
             now,
             expires_in_secs,
-            latency_secs,
+            latency,
             refresh_tokens: Arc::new(Mutex::new(BTreeMap::new())),
             refreshes: Arc::clone(&refreshes),
             enable_refresh: Arc::clone(&enable_refresh),
@@ -165,8 +165,8 @@ impl FronteggMockServer {
 
     async fn handle(context: Context, req: Request<Body>) -> Result<Response<Body>, Infallible> {
         // In some cases we want to add latency to test de-duplicating results.
-        if let Some(latency) = context.latency_secs {
-            tokio::time::sleep(Duration::from_secs(latency)).await;
+        if let Some(latency) = context.latency {
+            tokio::time::sleep(latency).await;
         }
 
         let (parts, body) = req.into_parts();
@@ -268,7 +268,7 @@ struct Context {
     role_updates_rx: Arc<Mutex<UnboundedReceiver<(String, Vec<String>)>>>,
     now: NowFn,
     expires_in_secs: i64,
-    latency_secs: Option<u64>,
+    latency: Option<Duration>,
     // Uuid -> email
     refresh_tokens: Arc<Mutex<BTreeMap<String, String>>>,
     refreshes: Arc<Mutex<u64>>,
