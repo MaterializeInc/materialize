@@ -29,7 +29,6 @@ use mz_compute_types::plan::Plan;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
-use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
@@ -40,8 +39,10 @@ use mz_repr::{ColumnType, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::StatsCursor;
+use mz_timely_util::builder_async::{OperatorBuilder, PressOnDropButton};
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
+use timely::dataflow::scopes::Child;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
@@ -360,18 +361,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 PendingPeek::index(peek, trace_bundle)
             }
             PeekTarget::Persist { metadata, .. } => {
-                let active_worker = {
-                    // Choose the worker that does the actual peek arbitrarily but consistently.
-                    let chosen_index =
-                        usize::cast_from(peek.uuid.hashed()) % self.timely_worker.peers();
-                    chosen_index == self.timely_worker.index()
-                };
                 let metadata = metadata.clone();
                 PendingPeek::persist(
                     peek,
                     Arc::clone(&self.compute_state.persist_clients),
                     metadata,
-                    active_worker,
+                    self.timely_worker,
                 )
             }
         };
@@ -702,40 +697,64 @@ impl PendingPeek {
         })
     }
 
-    fn persist(
+    fn persist<A: Allocate>(
         peek: Peek,
         persist_clients: Arc<PersistClientCache>,
         metadata: CollectionMetadata,
-        active_worker: bool,
+        timely_worker: &mut TimelyWorker<A>,
     ) -> Self {
+        let active_worker = {
+            // Choose the worker that does the actual peek arbitrarily but consistently.
+            let chosen_index = usize::cast_from(peek.uuid.hashed()) % timely_worker.peers();
+            chosen_index == timely_worker.index()
+        };
+
         let (result_tx, result_rx) = oneshot::channel();
         let timestamp = peek.timestamp;
         let mfp_plan = peek.map_filter_project.clone();
         let max_results_needed = peek.finishing.limit.unwrap_or(usize::MAX) + peek.finishing.offset;
 
-        let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {
-            let start = Instant::now();
-            let result = if active_worker {
-                PersistPeek::do_peek(
-                    &persist_clients,
-                    metadata,
-                    timestamp,
-                    mfp_plan,
-                    max_results_needed,
-                )
-                .await
-            } else {
-                Ok(vec![])
-            };
-            let result = match result {
-                Ok(rows) => PeekResponse::Rows(rows),
-                Err(e) => PeekResponse::Error(e.to_string()),
-            };
-            let _ = result_tx.send((result, start.elapsed()));
-        });
+        let button =
+            timely_worker.dataflow_named("Dataflow: persist peek", |scope: &mut Child<_, ()>| {
+                let builder = OperatorBuilder::new("persist peek".to_string(), scope.clone());
+                let token = builder.build(move |capabilities| async move {
+                    // Run the actual Persist logic in a task to make sure the future is driven
+                    // even when timely is slow.
+                    let task = mz_ore::task::spawn(|| "persist::peek", async move {
+                        let start = Instant::now();
+                        let result = if active_worker {
+                            PersistPeek::do_peek(
+                                &persist_clients,
+                                metadata,
+                                timestamp,
+                                mfp_plan,
+                                max_results_needed,
+                            )
+                            .await
+                        } else {
+                            Ok(vec![])
+                        };
+                        let result = match result {
+                            Ok(rows) => PeekResponse::Rows(rows),
+                            Err(e) => PeekResponse::Error(e.to_string()),
+                        };
+                        // Send failures mean the peek has been cancelled;
+                        // no special handling needed.
+                        let _ = result_tx.send((result, start.elapsed()));
+                    })
+                    .abort_on_drop();
+
+                    // Errors here mean the task has been cancelled, typically
+                    // because MZ is shutting down, and do not need special handling.
+                    let _ = task.await;
+
+                    drop(capabilities)
+                });
+                token.press_on_drop()
+            });
         PendingPeek::Persist(PersistPeek {
             peek,
-            _abort_handle: task_handle.abort_on_drop(),
+            _drop_button: button,
             result: result_rx,
             span: tracing::Span::current(),
         })
@@ -764,7 +783,7 @@ pub struct PersistPeek {
     pub(crate) peek: Peek,
     /// A background task that's responsible for producing the peek results.
     /// If we're no longer interested in the results, we abort the task.
-    _abort_handle: AbortOnDropHandle<()>,
+    _drop_button: PressOnDropButton,
     /// The result of the background task, eventually.
     result: oneshot::Receiver<(PeekResponse, Duration)>,
     /// The `tracing::Span` tracking this peek's operation
