@@ -29,18 +29,15 @@ import subprocess
 import sys
 import time
 from collections import OrderedDict
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from functools import cache
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import IO, Any, cast
 
-import boto3
 import yaml
-from botocore.exceptions import ClientError, NoCredentialsError
 
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
-from materialize.elf import get_build_id
 from materialize.xcompile import Arch
 
 
@@ -68,20 +65,20 @@ class RepositoryDetails:
         coverage: Whether the repository has code coverage instrumentation
             enabled.
         cargo_workspace: The `cargo.Workspace` associated with the repository.
-        stable: Whether certain build artifacts (today, just debuginfo)
-            should be kept indefinitely.
-
     """
 
     def __init__(
-        self, root: Path, arch: Arch, release_mode: bool, coverage: bool, stable: bool
+        self,
+        root: Path,
+        arch: Arch,
+        release_mode: bool,
+        coverage: bool,
     ):
         self.root = root
         self.arch = arch
         self.release_mode = release_mode
         self.coverage = coverage
         self.cargo_workspace = cargo.Workspace(root)
-        self.stable = stable
 
     def cargo(
         self, subcommand: str, rustflags: list[str], channel: str | None = None
@@ -181,11 +178,8 @@ class PreImage:
 class Copy(PreImage):
     """A `PreImage` action which copies files from a directory.
 
-    The contents of the specified `source` directory are copied into the
-    `destination` directory. The `source` directory is relative to the
-    repository root. The `destination` directory is relative to the mzbuild
-    context. Files in the `source` directory are matched against the glob
-    specified by the `matching` argument.
+    See doc/developer/mzbuild.md for an explanation of the user-facing
+    parameters.
     """
 
     def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
@@ -210,168 +204,6 @@ class Copy(PreImage):
 
     def inputs(self) -> set[str]:
         return set(git.expand_globs(self.rd.root, f"{self.source}/{self.matching}"))
-
-
-class PSUploadSources(PreImage):
-    """A `PreImage` action which uploads a source tarball to S3."""
-
-    def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
-        super().__init__(rd, path)
-
-        bin = config.pop("bin", None)
-        if bin is None:
-            raise ValueError("mzbuild config is missing 'bin' argument")
-        self.bin_path = path / bin
-        self.out_path = path / "sources.tar.zstd"
-
-    def run(self) -> None:
-        super().run()
-        polar_signals_api_token = os.getenv("POLAR_SIGNALS_API_TOKEN")
-        if polar_signals_api_token is None or not self.rd.stable:
-            print(
-                "This is not a stable build or we don't have a PolarSignals token; not uploading sources"
-            )
-            return
-        with open(self.bin_path, "rb") as bin:
-            build_id = get_build_id(bin)
-
-        cmd1 = ["/usr/bin/llvm-dwarfdump", "--show-sources", self.bin_path]
-        cmd2 = [
-            "/usr/bin/tar",
-            "-cf",
-            self.out_path,
-            "--zstd",
-            "-T",
-            "-",
-            "--ignore-failed-read",
-        ]
-
-        p1 = subprocess.Popen(cmd1, stdout=subprocess.PIPE)
-        p2 = subprocess.Popen(cmd2, stdin=p1.stdout, stdout=subprocess.PIPE)
-
-        if p1.stdout is not None:
-            # This causes p1 to receive SIGPIPE if p2 exits early, like in the shell
-            p1.stdout.close()
-
-        for p in [p1, p2]:
-            if p.returncode != 0:
-                raise subprocess.CalledProcessError(p.returncode, p.args)
-
-        print("Attempting to upload sources to polar signals")
-        spawn.runv(
-            [
-                "/usr/local/bin/parca-debuginfo",
-                "upload",
-                "--store-address=grpc.polarsignals.com:443",
-                "--type=sources",
-                f"--build-id={build_id}",
-                self.out_path,
-            ],
-            cwd=self.rd.root,
-            env={"PARCA_DEBUGINFO_BEARER_TOKEN": polar_signals_api_token},
-        )
-
-    def inputs(self) -> set[str]:
-        return {self.bin_path}
-
-
-class S3UploadDebuginfo(PreImage):
-    """A `PreImage` action which uploads an executable and its debuginfo to S3.
-
-    The name of the executable is given by the `bin` property; its
-    debuginfo is expected to exist in the same directory, suffixed by
-    `.debug`.
-
-    If no AWS credentials are configured in the environment, no action
-    is taken.
-
-    Otherwise, the ELF file with the specified name is scanned to
-    get its build ID, then it is uploaded to the path
-    `buildid/BUILDID/executable` in the specified bucket.
-
-    If an ELF file called `NAME.debug` exists, and if its build ID
-    matches that of the main executable, it is uploaded to the path
-    `buildid/BUILDID/debuginfo`.
-
-    This structure is intended to match that served by `debuginfod`,
-    making it possible for `gdb` to find debuginfo when the
-    `DEBUGINFOD_URLS` environment variable is set to a URL at which
-    the bucket is accessible.
-
-    """
-
-    def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
-        super().__init__(rd, path)
-
-        bin = config.pop("bin", None)
-        if bin is None:
-            raise ValueError("mzbuild config is missing 'bin' argument")
-        self.exe_path = path / bin
-        self.dbg_path = self.exe_path.with_suffix(self.exe_path.suffix + ".debug")
-
-        self.bucket = str(config.pop("bucket", None))
-        if self.bucket is None:
-            raise ValueError("mzbuild config is missing 'bucket' argument")
-
-    def run(self) -> None:
-        super().run()
-        s3 = boto3.client("s3")
-        with open(self.exe_path, "rb") as exe, open(self.dbg_path, "rb") as dbg:
-            build_id = get_build_id(exe)
-            assert build_id.isalnum()
-            assert len(build_id) > 0
-            dbg_build_id = get_build_id(dbg)
-            assert build_id == dbg_build_id
-            exe.seek(0)
-            dbg.seek(0)
-
-            exe_object_name = f"buildid/{build_id}/executable"
-            dbg_object_name = f"buildid/{build_id}/debuginfo"
-            print(
-                f"Attempting to upload executable to s3://{self.bucket}/{exe_object_name}"
-            )
-            try:
-                s3.upload_fileobj(exe, self.bucket, exe_object_name)
-            except NoCredentialsError:
-                print("Failed to find S3 credentials; not uploading build.")
-                return
-            except ClientError as err:
-                if err.response["Error"]["Code"] == "AccessDenied":
-                    print("Incorrect S3 credentials; not uploading build.")
-                    return
-                else:
-                    raise err
-
-            print(
-                f"Attempting to upload debug info to s3://{self.bucket}/{dbg_object_name}"
-            )
-            s3.upload_fileobj(dbg, self.bucket, dbg_object_name)
-
-            ephemeral_str = "false" if self.rd.stable else "true"
-            for key in [exe_object_name, dbg_object_name]:
-                s3.put_object_tagging(
-                    Bucket=self.bucket,
-                    Key=key,
-                    Tagging={"TagSet": [{"Key": "ephemeral", "Value": ephemeral_str}]},
-                )
-
-            polar_signals_api_token = os.getenv("POLAR_SIGNALS_API_TOKEN")
-            if self.rd.stable and polar_signals_api_token is not None:
-                print("Attempting to upload debug info to polar signals")
-                spawn.runv(
-                    [
-                        "/usr/local/bin/parca-debuginfo",
-                        "upload",
-                        "--store-address=grpc.polarsignals.com:443",
-                        "--no-extract",
-                        self.dbg_path,
-                    ],
-                    cwd=self.rd.root,
-                    env={"PARCA_DEBUGINFO_BEARER_TOKEN": polar_signals_api_token},
-                )
-
-    def inputs(self) -> set[str]:
-        return {self.exe_path, self.dbg_path}
 
 
 class CargoPreImage(PreImage):
@@ -401,7 +233,11 @@ class CargoPreImage(PreImage):
 
 
 class CargoBuild(CargoPreImage):
-    """A pre-image action that builds individual binaries with Cargo."""
+    """A `PreImage` action that builds a single binary with Cargo.
+
+    See doc/developer/mzbuild.md for an explanation of the user-facing
+    parameters.
+    """
 
     def __init__(self, rd: RepositoryDetails, path: Path, config: dict[str, Any]):
         super().__init__(rd, path)
@@ -410,7 +246,6 @@ class CargoBuild(CargoPreImage):
         example = config.pop("example", [])
         self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
-        self.split_debuginfo = config.pop("split_debuginfo", False)
         self.extract = config.pop("extract", {})
         if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
@@ -466,29 +301,13 @@ class CargoBuild(CargoPreImage):
 
         def copy(exe: Path) -> None:
             exe_path = self.path / exe
-            dbg_path = exe_path.with_suffix(exe_path.suffix + ".debug")
             exe_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(self.rd.cargo_target_dir() / cargo_profile / exe, exe_path)
 
-            if self.split_debuginfo:
-                spawn.runv(
-                    [
-                        *self.rd.tool("objcopy"),
-                        exe_path,
-                        dbg_path,
-                        "--only-keep-debug",
-                    ],
-                    cwd=self.rd.root,
-                )
-
             if self.strip:
-                # The debug information is large enough that it slows
-                # down CI, since we're packaging these binaries up into Docker
-                # images and shipping them around.
-                #
-                # This option can be used in conjuction with
-                # `split_debuginfo` and the `s3-upload-debuginfo`
-                # preimage to save the info to an S3 bucket for future use.
+                # The debug information is large enough that it slows down CI,
+                # since we're packaging these binaries up into Docker images and
+                # shipping them around.
                 spawn.runv(
                     [*self.rd.tool("strip"), "--strip-debug", exe_path],
                     cwd=self.rd.root,
@@ -603,14 +422,6 @@ class Image:
                     self.pre_images.append(CargoBuild(self.rd, self.path, pre_image))
                 elif typ == "copy":
                     self.pre_images.append(Copy(self.rd, self.path, pre_image))
-                elif typ == "s3-upload-debuginfo":
-                    self.pre_images.append(
-                        S3UploadDebuginfo(self.rd, self.path, pre_image)
-                    )
-                elif typ == "ps-upload-sources":
-                    self.pre_images.append(
-                        PSUploadSources(self.rd, self.path, pre_image)
-                    )
                 else:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"
@@ -928,11 +739,15 @@ class DependencySet:
         for dep in deps_to_build:
             dep.build()
 
-    def ensure(self) -> None:
+    def ensure(self, post_build: Callable[[ResolvedImage], None] | None = None):
         """Ensure all publishable images in this dependency set exist on Docker
         Hub.
 
         Images are pushed using their spec as their tag.
+
+        Args:
+            post_build: A callback to invoke with each dependency that was built
+                locally.
         """
         deps_to_build = [dep for dep in self if not dep.is_published_if_necessary()]
         self._prepare_batch(deps_to_build)
@@ -940,6 +755,8 @@ class DependencySet:
         images_to_push = []
         for dep in deps_to_build:
             dep.build()
+            if post_build:
+                post_build(dep)
             if dep.publish:
                 images_to_push.append(dep.spec())
 
@@ -982,8 +799,6 @@ class Repository:
         arch: The CPU architecture to build for.
         release_mode: Whether to build the repository in release mode.
         coverage: Whether to enable code coverage instrumentation.
-        stable: Whether certain build artifacts (today, just debuginfo)
-            should be kept indefinitely.
 
     Attributes:
         images: A mapping from image name to `Image` for all contained images.
@@ -996,9 +811,8 @@ class Repository:
         arch: Arch = Arch.host(),
         release_mode: bool = True,
         coverage: bool = False,
-        stable: bool = False,
     ):
-        self.rd = RepositoryDetails(root, arch, release_mode, coverage, stable)
+        self.rd = RepositoryDetails(root, arch, release_mode, coverage)
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
         for path, dirs, files in os.walk(self.root, topdown=True):
