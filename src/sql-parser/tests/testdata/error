@@ -21,9 +21,9 @@
 parse-statement
 SELECT 1, 2, FROM a
 ----
-error: expected expression, but found reserved keyword: FROM
+error: invalid trailing comma in SELECT list
 SELECT 1, 2, FROM a
-             ^
+           ^
 
 parse-statement
 UPDATE t WHERE 1

@@ -6070,7 +6070,23 @@ impl<'a> Parser<'a> {
             // permits these for symmetry with zero column tables.
             Some(Token::Keyword(kw)) if kw.is_reserved() => vec![],
             Some(Token::Semicolon) | Some(Token::RParen) | None => vec![],
-            _ => self.parse_comma_separated(Parser::parse_select_item)?,
+            _ => {
+                let mut projection = vec![];
+                loop {
+                    projection.push(self.parse_select_item()?);
+                    if !self.consume_token(&Token::Comma) {
+                        break;
+                    }
+                    if self.peek_keyword(FROM) {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            "invalid trailing comma in SELECT list",
+                        );
+                    }
+                }
+                projection
+            }
         };
 
         // Note that for keywords to be properly handled here, they need to be
