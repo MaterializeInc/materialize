@@ -67,13 +67,14 @@ git_files() {
         | awk '$2 != 120000 {print $6}'
 }
 
-# try COMMAND [ARGS...]
+# try_now COMMAND [ARGS...]
 #
 # Runs COMMAND with the specified ARGS without aborting the script if the
 # command fails. See also try_last_failed and try_status_report.
-try() {
+try_now() {
     ci_collapsed_heading "$@"
 
+    try_last_bg=false
     # Try the command.
     if "$@"; then
         try_last_failed=false
@@ -87,12 +88,79 @@ try() {
     fi
     ((++ci_try_total))
 }
+try_failed=false
 try_last_failed=false
+try_last_bg=false
+
+# try COMMAND [ARGS...]
+#
+# Runs COMMAND with the specified ARGS without aborting the script if the
+# command fails.
+#
+# try will run commands in the background, saving their output and status.
+# try_wait forces pending commands to catch up. Output will be reassembled so
+# that no one knows the difference.
+#
+# If a command should run immediately, use try_now.
+try() {
+    try_last_bg=true
+    try_jobs+=("\$ $*")
+    output="$(mktemp)"
+    status="$(mktemp)"
+    try_job_output+=("$output")
+    "$@" >"$output" 2>&1 <&0 &
+    try_job_pid+=("$!")
+}
+declare -a try_jobs=()
+declare -a try_job_output=()
+declare -a try_job_pid=()
+
+# try_wait
+#
+# Waits for pending commands to catch up, showing their output and recording
+# their exit status.
+try_wait() {
+    i=0
+    num_jobs="${#try_jobs[@]}"
+    while ((i < num_jobs)); do
+        ci_collapsed_heading  "${try_jobs[$i]}"
+        if wait "${try_job_pid[$i]}"; then
+            try_last_failed=false
+            ((++ci_try_passed))
+        else
+            cat "${try_job_output[$i]}"
+            rm "${try_job_output[$i]}"
+            try_last_failed=true
+        fi
+        ((++ci_try_total))
+        ((++i))
+    done
+
+    unset try_jobs
+    unset try_job_output
+    unset try_job_pid
+    declare -a try_jobs=()
+    declare -a try_job_output=()
+    declare -a try_job_pid=()
+}
+
+# try_last_bg
+#
+# Reports whether the last command executed with `try_bg` or `try`.
+try_last_bg() {
+    $try_last_bg
+}
 
 # try_last_failed
 #
 # Reports whether the last command executed with `try` succeeded or failed.
+#
+# If there are many background commands, we must wait for execution to catch
+# up; try_wait does so.
 try_last_failed() {
+    if try_last_bg; then
+        try_wait
+    fi
     $try_last_failed
 }
 
