@@ -637,7 +637,7 @@ impl Coordinator {
 
         // Note: It's important that we keep the function call inside macro, this way we only run
         // the consistency checks if sort assertions are enabled.
-        mz_ore::soft_assert_eq!(
+        mz_ore::soft_assert_eq_no_log!(
             self.check_consistency(),
             Ok(()),
             "coordinator inconsistency detected"

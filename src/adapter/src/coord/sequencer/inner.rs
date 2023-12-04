@@ -5318,7 +5318,7 @@ impl Coordinator {
                     .ok_or(purification_err())?
                 {
                     ReferencedSubsources::SubsetTables(c) => {
-                        mz_ore::soft_assert!(
+                        mz_ore::soft_assert_no_log!(
                             {
                                 let current_references: BTreeSet<_> = c
                                     .iter()
@@ -5379,21 +5379,21 @@ impl Coordinator {
                         curr.extend(new);
                         curr.sort();
 
-                        mz_ore::soft_assert!(
+                        mz_ore::soft_assert_no_log!(
                             curr.iter()
                                 .all(|v| matches!(v, WithOptionValue::UnresolvedItemName(_))),
                             "all elements of text columns must be UnresolvedItemName, but got {:?}",
                             curr
                         );
 
-                        mz_ore::soft_assert!(
+                        mz_ore::soft_assert_no_log!(
                             curr.iter().duplicates().next().is_none(),
                             "TEXT COLUMN references must be unique among both sets, but got {:?}",
                             curr
                         );
                     }
                     (None, Some(new)) => {
-                        mz_ore::soft_assert!(
+                        mz_ore::soft_assert_no_log!(
                             match &new.value {
                                 Some(WithOptionValue::Sequence(v)) => v
                                     .iter()

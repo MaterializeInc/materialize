@@ -6620,7 +6620,7 @@ where
 }
 
 fn array_index<'a>(datums: &[Datum<'a>], offset: i64) -> Datum<'a> {
-    mz_ore::soft_assert!(offset == 0 || offset == 1, "offset must be either 0 or 1");
+    mz_ore::soft_assert_no_log!(offset == 0 || offset == 1, "offset must be either 0 or 1");
 
     let array = datums[0].unwrap_array();
     let dims = array.dims();

@@ -43,7 +43,7 @@ use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
-use mz_ore::soft_assert;
+use mz_ore::soft_assert_no_log;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
@@ -703,7 +703,7 @@ impl CatalogState {
             if !membership.contains(cur_id) {
                 membership.insert(cur_id.clone());
                 let role = self.get_role(cur_id);
-                soft_assert!(
+                soft_assert_no_log!(
                     !role.membership().keys().contains(id),
                     "circular membership exists in the catalog"
                 );

@@ -285,7 +285,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 &format!("SET statement_timeout = {}", config.params.pg_source_snapshot_statement_timeout.as_millis())
             ).await?;
 
-            mz_ore::soft_assert!{{
+            mz_ore::soft_assert_no_log!{{
                 let row = simple_query_opt(&client, "SHOW statement_timeout;")
                     .await?
                     .unwrap();

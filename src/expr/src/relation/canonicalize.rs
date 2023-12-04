@@ -360,7 +360,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
 
     if completed.iter().any(|p| {
         (p.is_literal_false() || p.is_literal_null()) &&
-        // This extra check is only needed if we determine that the soft_assert!
+        // This extra check is only needed if we determine that the soft-assert
         // at the top of this function would ever fail for a good reason.
         p.typ(column_types).scalar_type == ScalarType::Bool
     }) {

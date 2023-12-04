@@ -107,7 +107,7 @@ impl Ident {
     /// [`ident!`]: [`mz_sql_parser::ident`]
     pub fn new_unchecked<S: Into<String>>(value: S) -> Self {
         let s = value.into();
-        mz_ore::soft_assert!(s.len() <= Self::MAX_LENGTH);
+        mz_ore::soft_assert_no_log!(s.len() <= Self::MAX_LENGTH);
 
         Ident(s)
     }

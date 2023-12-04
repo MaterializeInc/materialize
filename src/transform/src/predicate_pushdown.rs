@@ -89,7 +89,7 @@ use mz_expr::{
     func, AggregateFunc, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr,
     VariadicFunc, RECURSION_LIMIT,
 };
-use mz_ore::soft_assert_eq;
+use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::{ColumnType, Datum, ScalarType};
 
@@ -1039,7 +1039,7 @@ impl PredicatePushdown {
                 }
             })?;
 
-            soft_assert_eq!(new_size, new_expr.size()?);
+            soft_assert_eq_no_log!(new_size, new_expr.size()?);
             if new_size <= size_limit {
                 Ok(Some(new_expr)) // We managed to stay within the limit.
             } else {

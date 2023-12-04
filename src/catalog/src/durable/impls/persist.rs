@@ -26,7 +26,9 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
-use mz_ore::{soft_assert, soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_or_log};
+use mz_ore::{
+    soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log, soft_assert_or_log,
+};
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
@@ -238,7 +240,7 @@ impl UnopenedPersistCatalogState {
             }
             txn
         } else {
-            soft_assert!(
+            soft_assert_no_log!(
                 catalog.snapshot.is_empty(),
                 "snapshot should not contain anything for an uninitialized catalog: {:?}",
                 catalog.snapshot
@@ -1235,7 +1237,7 @@ async fn snapshot_binary_inner(
         .snapshot_and_fetch(Antichain::from_elem(as_of))
         .await
         .expect("we have advanced the restart_as_of by the since");
-    soft_assert!(
+    soft_assert_no_log!(
         snapshot.iter().all(|(_, _, diff)| *diff == 1),
         "snapshot_and_fetch guarantees a consolidated result: {snapshot:?}"
     );

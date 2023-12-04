@@ -32,13 +32,18 @@
 //!
 //! Ore provides the following macros to make soft assertions:
 //!
-//!   * [`soft_assert`](crate::soft_assert)
-//!   * [`soft_assert_eq`](crate::soft_assert_eq)
-//!   * [`soft_assert_ne`](crate::soft_assert_ne)
 //!   * [`soft_assert_or_log`](crate::soft_assert_or_log)
 //!   * [`soft_assert_eq_or_log`](crate::soft_assert_eq_or_log)
 //!   * [`soft_assert_ne_or_log`](crate::soft_assert_ne_or_log)
 //!   * [`soft_panic_or_log`](crate::soft_panic_or_log)
+//!   * [`soft_assert_no_log`](crate::soft_assert_no_log)
+//!   * [`soft_assert_eq_no_log`](crate::soft_assert_eq_no_log)
+//!   * [`soft_assert_ne_no_log`](crate::soft_assert_ne_no_log)
+//!
+//! The `_or_log` variants should be used by default, as they allow us to find
+//! failed condition checks in production. The `_no_log` variants are silent
+//! in production and should only be used when performance considerations
+//! prohibit the use of the logging variants.
 //!
 //! Due to limitations in Rust, these macros are exported at the crate root.
 
@@ -73,7 +78,7 @@ pub static SOFT_ASSERTIONS: AtomicBool = AtomicBool::new(true);
 /// Soft assertions have a small runtime cost even when disabled. See
 /// [`ore::assert`](crate::assert#Soft-assertions) for details.
 #[macro_export]
-macro_rules! soft_assert {
+macro_rules! soft_assert_no_log {
     ($cond:expr $(, $($arg:tt)+)?) => {{
         if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
             assert!($cond$(, $($arg)+)?);
@@ -86,7 +91,7 @@ macro_rules! soft_assert {
 /// Soft assertions have a small runtime cost even when disabled. See
 /// [`ore::assert`](crate::assert#Soft-assertions) for details.
 #[macro_export]
-macro_rules! soft_assert_eq {
+macro_rules! soft_assert_eq_no_log {
     ($cond:expr, $($arg:tt)+) => {{
         if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
             assert_eq!($cond, $($arg)+);
@@ -99,7 +104,7 @@ macro_rules! soft_assert_eq {
 /// Soft assertions have a small runtime cost even when disabled. See
 /// [`ore::assert`](crate::assert#Soft-assertions) for details.
 #[macro_export]
-macro_rules! soft_assert_ne {
+macro_rules! soft_assert_ne_no_log {
     ($cond:expr, $($arg:tt)+) => {{
         if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
             assert_ne!($cond, $($arg)+);
