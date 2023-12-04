@@ -534,6 +534,7 @@ class ResolvedImage:
         Requires that the caller has already acquired all dependencies and
         prepared all `PreImage` actions via `PreImage.prepare_batch`.
         """
+        ui.header(f"Building {self.spec()}")
         spawn.runv(["git", "clean", "-ffdX", self.image.path])
 
         for pre_image in self.image.pre_images:
@@ -761,6 +762,7 @@ class DependencySet:
                 images_to_push.append(dep.spec())
 
         # Push all Docker images in parallel to minimize build time.
+        ui.header("Pushing images")
         pushes: list[subprocess.Popen] = []
         for image in images_to_push:
             # Piping through `cat` disables terminal control codes, and so the

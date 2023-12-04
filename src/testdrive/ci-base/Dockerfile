@@ -7,10 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM prod-base
+# This is a separate mzimage so that we don't have to re-install the apt things
+# every time we get a CI builder with a cold cache.
 
-COPY environmentd /usr/local/bin/
+MZFROM ubuntu-base
 
-USER materialize
-
-ENTRYPOINT ["tini", "--", "environmentd", "--sql-listen-addr=0.0.0.0:6875", "--http-listen-addr=0.0.0.0:6876"]
+RUN apt-get update && apt-get -qy install --no-install-recommends \
+    ca-certificates \
+    curl \
+    dnsutils \
+    iputils-ping \
+    postgresql-client \
+    ssh \
+    wait-for-it \
+    wget
