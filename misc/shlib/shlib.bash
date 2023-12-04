@@ -120,17 +120,22 @@ declare -a try_job_pid=()
 #
 # shellcheck disable=SC2120 # avoid misparse of num_jobs
 try_wait() {
+    echo TRY_WAIT $$
     i=0
     num_jobs="${#try_jobs[@]}"
     while ((i < num_jobs)); do
-        ci_collapsed_heading  "${try_jobs[$i]}"
+        ci_collapsed_heading "${try_jobs[$i]}"
         if wait "${try_job_pid[$i]}"; then
+            [ -f "${try_job_output[$i]}" ] && cat "${try_job_output[$i]}"
+            rm "${try_job_output[$i]}" >/dev/null 2>&1
             try_last_failed=false
             ((++ci_try_passed))
         else
             cat "${try_job_output[$i]}"
             rm "${try_job_output[$i]}"
             try_last_failed=true
+            # The command failed. Tell Buildkite to uncollapse this log section, so
+            # that the errors are immediately visible.
             in_ci && ci_uncollapse_current_section
             echo "^^^ 🚨 Failed: $*"
         fi
