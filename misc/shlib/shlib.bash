@@ -88,7 +88,6 @@ try_now() {
     fi
     ((++ci_try_total))
 }
-try_failed=false
 try_last_failed=false
 try_last_bg=false
 
@@ -106,7 +105,6 @@ try() {
     try_last_bg=true
     try_jobs+=("\$ $*")
     output="$(mktemp)"
-    status="$(mktemp)"
     try_job_output+=("$output")
     "$@" >"$output" 2>&1 <&0 & # STDIN redirect is necessary to propagate STDIN
     try_job_pid+=("$!")
@@ -119,6 +117,8 @@ declare -a try_job_pid=()
 #
 # Waits for pending commands to catch up, showing their output and recording
 # their exit status.
+#
+# shellcheck disable=SC2120 # avoid misparse of num_jobs
 try_wait() {
     i=0
     num_jobs="${#try_jobs[@]}"
@@ -131,6 +131,8 @@ try_wait() {
             cat "${try_job_output[$i]}"
             rm "${try_job_output[$i]}"
             try_last_failed=true
+            in_ci && ci_uncollapse_current_section
+            echo "^^^ 🚨 Failed: $*"
         fi
         ((++ci_try_total))
         ((++i))
@@ -166,6 +168,7 @@ try_last_failed() {
 # Exits the script with a code that reflects whether all commands executed with
 # `try` were successful.
 try_status_report() {
+    try_wait
     ci_uncollapsed_heading "Status report"
     echo "$ci_try_passed/$ci_try_total commands passed"
     if ((ci_try_passed != ci_try_total)); then
