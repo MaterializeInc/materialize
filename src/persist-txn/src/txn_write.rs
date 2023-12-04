@@ -11,12 +11,14 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use mz_ore::cast::CastFrom;
 use mz_persist_client::ShardId;
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use prost::Message;
@@ -85,146 +87,156 @@ where
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
-        let mut txns_upper = handle
-            .txns_write
-            .shared_upper()
-            .into_option()
-            .expect("txns shard should not be closed");
+        let op = &Arc::clone(&handle.metrics).commit;
+        op.run(async {
+            let mut txns_upper = handle
+                .txns_write
+                .shared_upper()
+                .into_option()
+                .expect("txns shard should not be closed");
 
-        loop {
-            // Validate that the involved data shards are all registered.
-            let () = handle.txns_cache.update_ge(&txns_upper).await;
-            for (data_id, _) in self.writes.iter() {
-                assert!(
-                    handle.txns_cache.registered_at(data_id, &commit_ts),
-                    "{} should be registered to commit at {:?}",
-                    data_id,
-                    commit_ts
-                );
-            }
+            loop {
+                // Validate that the involved data shards are all registered.
+                let () = handle.txns_cache.update_ge(&txns_upper).await;
+                for (data_id, _) in self.writes.iter() {
+                    assert!(
+                        handle.txns_cache.registered_at(data_id, &commit_ts),
+                        "{} should be registered to commit at {:?}",
+                        data_id,
+                        commit_ts
+                    );
+                }
 
-            // txns_upper is the (inclusive) minimum timestamp at which we
-            // could possibly write. If our requested commit timestamp is before
-            // that, then it's no longer possible to write and the caller needs
-            // to decide what to do.
-            if commit_ts < txns_upper {
+                // txns_upper is the (inclusive) minimum timestamp at which we
+                // could possibly write. If our requested commit timestamp is before
+                // that, then it's no longer possible to write and the caller needs
+                // to decide what to do.
+                if commit_ts < txns_upper {
+                    debug!(
+                        "commit_at {:?} mismatch current={:?}",
+                        commit_ts, txns_upper
+                    );
+                    return Err(txns_upper);
+                }
                 debug!(
-                    "commit_at {:?} mismatch current={:?}",
-                    commit_ts, txns_upper
+                    "commit_at {:?}: [{:?}, {:?}) begin",
+                    commit_ts,
+                    txns_upper,
+                    commit_ts.step_forward(),
                 );
-                return Err(txns_upper);
-            }
-            debug!(
-                "commit_at {:?}: [{:?}, {:?}) begin",
-                commit_ts,
-                txns_upper,
-                commit_ts.step_forward(),
-            );
 
-            let txn_batches_updates = FuturesUnordered::new();
-            for (data_id, updates) in self.writes.iter() {
-                let mut data_write = handle.datas.take_write(data_id).await;
-                let commit_ts = commit_ts.clone();
-                txn_batches_updates.push(async move {
-                    let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
-                    for (k, v, d) in updates.iter() {
-                        batch.add(k, v, &commit_ts, d).await.expect("valid usage");
-                    }
-                    let batch = batch
-                        .finish(Antichain::from_elem(commit_ts.step_forward()))
-                        .await
-                        .expect("valid usage");
-                    let batch = batch.into_transmittable_batch();
-                    let batch_raw = batch.encode_to_vec();
-                    debug!(
-                        "wrote {:.9} batch {} len={}",
-                        data_id.to_string(),
-                        batch_raw.hashed(),
-                        updates.len()
-                    );
-                    let update = C::encode(TxnsEntry::Append(
-                        *data_id,
-                        T::encode(&commit_ts),
-                        batch_raw,
-                    ));
-                    (data_write, batch, update)
-                })
-            }
-            let txn_batches_updates = txn_batches_updates.collect::<Vec<_>>().await;
+                let txn_batches_updates = FuturesUnordered::new();
+                for (data_id, updates) in self.writes.iter() {
+                    let mut data_write = handle.datas.take_write(data_id).await;
+                    let commit_ts = commit_ts.clone();
+                    txn_batches_updates.push(async move {
+                        let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
+                        for (k, v, d) in updates.iter() {
+                            batch.add(k, v, &commit_ts, d).await.expect("valid usage");
+                        }
+                        let batch = batch
+                            .finish(Antichain::from_elem(commit_ts.step_forward()))
+                            .await
+                            .expect("valid usage");
+                        let batch = batch.into_transmittable_batch();
+                        let batch_raw = batch.encode_to_vec();
+                        debug!(
+                            "wrote {:.9} batch {} len={}",
+                            data_id.to_string(),
+                            batch_raw.hashed(),
+                            updates.len()
+                        );
+                        let update = C::encode(TxnsEntry::Append(
+                            *data_id,
+                            T::encode(&commit_ts),
+                            batch_raw,
+                        ));
+                        (data_write, batch, update)
+                    })
+                }
+                let txn_batches_updates = txn_batches_updates.collect::<Vec<_>>().await;
 
-            let mut txns_updates = txn_batches_updates
-                .iter()
-                .map(|(_, _, (key, val))| ((key, val), &commit_ts, 1))
-                .collect::<Vec<_>>();
-            let apply_is_empty = txns_updates.is_empty();
-
-            // Tidy guarantees that anything in retractions has been applied,
-            // but races mean someone else may have written the retraction. If
-            // the following CaA goes through, then the `update_ge(txns_upper)`
-            // above means that anything the cache thinks is still unapplied
-            // but we know is applied indeed still needs to be retracted.
-            let filtered_retractions = handle
-                .read_cache()
-                .filter_retractions(&txns_upper, self.tidy.retractions.iter())
-                .map(|(batch_raw, (ts, data_id))| {
-                    C::encode(TxnsEntry::Append(*data_id, *ts, batch_raw.clone()))
-                })
-                .collect::<Vec<_>>();
-            txns_updates.extend(
-                filtered_retractions
+                let mut txns_updates = txn_batches_updates
                     .iter()
-                    .map(|(key, val)| ((key, val), &commit_ts, -1)),
-            );
+                    .map(|(_, _, (key, val))| ((key, val), &commit_ts, 1))
+                    .collect::<Vec<_>>();
+                let apply_is_empty = txns_updates.is_empty();
 
-            let res = crate::small_caa(
-                || "txns commit",
-                &mut handle.txns_write,
-                &txns_updates,
-                txns_upper.clone(),
-                commit_ts.step_forward(),
-            )
-            .await;
-            match res {
-                Ok(()) => {
-                    debug!(
-                        "commit_at {:?}: [{:?}, {:?}) success",
-                        commit_ts,
-                        txns_upper,
-                        commit_ts.step_forward(),
-                    );
-                    // The batch we wrote at commit_ts did commit. Mark it as
-                    // such to avoid a WARN in the logs.
-                    for (data_write, batch, _) in txn_batches_updates {
-                        let _ = data_write
-                            .batch_from_transmittable_batch(batch)
-                            .into_hollow_batch();
-                        handle.datas.put_write(data_write);
+                // Tidy guarantees that anything in retractions has been applied,
+                // but races mean someone else may have written the retraction. If
+                // the following CaA goes through, then the `update_ge(txns_upper)`
+                // above means that anything the cache thinks is still unapplied
+                // but we know is applied indeed still needs to be retracted.
+                let filtered_retractions = handle
+                    .read_cache()
+                    .filter_retractions(&txns_upper, self.tidy.retractions.iter())
+                    .map(|(batch_raw, (ts, data_id))| {
+                        C::encode(TxnsEntry::Append(*data_id, *ts, batch_raw.clone()))
+                    })
+                    .collect::<Vec<_>>();
+                txns_updates.extend(
+                    filtered_retractions
+                        .iter()
+                        .map(|(key, val)| ((key, val), &commit_ts, -1)),
+                );
+
+                let res = crate::small_caa(
+                    || "txns commit",
+                    &mut handle.txns_write,
+                    &txns_updates,
+                    txns_upper.clone(),
+                    commit_ts.step_forward(),
+                )
+                .await;
+                match res {
+                    Ok(()) => {
+                        debug!(
+                            "commit_at {:?}: [{:?}, {:?}) success",
+                            commit_ts,
+                            txns_upper,
+                            commit_ts.step_forward(),
+                        );
+                        // The batch we wrote at commit_ts did commit. Mark it as
+                        // such to avoid a WARN in the logs.
+                        for (data_write, batch, _) in txn_batches_updates {
+                            let batch = data_write
+                                .batch_from_transmittable_batch(batch)
+                                .into_hollow_batch();
+                            handle.metrics.batches.commit_count.inc();
+                            let commit_bytes = &handle.metrics.batches.commit_bytes;
+                            for part in batch.parts.iter() {
+                                commit_bytes.inc_by(u64::cast_from(part.encoded_size_bytes));
+                            }
+                            handle.datas.put_write(data_write);
+                        }
+                        return Ok(TxnApply {
+                            is_empty: apply_is_empty,
+                            commit_ts,
+                        });
                     }
-                    return Ok(TxnApply {
-                        is_empty: apply_is_empty,
-                        commit_ts,
-                    });
-                }
-                Err(new_txns_upper) => {
-                    assert!(txns_upper < new_txns_upper);
-                    txns_upper = new_txns_upper;
-                    // The batch we wrote at commit_ts didn't commit. At the
-                    // moment, we'll try writing it out again at some higher
-                    // commit_ts on the next loop around, so we're free to go
-                    // ahead and delete this one. When we do the TODO to
-                    // efficiently re-timestamp batches, this must be removed.
-                    for (data_write, batch, _) in txn_batches_updates {
-                        let () = data_write
-                            .batch_from_transmittable_batch(batch)
-                            .delete()
-                            .await;
-                        handle.datas.put_write(data_write);
+                    Err(new_txns_upper) => {
+                        handle.metrics.commit.retry_count.inc();
+                        assert!(txns_upper < new_txns_upper);
+                        txns_upper = new_txns_upper;
+                        // The batch we wrote at commit_ts didn't commit. At the
+                        // moment, we'll try writing it out again at some higher
+                        // commit_ts on the next loop around, so we're free to go
+                        // ahead and delete this one. When we do the TODO to
+                        // efficiently re-timestamp batches, this must be removed.
+                        for (data_write, batch, _) in txn_batches_updates {
+                            let () = data_write
+                                .batch_from_transmittable_batch(batch)
+                                .delete()
+                                .await;
+                            handle.datas.put_write(data_write);
+                        }
+                        let () = handle.txns_cache.update_ge(&txns_upper).await;
+                        continue;
                     }
-                    let () = handle.txns_cache.update_ge(&txns_upper).await;
-                    continue;
                 }
             }
-        }
+        })
+        .await
     }
 
     /// Merges the staged writes in the other txn into this one.

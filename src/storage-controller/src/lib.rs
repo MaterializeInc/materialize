@@ -103,6 +103,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
+use mz_persist_txn::metrics::Metrics as TxnMetrics;
 use mz_persist_txn::txn_read::TxnsRead;
 use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -335,6 +336,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Whether we have run `txns_init` yet (required before create_collections
     /// and the various flavors of append).
     txns_init_run: bool,
+    txns_metrics: Arc<TxnMetrics>,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
@@ -2161,6 +2163,7 @@ where
         let mut txns = TxnsHandle::<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>::open(
             T::minimum(),
             txns_client.clone(),
+            Arc::clone(&self.txns_metrics),
             *txns_id,
             Arc::new(RelationDesc::empty()),
             Arc::new(UnitSchema),
@@ -2335,6 +2338,7 @@ where
             PersistTxnTablesImpl::Eager => (true, false),
             PersistTxnTablesImpl::Lazy => (true, true),
         };
+        let txns_metrics = Arc::new(TxnMetrics::new(&metrics_registry));
         let (persist_table_worker, txns) = if persist_txn_tables {
             let txns_id = PERSIST_TXNS_SHARD
                 .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
@@ -2345,6 +2349,7 @@ where
             let txns = TxnsHandle::open(
                 T::minimum(),
                 txns_client.clone(),
+                Arc::clone(&txns_metrics),
                 txns_id,
                 Arc::new(RelationDesc::empty()),
                 Arc::new(UnitSchema),
@@ -2408,6 +2413,7 @@ where
             persist_read_handles: persist_handles::PersistReadWorker::new(),
             txns,
             txns_init_run: false,
+            txns_metrics,
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,

@@ -17,8 +17,10 @@ use std::sync::Arc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::fetch::LeasedBatchPart;
+use mz_persist_client::metrics::encode_ts_metric;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
@@ -27,6 +29,7 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, instrument};
 
+use crate::metrics::Metrics;
 use crate::txn_read::{DataListenNext, DataSnapshot};
 use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
@@ -555,6 +558,31 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             self.since_ts, self.datas_min_write_ts
         );
         debug_assert_eq!(self.validate(), Ok(()));
+    }
+
+    pub(crate) fn update_gauges(&self, metrics: &Metrics) {
+        metrics
+            .data_shard_count
+            .set(u64::cast_from(self.datas.len()));
+        metrics
+            .batches
+            .unapplied_count
+            .set(u64::cast_from(self.unapplied_batches.len()));
+        let unapplied_batches_bytes = self
+            .unapplied_batches
+            .values()
+            .map(|(_, x, _)| x.len())
+            .sum::<usize>();
+        metrics
+            .batches
+            .unapplied_bytes
+            .set(u64::cast_from(unapplied_batches_bytes));
+        metrics
+            .batches
+            .unapplied_min_ts
+            .set(encode_ts_metric(&Antichain::from_elem(
+                self.min_unapplied_ts().clone(),
+            )));
     }
 
     fn assert_only_data_id(&self, data_id: &ShardId) {
