@@ -214,7 +214,7 @@ def workflow_test_github_12251(c: Composition) -> None:
         CREATE TABLE IF NOT EXISTS panic_table (f1 TEXT);
         INSERT INTO panic_table VALUES ('forced panic');
         -- Crash loop the cluster with the table's index
-        INSERT INTO log_table SELECT mz_dangerous.mz_panic(f1) FROM panic_table;
+        INSERT INTO log_table SELECT mz_unsafe.mz_panic(f1) FROM panic_table;
         """
         )
     except ProgrammingError as e:
@@ -2142,7 +2142,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
                 COMPUTE ADDRESSES ['toxiproxy:2102'],
                 WORKERS 2));
 
-            > SELECT mz_dangerous.mz_sleep(1);
+            > SELECT mz_unsafe.mz_sleep(1);
             <null>
 
             $ http-request method=POST url=http://toxiproxy:8474/proxies/clusterd1/toxics content-type=application/json

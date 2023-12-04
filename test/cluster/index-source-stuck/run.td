@@ -35,7 +35,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 > DROP CLUSTER REPLICA cluster1.replica1;
 
 # Wait a bit to let Mz realize that
-> SELECT mz_dangerous.mz_sleep(3)
+> SELECT mz_unsafe.mz_sleep(3)
 <null>
 
 # Strict serializable is expected to fail, but serializable isolation should still be able to return (out of date) results

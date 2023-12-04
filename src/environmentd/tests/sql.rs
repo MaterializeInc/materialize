@@ -360,7 +360,7 @@ fn test_time() {
     // Test that `mz_sleep` causes a delay of at least the appropriate time.
     let start = Instant::now();
     client
-        .batch_execute("SELECT mz_dangerous.mz_sleep(0.3)")
+        .batch_execute("SELECT mz_unsafe.mz_sleep(0.3)")
         .unwrap();
     let elapsed = start.elapsed();
     assert!(
@@ -1549,7 +1549,7 @@ async fn test_github_12546() {
         .await
         .unwrap();
 
-    let query = client.query("SELECT mz_dangerous.mz_panic(a) FROM test", &[]);
+    let query = client.query("SELECT mz_unsafe.mz_panic(a) FROM test", &[]);
     let timeout = tokio::time::timeout(Duration::from_secs(2), query);
     // We expect the timeout to trigger because the query should be crashing the
     // compute instance.
@@ -2261,9 +2261,7 @@ fn test_idle_in_transaction_session_timeout() {
         .batch_execute("SET idle_in_transaction_session_timeout TO '50ms'")
         .unwrap();
     client.batch_execute("BEGIN").unwrap();
-    client
-        .query("SELECT mz_dangerous.mz_sleep(1)", &[])
-        .unwrap();
+    client.query("SELECT mz_unsafe.mz_sleep(1)", &[]).unwrap();
     client.query("SELECT 1", &[]).unwrap();
     client.batch_execute("COMMIT").unwrap();
 

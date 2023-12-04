@@ -51,7 +51,7 @@ $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestam
 
 # NOTE(benesch): grumble. This is not a particularly robust way to write this
 # test. It is, however, better than what was previously here, which used
-# `SELECT mz_dangerous.mz_sleep(2)`, which had the extremely suboptimal property
+# `SELECT mz_unsafe.mz_sleep(2)`, which had the extremely suboptimal property
 # of wedging up the coordinator for 2s, instead of just pausing the test for 2s.
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 

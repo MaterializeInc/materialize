@@ -23,7 +23,7 @@ use mz_catalog::builtin::{
     Builtin, DataSensitivity, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
     BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
-use mz_catalog::durable::initialize::MZ_DANGEROUS_SCHEMA_ID;
+use mz_catalog::durable::initialize::MZ_UNSAFE_SCHEMA_ID;
 use mz_catalog::durable::objects::{
     IntrospectionSourceIndex, SystemObjectDescription, SystemObjectMapping,
     SystemObjectUniqueIdentifier,
@@ -45,7 +45,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::to_datetime;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
-use mz_repr::namespaces::MZ_DANGEROUS_SCHEMA;
+use mz_repr::namespaces::MZ_UNSAFE_SCHEMA;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
@@ -312,14 +312,14 @@ impl Catalog {
             }
 
             // TODO(jkosh44) Remove after next release.
-            let contains_dangerous_schema = txn
+            let contains_unsafe_schema = txn
                 .get_schemas()
                 .filter_map(|schema| match schema.id {
                     SchemaId::User(_) => None,
                     SchemaId::System(id) => Some(id),
                 })
-                .any(|id| id == MZ_DANGEROUS_SCHEMA_ID);
-            if !contains_dangerous_schema {
+                .any(|id| id == MZ_UNSAFE_SCHEMA_ID);
+            if !contains_unsafe_schema {
                 let schema_privileges = vec![
                     rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema),
                     MzAclItem {
@@ -329,10 +329,10 @@ impl Catalog {
                     },
                     rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID),
                 ];
-                let schema_id = SchemaId::System(MZ_DANGEROUS_SCHEMA_ID);
+                let schema_id = SchemaId::System(MZ_UNSAFE_SCHEMA_ID);
                 txn.insert_system_schema(
                     schema_id,
-                    MZ_DANGEROUS_SCHEMA,
+                    MZ_UNSAFE_SCHEMA,
                     MZ_SYSTEM_ROLE_ID,
                     schema_privileges.clone(),
                 )?;

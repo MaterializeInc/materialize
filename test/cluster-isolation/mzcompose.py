@@ -55,7 +55,7 @@ ALTER SYSTEM SET enable_unstable_dependencies = true;
 
 > CREATE TABLE sleep_table (sleep INTEGER);
 
-> CREATE MATERIALIZED VIEW sleep_view AS SELECT mz_dangerous.mz_sleep(sleep) FROM sleep_table;
+> CREATE MATERIALIZED VIEW sleep_view AS SELECT mz_unsafe.mz_sleep(sleep) FROM sleep_table;
 
 > INSERT INTO sleep_table SELECT 1200 FROM generate_series(1,32)
 """,
@@ -80,7 +80,7 @@ ALTER SYSTEM SET enable_unstable_dependencies = true;
 
 > INSERT INTO panic_table VALUES ('forced panic');
 
-! INSERT INTO panic_table SELECT mz_dangerous.mz_panic(f1) FROM panic_table;
+! INSERT INTO panic_table SELECT mz_unsafe.mz_panic(f1) FROM panic_table;
 contains: statement timeout
 """,
         ),

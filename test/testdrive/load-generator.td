@@ -59,7 +59,7 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 8
 
 # Now make sure it doesn't change
-> SELECT mz_dangerous.mz_sleep(1)
+> SELECT mz_unsafe.mz_sleep(1)
 <null>
 
 > SELECT count(*) FROM counter
@@ -74,7 +74,7 @@ contains:invalid MAX CARDINALITY: invalid unsigned numeric value: invalid digit 
 > SELECT count(*) FROM counter3
 0
 
-> SELECT mz_dangerous.mz_sleep(1)
+> SELECT mz_unsafe.mz_sleep(1)
 <null>
 
 > SELECT count(*) FROM counter3

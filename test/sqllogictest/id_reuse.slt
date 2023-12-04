@@ -25,7 +25,7 @@ s2 pg_catalog
 u3 public
 s4 mz_internal
 s5 information_schema
-s6 mz_dangerous
+s6 mz_unsafe
 u7 foo
 
 statement ok
@@ -45,7 +45,7 @@ s2 pg_catalog
 u3 public
 s4 mz_internal
 s5 information_schema
-s6 mz_dangerous
+s6 mz_unsafe
 u8 bar
 
 statement ok

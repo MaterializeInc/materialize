@@ -16,4 +16,4 @@ pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
 pub const PG_CATALOG_SCHEMA: &str = "pg_catalog";
 pub const MZ_INTERNAL_SCHEMA: &str = "mz_internal";
 pub const INFORMATION_SCHEMA: &str = "information_schema";
-pub const MZ_DANGEROUS_SCHEMA: &str = "mz_dangerous";
+pub const MZ_UNSAFE_SCHEMA: &str = "mz_unsafe";

@@ -89,14 +89,14 @@ $ kafka-ingest format=avro topic=data partition=7 schema=${schema}
 
 # Sleep so that the views are not all created at the same time
 
-> SELECT mz_dangerous.mz_sleep(2);
+> SELECT mz_unsafe.mz_sleep(2);
 <null>
 
 > CREATE MATERIALIZED VIEW direct_view1b AS SELECT a + 0 AS a FROM direct_source1;
 
 > CREATE MATERIALIZED VIEW derived_view1a AS SELECT a + 0 AS a FROM direct_view1a;
 
-> SELECT mz_dangerous.mz_sleep(2);
+> SELECT mz_unsafe.mz_sleep(2);
 <null>
 
 > CREATE MATERIALIZED VIEW derived_view1b AS SELECT a + 0 AS a FROM direct_view1b;

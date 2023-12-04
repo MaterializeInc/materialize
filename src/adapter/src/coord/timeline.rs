@@ -628,7 +628,7 @@ impl Coordinator {
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog().get_mz_dangerous_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_mz_unsafe_schema_id().clone()),
             ),
         ];
 

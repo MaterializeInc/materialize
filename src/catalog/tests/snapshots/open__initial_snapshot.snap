@@ -517,7 +517,7 @@ Snapshot {
             ),
         }: SchemaValue {
             database_id: None,
-            name: "mz_dangerous",
+            name: "mz_unsafe",
             owner_id: Some(
                 RoleId {
                     value: Some(

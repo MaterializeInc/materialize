@@ -3491,7 +3491,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 CASE
                 -- We need to validate the name and privileges to return a proper error before
                 -- anything else.
-                WHEN mz_dangerous.mz_error_if_null(
+                WHEN mz_unsafe.mz_error_if_null(
                     (SELECT name FROM mz_clusters WHERE name = $2),
                     'error cluster \"' || $2 || '\" does not exist'
                 ) IS NULL
@@ -3846,7 +3846,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             CASE
                 WHEN $1 IS NULL THEN NULL
                 ELSE (
-                    SELECT mz_dangerous.mz_error_if_null(
+                    SELECT mz_unsafe.mz_error_if_null(
                         (
                             SELECT DISTINCT
                                 concat_ws(
@@ -3886,7 +3886,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     CASE
                         WHEN $1 IS NULL THEN NULL
                         WHEN pg_catalog.array_length(ident, 1) > 3
-                            THEN mz_dangerous.mz_error_if_null(
+                            THEN mz_unsafe.mz_error_if_null(
                                 NULL::pg_catalog.text[],
                                 'improper relation name (too many dotted names): ' || $1
                             )
@@ -3915,7 +3915,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 CASE
                 WHEN $1 IS NULL THEN NULL
                 ELSE (
-                    mz_dangerous.mz_error_if_null(
+                    mz_unsafe.mz_error_if_null(
                         (SELECT oid FROM mz_databases WHERE name = $1),
                         'database \"' || $1 || '\" does not exist'
                     )
@@ -3931,7 +3931,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 CASE
                 WHEN $1 IS NULL THEN NULL
                 ELSE (
-                    mz_dangerous.mz_error_if_null(
+                    mz_unsafe.mz_error_if_null(
                         (SELECT oid FROM mz_schemas WHERE name = $1),
                         'schema \"' || $1 || '\" does not exist'
                     )
@@ -3945,7 +3945,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 CASE
                 WHEN $1 IS NULL THEN NULL
                 ELSE (
-                    mz_dangerous.mz_error_if_null(
+                    mz_unsafe.mz_error_if_null(
                         (SELECT oid FROM mz_roles WHERE name = $1),
                         'role \"' || $1 || '\" does not exist'
                     )
@@ -3971,7 +3971,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
     }
 });
 
-pub static MZ_DANGEROUS_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+pub static MZ_UNSAFE_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {

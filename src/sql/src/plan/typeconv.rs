@@ -431,7 +431,7 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
                     WHEN $1 IS NULL THEN NULL
                     WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regclass
                     ELSE (
-                        mz_dangerous.mz_error_if_null(
+                        mz_unsafe.mz_error_if_null(
                             (SELECT oid::pg_catalog.regclass FROM mz_catalog.mz_objects WHERE name = $1),
                             'object \"' || $1 || '\" does not exist'
                         )
@@ -444,7 +444,7 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
                     WHEN $1 IS NULL THEN NULL
                     WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regproc
                     ELSE (
-                        mz_dangerous.mz_error_if_null(
+                        mz_unsafe.mz_error_if_null(
                             (SELECT oid::pg_catalog.regproc FROM mz_catalog.mz_functions WHERE name = $1),
                             'function \"' || $1 || '\" does not exist'
                         )
@@ -457,7 +457,7 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
                     WHEN $1 IS NULL THEN NULL
                     WHEN $1 ~ '^\\d+$' THEN $1::pg_catalog.oid::pg_catalog.regtype
                     ELSE (
-                        mz_dangerous.mz_error_if_null(
+                        mz_unsafe.mz_error_if_null(
                             (SELECT oid::pg_catalog.regtype FROM mz_catalog.mz_types WHERE name = $1),
                             'type \"' || $1 || '\" does not exist'
                         )

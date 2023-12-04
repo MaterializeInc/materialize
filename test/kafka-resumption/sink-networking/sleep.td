@@ -9,5 +9,5 @@
 
 # We need this length to be noticably longer than any internal
 # timeouts if we want this test to be informative.
-> SELECT mz_dangerous.mz_sleep(60);
+> SELECT mz_unsafe.mz_sleep(60);
 <null>

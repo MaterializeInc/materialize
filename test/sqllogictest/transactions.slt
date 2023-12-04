@@ -662,7 +662,7 @@ SELECT * FROM t AS OF AT LEAST 1683131452106;
 
 # Give t a chance to advance.
 statement ok
-SELECT mz_dangerous.mz_sleep(2)
+SELECT mz_unsafe.mz_sleep(2)
 
 query T
 SELECT * FROM t AS OF AT LEAST 1683131452106;
@@ -674,7 +674,7 @@ SELECT * FROM t;
 
 # Give t a chance to advance.
 statement ok
-SELECT mz_dangerous.mz_sleep(2)
+SELECT mz_unsafe.mz_sleep(2)
 
 query T
 SELECT * FROM t AS OF AT LEAST 1683131452106;

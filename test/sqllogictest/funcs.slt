@@ -1569,15 +1569,15 @@ SELECT a, b, mz_row_size(col_size.*) FROM col_size ORDER BY a
 NULL  NULL  24
 
 query error mz_errored
-SELECT mz_dangerous.mz_error_if_null(NULL, 'mz_errored')
+SELECT mz_unsafe.mz_error_if_null(NULL, 'mz_errored')
 
 query I
-SELECT mz_dangerous.mz_error_if_null(1, '')
+SELECT mz_unsafe.mz_error_if_null(1, '')
 ----
 1
 
 query error unexpected NULL
-SELECT mz_dangerous.mz_error_if_null(NULL, NULL)
+SELECT mz_unsafe.mz_error_if_null(NULL, NULL)
 
 query B
 SELECT pg_backend_pid() > 0
@@ -1624,7 +1624,7 @@ SELECT pg_stat_get_numscans('pg_views'::regclass::oid)
 ----
 -1
 
-# mz_dangerous functions can't be executed with the enable_dangerous_functions flag turned off
+# mz_unsafe functions can't be executed with the enable_dangerous_functions flag turned off
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_dangerous_functions = false
@@ -1632,10 +1632,10 @@ ALTER SYSTEM SET enable_dangerous_functions = false
 COMPLETE 0
 
 statement error executing potentially dangerous functions is not supported
-SELECT mz_dangerous.mz_sleep(10)
+SELECT mz_unsafe.mz_sleep(10)
 
 statement error executing potentially dangerous functions is not supported
-SELECT mz_dangerous.mz_panic('hello')
+SELECT mz_unsafe.mz_panic('hello')
 
 statement ok
 SELECT mz_internal.is_rbac_enabled()
@@ -1647,10 +1647,10 @@ statement ok
 INSERT INTO dangerous_table (a) VALUES (1)
 
 statement error executing potentially dangerous functions is not supported
-SELECT mz_dangerous.mz_any(a) FROM dangerous_table
+SELECT mz_unsafe.mz_any(a) FROM dangerous_table
 
 statement error executing potentially dangerous functions is not supported
-INSERT INTO dangerous_table (b) VALUES (mz_dangerous.mz_panic('hello'))
+INSERT INTO dangerous_table (b) VALUES (mz_unsafe.mz_panic('hello'))
 
 statement ok
 DROP TABLE dangerous_table

@@ -909,8 +909,8 @@ impl Catalog {
         self.state.get_mz_internal_schema_id()
     }
 
-    pub fn get_mz_dangerous_schema_id(&self) -> &SchemaId {
-        self.state.get_mz_dangerous_schema_id()
+    pub fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+        self.state.get_mz_unsafe_schema_id()
     }
 
     pub fn get_database(&self, id: &DatabaseId) -> &Database {
@@ -4068,8 +4068,8 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state().get_mz_internal_schema_id()
     }
 
-    fn get_mz_dangerous_schema_id(&self) -> &SchemaId {
-        self.state().get_mz_dangerous_schema_id()
+    fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+        self.state().get_mz_unsafe_schema_id()
     }
 
     fn is_system_schema(&self, schema: &str) -> bool {

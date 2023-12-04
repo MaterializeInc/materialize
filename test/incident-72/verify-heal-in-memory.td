@@ -43,6 +43,6 @@ $ set-from-sql var=source-id
 SELECT id FROM mz_objects WHERE name = 'textavro';
 
 $ set-from-sql var=source-shard-id
-SELECT shard_id FROM mz_dangerous.mz_storage_shards WHERE object_id = '${source-id}';
+SELECT shard_id FROM mz_unsafe.mz_storage_shards WHERE object_id = '${source-id}';
 
 $ persist-force-compaction shard-id=${source-shard-id}

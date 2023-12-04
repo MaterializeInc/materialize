@@ -16,7 +16,7 @@ public
 "some schema"
 information_schema
 mz_catalog
-mz_dangerous
+mz_unsafe
 mz_internal
 pg_catalog
 

@@ -3103,7 +3103,7 @@ fn invent_column_name(
                 if schema
                     == &SchemaSpecifier::from(*ecx.qcx.scx.catalog.get_mz_internal_schema_id())
                     || schema
-                        == &SchemaSpecifier::from(*ecx.qcx.scx.catalog.get_mz_dangerous_schema_id())
+                        == &SchemaSpecifier::from(*ecx.qcx.scx.catalog.get_mz_unsafe_schema_id())
                 {
                     None
                 } else {

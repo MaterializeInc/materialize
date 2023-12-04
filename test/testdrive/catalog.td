@@ -33,7 +33,7 @@ Indexes:
 public
 information_schema
 mz_catalog
-mz_dangerous
+mz_unsafe
 mz_internal
 pg_catalog
 > SHOW SCHEMAS
@@ -42,7 +42,7 @@ name
 information_schema
 public
 mz_catalog
-mz_dangerous
+mz_unsafe
 mz_internal
 pg_catalog
 $ psql-execute command=\dn
@@ -50,7 +50,7 @@ $ psql-execute command=\dn
      Name     |   Owner
 --------------+-----------
  mz_catalog   | mz_system
- mz_dangerous | mz_system
+ mz_unsafe | mz_system
  mz_internal  | mz_system
  public       | mz_system
 
@@ -67,7 +67,7 @@ $ psql-execute command="\dn mz_*"
      Name     |   Owner
 --------------+-----------
  mz_catalog   | mz_system
- mz_dangerous | mz_system
+ mz_unsafe | mz_system
  mz_internal  | mz_system
 
 # What objects do we have by default?
@@ -84,7 +84,7 @@ public
 s
 information_schema
 mz_catalog
-mz_dangerous
+mz_unsafe
 mz_internal
 pg_catalog
 
@@ -173,7 +173,7 @@ name
 public
 information_schema
 mz_catalog
-mz_dangerous
+mz_unsafe
 mz_internal
 pg_catalog
 
@@ -186,7 +186,7 @@ public
 s
 information_schema
 mz_catalog
-mz_dangerous
+mz_unsafe
 mz_internal
 pg_catalog
 
@@ -214,7 +214,7 @@ public
 s
 information_schema
 mz_catalog
-mz_dangerous
+mz_unsafe
 mz_internal
 pg_catalog
 > CREATE VIEW v2 AS SELECT 2

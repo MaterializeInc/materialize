@@ -41,7 +41,7 @@ false
 > CREATE INDEX test_index ON constant_view (a)
 > SELECT count(*) FROM constant_view
 1000
-> SELECT mz_dangerous.mz_sleep(1)
+> SELECT mz_unsafe.mz_sleep(1)
 <null>
 > SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
 false
@@ -66,7 +66,7 @@ false
 > CREATE MATERIALIZED VIEW test_mv AS SELECT generate_series(1, 1000)
 > SELECT count(*) FROM test_mv
 1000
-> SELECT mz_dangerous.mz_sleep(1)
+> SELECT mz_unsafe.mz_sleep(1)
 <null>
 > SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
 false
@@ -93,7 +93,7 @@ false
     AND l_shipdate < DATE '1995-09-01' + INTERVAL '1' month
 > SELECT count(*) > 0 FROM q14
 true
-> SELECT mz_dangerous.mz_sleep(1)
+> SELECT mz_unsafe.mz_sleep(1)
 <null>
 > SELECT count(*) FROM mz_internal.mz_dataflow_operators
 0
