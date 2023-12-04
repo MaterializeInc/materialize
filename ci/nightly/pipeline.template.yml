@@ -585,6 +585,50 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeClusterdComputeLast]
 
+      - id: checks-kill-clusterd-storage
+        label: "Checks + kill storage clusterd"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=KillClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-restart-source-postgres
+        label: "Checks + restart source Postgres"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=RestartSourcePostgres, --check=PgCdc, --check=PgCdcNoWait, --check=PgCdcMzNow, --check=SshPg, --check=DebeziumPostgres]
+
+      - id: checks-restart-clusterd-compute
+        label: "Checks + restart clusterd compute"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-drop-create-default-replica
+        label: "Checks + DROP/CREATE replica"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix"
         timeout_in_minutes: 600
@@ -610,6 +654,17 @@ steps:
   - group: Maelstrom
     key: maelstrom
     steps:
+      - id: persist-maelstrom
+        label: Maelstrom coverage of persist
+        timeout_in_minutes: 10
+        artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: persist
+              args: [--consensus=mem, --blob=mem]
+        agents:
+          queue: linux-x86_64
+
       - id: persist-maelstrom-single-node
         label: Long single-node Maelstrom coverage of persist
         timeout_in_minutes: 20
@@ -974,6 +1029,90 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: balancerd
+
+  - id: upsert-compaction-disabled
+    label: Upsert (compaction disabled)
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: upsert
+          args: [--compaction-disabled]
+    agents:
+      queue: linux-x86_64
+
+  - id: restarts
+    label: Restart test
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: restart
+    agents:
+      queue: linux-x86_64
+
+  - id: legacy-upgrade
+    label: Legacy upgrade tests
+    timeout_in_minutes: 60
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: legacy-upgrade
+    agents:
+      queue: linux-x86_64
+
+  - group: "Language tests"
+    key: language-tests
+    steps:
+      - id: lang-csharp
+        label: ":csharp: tests"
+        timeout_in_minutes: 10
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: csharp
+        agents:
+          queue: linux-x86_64
+
+      - id: lang-js
+        label: ":js: tests"
+        timeout_in_minutes: 10
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: js
+        agents:
+          queue: linux-x86_64
+
+      - id: lang-java
+        label: ":java: tests"
+        timeout_in_minutes: 10
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: java
+        agents:
+          queue: linux-x86_64
+
+      - id: lang-python
+        label: ":python: tests"
+        timeout_in_minutes: 10
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: python
+        agents:
+          queue: linux-x86_64
+
+      - id: lang-ruby
+        label: ":ruby: tests"
+        timeout_in_minutes: 10
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: ruby
+        agents:
+          queue: linux-x86_64
 
   - wait: ~
     continue_on_failure: true
