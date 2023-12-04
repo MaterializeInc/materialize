@@ -50,8 +50,8 @@ $ psql-execute command=\dn
      Name    |   Owner
 -------------+-----------
  mz_catalog  | mz_system
- mz_unsafe   | mz_system
  mz_internal | mz_system
+ mz_unsafe   | mz_system
  public      | mz_system
 
 
@@ -67,8 +67,8 @@ $ psql-execute command="\dn mz_*"
      Name    |   Owner
 -------------+-----------
  mz_catalog  | mz_system
- mz_unsafe   | mz_system
  mz_internal | mz_system
+ mz_unsafe   | mz_system
 
 # What objects do we have by default?
 > SHOW OBJECTS
@@ -84,8 +84,8 @@ public
 s
 information_schema
 mz_catalog
-mz_unsafe
 mz_internal
+mz_unsafe
 pg_catalog
 
 
@@ -173,8 +173,8 @@ name
 public
 information_schema
 mz_catalog
-mz_unsafe
 mz_internal
+mz_unsafe
 pg_catalog
 
 # New schemas in the database should appear in the output of SHOW SCHEMAS FROM.
@@ -186,8 +186,8 @@ public
 s
 information_schema
 mz_catalog
-mz_unsafe
 mz_internal
+mz_unsafe
 pg_catalog
 
 # SHOW SCHEMAS should filter its output based on the provided LIKE or WHERE
@@ -214,8 +214,8 @@ public
 s
 information_schema
 mz_catalog
-mz_unsafe
 mz_internal
+mz_unsafe
 pg_catalog
 > CREATE VIEW v2 AS SELECT 2
 > SHOW VIEWS
