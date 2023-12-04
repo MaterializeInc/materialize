@@ -49,6 +49,9 @@ from materialize.output_consistency.input_data.return_specs.number_return_spec i
 from materialize.output_consistency.input_data.return_specs.string_return_spec import (
     StringReturnTypeSpec,
 )
+from materialize.output_consistency.input_data.types.string_type_provider import (
+    TEXT_DATA_TYPE,
+)
 from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbFunctionWithCustomPattern,
@@ -56,6 +59,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
     OperationRelevance,
 )
+from materialize.output_consistency.sub_query.sub_query_param import SubQueryParam
 
 JSONB_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
@@ -211,6 +215,17 @@ JSONB_OPERATION_TYPES.append(
         is_aggregation=True,
         tags={TAG_JSONB_AGGREGATION},
         comment="additional overlapping variant only for records",
+    ),
+)
+
+JSONB_OPERATION_TYPES.append(
+    DbFunction(
+        "jsonb_agg",
+        [SubQueryParam(TEXT_DATA_TYPE)],
+        JsonbReturnTypeSpec(),
+        # not an aggregation on rows of the outer query
+        is_aggregation=False,
+        relevance=OperationRelevance.LOW,
     ),
 )
 
