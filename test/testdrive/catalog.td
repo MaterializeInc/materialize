@@ -47,12 +47,12 @@ mz_internal
 pg_catalog
 $ psql-execute command=\dn
 \     List of schemas
-     Name     |   Owner
---------------+-----------
- mz_catalog   | mz_system
- mz_unsafe    | mz_system
- mz_internal  | mz_system
- public       | mz_system
+     Name    |   Owner
+-------------+-----------
+ mz_catalog  | mz_system
+ mz_unsafe   | mz_system
+ mz_internal | mz_system
+ public      | mz_system
 
 
 $ psql-execute command="\dn mz_catalog"
@@ -64,11 +64,11 @@ $ psql-execute command="\dn mz_catalog"
 
 $ psql-execute command="\dn mz_*"
 \     List of schemas
-     Name     |   Owner
---------------+-----------
- mz_catalog   | mz_system
- mz_unsafe    | mz_system
- mz_internal  | mz_system
+     Name    |   Owner
+-------------+-----------
+ mz_catalog  | mz_system
+ mz_unsafe   | mz_system
+ mz_internal | mz_system
 
 # What objects do we have by default?
 > SHOW OBJECTS
