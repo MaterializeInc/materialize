@@ -7,9 +7,42 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::str::FromStr;
+
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
 use crate::{Config, PostgresError};
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WalLevel {
+    Minimal,
+    Replica,
+    Logical,
+}
+
+impl std::str::FromStr for WalLevel {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "minimal" => Ok(Self::Minimal),
+            "replica" => Ok(Self::Replica),
+            "logical" => Ok(Self::Logical),
+            o => Err(anyhow::anyhow!("unknown wal_level {}", o)),
+        }
+    }
+}
+
+pub async fn get_wal_level(
+    ssh_tunnel_manager: &SshTunnelManager,
+    config: &Config,
+) -> Result<WalLevel, PostgresError> {
+    let client = config
+        .connect("wal_level_check", ssh_tunnel_manager)
+        .await?;
+    let wal_level = client.query_one("SHOW wal_level", &[]).await?;
+    let wal_level: String = wal_level.get("wal_level");
+    Ok(WalLevel::from_str(&wal_level)?)
+}
 
 pub async fn available_replication_slots(
     ssh_tunnel_manager: &SshTunnelManager,
