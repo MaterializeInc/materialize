@@ -22,6 +22,7 @@ class Clusterd(Service):
         self,
         name: str = "clusterd",
         image: str | None = None,
+        environment_id: str | None = None,
         environment_extra: list[str] = [],
         memory: str | None = None,
         options: list[str] = [],
@@ -32,7 +33,7 @@ class Clusterd(Service):
             *environment_extra,
         ]
 
-        command = []
+        command = [f"--environment-id={environment_id}"]
 
         command += options
 

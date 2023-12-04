@@ -103,7 +103,7 @@ use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
-use mz_secrets::SecretsController;
+use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
@@ -531,7 +531,6 @@ pub struct Config {
     pub default_storage_cluster_size: Option<String>,
     pub builtin_cluster_replica_size: String,
     pub system_parameter_defaults: BTreeMap<String, String>,
-    pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
     pub storage_usage_retention_period: Option<Duration>,
@@ -1010,9 +1009,6 @@ pub struct Coordinator {
     /// Handle to a manager that can create and delete kubernetes resources
     /// (ie: VpcEndpoint objects)
     cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
-
-    /// Extra context to pass through to connection creation.
-    connection_context: ConnectionContext,
 
     /// Metadata about replicas that doesn't need to be persisted.
     /// Intended for inclusion in system tables.
@@ -1863,27 +1859,27 @@ impl Coordinator {
             max_as_of.meet_assign(&since.join(upper));
         }
 
-        mz_ore::soft_assert!(
-            PartialOrder::less_equal(&min_as_of, &max_as_of),
-            "error bootrapping index `as_of`: \
-             min_as_of {:?} greater than max_as_of {:?} \
-             (import_ids={}, export_ids={}, dependent_matviews={:?})",
-            min_as_of.elements(),
-            max_as_of.elements(),
-            dataflow.display_import_ids(),
-            dataflow.display_export_ids(),
-            dependent_matviews,
-        );
-
-        // Ensure that we never select an `as_of` that's less than `min_as_of`,
-        // even if that means selecting an `as_of` that's greater than `max_as_of`.
-        // The former makes environmentd crash, the latter "only" leads to correctness bugs.
         let as_of = if PartialOrder::less_equal(&min_as_of, &max_as_of) {
-            let mut as_of = min_as_of.clone();
-            as_of.join_assign(&max_compaction_frontier);
-            as_of.meet_assign(&max_as_of);
-            as_of
+            min_as_of.join(&max_compaction_frontier).meet(&max_as_of)
         } else {
+            // This should not happen. If we get here that means we _will_ skip times in some of
+            // the dependent materialized views, which is a correctness bug. However, skipping
+            // times in materialized views is probably preferable to panicking and thus making the
+            // entire environment unavailable. So we chose to handle this case gracefully and only
+            // log an error, unless soft-asserts are enabled, and continue with the `min_as_of` to
+            // make the dependent materialized views skip as few times as possible.
+
+            mz_ore::soft_panic_or_log!(
+                "error bootstrapping index `as_of`: \
+                 `min_as_of` {:?} greater than `max_as_of` {:?} \
+                 (import_ids={}, export_ids={}, dependent_matviews={:?})",
+                min_as_of.elements(),
+                max_as_of.elements(),
+                dataflow.display_import_ids(),
+                dataflow.display_export_ids(),
+                dependent_matviews,
+            );
+
             min_as_of.clone()
         };
 
@@ -2172,6 +2168,16 @@ impl Coordinator {
         Arc::make_mut(&mut self.catalog)
     }
 
+    /// Obtain a reference to the coordinator's connection context.
+    fn connection_context(&self) -> &ConnectionContext {
+        self.controller.connection_context()
+    }
+
+    /// Obtain a reference to the coordinator's secret reader.
+    fn secrets_reader(&self) -> &dyn SecretsReader {
+        &*self.connection_context().secrets_reader
+    }
+
     /// Publishes a notice message to all sessions.
     pub(crate) fn broadcast_notice(&mut self, notice: AdapterNotice) {
         for meta in self.active_conns.values() {
@@ -2224,7 +2230,6 @@ pub fn serve(
         builtin_cluster_replica_size,
         system_parameter_defaults,
         availability_zones,
-        connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
         storage_usage_retention_period,
@@ -2255,7 +2260,10 @@ pub fn serve(
 
         let aws_principal_context = match (
             aws_account_id,
-            connection_context.aws_external_id_prefix.clone(),
+            dataflow_client
+                .connection_context()
+                .aws_external_id_prefix
+                .clone(),
         ) {
             (Some(aws_account_id), Some(aws_external_id_prefix)) => Some(AwsPrincipalContext {
                 aws_account_id,
@@ -2274,7 +2282,6 @@ pub fn serve(
             Catalog::open(catalog::Config {
                 storage,
                 metrics_registry: &metrics_registry,
-                secrets_reader: secrets_controller.reader(),
                 storage_usage_retention_period,
                 state: catalog::StateConfig {
                     unsafe_mode,
@@ -2292,7 +2299,7 @@ pub fn serve(
                     egress_ips,
                     aws_principal_context,
                     aws_privatelink_availability_zones,
-                    connection_context: Some(connection_context.clone()),
+                    connection_context: dataflow_client.connection_context().clone(),
                     active_connection_count,
                     http_host_name,
                 },
@@ -2381,7 +2388,6 @@ pub fn serve(
                     secrets_controller,
                     caching_secrets_reader,
                     cloud_resource_controller,
-                    connection_context,
                     transient_replica_metadata: BTreeMap::new(),
                     storage_usage_client,
                     storage_usage_collection_interval,

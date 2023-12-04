@@ -36,8 +36,7 @@ use mz_storage_client::sink::ProgressRecord;
 use mz_storage_types::connections::{ConnectionContext, KafkaConnection};
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkAsOf,
-    SinkEnvelope, StorageSinkDesc,
+    KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkAsOf, SinkEnvelope, StorageSinkDesc,
 };
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -517,6 +516,7 @@ impl KafkaSinkState {
         )
         .await;
 
+        let progress_topic = connection.progress_topic(connection_context).into_owned();
         (
             KafkaSinkState {
                 name: sink_name,
@@ -526,9 +526,7 @@ impl KafkaSinkState {
                 pending_rows: BTreeMap::new(),
                 ready_rows: VecDeque::new(),
                 retry_manager,
-                progress_topic: match connection.consistency_config {
-                    KafkaConsistencyConfig::Progress { topic } => topic,
-                },
+                progress_topic,
                 progress_key: ProgressKey::new(sink_id),
                 healthchecker,
                 gate_ts,

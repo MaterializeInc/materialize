@@ -883,6 +883,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
 
     let persist_clients = Arc::new(persist_clients);
+    let connection_context = ConnectionContext::from_cli_args(
+        args.environment_id.to_string(),
+        &args.tracing.startup_log_filter,
+        args.aws_external_id_prefix,
+        secrets_reader,
+        cloud_resource_reader,
+    );
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
@@ -899,6 +906,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
         metrics_registry: metrics_registry.clone(),
         persist_pubsub_url: args.persist_pubsub_url,
+        connection_context,
         // When serialized to args in the controller, only the relevant flags will be passed
         // through, so we just set all of them
         secrets_args: SecretsReaderCliArgs {
@@ -978,12 +986,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
                 availability_zones: args.availability_zone,
-                connection_context: ConnectionContext::from_cli_args(
-                    &args.tracing.startup_log_filter,
-                    args.aws_external_id_prefix,
-                    secrets_reader,
-                    cloud_resource_reader,
-                ),
                 tracing_handle,
                 storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
                 storage_usage_retention_period: args.storage_usage_retention_period,

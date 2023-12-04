@@ -113,7 +113,7 @@ impl Catalog {
             (Statement::CreateSource(_), CatalogItem::Source(old_source)) => {
                 match old_source.data_source {
                     DataSourceDesc::Ingestion(ingestion) => CatalogItem::Source(Source {
-                        create_sql,
+                        create_sql: Some(create_sql),
                         data_source: DataSourceDesc::Ingestion(IngestionDescription {
                             instance_id: cluster.id,
                             ..ingestion

@@ -3675,7 +3675,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "regexp_extract" => Table {
             params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
                 let regex = match regex.into_literal_string() {
-                    None => sql_bail!("regex_extract requires a string literal as its first argument"),
+                    None => sql_bail!("regexp_extract requires a string literal as its first argument"),
                     Some(regex) => mz_expr::AnalyzedRegex::new(regex).map_err(|e| sql_err!("analyzing regex: {}", e))?,
                 };
                 let column_names = regex

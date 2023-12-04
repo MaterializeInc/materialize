@@ -1948,7 +1948,9 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("on_id", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column("create_sql", ScalarType::String.nullable(false))
+        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
@@ -1976,7 +1978,9 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .with_column("create_sql", ScalarType::String.nullable(true))
+        .with_column("redacted_create_sql", ScalarType::String.nullable(true)),
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
@@ -1993,7 +1997,9 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .with_column("create_sql", ScalarType::String.nullable(false))
+        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
@@ -2024,7 +2030,9 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .with_column("create_sql", ScalarType::String.nullable(true))
+        .with_column("redacted_create_sql", ScalarType::String.nullable(true)),
     is_retained_metrics_object: true,
     sensitivity: DataSensitivity::Public,
 });
@@ -2041,7 +2049,9 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("envelope_type", ScalarType::String.nullable(true))
         .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column("create_sql", ScalarType::String.nullable(false))
+        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
     is_retained_metrics_object: true,
     sensitivity: DataSensitivity::Public,
 });
@@ -2058,7 +2068,9 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .with_column("create_sql", ScalarType::String.nullable(false))
+        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
@@ -2076,7 +2088,9 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .with_column("create_sql", ScalarType::String.nullable(false))
+        .with_column("redacted_create_sql", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
@@ -2093,7 +2107,9 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .with_column("create_sql", ScalarType::String.nullable(true))
+        .with_column("redacted_create_sql", ScalarType::String.nullable(true)),
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });

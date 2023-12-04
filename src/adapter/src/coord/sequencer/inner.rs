@@ -358,7 +358,7 @@ impl Coordinator {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             let transient_revision = self.catalog().transient_revision();
             let conn_id = ctx.session().conn_id().clone();
-            let connection_context = self.connection_context.clone();
+            let connection_context = self.connection_context().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
 
@@ -550,7 +550,7 @@ impl Coordinator {
         };
         let table_id = self.catalog_mut().allocate_user_id().await?;
         let table = Table {
-            create_sql: table.create_sql,
+            create_sql: Some(table.create_sql),
             desc: table.desc,
             defaults: table.defaults,
             conn_id: conn_id.cloned(),
@@ -1196,7 +1196,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let typ = Type {
-            create_sql: plan.typ.create_sql,
+            create_sql: Some(plan.typ.create_sql),
             desc: plan.typ.inner.desc(&self.catalog().for_session(session))?,
             details: CatalogTypeDetails {
                 array_id: None,
@@ -4770,7 +4770,7 @@ impl Coordinator {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             let transient_revision = self.catalog().transient_revision();
             let conn_id = ctx.session().conn_id().clone();
-            let connection_context = self.connection_context.clone();
+            let connection_context = self.connection_context().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
 

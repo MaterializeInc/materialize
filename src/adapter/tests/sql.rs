@@ -159,7 +159,10 @@ async fn datadriven() {
                                             item: test_case.input.trim_end().to_string(),
                                         },
                                         item: CatalogItem::Table(Table {
-                                            create_sql: "TODO".to_string(),
+                                            create_sql: Some(format!(
+                                                "CREATE TABLE {} ()",
+                                                test_case.input.trim_end()
+                                            )),
                                             desc: RelationDesc::empty(),
                                             defaults: vec![Expr::null(); 0],
                                             conn_id: None,

@@ -19,6 +19,7 @@ use std::time::Duration;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
+use mz_storage_types::connections::ConnectionContext;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
 use tracing::{info, trace};
@@ -585,7 +586,6 @@ impl Catalog {
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
             metrics_registry,
-            secrets_reader,
             // when debugging, no reaping
             storage_usage_retention_period: None,
             state: StateConfig {
@@ -605,7 +605,7 @@ impl Catalog {
                 aws_principal_context: None,
                 aws_privatelink_availability_zones: None,
                 http_host_name: None,
-                connection_context: None,
+                connection_context: ConnectionContext::for_tests(secrets_reader),
                 active_connection_count,
             },
         })
@@ -1395,10 +1395,14 @@ impl Catalog {
                     // Since the catalog serializes the items using only their creation statement
                     // and context, we need to parse and rewrite the with options in that statement.
                     // (And then make any other changes to the source definition to match.)
-                    let mut stmt = mz_sql::parse::parse(&new_source.create_sql)
-                        .expect("invalid create sql persisted to catalog")
-                        .into_element()
-                        .ast;
+                    let mut stmt = mz_sql::parse::parse(
+                        &new_source
+                            .create_sql
+                            .expect("must exist for non-system sources"),
+                    )
+                    .expect("invalid create sql persisted to catalog")
+                    .into_element()
+                    .ast;
 
                     let create_stmt = match &mut stmt {
                         Statement::CreateSource(s) => s,
@@ -1432,7 +1436,7 @@ impl Catalog {
                     };
 
                     let create_sql = stmt.to_ast_string_stable();
-                    new_source.create_sql = create_sql;
+                    new_source.create_sql = Some(create_sql);
                     let source = CatalogEntry {
                         item: CatalogItem::Source(new_source.clone()),
                         ..(entry.clone())

@@ -103,10 +103,12 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
+use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_controller as storage;
+use mz_storage_types::connections::ConnectionContext;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
@@ -535,7 +537,9 @@ impl Usage {
                     aws_principal_context: None,
                     aws_privatelink_availability_zones: None,
                     http_host_name: None,
-                    connection_context: None,
+                    connection_context: ConnectionContext::for_tests(Arc::new(
+                        InMemorySecretsController::new(),
+                    )),
                     active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
                 },
                 &mut storage,

@@ -11,10 +11,3 @@ name: clusterd
 pre-image:
   - type: cargo-build
     bin: clusterd
-    strip: true
-    split_debuginfo: true
-  - type: s3-upload-debuginfo
-    bin: clusterd
-    bucket: materialize-debuginfo
-  - type: ps-upload-sources
-    bin: clusterd.debug

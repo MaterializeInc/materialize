@@ -111,9 +111,11 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
+use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::StashFactory;
+use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use url::Url;
@@ -459,7 +461,9 @@ async fn upgrade_check(
             aws_principal_context: None,
             aws_privatelink_availability_zones: None,
             http_host_name: None,
-            connection_context: None,
+            connection_context: ConnectionContext::for_tests(Arc::new(
+                InMemorySecretsController::new(),
+            )),
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
         },
         &mut storage,
