@@ -135,7 +135,9 @@ pub mod fetch;
 pub mod internals_bench;
 pub mod metrics {
     //! Utilities related to metrics.
-    pub use crate::internal::metrics::{encode_ts_metric, Metrics};
+    pub use crate::internal::metrics::{
+        encode_ts_metric, Metrics, SinkMetrics, SinkWorkerMetrics, UpdateDelta,
+    };
 }
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.

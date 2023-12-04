@@ -2340,6 +2340,43 @@ def workflow_test_replica_metrics(c: Composition) -> None:
     delayed_time = metrics.get_value("mz_dataflow_delayed_time_seconds_total")
     assert delayed_time < 1, f"unexpected delayed time: {delayed_time}"
 
+    mv_correction_insertions = metrics.get_value(
+        "mz_persist_sink_correction_insertions_total"
+    )
+    assert (
+        mv_correction_insertions > 0
+    ), f"unexpected persist sink correction insertions: {mv_correction_insertions}"
+    mv_correction_cap_increases = metrics.get_value(
+        "mz_persist_sink_correction_capacity_increases_total"
+    )
+    assert (
+        mv_correction_cap_increases > 0
+    ), f"unexpected persist sink correction capacity increases: {mv_correction_cap_increases}"
+    mv_correction_max_len_per_worker = metrics.get_value(
+        "mz_persist_sink_correction_max_per_sink_worker_len_updates"
+    )
+    assert (
+        mv_correction_max_len_per_worker > 0
+    ), f"unexpected persist max correction len per worker: {mv_correction_max_len_per_worker}"
+    mv_correction_max_cap_per_worker = metrics.get_value(
+        "mz_persist_sink_correction_max_per_sink_worker_capacity_updates"
+    )
+    assert (
+        mv_correction_max_cap_per_worker > 0
+    ), f"unexpected persist sink max correction capacity per worker: {mv_correction_max_cap_per_worker}"
+    mv_correction_peak_len = metrics.get_value(
+        "mz_persist_sink_correction_peak_len_updates"
+    )
+    assert (
+        mv_correction_peak_len > 0
+    ), f"unexpected persist peak correction len: {mv_correction_peak_len}"
+    mv_correction_peak_cap = metrics.get_value(
+        "mz_persist_sink_correction_peak_capacity_updates"
+    )
+    assert (
+        mv_correction_peak_cap > 0
+    ), f"unexpected persist sink peak correction capacity: {mv_correction_peak_cap}"
+
 
 def workflow_test_compute_controller_metrics(c: Composition) -> None:
     """Test metrics exposed by the compute controller."""

@@ -21,6 +21,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -530,6 +531,31 @@ enum BatchOrData {
     },
 }
 
+/// A type to wrap a `correction` buffer taking the difference between
+/// existing and desired contents for the sink while collecting metrics
+/// on its length and capacity dynamics.
+struct CorrectionBuffer<T, R>(Vec<(Result<Row, DataflowError>, T, R)>);
+
+impl<T, R> CorrectionBuffer<T, R> {
+    fn with_correction_buffer<F: FnMut(&mut Vec<(Result<Row, DataflowError>, T, R)>) -> O, O>(
+        &mut self,
+        sink_metrics: &SinkMetrics,
+        sink_worker_metrics: &SinkWorkerMetrics,
+        mut f: F,
+    ) -> O {
+        let (old_len, old_capacity) = (self.0.len(), self.0.capacity());
+        let output = f(&mut self.0);
+        let (new_len, new_capacity) = (self.0.len(), self.0.capacity());
+        let (len_delta, capacity_delta) = (
+            UpdateDelta::new(new_len, old_len),
+            UpdateDelta::new(new_capacity, old_capacity),
+        );
+        sink_worker_metrics.report_correction_update_totals(new_len, new_capacity);
+        sink_metrics.report_correction_update_deltas(len_delta, capacity_delta);
+        output
+    }
+}
+
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` for any batch of updates that was written.
@@ -588,7 +614,7 @@ where
         // Contains `desired - persist`, reflecting the updates we would like to commit
         // to `persist` in order to "correct" it to track `desired`. This collection is
         // only modified by updates received from either the `desired` or `persist` inputs.
-        let mut correction = Vec::new();
+        let mut correction = CorrectionBuffer(Vec::new());
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -607,6 +633,8 @@ where
             .open(persist_location)
             .await
             .expect("could not open persist client");
+        let sink_metrics = &persist_client.metrics().sink;
+        let sink_worker_metrics = &sink_metrics.for_worker(worker_index);
 
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(
@@ -687,7 +715,7 @@ where
                                     persist_frontier
                                 );
                             }
-                            correction.append(data);
+                            correction.with_correction_buffer(sink_metrics, sink_worker_metrics, |buffer| buffer.append(data));
 
                             continue;
                         }
@@ -700,7 +728,7 @@ where
                     match event {
                         Event::Data(_cap, data) => {
                             // Extract persist rows as negative contributions to `correction`.
-                            correction.extend(data.drain(..).map(|(d, t, r)| (d, t, -r)));
+                            correction.with_correction_buffer(sink_metrics, sink_worker_metrics, |buffer| buffer.extend(data.drain(..).map(|(d, t, r)| (d, t, -r))));
 
                             continue;
                         }
@@ -726,7 +754,7 @@ where
                     desired_frontier
                 );
                 // Advance all updates to `persist`'s frontier.
-                for (row, time, diff) in correction.iter_mut() {
+                for (row, time, diff) in correction.0.iter_mut() {
                     let time_before = *time;
                     time.advance_by(persist_frontier.borrow());
                     if sink_id.is_user() && &time_before != time {
@@ -778,7 +806,7 @@ where
                     // attempt to write out new updates. Otherwise, we might
                     // spend a lot of time "consolidating" the same updates
                     // over and over again, with no changes.
-                    consolidate_updates(&mut correction);
+                    correction.with_correction_buffer(sink_metrics, sink_worker_metrics, consolidate_updates);
 
                     // `correction` starts large as it diffs the initial snapshots,
                     // but in steady state contains substantially fewer updates.
@@ -790,8 +818,8 @@ where
                     // the current size, then halved, then doubled. We want that
                     // pattern to require a linear number of updates rather than
                     // a constant number.
-                    if correction.len() < correction.capacity() / 4 {
-                        correction.shrink_to_fit();
+                    if correction.0.len() < correction.0.capacity() / 4 {
+                        correction.with_correction_buffer(sink_metrics, sink_worker_metrics, Vec::shrink_to_fit);
                     }
                 }
 
@@ -809,7 +837,7 @@ where
 
                     let (batch_lower, batch_upper) = batch_description;
 
-                    let mut to_append = correction
+                    let mut to_append = correction.0
                         .iter()
                         .filter(|(_, time, _)| {
                             batch_lower.less_equal(time) && !batch_upper.less_equal(time)
@@ -822,7 +850,7 @@ where
                         // is small as a reasonable proxy.
                         let minimum_batch_updates =
                             persist_clients.cfg().sink_minimum_batch_updates();
-                        let batch_or_data = if correction.len() >= minimum_batch_updates {
+                        let batch_or_data = if correction.0.len() >= minimum_batch_updates {
                             let batch = write
                                 .batch(
                                     to_append.map(|(data, time, diff)| {

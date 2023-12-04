@@ -21,7 +21,7 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{
-    ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
+    raw, ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
     DeleteOnDropGauge, GaugeVecExt, IntCounter, MakeCollector, MetricsRegistry, UIntGauge,
     UIntGaugeVec,
 };
@@ -39,7 +39,7 @@ use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
-use tracing::instrument;
+use tracing::{error, instrument};
 
 use crate::internal::paths::BlobKey;
 use crate::{PersistConfig, ShardId};
@@ -1633,6 +1633,28 @@ impl UsageAuditMetrics {
     }
 }
 
+/// Represents a change in a number of updates kept in a data structure
+/// (e.g., a buffer length or capacity change).
+#[derive(Debug)]
+pub enum UpdateDelta {
+    /// A negative delta in the number of updates.
+    Negative(u64),
+    /// A non-negative delta in the number of updates.
+    NonNegative(u64),
+}
+
+impl UpdateDelta {
+    /// Creates a new `UpdateDelta` from the difference between a new value
+    /// for a number of updates and the corresponding old value.
+    pub fn new(new: usize, old: usize) -> Self {
+        if new < old {
+            UpdateDelta::Negative(CastFrom::cast_from(old - new))
+        } else {
+            UpdateDelta::NonNegative(CastFrom::cast_from(new - old))
+        }
+    }
+}
+
 /// Metrics for the persist sink. (While this lies slightly outside the usual
 /// abstraction boundary of the client, it's convenient to manage them together.
 #[derive(Debug)]
@@ -1641,6 +1663,22 @@ pub struct SinkMetrics {
     pub forwarded_batches: Counter,
     /// Number of updates that were forwarded to the centralized append operator
     pub forwarded_updates: Counter,
+    /// Cumulative record insertions made to the correction buffer across workers
+    correction_insertions_total: IntCounter,
+    /// Cumulative record deletions made to the correction buffer across workers
+    correction_deletions_total: IntCounter,
+    /// Cumulative capacity increases made to the correction buffer across workers
+    correction_capacity_increases_total: IntCounter,
+    /// Cumulative capacity decreases made to the correction buffer across workers
+    correction_capacity_decreases_total: IntCounter,
+    /// Peak length observed for the correction buffer across workers
+    correction_peak_len_updates: UIntGauge,
+    /// Peak capacity observed for the correction buffer across workers
+    correction_peak_capacity_updates: UIntGauge,
+    /// Maximum length observed for any one correction buffer per worker
+    correction_max_per_sink_worker_len_updates: raw::UIntGaugeVec,
+    /// Maximum capacity observed for any one correction buffer per worker
+    correction_max_per_sink_worker_capacity_updates: raw::UIntGaugeVec,
 }
 
 impl SinkMetrics {
@@ -1654,6 +1692,167 @@ impl SinkMetrics {
                 name: "mz_persist_sink_forwarded_updates",
                 help: "number of updates forwarded to the central append operator",
             )),
+            correction_insertions_total: registry.register(metric!(
+                name: "mz_persist_sink_correction_insertions_total",
+                help: "The cumulative insertions observed on the correction buffer across workers and persist sinks.",
+            )),
+            correction_deletions_total: registry.register(metric!(
+                name: "mz_persist_sink_correction_deletions_total",
+                help: "The cumulative deletions observed on the correction buffer across workers and persist sinks.",
+            )),
+            correction_capacity_increases_total: registry.register(metric!(
+                name: "mz_persist_sink_correction_capacity_increases_total",
+                help: "The cumulative capacity increases observed on the correction buffer across workers and persist sinks.",
+            )),
+            correction_capacity_decreases_total: registry.register(metric!(
+                name: "mz_persist_sink_correction_capacity_decreases_total",
+                help: "The cumulative capacity decreases observed on the correction buffer across workers and persist sinks.",
+            )),
+            correction_peak_len_updates: registry.register(metric!(
+                name: "mz_persist_sink_correction_peak_len_updates",
+                help: "The peak length observed for the correction buffer across workers and persist sinks.",
+            )),
+            correction_peak_capacity_updates: registry.register(metric!(
+                name: "mz_persist_sink_correction_peak_capacity_updates",
+                help: "The peak capacity observed for the correction buffer across workers and persist sinks.",
+            )),
+            correction_max_per_sink_worker_len_updates: registry.register(metric!(
+                name: "mz_persist_sink_correction_max_per_sink_worker_len_updates",
+                help: "The maximum length observed for the correction buffer of any single persist sink per worker.",
+                var_labels: ["worker_id"],
+            )),
+            correction_max_per_sink_worker_capacity_updates: registry.register(metric!(
+                name: "mz_persist_sink_correction_max_per_sink_worker_capacity_updates",
+                help: "The maximum capacity observed for the correction buffer of any single persist sink per worker.",
+                var_labels: ["worker_id"],
+            )),
+        }
+    }
+
+    /// Obtains a `SinkWorkerMetrics` instance, which allows for metric reporting
+    /// from a specific `persist_sink` instance for a given worker. The reports will
+    /// update metrics shared across workers, but provide per-worker contributions
+    /// to them.
+    pub fn for_worker(&self, worker_id: usize) -> SinkWorkerMetrics {
+        let worker = worker_id.to_string();
+        let correction_max_per_sink_worker_len_updates = self
+            .correction_max_per_sink_worker_len_updates
+            .with_label_values(&[&worker]);
+        let correction_max_per_sink_worker_capacity_updates = self
+            .correction_max_per_sink_worker_capacity_updates
+            .with_label_values(&[&worker]);
+        SinkWorkerMetrics {
+            correction_max_per_sink_worker_len_updates,
+            correction_max_per_sink_worker_capacity_updates,
+        }
+    }
+
+    /// Reports updates to the length and capacity of the correction buffer in the
+    /// `write_batches` operator of a `persist_sink`.
+    ///
+    /// This method updates monotonic metrics based on the deltas and thus can be
+    /// called across workers and instances of `persist_sink`.
+    pub fn report_correction_update_deltas(
+        &self,
+        correction_len_delta: UpdateDelta,
+        correction_cap_delta: UpdateDelta,
+    ) {
+        // Report insertions or deletions.
+        match correction_len_delta {
+            UpdateDelta::NonNegative(delta) => {
+                if delta > 0 {
+                    self.correction_insertions_total.inc_by(delta)
+                }
+            }
+            UpdateDelta::Negative(delta) => self.correction_deletions_total.inc_by(delta),
+        }
+        // Report capacity increases or decreases.
+        match correction_cap_delta {
+            UpdateDelta::NonNegative(delta) => {
+                if delta > 0 {
+                    self.correction_capacity_increases_total.inc_by(delta)
+                }
+            }
+            UpdateDelta::Negative(delta) => self.correction_capacity_decreases_total.inc_by(delta),
+        }
+    }
+
+    /// Updates our estimate of the aggregate peak for the correction buffer
+    /// length and capacity across workers and persist sink.
+    ///
+    /// This method assumes temporary quiescence on the correction buffer metrics,
+    /// i.e., there are no updates to these metrics taking place when the method
+    /// is called. This occurs, e.g., after a `step_or_park` call.
+    pub fn update_sink_correction_peak_metrics(&self) {
+        // Correctness argument:
+        // 1. We always update insertions/increases prior to updating deletions/decreases
+        // in each worker. So upon quiescence, the net effect of these must result in a
+        // non-negative quantity.
+        // 2. Every worker will execute the instructions below and compute the same peak.
+        // This is because during quiescence, no changes happen to the previous peak nor
+        // other metrics, and the ones we look at are all shared across workers. So at least
+        // one worker will update the peak with its new value, if there is an increase, at
+        // the quiescence granularity.
+        // Note that we may miss the overall peak if between quiescence moments there are
+        // lots of insertions followed by lots of deletions to the correction buffer. We
+        // find this trade-off more attractive than adding explicity multi-metric synchronization
+        // among workers.
+        let aggregate_correction_len = self
+            .correction_insertions_total
+            .get()
+            .checked_sub(self.correction_deletions_total.get());
+        let Some(aggregate_correction_len) = aggregate_correction_len else {
+            error!(
+                aggregate_correction_len,
+                "Negative aggregate length for persist sink correction"
+            );
+            return;
+        };
+        if aggregate_correction_len > self.correction_peak_len_updates.get() {
+            self.correction_peak_len_updates
+                .set(aggregate_correction_len);
+        }
+        let aggregate_correction_cap = self
+            .correction_capacity_increases_total
+            .get()
+            .checked_sub(self.correction_capacity_decreases_total.get());
+        let Some(aggregate_correction_cap) = aggregate_correction_cap else {
+            error!(
+                aggregate_correction_cap,
+                "Negative aggregate capacity for persist sink correction"
+            );
+            return;
+        };
+        if aggregate_correction_cap > self.correction_peak_capacity_updates.get() {
+            self.correction_peak_capacity_updates
+                .set(aggregate_correction_cap);
+        }
+    }
+}
+
+/// Metrics for the persist sink that are labeled per-worker.
+#[derive(Clone, Debug)]
+pub struct SinkWorkerMetrics {
+    correction_max_per_sink_worker_len_updates: UIntGauge,
+    correction_max_per_sink_worker_capacity_updates: UIntGauge,
+}
+
+impl SinkWorkerMetrics {
+    /// Reports the length and capacity of the correction buffer in the `write_batches`
+    /// operator of `persist_sink`.
+    ///
+    /// This method is used to update metrics that are kept per worker.
+    pub fn report_correction_update_totals(&self, correction_len: usize, correction_cap: usize) {
+        // Maintain per-worker peaks.
+        let correction_len = CastFrom::cast_from(correction_len);
+        if correction_len > self.correction_max_per_sink_worker_len_updates.get() {
+            self.correction_max_per_sink_worker_len_updates
+                .set(correction_len);
+        }
+        let correction_cap = CastFrom::cast_from(correction_cap);
+        if correction_cap > self.correction_max_per_sink_worker_capacity_updates.get() {
+            self.correction_max_per_sink_worker_capacity_updates
+                .set(correction_cap);
         }
     }
 }
