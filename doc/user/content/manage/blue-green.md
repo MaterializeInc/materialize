@@ -16,8 +16,8 @@ Materialize offers some helpful tools to manage Blue/Green deployments. We recom
 We highly recommend using dbt to manage deployments, but this workflow can be recreated using your own custom scripts.
 {{</ note >}}
 
-1. Use schemas and clusters to isolate your changes. Schemas should be the primary container for database objects (views, indexes, materialized views), while clusters are the compute resources that will perform view maintenance and serve queries.
-2. Configure `profiles.yml` to set up the different targets. Use consistent naming across the clusters and schemas that will be deployed together.
+1. Use schemas and clusters to isolate your changes. Schemas should be the primary container for database objects (views, indexes, materialized views), while clusters are the compute resources that will perform view maintenance and serve queries. 
+2. Within your dbt project, configure `profiles.yml` to set up the different targets. Use consistent naming across the clusters and schemas that will be deployed together. In this blue/green deployment we'll switch between two stacks, `prod` and `prod_deploy`.
 
   ```yaml
   default:
@@ -49,7 +49,7 @@ We highly recommend using dbt to manage deployments, but this workflow can be re
   target: prod_deploy
   ```
 
-3. Leave your sources in the public schema and don't touch them. Instead, define them as `sources` in a `schema.yml` file. Since the same source can be shared across your production views and clusters, you won’t need to recreate them.
+3. Leave your sources in a separate schema (e.g. `public` and don't touch them. Instead, define them as `sources` in a `schema.yml` file. Since the same source can be shared across your production views and clusters, you won’t need to recreate them.
 4. Create cluster `prod` and schema `prod` in Materialize and deploy your production objects here.
 
 ## Deploying changes to production
