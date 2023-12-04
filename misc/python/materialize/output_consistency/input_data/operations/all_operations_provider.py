@@ -60,6 +60,9 @@ from materialize.output_consistency.input_data.operations.set_operations_provide
 from materialize.output_consistency.input_data.operations.string_operations_provider import (
     STRING_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.subquery_operation import (
+    SUB_QUERY_OPERATIONS,
+)
 from materialize.output_consistency.input_data.operations.table_operations_provider import (
     TABLE_OPERATION_TYPES,
 )
@@ -93,5 +96,6 @@ ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
         RECORD_OPERATION_TYPES,
         TABLE_OPERATION_TYPES,
         PG_OPERATIONS,
+        SUB_QUERY_OPERATIONS,
     )
 )
