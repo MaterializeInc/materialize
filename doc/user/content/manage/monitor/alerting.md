@@ -6,7 +6,7 @@ menu:
     parent: "monitor"
 ---
 
-After setting up a monitoring tool, it is important to configure alert rules to prevent incidents. Alert rules are designed to send a notification when a metric surpasses a threshold.
+After setting up a monitoring tool, it is important to configure alert rules. Alert rules send a notification when a metric surpasses a threshold. This will help you prevent operational incidents.
 
 This page describes which metrics and thresholds to build as a starting point. For more details on how to set up alert rules in Datadog or Grafana, refer to:
 
