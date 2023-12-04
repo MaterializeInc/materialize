@@ -47,7 +47,7 @@ durably, they are effectively fencing out all previous readers/writers.
 
 Opening a catalog involves the following two steps:
 
-1. Increment the persist epoch.
+1. Increment the epoch.
 2. Either initialize the persisted catalog state if it's uninitialized, or migrate the data format
    if there are any migrations, otherwise do nothing.
 
