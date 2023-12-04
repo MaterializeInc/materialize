@@ -49,7 +49,7 @@ We highly recommend using dbt to manage deployments, but this workflow can be re
   target: prod_deploy
   ```
 
-3. Leave your sources in a separate schema (e.g. `public` and don't touch them. Instead, define them as `sources` in a `schema.yml` file. Since the same source can be shared across your production views and clusters, you won’t need to recreate them.
+3. Leave your sources in a separate schema (e.g. `public`) and don't touch them. Instead, define them as `sources` in a `schema.yml` file. Since the same source can be shared across your production views and clusters, you won’t need to recreate them.
 4. Create cluster `prod` and schema `prod` in Materialize and deploy your production objects here.
 
 ## Deploying changes to production
