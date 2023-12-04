@@ -108,7 +108,7 @@ try() {
     output="$(mktemp)"
     status="$(mktemp)"
     try_job_output+=("$output")
-    "$@" >"$output" 2>&1 <&0 &
+    "$@" >"$output" 2>&1 <&0 & # STDIN redirect is necessary to propagate STDIN
     try_job_pid+=("$!")
 }
 declare -a try_jobs=()
