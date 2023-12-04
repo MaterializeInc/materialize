@@ -3267,6 +3267,9 @@ where
         Ok(read_handle)
     }
 
+    // TODO: This appears to have become unused at some point. Figure out if the
+    // caller is coming back or if we should delete it.
+    #[allow(dead_code)]
     async fn snapshot_and_stream(
         &self,
         id: GlobalId,
