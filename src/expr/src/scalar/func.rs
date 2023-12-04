@@ -33,7 +33,7 @@ use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
-use mz_ore::soft_assert;
+use mz_ore::soft_assert_eq_or_log;
 use mz_pgrepr::Type;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_proto::chrono::any_naive_datetime;
@@ -2781,9 +2781,9 @@ impl BinaryFunc {
             | RangeAdjacent => ScalarType::Bool.nullable(in_nullable),
 
             RangeUnion | RangeIntersection | RangeDifference => {
-                soft_assert!(
-                    input1_type.scalar_type.without_modifiers()
-                        == input2_type.scalar_type.without_modifiers()
+                soft_assert_eq_or_log!(
+                    input1_type.scalar_type.without_modifiers(),
+                    input2_type.scalar_type.without_modifiers()
                 );
                 input1_type.scalar_type.without_modifiers().nullable(true)
             }

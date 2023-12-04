@@ -177,7 +177,7 @@ impl Ident {
 
     /// Append the provided `suffix`, truncating `self` as necessary to satisfy our invariants.
     ///
-    /// Note: We `soft_assert!` that the provided `suffix` is not too long, if it is, we'll
+    /// Note: We soft-assert that the provided `suffix` is not too long, if it is, we'll
     /// truncate it.
     ///
     /// # Examples
@@ -230,7 +230,7 @@ impl Ident {
         const MAX_SUFFIX_LENGTH: usize = Ident::MAX_LENGTH - 8;
 
         let mut suffix: String = suffix.into();
-        mz_ore::soft_assert!(suffix.len() <= MAX_SUFFIX_LENGTH, "suffix too long");
+        mz_ore::soft_assert_or_log!(suffix.len() <= MAX_SUFFIX_LENGTH, "suffix too long");
 
         // Truncate the suffix as necessary.
         if suffix.len() > MAX_SUFFIX_LENGTH {

@@ -603,7 +603,7 @@ mod delta_queries {
 
 mod differential {
     use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
-    use mz_ore::soft_assert;
+    use mz_ore::soft_assert_eq_or_log;
 
     use crate::join_implementation::{FilterCharacteristics, JoinInputCharacteristics};
     use crate::TransformError;
@@ -684,7 +684,7 @@ mod differential {
             } else {
                 // if max_min_characteristics is None, then there must only be
                 // one input and thus only one order in orders
-                soft_assert!(orders.len() == 1);
+                soft_assert_eq_or_log!(orders.len(), 1);
                 orders
                     .remove(0)
                     .into_iter()

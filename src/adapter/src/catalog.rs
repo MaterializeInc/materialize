@@ -2028,7 +2028,11 @@ impl Catalog {
                     let comment_id = state.get_comment_id(id.clone());
                     let deleted = tx.drop_comments(comment_id)?;
                     let dropped = state.comments.drop_comments(comment_id);
-                    mz_ore::soft_assert_eq!(deleted, dropped, "transaction and state out of sync");
+                    mz_ore::soft_assert_eq_or_log!(
+                        deleted,
+                        dropped,
+                        "transaction and state out of sync"
+                    );
 
                     let updates = dropped.into_iter().map(|(id, col_pos, comment)| {
                         state.pack_comment_update(id, col_pos, &comment, -1)

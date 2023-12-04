@@ -2867,7 +2867,7 @@ where
         I: Iterator<Item = GlobalId>,
     {
         assert!(self.txns_init_run);
-        mz_ore::soft_assert!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
+        mz_ore::soft_assert_or_log!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
 
         let id = match self
             .introspection_ids

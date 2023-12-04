@@ -26,7 +26,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
-use mz_ore::{soft_assert, soft_assert_eq, soft_assert_ne};
+use mz_ore::{soft_assert, soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_or_log};
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
@@ -107,7 +107,7 @@ impl UnopenedPersistCatalogState {
     /// Deterministically generate the a ID for the given `organization_id` and `seed`.
     fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
         let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
-        soft_assert_eq!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
+        soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
         let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
         ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
     }
@@ -198,7 +198,7 @@ impl UnopenedPersistCatalogState {
                 format!("catalog tables do not exist; will not create in {mode:?} mode"),
             )));
         }
-        soft_assert_ne!(upper, Timestamp::minimum());
+        soft_assert_ne_or_log!(upper, Timestamp::minimum());
 
         // Perform data migrations.
         if is_initialized && !read_only {
@@ -400,7 +400,7 @@ impl UnopenedPersistCatalogState {
                 }
             })
             .collect();
-        soft_assert!(
+        soft_assert_or_log!(
             configs.len() <= 1,
             "multiple configs should not share the same key: {configs:?}"
         );
@@ -419,7 +419,7 @@ impl UnopenedPersistCatalogState {
             // Configs and the epoch can never be migrated so we know that they will always convert
             // successfully from binary.
             .filter_map(|update| {
-                soft_assert_eq!(update.diff, 1, "snapshot returns consolidated results");
+                soft_assert_eq_or_log!(update.diff, 1, "snapshot returns consolidated results");
                 let kind: Option<StateUpdateKind> = update.kind.clone().try_into().ok();
                 kind
             })
@@ -684,14 +684,14 @@ impl PersistCatalogState {
         {
             if diff == 1 {
                 let prev = map.insert(key, value);
-                soft_assert_eq!(
+                soft_assert_eq_or_log!(
                     prev,
                     None,
                     "values must be explicitly retracted before inserting a new value"
                 );
             } else if diff == -1 {
                 let prev = map.remove(&key);
-                soft_assert_eq!(
+                soft_assert_eq_or_log!(
                     prev,
                     Some(value),
                     "retraction does not match existing value"
@@ -742,7 +742,7 @@ impl PersistCatalogState {
                 }
                 StateUpdateKind::Epoch(epoch) => {
                     if epoch > self.epoch {
-                        soft_assert_eq!(diff, 1);
+                        soft_assert_eq_or_log!(diff, 1);
                         return Err(DurableCatalogError::Fence(format!(
                             "current catalog epoch {} fenced by new catalog epoch {}",
                             self.epoch, epoch
@@ -932,7 +932,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         let mut audit_events = Vec::new();
         let mut storage_usages = Vec::new();
         for StateUpdate { kind, ts: _, diff } in self.persist_snapshot().await {
-            soft_assert_eq!(1, diff, "updates should be consolidated");
+            soft_assert_eq_or_log!(1, diff, "updates should be consolidated");
             match kind {
                 StateUpdateKind::AuditLog(audit_event, ()) => {
                     let audit_event = AuditLogKey::from_proto(audit_event)?.event;
@@ -1155,7 +1155,7 @@ fn as_of(
     read_handle: &ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
     upper: Timestamp,
 ) -> Timestamp {
-    soft_assert!(
+    soft_assert_or_log!(
         upper > Timestamp::minimum(),
         "Catalog persist shard is uninitialized"
     );
@@ -1276,7 +1276,7 @@ async fn get_epoch(
         // The epoch can never be migrated so we know that it will always convert successfully
         // from binary.
         .filter_map(|update| {
-            soft_assert_eq!(update.diff, 1, "snapshot returns consolidated results");
+            soft_assert_eq_or_log!(update.diff, 1, "snapshot returns consolidated results");
             let kind: Option<StateUpdateKind> = update.kind.clone().try_into().ok();
             kind
         })
@@ -1418,7 +1418,7 @@ impl UnopenedPersistCatalogState {
             .values
             .into_iter()
             .filter(|((k, _), _, diff)| {
-                soft_assert_eq!(*diff, 1, "trace is consolidated");
+                soft_assert_eq_or_log!(*diff, 1, "trace is consolidated");
                 &key == k
             })
             .collect();
@@ -1481,7 +1481,7 @@ impl UnopenedPersistCatalogState {
             .values
             .into_iter()
             .filter(|((k, _), _, diff)| {
-                soft_assert_eq!(*diff, 1, "trace is consolidated");
+                soft_assert_eq_or_log!(*diff, 1, "trace is consolidated");
                 &key == k
             })
             .map(|((k, v), _, _)| StateUpdate {

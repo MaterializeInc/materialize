@@ -189,7 +189,7 @@ pub(crate) mod stash {
 }
 
 pub(crate) mod persist {
-    use mz_ore::{soft_assert_eq, soft_assert_ne};
+    use mz_ore::{soft_assert_eq_or_log, soft_assert_ne_or_log};
     use timely::progress::Timestamp as TimelyTimestamp;
 
     use crate::durable::impls::persist::state_update::{
@@ -264,7 +264,7 @@ pub(crate) mod persist {
         persist_handle: &mut UnopenedPersistCatalogState,
         mut upper: Timestamp,
     ) -> Result<Timestamp, CatalogError> {
-        soft_assert_ne!(
+        soft_assert_ne_or_log!(
             upper,
             Timestamp::minimum(),
             "cannot upgrade uninitialized catalog"
@@ -354,7 +354,7 @@ pub(crate) mod persist {
         let snapshot: Vec<_> = snapshot
             .into_iter()
             .map(|update| {
-                soft_assert_eq!(1, update.diff, "snapshot is consolidated");
+                soft_assert_eq_or_log!(1, update.diff, "snapshot is consolidated");
                 V1::try_from(update.clone().kind).expect("invalid catalog data persisted")
             })
             .collect();

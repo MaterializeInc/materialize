@@ -28,7 +28,7 @@ use mz_expr::{
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
-use mz_ore::{soft_assert, task};
+use mz_ore::{soft_assert_or_log, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
@@ -5076,7 +5076,7 @@ impl Coordinator {
                 }
             }
             plan::AlterSourceAction::DropSubsourceExports { to_drop } => {
-                mz_ore::soft_assert!(!to_drop.is_empty());
+                mz_ore::soft_assert_or_log!(!to_drop.is_empty(), "`to_drop` is empty");
 
                 const ALTER_SOURCE: &str = "ALTER SOURCE...DROP TABLES";
 
@@ -5158,8 +5158,8 @@ impl Coordinator {
                                         WithOptionValue::UnresolvedItemName(
                                             column_qualified_reference,
                                         ) => {
-                                            mz_ore::soft_assert!(
-                                                column_qualified_reference.0.len() == 4
+                                            mz_ore::soft_assert_eq_or_log!(
+                                                column_qualified_reference.0.len(), 4
                                             );
                                             if column_qualified_reference.0.len() == 4 {
                                                 let mut table = column_qualified_reference.clone();
@@ -5273,7 +5273,7 @@ impl Coordinator {
                     "dropping subsources does not drop DBs or clusters"
                 );
 
-                soft_assert!(
+                soft_assert_or_log!(
                     dropped_in_use_indexes.is_empty(),
                     "Dropping subsources might drop indexes, but then all objects dependent on the index should also be dropped."
                 );

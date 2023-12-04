@@ -20,7 +20,7 @@
 
 use std::{fmt, mem};
 
-use mz_ore::soft_assert_eq;
+use mz_ore::soft_assert_eq_or_log;
 use mz_sql_lexer::keywords::*;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
@@ -903,7 +903,7 @@ impl<T: AstInfo> FunctionArgs<T> {
             FunctionArgs::Star => unreachable!(),
             FunctionArgs::Args { args, .. } => args,
         };
-        soft_assert_eq!(args.len(), kws.len());
+        soft_assert_eq_or_log!(args.len(), kws.len());
         let mut delim = "";
         for (arg, kw) in args.iter().zip(kws) {
             if let Some(kw) = kw {
