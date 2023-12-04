@@ -166,7 +166,7 @@ struct Args {
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
     #[clap(long, env = "AWS_EXTERNAL_ID", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
-    aws_external_id: Option<AwsExternalIdPrefix>,
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
 
     // === Process orchestrator options. ===
     /// Where to write a PID lock file.
@@ -184,6 +184,11 @@ struct Args {
     tracing: TracingCliArgs,
 
     // === Other options. ===
+    /// An opaque identifier for the environment in which this process is
+    /// running.
+    #[clap(long, env = "ENVIRONMENT_ID")]
+    environment_id: String,
+
     /// A scratch directory that can be used for ephemeral storage.
     #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
     scratch_directory: Option<PathBuf>,
@@ -319,8 +324,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         },
         SYSTEM_TIME.clone(),
         ConnectionContext::from_cli_args(
+            args.environment_id,
             &args.tracing.startup_log_filter,
-            args.aws_external_id,
+            args.aws_external_id_prefix,
             secrets_reader,
             None,
         ),

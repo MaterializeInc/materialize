@@ -585,6 +585,8 @@ where
             ClusterRole::System => "system",
             ClusterRole::User => "user",
         };
+        let environment_id = self.connection_context.environment_id.clone();
+        let aws_external_id_prefix = self.connection_context.aws_external_id_prefix.clone();
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let enable_persist_txn_tables = self.enable_persist_txn_tables;
         let secrets_args = self.secrets_args.to_flags();
@@ -610,7 +612,14 @@ where
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
                             format!("--persist-pubsub-url={}", persist_pubsub_url),
                             format!("--enable-persist-txn-tables={}", enable_persist_txn_tables),
+                            format!("--environment-id={}", environment_id),
                         ];
+                        if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
+                            args.push(format!(
+                                "--aws-external-id-prefix={}",
+                                aws_external_id_prefix
+                            ));
+                        }
                         if let Some(memory_limit) = location.allocation.memory_limit {
                             args.push(format!(
                                 "--announce-memory-limit={}",

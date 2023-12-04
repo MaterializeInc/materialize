@@ -103,7 +103,7 @@ use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
-use mz_secrets::SecretsController;
+use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
@@ -530,7 +530,6 @@ pub struct Config {
     pub default_storage_cluster_size: Option<String>,
     pub builtin_cluster_replica_size: String,
     pub system_parameter_defaults: BTreeMap<String, String>,
-    pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
     pub storage_usage_retention_period: Option<Duration>,
@@ -1009,9 +1008,6 @@ pub struct Coordinator {
     /// Handle to a manager that can create and delete kubernetes resources
     /// (ie: VpcEndpoint objects)
     cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
-
-    /// Extra context to pass through to connection creation.
-    connection_context: ConnectionContext,
 
     /// Metadata about replicas that doesn't need to be persisted.
     /// Intended for inclusion in system tables.
@@ -2171,6 +2167,16 @@ impl Coordinator {
         Arc::make_mut(&mut self.catalog)
     }
 
+    /// Obtain a reference to the coordinator's connection context.
+    fn connection_context(&self) -> &ConnectionContext {
+        self.controller.connection_context()
+    }
+
+    /// Obtain a reference to the coordinator's secret reader.
+    fn secrets_reader(&self) -> &dyn SecretsReader {
+        &*self.connection_context().secrets_reader
+    }
+
     /// Publishes a notice message to all sessions.
     pub(crate) fn broadcast_notice(&mut self, notice: AdapterNotice) {
         for meta in self.active_conns.values() {
@@ -2223,7 +2229,6 @@ pub fn serve(
         builtin_cluster_replica_size,
         system_parameter_defaults,
         availability_zones,
-        connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
         storage_usage_retention_period,
@@ -2254,7 +2259,10 @@ pub fn serve(
 
         let aws_principal_context = match (
             aws_account_id,
-            connection_context.aws_external_id_prefix.clone(),
+            dataflow_client
+                .connection_context()
+                .aws_external_id_prefix
+                .clone(),
         ) {
             (Some(aws_account_id), Some(aws_external_id_prefix)) => Some(AwsPrincipalContext {
                 aws_account_id,
@@ -2271,7 +2279,6 @@ pub fn serve(
             Catalog::open(catalog::Config {
                 storage,
                 metrics_registry: &metrics_registry,
-                secrets_reader: secrets_controller.reader(),
                 storage_usage_retention_period,
                 state: catalog::StateConfig {
                     unsafe_mode,
@@ -2289,7 +2296,7 @@ pub fn serve(
                     aws_principal_context,
                     aws_privatelink_availability_zones,
                     system_parameter_sync_config,
-                    connection_context: Some(connection_context.clone()),
+                    connection_context: dataflow_client.connection_context().clone(),
                     active_connection_count,
                     http_host_name,
                 },
@@ -2378,7 +2385,6 @@ pub fn serve(
                     secrets_controller,
                     caching_secrets_reader,
                     cloud_resource_controller,
-                    connection_context,
                     transient_replica_metadata: BTreeMap::new(),
                     storage_usage_client,
                     storage_usage_collection_interval,
