@@ -348,6 +348,7 @@ steps:
 
       - id: pg-cdc-resumption
         label: Postgres CDC resumption tests
+        parallelism: 2
         depends_on: build-x86_64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc-resumption]
