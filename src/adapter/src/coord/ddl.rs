@@ -48,7 +48,7 @@ use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
 use tracing::{event, warn, Level};
 
-use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, Op, Sink, TransactionResult};
+use crate::catalog::{CatalogState, Op, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};

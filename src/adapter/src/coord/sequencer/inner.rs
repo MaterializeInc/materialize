@@ -423,11 +423,6 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let connection_oid = self.catalog_mut().allocate_oid()?;
-        let cloud_resource_controller = self
-            .cloud_resource_controller
-            .as_ref()
-            .cloned()
-            .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?;
 
         let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
@@ -442,13 +437,21 @@ impl Coordinator {
         }];
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(session), ops, |_coord| async {
+            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 match plan.connection.connection {
                     mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
                         let spec = VpcEndpointConfig {
                             aws_service_name: privatelink.service_name.to_owned(),
                             availability_zone_ids: privatelink.availability_zones.to_owned(),
                         };
+                        let cloud_resource_controller =
+                            match coord.cloud_resource_controller.as_ref().cloned() {
+                                Some(controller) => controller,
+                                None => {
+                                    tracing::warn!("AWS PrivateLink connections unsupported");
+                                    return;
+                                }
+                            };
                         if let Err(err) = cloud_resource_controller
                             .ensure_vpc_endpoint(connection_gid, spec)
                             .await
