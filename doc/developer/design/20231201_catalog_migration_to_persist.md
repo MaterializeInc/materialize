@@ -59,7 +59,7 @@ Below are the steps to migrate from the stash to persist.
 2. Open the persist catalog.
 3. If the stash tombstone is `true`, then we're done.
 4. Read stash catalog snapshot.
-5. Write catalog snapshot to persist.
+5. Replace the contents of the persist catalog with the stash catalog snapshot.
 6. Set the stash tombstone to `true`.
 
 ### Rollback From Persist to Stash
@@ -70,7 +70,7 @@ Below are the steps to rollback from persist to the stash.
 2. Open the persist catalog.
 3. If the stash tombstone is `false` or doesn't exist, then we're done.
 4. Read persist catalog snapshot.
-5. Write catalog snapshot to stash.
+5. Replace the contents of the stash catalog with the persist catalog snapshot.
 6. Set the stash tombstone to `false`.
 
 NOTE: Steps (5) and (6) can be done as a single write as a performance optimization.
