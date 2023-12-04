@@ -642,10 +642,7 @@ impl CatalogState {
             mz_storage_types::connections::Connection::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
             }
-            mz_storage_types::connections::Connection::Csr(_)
-            | mz_storage_types::connections::Connection::Postgres(_)
-            | mz_storage_types::connections::Connection::Aws(_)
-            | mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
+            mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
                 if let Some(aws_principal_context) = self.aws_principal_context.as_ref() {
                     updates.extend(self.pack_aws_privatelink_connection_update(
                         id,
@@ -656,6 +653,9 @@ impl CatalogState {
                     tracing::error!("Missing AWS principal context, cannot write to mz_aws_privatelink_connections table");
                 }
             }
+            mz_storage_types::connections::Connection::Csr(_)
+            | mz_storage_types::connections::Connection::Postgres(_)
+            | mz_storage_types::connections::Connection::Aws(_) => (),
         };
         updates
     }
