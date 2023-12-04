@@ -22,6 +22,7 @@ use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
 use mz_ore::error::ErrorExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
+use mz_postgres_util::replication::WalLevel;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -574,6 +575,14 @@ async fn purify_create_source(
             let config = connection
                 .config(&*connection_context.secrets_reader)
                 .await?;
+
+            let wal_level =
+                mz_postgres_util::get_wal_level(&connection_context.ssh_tunnel_manager, &config)
+                    .await?;
+
+            if wal_level < WalLevel::Logical {
+                Err(PgSourcePurificationError::InsufficientWalLevel { wal_level })?;
+            }
 
             let available_replication_slots = mz_postgres_util::available_replication_slots(
                 &connection_context.ssh_tunnel_manager,

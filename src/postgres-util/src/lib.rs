@@ -91,7 +91,7 @@ macro_rules! bail_generic {
 #[cfg(feature = "replication")]
 pub mod replication;
 #[cfg(feature = "replication")]
-pub use replication::{available_replication_slots, drop_replication_slots};
+pub use replication::{available_replication_slots, drop_replication_slots, get_wal_level};
 #[cfg(feature = "schemas")]
 pub mod desc;
 #[cfg(feature = "schemas")]
