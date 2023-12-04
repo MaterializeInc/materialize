@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = [
+    "src/sql-lexer-wasm",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.74.0"
+
+[workspace.metadata.vet]
+store = { path = "../cargo-vet" }

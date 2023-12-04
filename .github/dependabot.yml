@@ -8,6 +8,14 @@ updates:
     time: "22:00"
   open-pull-requests-limit: 10
   labels: [A-dependencies]
+- package-ecosystem: cargo
+  directory: /misc/wasm
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  open-pull-requests-limit: 10
+  labels: [A-dependencies]
 - package-ecosystem: pip
   directory: /misc/dbt-materialize
   schedule:
