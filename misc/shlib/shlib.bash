@@ -120,7 +120,6 @@ declare -a try_job_pid=()
 #
 # shellcheck disable=SC2120 # avoid misparse of num_jobs
 try_wait() {
-    echo TRY_WAIT $$
     i=0
     num_jobs="${#try_jobs[@]}"
     while ((i < num_jobs)); do
@@ -143,6 +142,7 @@ try_wait() {
         ((++i))
     done
 
+    unset try_jobs try_job_output try_job_pid
     declare -a try_jobs=()
     declare -a try_job_output=()
     declare -a try_job_pid=()
