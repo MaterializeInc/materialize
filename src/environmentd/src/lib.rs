@@ -110,7 +110,7 @@ use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::ConnectionCounter;
+use mz_sql::session::vars::{ConnectionCounter, Var, PERSIST_TXN_TABLES};
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
@@ -503,14 +503,33 @@ impl Listeners {
         );
 
         // Initialize controller.
+        let persist_txn_tables_default = config
+            .system_parameter_defaults
+            .get(PERSIST_TXN_TABLES.name())
+            .map(|x| {
+                PersistTxnTablesImpl::from_str(x).map_err(|err| {
+                    anyhow!(
+                        "failed to parse default for {}: {}",
+                        PERSIST_TXN_TABLES.name(),
+                        err
+                    )
+                })
+            })
+            .transpose()?;
         let mut persist_txn_tables =
-            persist_txn_tables_stash_ld.unwrap_or(PersistTxnTablesImpl::Off);
+            persist_txn_tables_default.unwrap_or(PersistTxnTablesImpl::Off);
+        if let Some(value) = persist_txn_tables_stash_ld {
+            persist_txn_tables = value;
+        }
         if let Some(value) = config.persist_txn_tables_cli {
             persist_txn_tables = value;
         }
         info!(
-            "persist_txn_tables value of {} computed from catalog {:?} and flag {:?}",
-            persist_txn_tables, persist_txn_tables_stash_ld, config.persist_txn_tables_cli,
+            "persist_txn_tables value of {} computed from default {:?} catalog {:?} and flag {:?}",
+            persist_txn_tables,
+            persist_txn_tables_default,
+            persist_txn_tables_stash_ld,
+            config.persist_txn_tables_cli,
         );
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
