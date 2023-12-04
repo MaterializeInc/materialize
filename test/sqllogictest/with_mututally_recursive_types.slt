@@ -1,0 +1,75 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE TABLE y (a BIGINT);
+
+statement ok
+INSERT INTO y VALUES (1);
+
+query T
+WITH MUTUALLY RECURSIVE
+    bar(x NUMERIC) as (SELECT sum(a) FROM y)
+SELECT x FROM bar
+----
+1
+
+query T
+WITH MUTUALLY RECURSIVE
+    bar(x NUMERIC) as (SELECT sum(a) FROM y)
+SELECT pg_typeof(x) FROM bar
+----
+numeric
+
+query T
+WITH MUTUALLY RECURSIVE
+    bar(x NUMERIC) as (SELECT sum(a) + 1.23456 FROM y)
+SELECT x FROM bar
+----
+2.23456
+
+query T
+WITH MUTUALLY RECURSIVE
+    bar(x NUMERIC(38,2)) as (SELECT sum(a) + 1.23456 FROM y)
+SELECT x FROM bar
+----
+2.23
+
+query T
+WITH MUTUALLY RECURSIVE
+    bar(x UINT2) as (SELECT 1::INT8)
+SELECT x FROM bar
+----
+1
+
+query error "-1" uint2 out of range
+WITH MUTUALLY RECURSIVE
+    bar(x UINT2) as (SELECT -1::INT8)
+SELECT x FROM bar
+
+# TODO: '1' should be coercible to an integer.
+query error db error: ERROR: WITH MUTUALLY RECURSIVE query "bar" declared types \(bigint\), but query returns types \(text\)
+WITH MUTUALLY RECURSIVE
+    bar(x INT8) as (SELECT '1')
+SELECT x FROM bar
+
+statement ok
+CREATE TYPE list_numeric_scale_2 AS LIST (ELEMENT TYPE = NUMERIC(38,2));
+
+query T
+WITH MUTUALLY RECURSIVE
+    bar(x list_numeric_scale_2) as (SELECT LIST[sum(a) + 1.2345] FROM y)
+SELECT x::TEXT FROM bar
+----
+{2.23}
+
+query error db error: ERROR: WITH MUTUALLY RECURSIVE query "bar" declared types \(list_numeric_scale_2\), but query returns types \(text list\)
+WITH MUTUALLY RECURSIVE
+    bar(x list_numeric_scale_2) as (SELECT LIST['1'::TEXT])
+SELECT x FROM bar
