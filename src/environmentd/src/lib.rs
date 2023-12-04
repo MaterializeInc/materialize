@@ -91,6 +91,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use futures::FutureExt;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
@@ -402,6 +403,7 @@ impl Listeners {
                 &config.controller,
                 &config.environment_id,
             )
+            .boxed()
             .await?;
 
             if !openable_adapter_storage.is_initialized().await? {
@@ -461,6 +463,7 @@ impl Listeners {
             &config.controller,
             &config.environment_id,
         )
+        .boxed()
         .await?;
         // Get the value from Launch Darkly as of the last time this environment
         // was running. (Ideally it would be the current value, but that's
@@ -519,6 +522,7 @@ impl Listeners {
             envd_epoch,
             enable_persist_txn_tables,
         )
+        .boxed()
         .await;
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
