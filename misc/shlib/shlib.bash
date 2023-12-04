@@ -136,9 +136,6 @@ try_wait() {
         ((++i))
     done
 
-    unset try_jobs
-    unset try_job_output
-    unset try_job_pid
     declare -a try_jobs=()
     declare -a try_job_output=()
     declare -a try_job_pid=()
