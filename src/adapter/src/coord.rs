@@ -1257,10 +1257,8 @@ impl Coordinator {
                 .item()
                 .initial_logical_compaction_window()
                 .map(|duration| {
-                    let ts = Timestamp::from(
-                        u64::try_from(duration.as_millis())
-                            .expect("Timestamp millis must fit in u64"),
-                    );
+                    let ts =
+                        Timestamp::try_from(duration).expect("Timestamp millis must fit in u64");
                     ts
                 });
             match entry.item() {

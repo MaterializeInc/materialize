@@ -68,7 +68,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOptionName, ConnectionOption, ConnectionOptionName,
     CreateSourceConnection, CreateSourceSubsource, DeferredItemName, PgConfigOption,
-    PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
+    PgConfigOptionName, Raw, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{
@@ -1171,7 +1171,7 @@ impl Coordinator {
 
                 self.ship_dataflow(df_desc, cluster_id).await;
 
-                self.set_index_options(id, options).expect("index enabled");
+                self.set_index_options(id, options);
                 Ok(ExecuteResponse::CreatedIndex)
             }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
@@ -4476,42 +4476,101 @@ impl Coordinator {
         }
     }
 
-    pub(super) fn sequence_alter_index_set_options(
+    pub(super) async fn sequence_alter_index_set_options(
         &mut self,
+        session: &Session,
         plan: plan::AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.set_index_options(plan.id, plan.options)?;
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
+        self.apply_index_options(session, plan.id, |index, with_options| {
+            for o in &plan.options {
+                match o {
+                    IndexOption::LogicalCompactionWindow {
+                        window: _,
+                        ast,
+                        duration,
+                    } => {
+                        index.custom_logical_compaction_window = duration.clone();
+                        with_options
+                            .retain(|opt| opt.name != IndexOptionName::LogicalCompactionWindow);
+                        with_options.push(mz_sql_parser::ast::IndexOption {
+                            name: IndexOptionName::LogicalCompactionWindow,
+                            value: ast.as_ref().map(|ast| WithOptionValue::Value(ast.clone())),
+                        });
+                    }
+                }
+            }
+            plan.options
+        })
+        .await
     }
 
-    pub(super) fn sequence_alter_index_reset_options(
+    pub(super) async fn sequence_alter_index_reset_options(
         &mut self,
+        session: &Session,
         plan: plan::AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut options = Vec::with_capacity(plan.options.len());
-        for o in plan.options {
-            options.push(match o {
-                IndexOptionName::LogicalCompactionWindow => {
-                    IndexOption::LogicalCompactionWindow(Some(Duration::from_millis(
-                        DEFAULT_LOGICAL_COMPACTION_WINDOW_TS.into(),
-                    )))
-                }
-            });
-        }
+        self.apply_index_options(session, plan.id, |index, with_options| {
+            let mut options = Vec::with_capacity(plan.options.len());
+            for o in &plan.options {
+                options.push(match o {
+                    IndexOptionName::LogicalCompactionWindow => {
+                        index.custom_logical_compaction_window = None;
+                        with_options
+                            .retain(|opt| opt.name != IndexOptionName::LogicalCompactionWindow);
+                        IndexOption::LogicalCompactionWindow {
+                            ast: None,
+                            duration: None,
+                            window: Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                        }
+                    }
+                });
+            }
+            options
+        })
+        .await
+    }
 
-        self.set_index_options(plan.id, options)?;
-
+    /// For the given index id, provide a fn to mutate it and its SQL for updating.
+    async fn apply_index_options<F>(
+        &mut self,
+        session: &Session,
+        id: GlobalId,
+        f: F,
+    ) -> Result<ExecuteResponse, AdapterError>
+    where
+        F: FnOnce(
+            &mut mz_catalog::memory::objects::Index,
+            &mut Vec<mz_sql_parser::ast::IndexOption<Raw>>,
+        ) -> Vec<IndexOption>,
+    {
+        let mut index = self
+            .catalog()
+            .get_entry(&id)
+            .index()
+            .expect("setting options on index")
+            .clone();
+        let create_stmt = mz_sql::parse::parse(&index.create_sql)
+            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", index.create_sql))
+            .into_element()
+            .ast;
+        let Statement::CreateIndex(mut create_stmt) = create_stmt else {
+            panic!("expected CreateIndex statement");
+        };
+        let options = f(&mut index, &mut create_stmt.with_options);
+        index.create_sql = create_stmt.to_ast_string_stable();
+        let op = catalog::Op::UpdateItem {
+            id,
+            to_item: CatalogItem::Index(index),
+        };
+        self.catalog_transact(Some(session), vec![op]).await?;
+        self.set_index_options(id, options);
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    pub(super) fn set_index_options(
-        &mut self,
-        id: GlobalId,
-        options: Vec<IndexOption>,
-    ) -> Result<(), AdapterError> {
+    pub(super) fn set_index_options(&mut self, id: GlobalId, options: Vec<IndexOption>) {
         for o in options {
             match o {
-                IndexOption::LogicalCompactionWindow(window) => {
+                IndexOption::LogicalCompactionWindow { window, .. } => {
                     // The index is on a specific cluster.
                     let cluster = self
                         .catalog()
@@ -4520,16 +4579,13 @@ impl Coordinator {
                         .expect("setting options on index")
                         .cluster_id;
                     let policy = match window {
-                        Some(time) => {
-                            ReadPolicy::lag_writes_by(time.try_into()?, SINCE_GRANULARITY)
-                        }
+                        Some(time) => ReadPolicy::lag_writes_by(time, SINCE_GRANULARITY),
                         None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
                     };
                     self.update_compute_base_read_policy(cluster, id, policy);
                 }
             }
         }
-        Ok(())
     }
 
     pub(super) async fn sequence_alter_role(
@@ -4840,7 +4896,6 @@ impl Coordinator {
 
         let ops = vec![catalog::Op::UpdateItem {
             id,
-            name: self.catalog.get_entry(&id).name().clone(),
             to_item: CatalogItem::Connection(connection.clone()),
         }];
 
@@ -5183,9 +5238,6 @@ impl Coordinator {
                 // Redefine source.
                 ops.push(catalog::Op::UpdateItem {
                     id,
-                    // Look this up again so we don't have to hold an immutable reference to the
-                    // entry for so long.
-                    name: self.catalog.get_entry(&id).name().clone(),
                     to_item: CatalogItem::Source(source),
                 });
 
@@ -5382,9 +5434,6 @@ impl Coordinator {
                 // Redefine source.
                 ops.push(catalog::Op::UpdateItem {
                     id,
-                    // Look this up again so we don't have to hold an immutable reference to the
-                    // entry for so long.
-                    name: self.catalog.get_entry(&id).name().clone(),
                     to_item: CatalogItem::Source(source),
                 });
 

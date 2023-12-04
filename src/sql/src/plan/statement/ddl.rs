@@ -99,7 +99,7 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
-use crate::plan::with_options::{OptionalInterval, TryFromValue};
+use crate::plan::with_options::{OptionalInterval, RetainedValue, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan,
@@ -4092,29 +4092,34 @@ pub fn plan_drop_owned(
     }))
 }
 
-generate_extracted_config!(IndexOption, (LogicalCompactionWindow, OptionalInterval));
+generate_extracted_config!(
+    IndexOption,
+    (LogicalCompactionWindow, RetainedValue<OptionalInterval>)
+);
 
 fn plan_index_options(
     scx: &StatementContext,
     with_opts: Vec<IndexOption<Aug>>,
 ) -> Result<Vec<crate::plan::IndexOption>, PlanError> {
-    if !with_opts.is_empty() {
-        // Index options are not durable.
-        scx.require_feature_flag(&vars::ENABLE_INDEX_OPTIONS)?;
-    }
-
     let IndexOptionExtracted {
         logical_compaction_window,
-        ..
+        seen: _,
     }: IndexOptionExtracted = with_opts.try_into()?;
 
     let mut out = Vec::with_capacity(1);
 
-    if let Some(OptionalInterval(lcw)) = logical_compaction_window {
+    if let Some(lcw) = logical_compaction_window {
         scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-        out.push(crate::plan::IndexOption::LogicalCompactionWindow(
-            lcw.map(|interval| interval.duration()).transpose()?,
-        ))
+        let duration = lcw
+            .value
+            .0
+            .map(|interval| interval.duration())
+            .transpose()?;
+        out.push(crate::plan::IndexOption::LogicalCompactionWindow {
+            window: duration.map(|duration| duration.try_into()).transpose()?,
+            ast: Some(lcw.ast),
+            duration,
+        })
     }
 
     Ok(out)
