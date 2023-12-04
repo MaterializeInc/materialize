@@ -33,7 +33,7 @@ use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_client::sink::ProgressRecord;
-use mz_storage_types::connections::{ConnectionContext, KafkaConnection};
+use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
     KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkAsOf, SinkEnvelope, StorageSinkDesc,
@@ -216,7 +216,7 @@ impl ProducerContext for SinkProducerContext {
 
 struct KafkaTxProducerConfig<'a> {
     name: String,
-    connection: &'a KafkaConnection,
+    connection: &'a KafkaSinkConnection,
     connection_context: &'a ConnectionContext,
     producer_context: SinkProducerContext,
     sink_id: GlobalId,
@@ -245,6 +245,7 @@ impl KafkaTxProducer {
         // versions, if any. This section should be removed after it has been running in
         // production for a week or two.
         let fence_producer: ThreadedProducer<_> = connection
+            .connection
             .create_with_context(
                 connection_context,
                 MzClientContext::default(),
@@ -264,6 +265,7 @@ impl KafkaTxProducer {
         .check_ssh_status(fence_producer.context())?;
 
         let producer = connection
+            .connection
             .create_with_context(
                 connection_context,
                 producer_context,
@@ -273,6 +275,8 @@ impl KafkaTxProducer {
                     // instance of a producer - in the case of restarts, all
                     // bets are off and full exactly once support is required.
                     "enable.idempotence" => "true".into(),
+                    // Use the compression type requested by the user.
+                    "compression.type" => connection.compression_type.to_librdkafka_option().into(),
                     // Increase limits for the Kafka producer's internal
                     // buffering of messages Currently we don't have a great
                     // backpressure mechanism to tell indexes or views to slow
@@ -492,7 +496,7 @@ impl KafkaSinkState {
 
                 KafkaTxProducer::new(KafkaTxProducerConfig {
                     name: sink_name.clone(),
-                    connection: &connection.connection,
+                    connection: &connection,
                     connection_context,
                     producer_context,
                     sink_id,
