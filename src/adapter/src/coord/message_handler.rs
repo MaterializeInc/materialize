@@ -46,8 +46,17 @@ impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) fn handle_message<'a>(&'a mut self, msg: Message) -> LocalBoxFuture<'a, ()> {
+    ///
+    /// We pass in a span from the outside, rather than instrumenting this
+    /// method using `#instrument[...]` or calling `.instrument()` at the
+    /// callsite so that we can correctly instrument the boxed future here _and_
+    /// so that we can stitch up the OpenTelemetryContext when we're processing
+    /// a `Message::Command` or other commands that pass around a context.
+    pub(crate) fn handle_message<'a>(
+        &'a mut self,
+        span: tracing::Span,
+        msg: Message,
+    ) -> LocalBoxFuture<'a, ()> {
         async move {
             match msg {
                 Message::Command(otel_ctx, cmd) => {
@@ -150,6 +159,7 @@ impl Coordinator {
                 }
             }
         }
+        .instrument(span)
         .boxed_local()
     }
 

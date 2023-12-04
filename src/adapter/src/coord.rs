@@ -2126,8 +2126,10 @@ impl Coordinator {
                     }
                 };
 
+                // All message processing functions trace. Start a parent span
+                // for them to make it easy to find slow messages.
                 let msg_kind = msg.kind();
-                let span = span!(Level::DEBUG, "coordinator processing", kind = msg_kind);
+                let span = span!(Level::DEBUG, "coordinator processing (handle_message)", kind = msg_kind);
                 let otel_context = span.context().span().span_context().clone();
 
                 // Record the last kind of message incase we get stuck.
@@ -2136,10 +2138,7 @@ impl Coordinator {
                 }
 
                 let start = Instant::now();
-                self.handle_message(msg)
-                    // All message processing functions trace. Start a parent span for them to make
-                    // it easy to find slow messages.
-                    .instrument(span)
+                self.handle_message(span, msg)
                     .await;
                 let duration = start.elapsed();
 
