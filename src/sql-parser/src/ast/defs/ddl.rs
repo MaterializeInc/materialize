@@ -820,16 +820,10 @@ impl_display_t!(CreateConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KafkaConfigOptionName {
-    Acks,
-    ClientId,
     CompressionType,
-    EnableIdempotence,
-    FetchMessageMaxBytes,
     GroupIdPrefix,
-    IsolationLevel,
     Topic,
     TopicMetadataRefreshIntervalMs,
-    TransactionTimeoutMs,
     StartTimestamp,
     StartOffset,
     PartitionCount,
@@ -841,18 +835,12 @@ pub enum KafkaConfigOptionName {
 impl AstDisplay for KafkaConfigOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            KafkaConfigOptionName::Acks => "ACKS",
-            KafkaConfigOptionName::ClientId => "CLIENT ID",
             KafkaConfigOptionName::CompressionType => "COMPRESSION TYPE",
-            KafkaConfigOptionName::EnableIdempotence => "ENABLE IDEMPOTENCE",
-            KafkaConfigOptionName::FetchMessageMaxBytes => "FETCH MESSAGE MAX BYTES",
             KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
-            KafkaConfigOptionName::IsolationLevel => "ISOLATION LEVEL",
             KafkaConfigOptionName::Topic => "TOPIC",
             KafkaConfigOptionName::TopicMetadataRefreshIntervalMs => {
                 "TOPIC METADATA REFRESH INTERVAL MS"
             }
-            KafkaConfigOptionName::TransactionTimeoutMs => "TRANSACTION TIMEOUT MS",
             KafkaConfigOptionName::StartOffset => "START OFFSET",
             KafkaConfigOptionName::StartTimestamp => "START TIMESTAMP",
             KafkaConfigOptionName::PartitionCount => "PARTITION COUNT",
