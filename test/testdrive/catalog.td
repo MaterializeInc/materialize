@@ -50,7 +50,7 @@ $ psql-execute command=\dn
      Name     |   Owner
 --------------+-----------
  mz_catalog   | mz_system
- mz_unsafe | mz_system
+ mz_unsafe    | mz_system
  mz_internal  | mz_system
  public       | mz_system
 
@@ -67,7 +67,7 @@ $ psql-execute command="\dn mz_*"
      Name     |   Owner
 --------------+-----------
  mz_catalog   | mz_system
- mz_unsafe | mz_system
+ mz_unsafe    | mz_system
  mz_internal  | mz_system
 
 # What objects do we have by default?
