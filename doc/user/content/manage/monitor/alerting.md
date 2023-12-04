@@ -6,24 +6,20 @@ menu:
     parent: "monitor"
 ---
 
-After setting up your monitoring tool, it is essential to configure alerting rules.
-These rules are designed to trigger a warning or alert message
-when a **metric** surpasses a **particular threshold**, helping to investigate
-and prevent incidents.
+After setting up a monitoring tool, it is important to configure alert rules to prevent incidents. Alert rules are designed to send a notification when a metric surpasses a threshold.
 
-This page describes which **thresholds** and **metrics** are crucial.
-For more details on how to set up an alert in Datadog or Grafana, refer to:
+This page describes which metrics and thresholds to build as a starting point. For more details on how to set up alert rules in Datadog or Grafana, refer to:
 
  * [Datadog monitors](https://docs.datadoghq.com/monitors/)
  * [Grafana alerts](https://grafana.com/docs/grafana/latest/alerting/fundamentals/)
 
 ## Thresholds
 
-Alerting rules can have two different severity level thresholds that we are going to define as follows:
+Alert rules tend to have two threshold levels, and we are going to define them as follows:
  * **Warning:** represents a call to attention to a symptom with high chances to develop into an issue.
  * **Alert:** represents an active issue that requires immediate action.
 
-Use the following table as a guide to set up your own alerting rules:
+For each threshold level, use the following table as a guide to set up your own alert rules:
 
 Metric | Warning | Alert | Description
 -- | -- | -- | --
@@ -31,22 +27,22 @@ CPU | 85% | 100% | Average CPU usage for a cluster in the last *60 minutes*.
 Memory | 80% | 90% | Average memory usage for a cluster in the last *30 minutes*.
 Status | - | On Change | Source status change in the last *5 minutes*.
 Distribution | Time spent by worker > Avg * 1.5 | Time spent by worker > Avg * 2 | Average [work distribution](https://materialize.com/docs/manage/troubleshooting/#is-work-distributed-equally-across-workers) in the last *60 minutes*.
-Freshness | > 1s | > 1m | Average [lag behind an input](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_materialization_lag) in the last *30 minutes*.
+Freshness | > 5s | > 1m | Average [lag behind an input](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_materialization_lag) in the last *30 minutes*.
 
-### SLA Thresholds
+### Custom Thresholds
 
-The following metrics will change depending your business target SLAs:
+For the following table, replace the two variables, _X_ and _Y_, by your organization and use case:
 
 Metric | Warning | Alert | Description
 -- | -- | -- | --
-Latency | p99 > X | p99 > Y | Latency percentile from the activity log in the last *60 minutes*. Where X and Y are the expected latencies.
-Credits | Consumption rate increase by X% | Consumption rate increase by Y% | Average credit consumption in the last *60 minutes*.
+Latency | p99 > X | p99 > Y | Latency percentile from the activity log in the last *30 minutes*. Where X and Y are the expected latencies in milliseconds.
+Credits | Consumption rate increase by X% | Consumption rate increase by Y% | Average credit consumption in the last *30 minutes*.
 
 ## Maintenance window
 
-Materialize has a [release and a maintenance window almost every week](https://materialize.com/docs/releases/) at a defined [schedule hours](https://materialize.com/docs/releases/#schedule). We announce every maintenance window on the [status page](https://status.materialize.com/), where you can subscribe to updates and receive alerts for this, or any other unexpected event.
+Materialize has a [release and a maintenance window almost every week](https://materialize.com/docs/releases/) at a defined [schedule](https://materialize.com/docs/releases/#schedule). We announce every maintenance window on the [status page](https://status.materialize.com/), where you can subscribe to updates and receive alerts for this, or an unexpected incident at Materialize.
 
-After an upgrade, you’ll experience just a few minutes of downtime and the rehydration process. During this brieft period of time, alerts may get trigger. For these cases, you can configure your moring tool as follows to avoid unnecesary alerts:
+After an upgrade, you’ll experience a few minutes of downtime and the rehydration process. Alerts may get trigger during this brief period of time. For this case, you can configure your moring tool to avoid unnecesary alerts as follows:
 
 * [Datadog dowtimes](https://docs.datadoghq.com/monitors/downtimes/)
 * [Grafana mute timings](https://grafana.com/docs/grafana/latest/alerting/manage-notifications/mute-timings/)
