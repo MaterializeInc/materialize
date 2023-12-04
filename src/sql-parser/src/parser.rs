@@ -30,7 +30,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_sql_lexer::keywords::*;
-use mz_sql_lexer::lexer::{self, LexerError, PosToken, Token};
+use mz_sql_lexer::lexer::{self, IdentString, LexerError, PosToken, Token};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 use IsLateral::*;
@@ -586,7 +586,7 @@ impl<'a> Parser<'a> {
                 ));
             }
             Token::Keyword(id) => self.parse_qualified_identifier(id.into()),
-            Token::Ident(id) => self.parse_qualified_identifier(Ident::from(id)),
+            Token::Ident(id) => self.parse_qualified_identifier(self.new_identifier(id)?),
             Token::Op(op) if op == "-" => {
                 if let Some(Token::Number(n)) = self.peek_token() {
                     let n = match n.parse::<f64>() {
@@ -910,7 +910,7 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::LParen)?;
         let field = match self.next_token() {
             Some(Token::Keyword(kw)) => Ident::from(kw).into_string(),
-            Some(Token::Ident(id)) => Ident::from(id).into_string(),
+            Some(Token::Ident(id)) => self.new_identifier(id)?.into_string(),
             Some(Token::String(s)) => s,
             t => self.expected(self.peek_prev_pos(), "extract field token", t)?,
         };
@@ -1262,7 +1262,7 @@ impl<'a> Parser<'a> {
             match self.next_token() {
                 Some(Token::Ident(id)) => Ok(Expr::FieldAccess {
                     expr: Box::new(expr),
-                    field: Ident::from(id),
+                    field: self.new_identifier(id)?,
                 }),
                 // Per PostgreSQL, even reserved keywords are ok after a field
                 // access operator.
@@ -1382,7 +1382,7 @@ impl<'a> Parser<'a> {
         let op = loop {
             match self.next_token() {
                 Some(Token::Keyword(kw)) => namespace.push(kw.into()),
-                Some(Token::Ident(id)) => namespace.push(Ident::from(id)),
+                Some(Token::Ident(id)) => namespace.push(self.new_identifier(id)?),
                 Some(Token::Op(op)) => break op,
                 Some(Token::Star) => break "*".to_string(),
                 tok => self.expected(self.peek_prev_pos(), "operator", tok)?,
@@ -3962,7 +3962,7 @@ impl<'a> Parser<'a> {
         loop {
             if let Some(constraint) = self.parse_optional_table_constraint()? {
                 constraints.push(constraint);
-            } else if let Some(column_name) = self.consume_identifier() {
+            } else if let Some(column_name) = self.consume_identifier()? {
                 let data_type = self.parse_data_type()?;
                 let collation = if self.parse_keyword(COLLATE) {
                     Some(self.parse_item_name()?)
@@ -5547,7 +5547,7 @@ impl<'a> Parser<'a> {
             // (For example, in `FROM t1 JOIN` the `JOIN` will always be parsed as a keyword,
             // not an alias.)
             Some(Token::Keyword(kw)) if after_as || !is_reserved(kw) => Ok(Some(kw.into())),
-            Some(Token::Ident(id)) => Ok(Some(Ident::from(id))),
+            Some(Token::Ident(id)) => Ok(Some(self.new_identifier(id)?)),
             not_an_ident => {
                 if after_as {
                     return self.expected(
@@ -5694,7 +5694,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a simple one-word identifier (possibly quoted, possibly a keyword)
     fn parse_identifier(&mut self) -> Result<Ident, ParserError> {
-        match self.consume_identifier() {
+        match self.consume_identifier()? {
             Some(id) => {
                 if id.as_str().is_empty() {
                     return parser_err!(
@@ -5709,17 +5709,17 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn consume_identifier(&mut self) -> Option<Ident> {
+    fn consume_identifier(&mut self) -> Result<Option<Ident>, ParserError> {
         match self.peek_token() {
             Some(Token::Keyword(kw)) => {
                 self.next_token();
-                Some(kw.into())
+                Ok(Some(kw.into()))
             }
             Some(Token::Ident(id)) => {
                 self.next_token();
-                Some(Ident::from(id))
+                Ok(Some(self.new_identifier(id)?))
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -5731,7 +5731,7 @@ impl<'a> Parser<'a> {
                 while self.consume_token(&Token::Dot) {
                     match self.next_token() {
                         Some(Token::Keyword(kw)) => id_parts.push(kw.into()),
-                        Some(Token::Ident(id)) => id_parts.push(Ident::from(id)),
+                        Some(Token::Ident(id)) => id_parts.push(self.new_identifier(id)?),
                         Some(Token::Star) => {
                             ends_with_wildcard = true;
                             break;
@@ -8135,6 +8135,17 @@ impl<'a> Parser<'a> {
         };
 
         Ok(Statement::Comment(CommentStatement { object, comment }))
+    }
+
+    pub fn new_identifier<S>(&self, s: S) -> Result<Ident, ParserError>
+    where
+        S: TryInto<IdentString>,
+        <S as TryInto<IdentString>>::Error: fmt::Display,
+    {
+        Ident::new(s).map_err(|e| ParserError {
+            pos: self.peek_prev_pos(),
+            message: e.to_string(),
+        })
     }
 }
 

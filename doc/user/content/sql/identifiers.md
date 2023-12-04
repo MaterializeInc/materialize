@@ -25,6 +25,8 @@ e.g. `"123_source"` or `"fun_source_@"`. All characters inside a quoted
 identifier are taken literally, except that double-quotes must be escaped by
 writing two adjacent double-quotes, as in `"includes""quote"`.
 
+Additionally, the identifiers `"."` and `".."` are not permitted.
+
 ## Case sensitivity
 
 Materialize performs case folding (the caseless comparison of text) for identifiers, which means that identifiers are effectively case-insensitive (`foo` is the same as `FOO` is the same as `fOo`). This can cause issues when column names come from data sources which do support case-sensitive names, such as Avro-formatted sources or CSV headers.
