@@ -361,7 +361,7 @@ impl Coordinator {
         let histogram = self
             .metrics
             .append_table_duration_seconds
-            .with_label_values(&["false"]);
+            .with_label_values(&[]);
         let append_fut = self
             .controller
             .storage
@@ -378,10 +378,12 @@ impl Coordinator {
             || "group_commit_apply",
             async move {
                 // Wait for the writes to complete.
-                append_fut
-                    .await
-                    .expect("One-shot dropped while waiting")
-                    .unwrap_or_terminate("cannot fail to apply appends");
+                match append_fut.await {
+                    Ok(append_result) => {
+                        append_result.unwrap_or_terminate("cannot fail to apply appends")
+                    }
+                    Err(_) => warn!("Writer terminated with writes in indefinite state"),
+                };
 
                 // Apply the write by marking the timestamp as complete on the timeline.
                 //
@@ -389,10 +391,29 @@ impl Coordinator {
                 // which is what allows us to move this future into a separate task. A shareable
                 // oracle isn't always available, which is why we fallback to an internal command.
                 match apply_write_fut {
-                    Some(fut) => fut.await,
+                    Some(fut) => {
+                        // Wait for the timeline update to complete.
+                        fut.await;
+
+                        // Notify the external clients of the result.
+                        for response in responses {
+                            let (ctx, result) = response.finalize();
+                            ctx.retire(result);
+                        }
+
+                        // Advance other timelines.
+                        if let Err(e) = internal_cmd_tx.send(Message::AdvanceTimelines) {
+                            warn!("Server closed with non-advanced timelines, {e}");
+                        }
+                    }
                     None => {
-                        // Trigger a GroupCommitApply, which will run before any user commands since we're
-                        // sending it on the internal command sender.
+                        // Trigger a GroupCommitApply, which will run before any user commands
+                        // since we're sending it on the internal command sender.
+                        //
+                        // Note: while technically we should have `GroupCommitApply` update the
+                        // notifies, we know that internal commands get processed before any user
+                        // commands, so the writes are still guaranteed to be observable before any
+                        // user commands.
                         if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
                             timestamp,
                             responses,
@@ -404,10 +425,6 @@ impl Coordinator {
                     }
                 }
 
-                // Note: while technically we should have `GroupCommitApply` update the notifies, we
-                // know that internal commands get processed before any user commands, so the writes
-                // are still guaranteed to be observable before any user commands, because we
-                // submitted the GroupCommitApply above.
                 for notify in notifies {
                     // We don't care if the listeners have gone away.
                     let _ = notify.send(());
