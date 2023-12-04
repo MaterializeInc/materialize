@@ -29,6 +29,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
+use mz_repr::cluster::{ClusterState, ClusterTransition};
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
 use mz_sql::ast::display::AstDisplay;
@@ -1726,6 +1727,8 @@ pub struct ClusterVariantManaged {
     pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
     pub disk: bool,
+    pub state: ClusterState,
+    pub transition: ClusterTransition,
 }
 
 impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
@@ -1737,6 +1740,8 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             idle_arrangement_merge_effort: managed.idle_arrangement_merge_effort,
             replication_factor: managed.replication_factor,
             disk: managed.disk,
+            state: managed.state,
+            transition: managed.transition,
         }
     }
 }
@@ -1750,6 +1755,8 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             idle_arrangement_merge_effort: managed.idle_arrangement_merge_effort,
             replication_factor: managed.replication_factor,
             disk: managed.disk,
+            state: managed.state,
+            transition: managed.transition,
         }
     }
 }
@@ -1908,6 +1915,20 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
 
     fn is_managed(&self) -> bool {
         self.is_managed()
+    }
+
+    fn state(&self) -> ClusterState {
+        match self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged { state, .. }) => state,
+            ClusterVariant::Unmanaged => ClusterState::Active,
+        }
+    }
+
+    fn transition(&self) -> ClusterTransition {
+        match self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged { transition, .. }) => transition,
+            ClusterVariant::Unmanaged => ClusterTransition::Never,
+        }
     }
 }
 

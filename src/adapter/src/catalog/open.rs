@@ -980,7 +980,7 @@ impl Catalog {
                 );
             }
             for (id, cluster) in &catalog.state.clusters_by_id {
-                builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
+                builtin_table_updates.extend(catalog.state.pack_cluster_update(&cluster.name, 1));
                 if let Some(linked_object_id) = cluster.linked_object_id {
                     builtin_table_updates.push(catalog.state.pack_cluster_link_update(
                         &cluster.name,

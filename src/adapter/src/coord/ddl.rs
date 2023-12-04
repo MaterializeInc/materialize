@@ -14,10 +14,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use fail::fail_point;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
+use mz_catalog::memory::objects::ClusterVariant;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
@@ -27,6 +29,7 @@ use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::cluster::{ClusterState, ClusterTransition};
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
@@ -47,7 +50,7 @@ use tracing::{event, warn, Level};
 use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, Op, Sink, TransactionResult};
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::{Coordinator, ReplicaMetadata};
+use crate::coord::{ClusterTransitionEvent, Coordinator, Message, ReplicaMetadata};
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::SegmentClientExt;
@@ -176,6 +179,7 @@ impl Coordinator {
         let mut secrets_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
+        let mut clusters_to_schedule = vec![];
         let mut cluster_replicas_to_drop = vec![];
         let mut peeks_to_drop = vec![];
         let mut update_tracing_config = false;
@@ -301,6 +305,19 @@ impl Coordinator {
                     update_jemalloc_profiling_config = true;
                     update_default_arrangement_merge_options = true;
                     update_http_config = true;
+                }
+                catalog::Op::UpdateClusterConfig { id, config, .. }
+                | catalog::Op::CreateCluster { id, config, .. } => {
+                    let metadata = match &config.variant {
+                        ClusterVariant::Managed(managed) => {
+                            Some((managed.transition, managed.state))
+                        }
+                        ClusterVariant::Unmanaged => None,
+                    };
+                    if let Some((ClusterTransition::DateTime(datetime), expected_state)) = metadata
+                    {
+                        clusters_to_schedule.push((*id, datetime, expected_state))
+                    };
                 }
                 _ => (),
             }
@@ -516,7 +533,11 @@ impl Coordinator {
             if !clusters_to_drop.is_empty() {
                 for cluster_id in clusters_to_drop {
                     self.controller.drop_cluster(cluster_id);
+                    self.unschedule_cluster_transition(cluster_id);
                 }
+            }
+            for (id, datetime, expected_state) in clusters_to_schedule {
+                self.schedule_cluster_transition(id, datetime, expected_state);
             }
 
             // We don't want to block the coordinator on an external postgres server, so
@@ -775,6 +796,49 @@ impl Coordinator {
         self.catalog_transact_conn(Some(conn_id), ops)
             .await
             .expect("unable to drop temporary items for conn_id");
+    }
+
+    pub(crate) fn unschedule_cluster_transition(&mut self, id: ClusterId) {
+        if let Some(handle) = self.cluster_schedule_map.remove(&id) {
+            handle.abort();
+        }
+    }
+
+    pub(crate) fn schedule_cluster_transition(
+        &mut self,
+        id: ClusterId,
+        datetime: DateTime<Utc>,
+        expected_state: ClusterState,
+    ) {
+        let internal_command_tx = self.internal_cmd_tx.clone();
+        let duration = datetime - self.now_datetime();
+
+        // Note: This guards against negative durations.
+        let Ok(duration) = duration.to_std() else {
+            return;
+        };
+
+        let handle = mz_ore::task::spawn(|| format!("cluster-{id}-schedule-task"), async move {
+            tracing::info!(
+                ?id,
+                ?expected_state,
+                ?duration,
+                "Scheduled Cluster Transition"
+            );
+            tokio::time::sleep(duration).await;
+            tracing::info!(?id, "Transition Task woke up!");
+
+            let _ = internal_command_tx.send(Message::ClusterTransition(ClusterTransitionEvent {
+                id,
+                expected_state,
+            }));
+        });
+
+        let prev = self.cluster_schedule_map.insert(id, handle);
+        if let Some(prev_handle) = prev {
+            tracing::info!(?id, "Canceling previous schedule task");
+            prev_handle.abort();
+        }
     }
 
     fn update_cluster_scheduling_config(&mut self) {

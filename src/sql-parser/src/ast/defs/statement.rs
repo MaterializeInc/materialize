@@ -1628,7 +1628,7 @@ impl AstDisplay for ClusterOptionName {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// An option in a `CREATE CLUSTER` ostatement.
+/// An option in a `CREATE CLUSTER` statement.
 pub struct ClusterOption<T: AstInfo> {
     pub name: ClusterOptionName,
     pub value: Option<WithOptionValue<T>>,
@@ -1690,8 +1690,13 @@ impl_display_t!(ReplicaDefinition);
 pub enum AlterClusterAction<T: AstInfo> {
     SetOptions(Vec<ClusterOption<T>>),
     ResetOptions(Vec<ClusterOptionName>),
-    Suspend,
-    Resume { if_suspended: bool },
+    Suspend {
+        interval: Option<Value>,
+    },
+    Resume {
+        interval: Option<Value>,
+        if_suspended: bool,
+    },
 }
 
 /// `ALTER CLUSTER .. SET ...`
@@ -1724,9 +1729,24 @@ impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
                 f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
-            AlterClusterAction::Suspend => f.write_str("SUSPEND"),
-            AlterClusterAction::Resume { if_suspended } => {
+            AlterClusterAction::Suspend { interval: period } => {
+                f.write_str("SUSPEND");
+                if let Some(period) = period {
+                    f.write_str(" FOR ");
+                    f.write_node(period);
+                }
+            }
+            AlterClusterAction::Resume {
+                interval: period,
+                if_suspended,
+            } => {
                 f.write_str("RESUME");
+
+                if let Some(period) = period {
+                    f.write_str(" FOR ");
+                    f.write_node(period);
+                }
+
                 if *if_suspended {
                     f.write_str(" IF SUSPENDED");
                 }

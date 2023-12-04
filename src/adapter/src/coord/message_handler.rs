@@ -16,11 +16,14 @@ use std::time::{Duration, Instant};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
+use mz_orchestrator::ServiceStatus;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::usage::ShardsUsageReferenced;
+use mz_repr::cluster::{ClusterState, ClusterTransition};
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
@@ -33,8 +36,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::{
-    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
-    PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
+    ClusterTransitionEvent, Coordinator, CreateConnectionValidationReady, Message, PeekStage,
+    PeekStageFinish, PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
 };
 use crate::session::Session;
 use crate::util::{ComputeSinkId, ResultExt};
@@ -97,6 +100,9 @@ impl Coordinator {
                     self.advance_timelines().await;
                 }
                 Message::ClusterEvent(event) => self.message_cluster_event(event).await,
+                Message::ClusterTransition(transition_event) => {
+                    self.message_cluster_transition(transition_event).await
+                }
                 // Processing this message DOES NOT send a response to the client;
                 // in any situation where you use it, you must also have a code
                 // path that responds to the client (e.g. reporting an error).
@@ -567,13 +573,52 @@ impl Coordinator {
         // here.
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn message_cluster_transition(&mut self, event: ClusterTransitionEvent) {
+        let Some(mut cluster) = self.catalog().try_get_cluster(event.id).cloned() else {
+            tracing::error!(?event.id, "Unknown ID when running cluster schedule");
+            return;
+        };
+        let ClusterVariant::Managed(managed_cluster) = &mut cluster.config.variant else {
+            tracing::error!(?event.id, "Found non-managed cluster when running schedule");
+            return;
+        };
+        if managed_cluster.state != event.expected_state {
+            tracing::error!(
+                ?event.id,
+                ?managed_cluster,
+                ?event.expected_state,
+                "Managed Cluster was not in expected state"
+            );
+        }
+
+        // Everything is as we expect! Transition the cluster to the new state.
+        let new_state = match managed_cluster.state {
+            ClusterState::Active => ClusterState::Suspended,
+            ClusterState::Suspended => ClusterState::Active,
+        };
+        managed_cluster.state = new_state;
+        managed_cluster.transition = ClusterTransition::Never;
+
+        self.catalog_transact(
+            None,
+            vec![catalog::Op::UpdateClusterConfig {
+                id: cluster.id,
+                name: cluster.name,
+                config: cluster.config,
+            }],
+        )
+        .await
+        .unwrap_or_terminate("updating cluster schedule cannot fail");
+    }
+
     #[tracing::instrument(level = "debug", skip_all)]
     async fn message_cluster_event(&mut self, event: ClusterEvent) {
-        event!(Level::TRACE, event = format!("{:?}", event));
+        event!(Level::INFO, event = format!("{:?}", event));
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.
-        let Some(cluster) = self.catalog().try_get_cluster(event.cluster_id) else {
+        let Some(mut cluster) = self.catalog().try_get_cluster(event.cluster_id).cloned() else {
             return;
         };
         let Some(replica) = cluster.replica(event.replica_id) else {
@@ -603,6 +648,35 @@ impl Coordinator {
                     status: new_status,
                     time: event.time,
                 });
+            }
+        }
+
+        if event.status == ServiceStatus::Ready {
+            if let ClusterConfig {
+                variant: ClusterVariant::Managed(managed_cluster),
+            } = &mut cluster.config
+            {
+                let new_transition = match managed_cluster.transition {
+                    ClusterTransition::Interval(interval) => {
+                        let datetime = self.now_datetime() + interval.duration_as_chrono();
+                        Some(ClusterTransition::DateTime(datetime))
+                    }
+                    ClusterTransition::DateTime(_) | ClusterTransition::Never => None,
+                };
+
+                if let Some(new_transition) = new_transition {
+                    managed_cluster.transition = new_transition;
+                    self.catalog_transact(
+                        None,
+                        vec![catalog::Op::UpdateClusterConfig {
+                            id: cluster.id,
+                            name: cluster.name,
+                            config: cluster.config.clone(),
+                        }],
+                    )
+                    .await
+                    .unwrap_or_terminate("updating cluster schedule cannot fail");
+                }
             }
         }
     }

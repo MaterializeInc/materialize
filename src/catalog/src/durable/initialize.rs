@@ -15,6 +15,7 @@ use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::cluster::{ClusterState, ClusterTransition};
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{
     DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes, RoleMembership,
@@ -605,6 +606,8 @@ fn default_cluster_config(args: &BootstrapArgs) -> ClusterConfig {
             },
             idle_arrangement_merge_effort: None,
             disk: false,
+            state: ClusterState::default(),
+            transition: ClusterTransition::default(),
         }),
     }
 }

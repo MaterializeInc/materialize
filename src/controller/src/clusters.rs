@@ -30,6 +30,7 @@ use mz_orchestrator::{
 use mz_ore::halt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::cluster::ClusterState;
 use mz_repr::GlobalId;
 use once_cell::sync::Lazy;
 use regex::Regex;

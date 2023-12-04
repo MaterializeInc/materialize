@@ -2246,6 +2246,7 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("replication_factor", ScalarType::UInt32.nullable(true))
         .with_column("disk", ScalarType::Bool.nullable(true))
+        .with_column("state", ScalarType::String.nullable(false))
         .with_column(
             "availability_zones",
             ScalarType::List {
@@ -2254,6 +2255,17 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             }
             .nullable(true),
         ),
+    is_retained_metrics_object: false,
+    sensitivity: DataSensitivity::Public,
+});
+
+pub static MZ_CLUSTER_SCHEDULES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_schedules",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("action", ScalarType::String.nullable(false))
+        .with_column("transition_at", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
@@ -5943,6 +5955,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_OPERATORS),
         Builtin::Table(&MZ_AGGREGATES),
         Builtin::Table(&MZ_CLUSTERS),
+        Builtin::Table(&MZ_CLUSTER_SCHEDULES),
         Builtin::Table(&MZ_CLUSTER_LINKS),
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),

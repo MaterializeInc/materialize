@@ -38,6 +38,7 @@ use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSe
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::cluster::{ClusterState, ClusterTransition};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
@@ -1561,6 +1562,7 @@ pub struct PlanClusterOption {
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
     pub disk: AlterOptionParameter<bool>,
+    pub state: AlterOptionParameter<(ClusterState, ClusterTransition)>,
 }
 
 impl Default for PlanClusterOption {
@@ -1575,6 +1577,7 @@ impl Default for PlanClusterOption {
             replication_factor: AlterOptionParameter::Unchanged,
             size: AlterOptionParameter::Unchanged,
             disk: AlterOptionParameter::Unchanged,
+            state: AlterOptionParameter::Unchanged,
         }
     }
 }

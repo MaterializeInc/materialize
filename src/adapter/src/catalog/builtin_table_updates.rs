@@ -15,16 +15,17 @@ use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, Versione
 use mz_catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
     MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_METRICS,
-    MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS,
-    MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS,
-    MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES,
-    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
-    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS,
-    MZ_WEBHOOKS_SOURCES,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_CLUSTER_SCHEDULES, MZ_COLUMNS,
+    MZ_COMMENTS, MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS,
+    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS,
+    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
+    MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
+    MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
+    MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
+use mz_catalog::memory::objects::Cluster;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
@@ -38,6 +39,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::cluster::{ClusterState, ClusterTransition};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
@@ -179,12 +181,12 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_cluster_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
+    pub(super) fn pack_cluster_update(&self, name: &str, diff: Diff) -> Vec<BuiltinTableUpdate> {
         let id = self.clusters_by_name[name];
         let cluster = &self.clusters_by_id[&id];
         let row = self.pack_privilege_array_row(cluster.privileges());
         let privileges = row.unpack_first();
-        let (size, disk, replication_factor, azs) = match &cluster.config.variant {
+        let (size, disk, replication_factor, azs, state) = match &cluster.config.variant {
             ClusterVariant::Managed(config) => (
                 Some(config.size.as_str()),
                 Some(config.disk),
@@ -194,8 +196,9 @@ impl CatalogState {
                 } else {
                     Some(config.availability_zones.clone())
                 },
+                config.state.as_str(),
             ),
-            ClusterVariant::Unmanaged => (None, None, None, None),
+            ClusterVariant::Unmanaged => (None, None, None, None, ClusterState::Active.as_str()),
         };
 
         let mut row = Row::default();
@@ -209,17 +212,54 @@ impl CatalogState {
             size.into(),
             replication_factor.into(),
             disk.into(),
+            Datum::String(state),
         ]);
         if let Some(azs) = azs {
             packer.push_list(azs.iter().map(|az| Datum::String(az)));
         } else {
             packer.push(Datum::Null);
         }
-        BuiltinTableUpdate {
+        let mut updates = vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
             row,
             diff,
+        }];
+
+        if let Some(update) = self.pack_cluster_schedule_update(&cluster, diff) {
+            updates.push(update);
         }
+
+        updates
+    }
+
+    fn pack_cluster_schedule_update(
+        &self,
+        cluster: &Cluster,
+        diff: Diff,
+    ) -> Option<BuiltinTableUpdate> {
+        // Only managed clusters can have schedules.
+        let ClusterVariant::Managed(config) = &cluster.config.variant else {
+            return None;
+        };
+        let transition = match config.transition {
+            ClusterTransition::Never => return None,
+            ClusterTransition::Interval(interval) => interval.to_string(),
+            ClusterTransition::DateTime(datetime) => datetime.to_rfc3339(),
+        };
+        let action = match config.state {
+            ClusterState::Active => ClusterState::Suspended.as_str(),
+            ClusterState::Suspended => ClusterState::Active.as_str(),
+        };
+
+        Some(BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_CLUSTER_SCHEDULES),
+            row: Row::pack_slice(&[
+                Datum::String(&cluster.id.to_string()),
+                Datum::String(action),
+                Datum::String(&transition),
+            ]),
+            diff,
+        })
     }
 
     pub(super) fn pack_cluster_replica_update(

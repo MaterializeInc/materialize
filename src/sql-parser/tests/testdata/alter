@@ -123,7 +123,7 @@ ALTER CLUSTER foo SUSPEND
 ----
 ALTER CLUSTER foo SUSPEND
 =>
-AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("foo"), action: Suspend })
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("foo"), action: Suspend { period: None } })
 
 parse-statement
 ALTER CLUSTER bar SUSPEND IF SUSPENDED
@@ -137,14 +137,14 @@ ALTER CLUSTER baz RESUME
 ----
 ALTER CLUSTER baz RESUME
 =>
-AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("baz"), action: Resume { if_suspended: false } })
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("baz"), action: Resume { period: None, if_suspended: false } })
 
 parse-statement
 ALTER CLUSTER baz RESUME IF SUSPENDED
 ----
 ALTER CLUSTER baz RESUME IF SUSPENDED
 =>
-AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("baz"), action: Resume { if_suspended: true } })
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("baz"), action: Resume { period: None, if_suspended: true } })
 
 parse-statement
 ALTER CLUSTER baz RESUME IF
@@ -159,3 +159,10 @@ ALTER CLUSTER baz RESUME IF RESUME
 error: Expected SUSPENDED, found RESUME
 ALTER CLUSTER baz RESUME IF RESUME
                             ^
+
+parse-statement
+ALTER CLUSTER baz RESUME FOR '1 day'
+----
+ALTER CLUSTER baz RESUME FOR '1 day'
+=>
+AlterCluster(AlterClusterStatement { if_exists: false, name: Ident("baz"), action: Resume { period: Some(String("1 day")), if_suspended: false } })

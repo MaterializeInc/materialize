@@ -9,6 +9,7 @@
 
 //! This module is responsible for serializing catalog objects into Protobuf.
 
+use chrono::{TimeZone, Utc};
 use mz_audit_log::{
     AlterDefaultPrivilegeV1, AlterSetClusterV1, AlterSourceSinkV1, CreateClusterReplicaV1,
     CreateSourceSinkV1, CreateSourceSinkV2, DropClusterReplicaV1, EventDetails, EventType, EventV1,
@@ -21,7 +22,9 @@ use mz_compute_client::controller::ComputeReplicaLogging;
 use mz_controller_types::ReplicaId;
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::cluster::{ClusterState, ClusterTransition};
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
@@ -73,6 +76,8 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 idle_arrangement_merge_effort,
                 replication_factor,
                 disk,
+                state,
+                transition,
             }) => proto::cluster_config::Variant::Managed(proto::cluster_config::ManagedCluster {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
@@ -81,6 +86,8 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                     .map(|effort| proto::ReplicaMergeEffort { effort }),
                 replication_factor: *replication_factor,
                 disk: *disk,
+                state: Some(state.into_proto()),
+                transition: Some(transition.into_proto()),
             }),
             ClusterVariant::Unmanaged => proto::cluster_config::Variant::Unmanaged(proto::Empty {}),
         }
@@ -101,7 +108,77 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                         .map(|e| e.effort),
                     replication_factor: managed.replication_factor,
                     disk: managed.disk,
+                    state: managed.state.into_rust_if_some("ManagedCluster::state")?,
+                    transition: managed
+                        .transition
+                        .into_rust_if_some("ManagedCluster::transition")?,
                 }))
+            }
+        }
+    }
+}
+
+impl RustType<proto::cluster_config::managed_cluster::State> for ClusterState {
+    fn into_proto(&self) -> proto::cluster_config::managed_cluster::State {
+        match self {
+            ClusterState::Active => {
+                proto::cluster_config::managed_cluster::State::Active(Default::default())
+            }
+            ClusterState::Suspended => {
+                proto::cluster_config::managed_cluster::State::Suspend(Default::default())
+            }
+        }
+    }
+
+    fn from_proto(
+        proto: proto::cluster_config::managed_cluster::State,
+    ) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::cluster_config::managed_cluster::State::Active(_) => Ok(ClusterState::Active),
+            proto::cluster_config::managed_cluster::State::Suspend(_) => {
+                Ok(ClusterState::Suspended)
+            }
+        }
+    }
+}
+
+impl RustType<proto::cluster_config::Transition> for ClusterTransition {
+    fn into_proto(&self) -> proto::cluster_config::Transition {
+        match self {
+            ClusterTransition::Never => proto::cluster_config::Transition { period: None },
+            ClusterTransition::Interval(interval) => {
+                let duration = interval.duration().expect("failure");
+                proto::cluster_config::Transition {
+                    period: Some(proto::cluster_config::transition::Period::Duration(
+                        duration.into_proto(),
+                    )),
+                }
+            }
+            ClusterTransition::DateTime(datetime) => {
+                let millis = u64::try_from(datetime.timestamp_millis()).expect("failure");
+                proto::cluster_config::Transition {
+                    period: Some(proto::cluster_config::transition::Period::Datetime(
+                        proto::EpochMillis { millis },
+                    )),
+                }
+            }
+        }
+    }
+
+    ///
+    ///
+    /// DO NOT MERGE, THIS NEEDS TO BE FIXED!!
+    ///
+    ///
+    fn from_proto(proto: proto::cluster_config::Transition) -> Result<Self, TryFromProtoError> {
+        match proto.period {
+            None => Ok(ClusterTransition::Never),
+            Some(proto::cluster_config::transition::Period::Duration(_duration)) => {
+                Ok(ClusterTransition::Interval(Interval::new(0, 0, 60000000)))
+            }
+            Some(proto::cluster_config::transition::Period::Datetime(epoch)) => {
+                let datetime = Utc.timestamp_millis(i64::try_from(epoch.millis).expect("broken"));
+                Ok(ClusterTransition::DateTime(datetime))
             }
         }
     }

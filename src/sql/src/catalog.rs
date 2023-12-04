@@ -27,6 +27,7 @@ use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::cluster::{ClusterState, ClusterTransition};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
@@ -514,6 +515,12 @@ pub trait CatalogCluster<'a> {
 
     /// Returns true if this cluster is a managed cluster.
     fn is_managed(&self) -> bool;
+
+    /// Returns the state or this cluster.
+    fn state(&self) -> ClusterState;
+
+    /// Returns the transition plan for this cluster.
+    fn transition(&self) -> ClusterTransition;
 }
 
 /// A cluster replica in a [`SessionCatalog`]

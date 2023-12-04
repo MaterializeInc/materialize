@@ -99,6 +99,7 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
+use mz_repr::cluster::ClusterState;
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, Timestamp};
@@ -206,6 +207,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     ),
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
+    ClusterTransition(ClusterTransitionEvent),
     RemovePendingPeeks {
         conn_id: ConnectionId,
     },
@@ -262,6 +264,7 @@ impl Message {
             Message::GroupCommitApply(..) => "group_commit_apply",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
+            Message::ClusterTransition(_) => "cluster_transition",
             Message::RemovePendingPeeks { .. } => "remove_pending_peeks",
             Message::LinearizeReads(_) => "linearize_reads",
             Message::StorageUsageFetch => "storage_usage_fetch",
@@ -276,6 +279,12 @@ impl Message {
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
         }
     }
+}
+
+#[derive(Debug)]
+pub struct ClusterTransitionEvent {
+    pub id: ClusterId,
+    pub expected_state: ClusterState,
 }
 
 #[derive(Derivative)]
@@ -1012,6 +1021,9 @@ pub struct Coordinator {
 
     /// Extra context to pass through to connection creation.
     connection_context: ConnectionContext,
+
+    /// Runs periodics tasks for the scheduling of Clusters.
+    cluster_schedule_map: BTreeMap<ClusterId, tokio::task::JoinHandle<()>>,
 
     /// Metadata about replicas that doesn't need to be persisted.
     /// Intended for inclusion in system tables.
@@ -2391,6 +2403,7 @@ pub fn serve(
                     webhook_concurrency_limit,
                     timestamp_oracle_impl,
                     timestamp_oracle_url,
+                    cluster_schedule_map: BTreeMap::new(),
                 };
                 let bootstrap = handle.block_on(async {
                     coord

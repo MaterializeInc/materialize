@@ -4307,12 +4307,26 @@ impl<'a> Parser<'a> {
                     name_b,
                 }))
             }
-            SUSPEND => Ok(Statement::AlterCluster(AlterClusterStatement {
-                if_exists,
-                name,
-                action: AlterClusterAction::Suspend,
-            })),
+            SUSPEND => {
+                let interval = self
+                    .parse_keyword(FOR)
+                    .then(|| self.parse_value())
+                    .transpose()
+                    .map_parser_err(StatementKind::AlterCluster)?;
+
+                Ok(Statement::AlterCluster(AlterClusterStatement {
+                    if_exists,
+                    name,
+                    action: AlterClusterAction::Suspend { interval },
+                }))
+            }
             RESUME => {
+                let interval = self
+                    .parse_keyword(FOR)
+                    .then(|| self.parse_value())
+                    .transpose()
+                    .map_parser_err(StatementKind::AlterCluster)?;
+
                 let if_suspended = self.parse_keyword(IF);
                 if if_suspended {
                     self.expect_keyword(SUSPENDED)
@@ -4322,7 +4336,10 @@ impl<'a> Parser<'a> {
                 Ok(Statement::AlterCluster(AlterClusterStatement {
                     if_exists,
                     name,
-                    action: AlterClusterAction::Resume { if_suspended },
+                    action: AlterClusterAction::Resume {
+                        interval,
+                        if_suspended,
+                    },
                 }))
             }
             _ => unreachable!(),

@@ -27,6 +27,7 @@ use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
+use mz_repr::cluster::{ClusterState, ClusterTransition};
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
@@ -4325,6 +4326,60 @@ pub fn plan_alter_cluster(
                     Size => options.size = Reset,
                 }
             }
+        }
+        AlterClusterAction::Suspend { interval } => {
+            if !cluster.is_managed() {
+                sql_bail!("SUSPEND not supported for unmanaged clusters");
+            }
+
+            let transition = match interval {
+                None => ClusterTransition::Never,
+                Some(value) => {
+                    let interval = Interval::try_from_value(value)?;
+                    let now = scx.pcx()?.wall_time;
+                    let transition = now + interval.duration_as_chrono();
+
+                    // Note: when suspending a cluster, we never use Duration, and instead always
+                    // resolve a timestamp. This is because unlike creating a cluster, destroying
+                    // a cluster is instantaneous.
+                    ClusterTransition::DateTime(transition)
+                }
+            };
+            options.state = AlterOptionParameter::Set((ClusterState::Suspended, transition))
+        }
+        AlterClusterAction::Resume {
+            interval,
+            if_suspended,
+        } => {
+            if !cluster.is_managed() {
+                sql_bail!("RESUME not supported for unmanaged clusters");
+            }
+            if cluster.state() == ClusterState::Active && if_suspended {
+                sql_bail!("Cannot RESUME an already active cluster");
+            }
+
+            let transition = match interval {
+                None => ClusterTransition::Never,
+                Some(value) => {
+                    let interval = Interval::try_from_value(value)?;
+
+                    // Note: when resuming a cluster we use an Interval, and delay picking a
+                    // datetime for transitioning, because creating a replica can take a relatively
+                    // significant amount of time.
+                    //
+                    // Unless! The replica is already running, in which case we won't receive an
+                    // event for it, so we pick a timestamp now.
+                    match (cluster.state(), cluster.transition()) {
+                        (ClusterState::Active, ClusterTransition::DateTime(_)) => {
+                            let now = scx.pcx()?.wall_time;
+                            let transition = now + interval.duration_as_chrono();
+                            ClusterTransition::DateTime(transition)
+                        }
+                        _ => ClusterTransition::Interval(interval),
+                    }
+                }
+            };
+            options.state = AlterOptionParameter::Set((ClusterState::Active, transition))
         }
     }
     Ok(Plan::AlterCluster(AlterClusterPlan {

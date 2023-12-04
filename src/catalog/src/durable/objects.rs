@@ -15,6 +15,7 @@ use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::cluster::{ClusterState, ClusterTransition};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
@@ -201,6 +202,8 @@ pub struct ClusterVariantManaged {
     pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
     pub disk: bool,
+    pub state: ClusterState,
+    pub transition: ClusterTransition,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

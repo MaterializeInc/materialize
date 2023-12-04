@@ -20,6 +20,7 @@ use mz_controller::clusters::{
 };
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_ore::cast::CastFrom;
+use mz_repr::cluster::{ClusterState, ClusterTransition};
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType, SessionCatalog};
 use mz_sql::names::{ObjectId, QualifiedItemName};
@@ -68,6 +69,8 @@ impl Coordinator {
                     idle_arrangement_merge_effort: plan.compute.idle_arrangement_merge_effort,
                     replication_factor: plan.replication_factor,
                     disk: plan.disk,
+                    state: ClusterState::default(),
+                    transition: ClusterTransition::default(),
                 })
             }
             CreateClusterVariant::Unmanaged(_) => ClusterVariant::Unmanaged,
@@ -135,21 +138,22 @@ impl Coordinator {
 
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
             let id = self.catalog_mut().allocate_user_replica_id().await?;
-            self.create_managed_cluster_replica_op(
+            let azs = match &availability_zones[..] {
+                [] => None,
+                other => Some(other),
+            };
+            let op = self.create_managed_cluster_replica_op(
                 cluster_id,
                 id,
                 replica_name,
                 &compute,
                 &size,
-                &mut ops,
-                if availability_zones.is_empty() {
-                    None
-                } else {
-                    Some(availability_zones.as_ref())
-                },
+                azs,
                 disk,
                 *session.current_role_id(),
             )?;
+
+            ops.push(op);
         }
 
         self.catalog_transact(Some(session), ops).await?;
@@ -166,51 +170,50 @@ impl Coordinator {
         name: String,
         compute: &mz_sql::plan::ComputeReplicaConfig,
         size: &String,
-        ops: &mut Vec<Op>,
         azs: Option<&[String]>,
         disk: bool,
         owner_id: RoleId,
-    ) -> Result<(), AdapterError> {
-        let location = mz_catalog::durable::ReplicaLocation::Managed {
+    ) -> Result<Op, AdapterError> {
+        let logging = match compute.introspection {
+            Some(config) => ReplicaLogging {
+                log_logging: config.debugging,
+                interval: Some(config.interval),
+            },
+            None => ReplicaLogging::default(),
+        };
+
+        let partial_location = mz_catalog::durable::ReplicaLocation::Managed {
             availability_zone: None,
             billed_as: None,
             disk,
             internal: false,
             size: size.clone(),
         };
-
-        let logging = if let Some(config) = compute.introspection {
-            ReplicaLogging {
-                log_logging: config.debugging,
-                interval: Some(config.interval),
-            }
-        } else {
-            ReplicaLogging::default()
-        };
+        let allowed_cluster_sizes = self
+            .catalog()
+            .system_config()
+            .allowed_cluster_replica_sizes();
+        let location = self.catalog.concretize_replica_location(
+            partial_location,
+            &allowed_cluster_sizes,
+            azs,
+        )?;
 
         let config = ReplicaConfig {
-            location: self.catalog().concretize_replica_location(
-                location,
-                &self
-                    .catalog()
-                    .system_config()
-                    .allowed_cluster_replica_sizes(),
-                azs,
-            )?,
+            location,
             compute: ComputeReplicaConfig {
                 logging,
                 idle_arrangement_merge_effort: compute.idle_arrangement_merge_effort,
             },
         };
 
-        ops.push(catalog::Op::CreateClusterReplica {
+        Ok(catalog::Op::CreateClusterReplica {
             cluster_id,
             id,
             name,
             config,
             owner_id,
-        });
-        Ok(())
+        })
     }
 
     fn ensure_valid_azs<'a, I: IntoIterator<Item = &'a String>>(
@@ -567,6 +570,8 @@ impl Coordinator {
                     idle_arrangement_merge_effort: None,
                     replication_factor: 1,
                     disk,
+                    state: Default::default(),
+                    transition: Default::default(),
                 });
             }
         }
@@ -579,6 +584,8 @@ impl Coordinator {
                 idle_arrangement_merge_effort,
                 replication_factor,
                 disk,
+                state,
+                transition,
             }) => {
                 use AlterOptionParameter::*;
                 match &options.size {
@@ -625,6 +632,19 @@ impl Coordinator {
                     Reset => *replication_factor = 1,
                     Unchanged => {}
                 }
+                match &options.state {
+                    Set((s, t)) => {
+                        *state = *s;
+                        *transition = *t;
+                    }
+                    // Note: this shouldn't ever get reached, but these values are sane.
+                    Reset => {
+                        *state = ClusterState::default();
+                        *transition = ClusterTransition::default();
+                    }
+                    Unchanged => {}
+                }
+
                 if !matches!(options.replicas, Unchanged) {
                     coord_bail!("Cannot change REPLICAS of managed clusters");
                 }
@@ -707,6 +727,8 @@ impl Coordinator {
                 logging,
                 idle_arrangement_merge_effort,
                 disk,
+                state,
+                transition: _,
             },
             ClusterVariantManaged {
                 size: new_size,
@@ -715,6 +737,8 @@ impl Coordinator {
                 logging: new_logging,
                 idle_arrangement_merge_effort: new_idle_arrangement_merge_effort,
                 disk: new_disk,
+                state: new_state,
+                transition: new_transition,
             },
         ) = (&config, &new_config);
 
@@ -751,11 +775,13 @@ impl Coordinator {
             )?;
         }
 
-        if new_size != size
+        if (new_size != size
             || new_availability_zones != availability_zones
             || new_idle_arrangement_merge_effort != idle_arrangement_merge_effort
             || new_logging != logging
             || new_disk != disk
+            || new_state != state)
+            && *new_state == ClusterState::Active
         {
             self.ensure_valid_azs(new_availability_zones.iter())?;
 
@@ -771,20 +797,22 @@ impl Coordinator {
             }
             for name in (0..*new_replication_factor).map(managed_cluster_replica_name) {
                 let id = self.catalog_mut().allocate_user_replica_id().await?;
-                self.create_managed_cluster_replica_op(
+                let op = self.create_managed_cluster_replica_op(
                     cluster_id,
                     id,
                     name,
                     &compute,
                     new_size,
-                    &mut ops,
                     Some(new_availability_zones.as_ref()),
                     *new_disk,
                     owner_id,
                 )?;
+
+                ops.push(op);
                 create_cluster_replicas.push((cluster_id, id))
             }
-        } else if new_replication_factor < replication_factor {
+        } else if new_replication_factor < replication_factor && *new_state == ClusterState::Active
+        {
             // Adjust size down
             for name in
                 (*new_replication_factor..*replication_factor).map(managed_cluster_replica_name)
@@ -797,26 +825,39 @@ impl Coordinator {
                     ))))
                 }
             }
-        } else if new_replication_factor > replication_factor {
+        } else if new_replication_factor > replication_factor && *new_state == ClusterState::Active
+        {
             // Adjust size up
             for name in
                 (*replication_factor..*new_replication_factor).map(managed_cluster_replica_name)
             {
                 let id = self.catalog_mut().allocate_user_replica_id().await?;
-                self.create_managed_cluster_replica_op(
+                let op = self.create_managed_cluster_replica_op(
                     cluster_id,
                     id,
                     name,
                     &compute,
                     new_size,
-                    &mut ops,
                     // AVAILABILITY ZONES hasn't changed, so existing replicas don't need to be
                     // rescheduled.
                     Some(new_availability_zones.as_ref()),
                     *new_disk,
                     owner_id,
                 )?;
+
+                ops.push(op);
                 create_cluster_replicas.push((cluster_id, id))
+            }
+        } else if *state == ClusterState::Active && *new_state == ClusterState::Suspended {
+            // Suspend the cluster by dropping replicas.
+            for name in (0..*replication_factor).map(managed_cluster_replica_name) {
+                let replica = cluster.replica_id(&name);
+                if let Some(replica) = replica {
+                    ops.push(catalog::Op::DropObject(ObjectId::ClusterReplica((
+                        cluster.id(),
+                        replica,
+                    ))))
+                }
             }
         }
 
@@ -849,6 +890,8 @@ impl Coordinator {
             logging: _,
             idle_arrangement_merge_effort: _,
             disk: new_disk,
+            state: _,
+            transition: _,
         } = &mut new_config;
 
         // Validate replication factor parameter
