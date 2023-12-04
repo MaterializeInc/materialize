@@ -368,6 +368,9 @@ impl PlanError {
                     }
                 }
             }
+            Self::RecursiveTypeMismatch(..) => {
+                Some("You will need to rewrite or cast the query's expressions.".into())
+            },
             _ => None,
         }
     }
@@ -520,7 +523,7 @@ impl fmt::Display for PlanError {
                 let declared = separated(", ", declared);
                 let inferred = separated(", ", inferred);
                 let name = name.quoted();
-                write!(f, "declared type ({declared}) of WITH MUTUALLY RECURSIVE query {name} did not match inferred type ({inferred})")
+                write!(f, "WITH MUTUALLY RECURSIVE query {name} declared types ({declared}), but query returns types ({inferred})")
             },
             Self::UnknownFunction {name, arg_types, ..} => {
                 write!(f, "function {}({}) does not exist", name, arg_types.join(", "))

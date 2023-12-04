@@ -1428,30 +1428,70 @@ pub fn plan_ctes(
 
             // Plan all CTEs and validate the proposed types.
             for cte in ctes.iter() {
-                let cte_name = normalize::ident(cte.name.clone());
                 let (val, _scope) = plan_nested_query(qcx, &cte.query)?;
+
                 // Validate that the derived and proposed types are the same.
-                let typ = qcx.relation_type(&val);
-                // TODO: Use implicit casts to convert among types rather than error.
-                if !typ.subtypes(qcx.ctes[&cte.id].desc.typ()) {
-                    let declared_typ = qcx.ctes[&cte.id]
-                        .desc
-                        .typ()
+                let derived_typ = qcx.relation_type(&val);
+                let proposed_typ = qcx.ctes[&cte.id].desc.typ();
+
+                let err = |proposed_typ: &RelationType, derived_typ: RelationType| {
+                    let cte_name = normalize::ident(cte.name.clone());
+                    let proposed_typ = proposed_typ
                         .column_types
                         .iter()
                         .map(|ty| qcx.humanize_scalar_type(&ty.scalar_type))
                         .collect::<Vec<_>>();
-                    let inferred_typ = typ
+                    let inferred_typ = derived_typ
                         .column_types
                         .iter()
                         .map(|ty| qcx.humanize_scalar_type(&ty.scalar_type))
                         .collect::<Vec<_>>();
                     Err(PlanError::RecursiveTypeMismatch(
                         cte_name,
-                        declared_typ,
+                        proposed_typ,
                         inferred_typ,
-                    ))?;
+                    ))
+                };
+
+                let all_keys = proposed_typ.keys.iter().all(|key1| {
+                    derived_typ
+                        .keys
+                        .iter()
+                        .any(|key2| key1.iter().all(|k| key2.contains(k)))
+                });
+
+                if !all_keys {
+                    return err(proposed_typ, derived_typ);
                 }
+
+                if derived_typ.column_types.len() != proposed_typ.column_types.len() {
+                    return err(proposed_typ, derived_typ);
+                }
+
+                for (derived_col, proposed_col) in derived_typ
+                    .column_types
+                    .iter()
+                    .zip(proposed_typ.column_types.iter())
+                {
+                    if derived_col.nullable && !proposed_col.nullable {
+                        return err(proposed_typ, derived_typ);
+                    }
+                }
+
+                // Cast dervied types to proposed types or error.
+                let val = match cast_relation(
+                    qcx,
+                    // Choose `CastContext::Assignment`` because the user has
+                    // been explicit about the types they expect. Choosing
+                    // `CastContext::Implicit` is not "strong" enough to impose
+                    // typmods from proposed types onto values.
+                    CastContext::Assignment,
+                    val,
+                    proposed_typ.column_types.iter().map(|c| &c.scalar_type),
+                ) {
+                    Ok(val) => val,
+                    Err(_) => return err(proposed_typ, derived_typ),
+                };
 
                 result.push((cte.id, val, shadowed_descs.remove(&cte.id)));
             }
