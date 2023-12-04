@@ -2340,6 +2340,11 @@ def workflow_test_replica_metrics(c: Composition) -> None:
     delayed_time = metrics.get_value("mz_dataflow_delayed_time_seconds_total")
     assert delayed_time < 1, f"unexpected delayed time: {delayed_time}"
 
+    mv_correction = metrics.get_value("mz_persist_sink_correction_max_len")
+    assert (
+        mv_correction > 0
+    ), f"unexpected persist sink maximum correction length: {mv_correction}"
+
 
 def workflow_test_compute_controller_metrics(c: Composition) -> None:
     """Test metrics exposed by the compute controller."""

@@ -21,7 +21,7 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{
-    ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
+    raw, ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
     DeleteOnDropGauge, GaugeVecExt, IntCounter, MakeCollector, MetricsRegistry, UIntGauge,
     UIntGaugeVec,
 };
@@ -1641,6 +1641,14 @@ pub struct SinkMetrics {
     pub forwarded_batches: Counter,
     /// Number of updates that were forwarded to the centralized append operator
     pub forwarded_updates: Counter,
+    /// Maximum length seen for the correction buffer broken down per worker
+    sink_correction_max_len: raw::UIntGaugeVec,
+}
+
+/// Metrics for the persist sink that are labeled per-worker.
+#[derive(Clone, Debug)]
+pub struct SinkWorkerMetrics {
+    correction_max_len: UIntGauge,
 }
 
 impl SinkMetrics {
@@ -1654,6 +1662,28 @@ impl SinkMetrics {
                 name: "mz_persist_sink_forwarded_updates",
                 help: "number of updates forwarded to the central append operator",
             )),
+            sink_correction_max_len: registry.register(metric!(
+                name: "mz_persist_sink_correction_max_len",
+                help: "The maximum length observed for the correction buffer across persist sinks.",
+                var_labels: ["worker_id"],
+            )),
+        }
+    }
+
+    pub fn for_worker(&self, worker_id: usize) -> SinkWorkerMetrics {
+        let worker = worker_id.to_string();
+        let correction_max_len = self.sink_correction_max_len.with_label_values(&[&worker]);
+        SinkWorkerMetrics { correction_max_len }
+    }
+}
+
+impl SinkWorkerMetrics {
+    pub fn report_correction_len(&mut self, correction_len: usize) {
+        let correction_len: u64 = correction_len
+            .try_into()
+            .expect("buffer lenght must fit an unsigned 64-bit number");
+        if correction_len > self.correction_max_len.get() {
+            self.correction_max_len.set(correction_len);
         }
     }
 }

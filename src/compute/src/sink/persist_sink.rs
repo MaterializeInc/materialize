@@ -607,6 +607,7 @@ where
             .open(persist_location)
             .await
             .expect("could not open persist client");
+        let mut sink_worker_metrics = persist_client.metrics().sink.for_worker(worker_index);
 
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(
@@ -774,6 +775,10 @@ where
                 );
 
                 if !ready_batches.is_empty() {
+                    // Prior to potentially reducing the size of the `correction`
+                    // buffer, report its length.
+                    sink_worker_metrics.report_correction_len(correction.len());
+
                     // Consolidate updates only when they are required by an
                     // attempt to write out new updates. Otherwise, we might
                     // spend a lot of time "consolidating" the same updates
