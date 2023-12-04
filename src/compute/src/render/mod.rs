@@ -134,7 +134,7 @@ use timely::{Data, PartialOrder};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{ArrangementSize, HeapSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
@@ -431,7 +431,7 @@ where
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: RenderTimestamp + HeapSize,
+    G::Timestamp: RenderTimestamp,
 {
     pub(crate) fn build_object(&mut self, object: BuildDesc<Plan>) {
         // First, transform the relation expression into a render plan.
@@ -742,7 +742,7 @@ where
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: RenderTimestamp + HeapSize,
+    G::Timestamp: RenderTimestamp,
 {
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///

@@ -14,7 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::trace::implementations::ord::ColValSpine;
+use differential_dataflow::trace::implementations::ord_neu::ColValSpine;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
