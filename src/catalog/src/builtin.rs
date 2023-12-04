@@ -5547,6 +5547,18 @@ JOIN root_times r USING (id)",
     sensitivity: DataSensitivity::Public,
 };
 
+pub const MZ_ACTIVITY_LOG_AVERAGE_ROW_SIZE: BuiltinView = BuiltinView {
+    name: "mz_activity_log_average_row_size",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+  SELECT 
+    avg(mz_row_size(mal.*)) as average_row_size 
+  FROM mz_internal.mz_activity_log as mal;
+    ",
+    sensitivity: DataSensitivity::Public,
+};
+
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -5848,6 +5860,15 @@ pub const MZ_FRONTIERS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_frontiers (object_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_ACTIVITY_LOG_AVERAGE_ROW_SIZE_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_activity_log_average_row_size_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_activity_log_average_row_size_ind
+IN CLUSTER default
+ON mz_internal.mz_activity_log_average_row_size (average_row_size)",
     is_retained_metrics_object: false,
 };
 
@@ -6229,6 +6250,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
+        Builtin::View(&MZ_ACTIVITY_LOG_AVERAGE_ROW_SIZE),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::Source(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
@@ -6269,6 +6291,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_FRONTIERS_IND),
+        Builtin::Index(&MZ_ACTIVITY_LOG_AVERAGE_ROW_SIZE_IND),
     ]);
 
     builtins
