@@ -86,9 +86,9 @@ statement ok
 CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
 
 query T multiline
-SELECT pretty_sql(create_sql) FROM mz_sources WHERE name = 's'
+SELECT regexp_replace(create_sql, 'u[0-9]+', 'uX') FROM mz_sources WHERE name = 's'
 ----
-CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS [u5 AS materialize.public.s_progress] WITH (SIZE = '1');
+CREATE SOURCE "materialize"."public"."s" FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS [uX AS "materialize"."public"."s_progress"] WITH (SIZE = '1')
 EOF
 
 statement ok
