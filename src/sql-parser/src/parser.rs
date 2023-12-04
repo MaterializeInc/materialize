@@ -2355,45 +2355,22 @@ impl<'a> Parser<'a> {
 
     fn parse_kafka_config_option(&mut self) -> Result<KafkaConfigOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
-            ACKS,
-            CLIENT,
             COMPRESSION,
-            ENABLE,
-            FETCH,
             GROUP,
-            ISOLATION,
             PARTITION,
             REPLICATION,
             RETENTION,
             SNAPSHOT,
             START,
             TOPIC,
-            TRANSACTION,
         ])? {
-            ACKS => KafkaConfigOptionName::Acks,
-            CLIENT => {
-                self.expect_keyword(ID)?;
-                KafkaConfigOptionName::ClientId
-            }
             COMPRESSION => {
                 self.expect_keyword(TYPE)?;
                 KafkaConfigOptionName::CompressionType
             }
-            ENABLE => {
-                self.expect_keyword(IDEMPOTENCE)?;
-                KafkaConfigOptionName::EnableIdempotence
-            }
-            FETCH => {
-                self.expect_keywords(&[MESSAGE, MAX, BYTES])?;
-                KafkaConfigOptionName::FetchMessageMaxBytes
-            }
             GROUP => {
                 self.expect_keywords(&[ID, PREFIX])?;
                 KafkaConfigOptionName::GroupIdPrefix
-            }
-            ISOLATION => {
-                self.expect_keyword(LEVEL)?;
-                KafkaConfigOptionName::IsolationLevel
             }
             PARTITION => {
                 self.expect_keyword(COUNT)?;
@@ -2415,10 +2392,6 @@ impl<'a> Parser<'a> {
                 } else {
                     KafkaConfigOptionName::Topic
                 }
-            }
-            TRANSACTION => {
-                self.expect_keywords(&[TIMEOUT, MS])?;
-                KafkaConfigOptionName::TransactionTimeoutMs
             }
             START => match self.expect_one_of_keywords(&[OFFSET, TIMESTAMP])? {
                 OFFSET => KafkaConfigOptionName::StartOffset,
