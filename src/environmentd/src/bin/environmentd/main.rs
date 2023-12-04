@@ -127,6 +127,7 @@ use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::EnablePersistTxnTables;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
@@ -427,8 +428,8 @@ pub struct Args {
     /// This value is also configurable via a Launch Darkly parameter of the
     /// same name, but we keep the flag to make testing easier. If specified,
     /// the flag takes precedence over the Launch Darkly param.
-    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", action = clap::ArgAction::Set)]
-    enable_persist_txn_tables: Option<bool>,
+    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", parse(try_from_str))]
+    enable_persist_txn_tables: Option<EnablePersistTxnTables>,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.

@@ -110,6 +110,7 @@ use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
+use mz_storage_types::controller::EnablePersistTxnTables;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
@@ -158,7 +159,7 @@ pub struct Config {
     ///
     /// If specified, this overrides the value stored in Launch Darkly (and
     /// mirrored to the catalog storage's "config" collection).
-    pub enable_persist_txn_tables_cli: Option<bool>,
+    pub enable_persist_txn_tables_cli: Option<EnablePersistTxnTables>,
 
     // === Adapter options. ===
     /// Catalog configuration.
@@ -500,7 +501,8 @@ impl Listeners {
         );
 
         // Initialize controller.
-        let mut enable_persist_txn_tables = enable_persist_txn_tables_stash_ld.unwrap_or(false);
+        let mut enable_persist_txn_tables =
+            enable_persist_txn_tables_stash_ld.unwrap_or(EnablePersistTxnTables::Off);
         if let Some(value) = config.enable_persist_txn_tables_cli {
             enable_persist_txn_tables = value;
         }

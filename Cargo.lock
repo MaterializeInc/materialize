@@ -5725,6 +5725,7 @@ dependencies = [
  "mz-timely-util",
  "mz-tracing",
  "native-tls",
+ "num_enum",
  "once_cell",
  "openssl",
  "proptest",

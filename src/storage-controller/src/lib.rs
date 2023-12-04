@@ -123,7 +123,8 @@ use mz_storage_client::controller::{
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
 use mz_storage_types::controller::{
-    CollectionMetadata, DurableCollectionMetadata, StorageError, TxnsCodecRow,
+    CollectionMetadata, DurableCollectionMetadata, EnablePersistTxnTables, StorageError,
+    TxnsCodecRow,
 };
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
@@ -270,7 +271,11 @@ impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
 #[derive(Debug)]
 enum PersistTxns<T> {
     NeverEnabled,
-    Enabled {
+    EnabledEager {
+        txns_id: ShardId,
+        txns_client: PersistClient,
+    },
+    EnabledLazy {
         txns_read: TxnsRead<T>,
         txns_client: PersistClient,
     },
@@ -281,14 +286,16 @@ enum PersistTxns<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> PersistTxns<T> {
-    fn expect_enabled(&self, txns_id: &ShardId) -> &TxnsRead<T> {
+    fn expect_enabled_lazy(&self, txns_id: &ShardId) -> &TxnsRead<T> {
         match self {
-            PersistTxns::Enabled { txns_read, .. } => {
+            PersistTxns::EnabledLazy { txns_read, .. } => {
                 assert_eq!(txns_id, txns_read.txns_id());
                 txns_read
             }
-            PersistTxns::NeverEnabled | PersistTxns::DisabledPreviouslyEnabled { .. } => {
-                panic!("set if txns are enabled")
+            PersistTxns::NeverEnabled
+            | PersistTxns::EnabledEager { .. }
+            | PersistTxns::DisabledPreviouslyEnabled { .. } => {
+                panic!("set if txns are enabled and lazy")
             }
         }
     }
@@ -608,7 +615,11 @@ where
                 // pass along the shard id for the txns shard to dataflow rendering.
                 let txns_shard = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) => match &self.txns {
-                        PersistTxns::Enabled { txns_read, .. } => Some(*txns_read.txns_id()),
+                        // If we're not using lazy persist-txn upper (i.e. we're
+                        // using eager uppers) then all reads should be done
+                        // normally.
+                        PersistTxns::EnabledEager { .. } => None,
+                        PersistTxns::EnabledLazy { txns_read, .. } => Some(*txns_read.txns_id()),
                         PersistTxns::NeverEnabled
                         | PersistTxns::DisabledPreviouslyEnabled { .. } => None,
                     },
@@ -780,7 +791,7 @@ where
             self.persist_table_worker
                 .register(register_ts, table_registers);
             for (id, mut collection_state) in collection_states {
-                if let PersistTxns::Enabled { .. } = &self.txns {
+                if let PersistTxns::EnabledLazy { .. } = &self.txns {
                     if collection_state.write_frontier.less_than(&advance_to) {
                         collection_state.write_frontier = Antichain::from_elem(advance_to.clone());
                     }
@@ -1378,7 +1389,7 @@ where
                 // never come (worse, it's tricky to keep it making progress, which results in a
                 // stuck since). Replace this with the shared TxnsCache thing we'll have to do
                 // anyway for the dataflow operators.
-                let txns_read = self.txns.expect_enabled(txns_id);
+                let txns_read = self.txns.expect_enabled_lazy(txns_id);
                 txns_read.update_gt(as_of.clone()).await;
                 let data_snapshot = txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())
@@ -1425,7 +1436,7 @@ where
                 }
             }
             Some(txns_id) => {
-                let txns_read = self.txns.expect_enabled(txns_id);
+                let txns_read = self.txns.expect_enabled_lazy(txns_id);
                 txns_read.update_gt(as_of.clone()).await;
                 let data_snapshot = txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())
@@ -2082,12 +2093,22 @@ where
                 self.txns_init_run = true;
                 return Ok(());
             }
-            PersistTxns::Enabled {
+            PersistTxns::EnabledEager {
+                txns_id,
+                txns_client,
+            } => {
+                info!(
+                    "init_txns at {:?}: enabled lazy txns_id={}",
+                    init_ts, txns_id
+                );
+                (txns_id, txns_client)
+            }
+            PersistTxns::EnabledLazy {
                 txns_read,
                 txns_client,
             } => {
                 info!(
-                    "init_txns at {:?}: enabled txns_id={}",
+                    "init_txns at {:?}: enabled eager txns_id={}",
                     init_ts,
                     txns_read.txns_id()
                 );
@@ -2190,7 +2211,7 @@ where
         stash_metrics: Arc<StashMetrics>,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
-        enable_persist_txn_tables: bool,
+        enable_persist_txn_tables: EnablePersistTxnTables,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -2270,6 +2291,11 @@ where
             .open(persist_location.clone())
             .await
             .expect("location should be valid");
+        let (enable_persist_txn_tables, lazy_persist_txn_tables) = match enable_persist_txn_tables {
+            EnablePersistTxnTables::Off => (false, false),
+            EnablePersistTxnTables::Eager => (true, false),
+            EnablePersistTxnTables::Lazy => (true, true),
+        };
         let (persist_table_worker, txns) = if enable_persist_txn_tables {
             let txns_id = PERSIST_TXNS_SHARD
                 .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
@@ -2285,11 +2311,22 @@ where
                 Arc::new(UnitSchema),
             )
             .await;
-            let worker = persist_handles::PersistTableWriteWorker::new_txns(tx.clone(), txns);
-            let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id);
-            let txns = PersistTxns::Enabled {
-                txns_read,
-                txns_client,
+            let worker = persist_handles::PersistTableWriteWorker::new_txns(
+                tx.clone(),
+                txns,
+                lazy_persist_txn_tables,
+            );
+            let txns = if lazy_persist_txn_tables {
+                let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id);
+                PersistTxns::EnabledLazy {
+                    txns_read,
+                    txns_client,
+                }
+            } else {
+                PersistTxns::EnabledEager {
+                    txns_id,
+                    txns_client,
+                }
             };
             (worker, txns)
         } else {
@@ -3293,7 +3330,7 @@ where
                 }
             }
             Some(txns_id) => {
-                let txns_read = self.txns.expect_enabled(txns_id);
+                let txns_read = self.txns.expect_enabled_lazy(txns_id);
                 txns_read.update_gt(as_of.clone()).await;
                 let data_snapshot = txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())
