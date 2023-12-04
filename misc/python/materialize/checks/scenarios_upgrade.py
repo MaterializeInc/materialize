@@ -141,8 +141,8 @@ class UpgradeEntireMzFourVersions(Scenario):
     def __init__(
         self, checks: list[type[Check]], executor: Executor, seed: str | None = None
     ):
-        super().__init__(checks, executor, seed)
         self.minor_versions = get_minor_versions()
+        super().__init__(checks, executor, seed)
 
     def base_version(self) -> MzVersion:
         return self.minor_versions[3]
