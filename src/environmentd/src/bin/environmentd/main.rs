@@ -455,11 +455,6 @@ pub struct Args {
         value_name = "<CLOUD>-<REGION>-<ORG-ID>-<ORDINAL>"
     )]
     environment_id: EnvironmentId,
-    /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
-    ///
-    /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
-    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
@@ -554,14 +549,20 @@ pub struct Args {
     )]
     config_sync_loop_interval: Option<Duration>,
 
-    /// The 12-digit AWS account id, which is used to generate an AWS Principal.
+    // === AWS options. ===
+    /// The AWS account ID, which will be used to generate ARNs for
+    /// Materialize-controlled AWS resources.
     #[clap(long, env = "AWS_ACCOUNT_ID")]
     aws_account_id: Option<String>,
-
-    /// The Materialize role arn to assume when connecting to external user's AWS account.
-    #[clap(long, env = "AWS_EXTERNAL_CONNECTION_ROLE")]
-    aws_external_connection_role: Option<String>,
-
+    /// The ARN for a Materialize-controlled role to assume before assuming
+    /// a customer's requested role for an AWS connection.
+    #[clap(long, env = "AWS_CONNECTION_ROLE_ARN")]
+    aws_connection_role_arn: Option<String>,
+    /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
+    ///
+    /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// The list of supported AWS PrivateLink availability zone ids.
     /// Must be zone IDs, of format e.g. "use-az1".
     #[clap(
@@ -571,7 +572,6 @@ pub struct Args {
         use_delimiter = true
     )]
     aws_privatelink_availability_zones: Option<Vec<String>>,
-
     /// The list of tags to be set on AWS Secrets Manager secrets created by the
     /// AwsSecretsController.
     #[clap(
@@ -997,7 +997,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 segment_api_key: args.segment_api_key,
                 egress_ips: args.announce_egress_ip,
                 aws_account_id: args.aws_account_id,
-                aws_external_connection_role: args.aws_external_connection_role,
                 aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
                 launchdarkly_sdk_key: args.launchdarkly_sdk_key,
                 launchdarkly_key_map: args

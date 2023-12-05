@@ -537,7 +537,6 @@ pub struct Config {
     pub egress_ips: Vec<Ipv4Addr>,
     pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     pub aws_account_id: Option<String>,
-    pub aws_external_connection_role: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
     pub webhook_concurrency_limit: WebhookConcurrencyLimiter,
@@ -2236,7 +2235,6 @@ pub fn serve(
         segment_client,
         egress_ips,
         aws_account_id,
-        aws_external_connection_role,
         aws_privatelink_availability_zones,
         system_parameter_sync_config,
         active_connection_count,
@@ -2265,15 +2263,11 @@ pub fn serve(
                 .connection_context()
                 .aws_external_id_prefix
                 .clone(),
-            aws_external_connection_role,
         ) {
-            (Some(aws_account_id), Some(aws_external_id_prefix), aws_external_connection_role) => {
-                Some(AwsPrincipalContext {
-                    aws_account_id,
-                    aws_external_id_prefix,
-                    aws_external_connection_role,
-                })
-            }
+            (Some(aws_account_id), Some(aws_external_id_prefix)) => Some(AwsPrincipalContext {
+                aws_account_id,
+                aws_external_id_prefix,
+            }),
             _ => None,
         };
 

@@ -1044,7 +1044,6 @@ impl<'a> RunnerInner<'a> {
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,
-            aws_external_connection_role: None,
             aws_privatelink_availability_zones: None,
             launchdarkly_sdk_key: None,
             launchdarkly_key_map: Default::default(),
