@@ -49,7 +49,7 @@ use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogTyp
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_types::connections::aws::{AwsAuth, AwsConfig};
+use mz_storage_types::connections::aws::{AwsAssumeRole, AwsAuth, AwsConfig};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{KafkaConnection, StringOrSecret};
 use mz_storage_types::sinks::{KafkaSinkConnection, StorageSinkConnection};
@@ -755,18 +755,40 @@ impl CatalogState {
             AwsAuth::AssumeRole(assume_role) => {
                 assume_role_arn = Some(&assume_role.arn);
                 assume_role_session_name = assume_role.session_name.as_deref();
-                principal = Some(&assume_role.mz_principal.arn);
-                external_id = Some(
-                    assume_role
-                        .mz_principal
-                        .get_external_id(connection_id.to_string()),
-                );
+
+                let aws_connection_role_arn = self
+                    .config
+                    .connection_context
+                    .aws_connection_role_arn
+                    .as_ref()
+                    .ok_or_else(|| {
+                        Error::new(ErrorKind::Unstructured(
+                            "internal error: could not find aws_connection_role_arn".to_string(),
+                        ))
+                    })?;
+                principal = Some(aws_connection_role_arn);
+
+                let external_id_prefix = self
+                    .config
+                    .connection_context
+                    .aws_external_id_prefix
+                    .as_ref()
+                    .ok_or_else(|| {
+                        Error::new(ErrorKind::Unstructured(
+                            "internal error: could not find aws_external_id_prefix".to_string(),
+                        ))
+                    })?;
+
+                external_id = Some(AwsAssumeRole::get_external_id(
+                    external_id_prefix,
+                    &connection_id,
+                ));
                 example_trust_policy = Some(
-                    Jsonb::from_serde_json(
-                        assume_role
-                            .mz_principal
-                            .get_aws_example_trust_policy(connection_id.to_string()),
-                    )
+                    Jsonb::from_serde_json(AwsAssumeRole::get_example_trust_policy(
+                        aws_connection_role_arn,
+                        external_id_prefix,
+                        &connection_id,
+                    ))
                     .expect("valid json expected"),
                 );
             }
@@ -774,19 +796,14 @@ impl CatalogState {
         let mut row = Row::default();
         let mut row_packer = row.packer();
         row_packer.push(Datum::String(&connection_id.to_string()));
-        row_packer.push(Datum::from(
-            aws_config.endpoint.as_ref().map(String::as_str),
-        ));
-        row_packer.push(Datum::from(aws_config.region.as_ref().map(String::as_str)));
+        row_packer.push(Datum::from(aws_config.endpoint.as_deref()));
+        row_packer.push(Datum::from(aws_config.region.as_deref()));
         row_packer.push(Datum::from(access_key_id));
-        row_packer.push(Datum::from(
-            access_key_id_secret_id.as_ref().map(String::as_str),
-        ));
+        row_packer.push(Datum::from(access_key_id_secret_id.as_deref()));
         row_packer.push(Datum::from(assume_role_arn));
         row_packer.push(Datum::from(assume_role_session_name));
         row_packer.push(Datum::from(principal));
-        row_packer.push(Datum::from(external_id.as_ref().map(String::as_str)));
-
+        row_packer.push(Datum::from(external_id.as_deref()));
         if let Some(policy) = example_trust_policy {
             row_packer.push(policy.into_row().into_element())
         } else {

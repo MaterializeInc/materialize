@@ -892,6 +892,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         args.environment_id.to_string(),
         &args.tracing.startup_log_filter,
         args.aws_external_id_prefix,
+        args.aws_connection_role_arn,
         secrets_reader,
         cloud_resource_reader,
     );

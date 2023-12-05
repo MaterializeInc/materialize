@@ -20,9 +20,7 @@ use mz_sql_parser::ast::{
     ConnectionOption, ConnectionOptionName, CreateConnectionType, KafkaBroker,
     KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
 };
-use mz_storage_types::connections::aws::{
-    AwsAssumeRole, AwsAuth, AwsConfig, AwsCredentials, MaterializePrincipal,
-};
+use mz_storage_types::connections::aws::{AwsAssumeRole, AwsAuth, AwsConfig, AwsCredentials};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
@@ -30,7 +28,7 @@ use mz_storage_types::connections::{
     StringOrSecret, TlsIdentity, Tunnel,
 };
 
-use crate::catalog::{CatalogError, CatalogItemType};
+use crate::catalog::CatalogItemType;
 use crate::names::Aug;
 use crate::plan::statement::{Connection, ResolvedItemName};
 use crate::plan::with_options::{self, TryFromValue};
@@ -206,26 +204,7 @@ impl ConnectionOptionExtracted {
 
                 let assume_role = match (self.assume_role_arn, self.assume_role_session_name) {
                     (Some(arn), session_name) => {
-                        let mz_arn =
-                            scx.catalog.aws_external_connection_role().ok_or_else(|| {
-                                PlanError::Catalog(CatalogError::MissingState(
-                                    "AWS external connection role".to_string(),
-                                ))
-                            })?;
-                        let external_id_prefix =
-                            scx.catalog.aws_external_id_prefix().ok_or_else(|| {
-                                PlanError::Catalog(CatalogError::MissingState(
-                                    "AWS External ID prefix".to_string(),
-                                ))
-                            })?;
-                        Some(AwsAuth::AssumeRole(AwsAssumeRole {
-                            arn,
-                            session_name,
-                            mz_principal: MaterializePrincipal {
-                                arn: mz_arn,
-                                external_id_prefix,
-                            },
-                        }))
+                        Some(AwsAuth::AssumeRole(AwsAssumeRole { arn, session_name }))
                     }
                     (None, Some(_)) => {
                         return Err(PlanError::MissingRequiredOptions {

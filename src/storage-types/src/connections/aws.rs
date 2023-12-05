@@ -11,6 +11,7 @@
 
 use anyhow::anyhow;
 use aws_types::SdkConfig;
+use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
@@ -23,63 +24,6 @@ include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.connections.aws.rs"
 ));
-/// The materialize principal details
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct MaterializePrincipal {
-    /// The role which Materialize will assume first to eventually
-    /// assume the customer's role via role chaining.
-    pub arn: String,
-    /// The external ID prefix, will need the connection ID as a suffix
-    /// to get the complete External ID to assume customer's role.
-    pub external_id_prefix: String,
-}
-
-impl MaterializePrincipal {
-    pub fn get_external_id(&self, aws_external_id_suffix: String) -> String {
-        format!("mz_{}_{}", self.external_id_prefix, aws_external_id_suffix)
-    }
-
-    pub fn get_aws_example_trust_policy(
-        &self,
-        aws_external_id_suffix: String,
-    ) -> serde_json::Value {
-        serde_json::json!(
-            {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Effect": "Allow",
-                "Principal": {
-                  "AWS": self.arn
-                },
-                "Action": "sts:AssumeRole",
-                "Condition": {
-                  "StringEquals": {
-                    "sts:ExternalId": self.get_external_id(aws_external_id_suffix)
-                  }
-                }
-              }
-            ]
-          }
-        )
-    }
-}
-
-impl RustType<ProtoMaterializePrincipal> for MaterializePrincipal {
-    fn into_proto(&self) -> ProtoMaterializePrincipal {
-        ProtoMaterializePrincipal {
-            arn: self.arn.clone(),
-            external_id_prefix: self.external_id_prefix.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMaterializePrincipal) -> Result<Self, TryFromProtoError> {
-        Ok(MaterializePrincipal {
-            arn: proto.arn,
-            external_id_prefix: proto.external_id_prefix,
-        })
-    }
-}
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum AwsAuth {
@@ -181,8 +125,41 @@ pub struct AwsAssumeRole {
     pub arn: String,
     /// The optional session name for the assume role session.
     pub session_name: Option<String>,
-    /// The Materialize AWS principal details.
-    pub mz_principal: MaterializePrincipal,
+}
+
+impl AwsAssumeRole {
+    pub fn get_external_id(
+        external_id_prefix: &AwsExternalIdPrefix,
+        connection_id: &GlobalId,
+    ) -> String {
+        format!("mz_{}_{}", external_id_prefix, connection_id)
+    }
+
+    pub fn get_example_trust_policy(
+        arn: &String,
+        external_id_prefix: &AwsExternalIdPrefix,
+        connection_id: &GlobalId,
+    ) -> serde_json::Value {
+        serde_json::json!(
+            {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Principal": {
+                  "AWS": arn
+                },
+                "Action": "sts:AssumeRole",
+                "Condition": {
+                  "StringEquals": {
+                    "sts:ExternalId": Self::get_external_id(external_id_prefix, connection_id)
+                  }
+                }
+              }
+            ]
+          }
+        )
+    }
 }
 
 impl RustType<ProtoAwsAssumeRole> for AwsAssumeRole {
@@ -190,7 +167,6 @@ impl RustType<ProtoAwsAssumeRole> for AwsAssumeRole {
         ProtoAwsAssumeRole {
             arn: self.arn.clone(),
             session_name: self.session_name.clone(),
-            mz_principal: Some(self.mz_principal.into_proto()),
         }
     }
 
@@ -198,9 +174,6 @@ impl RustType<ProtoAwsAssumeRole> for AwsAssumeRole {
         Ok(AwsAssumeRole {
             arn: proto.arn,
             session_name: proto.session_name,
-            mz_principal: proto
-                .mz_principal
-                .into_rust_if_some("ProtoAwsAssumeRole::mz_principal")?,
         })
     }
 }
@@ -208,10 +181,10 @@ impl RustType<ProtoAwsAssumeRole> for AwsAssumeRole {
 impl AwsConfig {
     /// Loads the AWS SDK configuration object from the environment, then
     /// applies the overrides from this object.
-    pub async fn get_sdk_config(
+    pub async fn load_sdk_config(
         &self,
         secrets_reader: &dyn SecretsReader,
-        external_id_suffix: Option<String>,
+        connection_id: Option<GlobalId>,
     ) -> Result<SdkConfig, anyhow::Error> {
         use aws_config::default_provider::region::DefaultRegionChain;
         use aws_config::sts::AssumeRoleProvider;
@@ -249,14 +222,10 @@ impl AwsConfig {
             }
             AwsAuth::AssumeRole(assume_role) => {
                 let sts_client = aws_sdk_sts::Client::new(&aws_config::from_env().load().await);
-                let AwsAssumeRole {
-                    arn,
-                    session_name,
-                    mz_principal,
-                } = assume_role;
+                let AwsAssumeRole { arn, session_name } = assume_role;
                 let assume_role_response = sts_client
                     .assume_role()
-                    .role_arn(mz_principal.arn.clone())
+                    // .role_arn(mz_principal.arn.clone()) TODO(mouli): fix
                     .role_session_name("materialize_assume_role")
                     .send()
                     .await?;
@@ -285,9 +254,10 @@ impl AwsConfig {
                     role = role.region(region.clone());
                 }
 
-                if let Some(external_id_suffix) = external_id_suffix {
-                    role = role.external_id(mz_principal.get_external_id(external_id_suffix));
-                }
+                // TODO (mouli): fix
+                // if let Some(external_id_suffix) = external_id_suffix {
+                //     role = role.external_id(mz_principal.get_external_id(external_id_suffix));
+                // }
 
                 SharedCredentialsProvider::new(role.build(credentials))
             }
@@ -310,7 +280,7 @@ impl AwsConfig {
         match &self.auth {
             AwsAuth::Credentials(_) => {
                 let aws_config = self
-                    .get_sdk_config(
+                    .load_sdk_config(
                         storage_configuration
                             .connection_context
                             .secrets_reader
@@ -325,12 +295,12 @@ impl AwsConfig {
             }
             AwsAuth::AssumeRole(_) => {
                 let aws_config = self
-                    .get_sdk_config(
+                    .load_sdk_config(
                         storage_configuration
                             .connection_context
                             .secrets_reader
                             .as_ref(),
-                        Some(id.to_string()),
+                        Some(id),
                     )
                     .await?;
 
@@ -338,7 +308,7 @@ impl AwsConfig {
                 let _ = sts_client.get_caller_identity().send().await?;
 
                 let aws_config_without_external_id = self
-                    .get_sdk_config(
+                    .load_sdk_config(
                         storage_configuration
                             .connection_context
                             .secrets_reader
