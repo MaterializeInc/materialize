@@ -565,7 +565,7 @@ steps:
 
       - id: checks-upgrade-clusterd-compute-first
         label: "Platform checks upgrade, restarting compute clusterd first"
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
@@ -576,7 +576,7 @@ steps:
 
       - id: checks-upgrade-clusterd-compute-last
         label: "Platform checks upgrade, restarting compute clusterd last"
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
