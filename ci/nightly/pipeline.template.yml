@@ -27,12 +27,23 @@ steps:
 
   - wait: ~
 
-  - id: closed-issues-detect
-    timeout_in_minutes: 10
-    label: Detect references to already closed issues
-    command: bin/ci-builder run stable bin/ci-closed-issues-detect
-    agents:
-      queue: linux-x86_64
+  - group: Linters
+    key: linters
+    steps:
+    - id: closed-issues-detect
+      timeout_in_minutes: 10
+      label: Detect references to already closed issues
+      command: bin/ci-builder run stable bin/ci-closed-issues-detect
+      agents:
+        queue: linux-x86_64
+
+    - id: unused-deps
+      label: Unused dependencies
+      command: bin/ci-builder run nightly bin/unused-deps
+      timeout_in_minutes: 30
+      agents:
+        queue: linux-x86_64
+
 
   - id: miri-test
     label: Miri test (full)
@@ -81,25 +92,28 @@ steps:
               - --max-concurrency
               - "256"
 
-  - id: kafka-matrix
-    label: Kafka smoke test against previous Kafka versions
-    timeout_in_minutes: 60
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-matrix
+  - group: Kafka
+    key: kafka
+    steps:
+    - id: kafka-matrix
+      label: Kafka smoke test against previous Kafka versions
+      timeout_in_minutes: 60
+      agents:
+        queue: linux-x86_64
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: kafka-matrix
 
-  - id: kafka-multi-broker
-    label: Kafka multi-broker test
-    timeout_in_minutes: 10
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-multi-broker
+    - id: kafka-multi-broker
+      label: Kafka multi-broker test
+      timeout_in_minutes: 10
+      agents:
+        queue: linux-x86_64
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: kafka-multi-broker
 
   - group: Testdrive
     key: testdrive
@@ -201,38 +215,65 @@ steps:
               args: [--aws-region=us-east-1, --persistent-user-tables]
         skip: "Persistence tests disabled"
 
-  - id: limits
-    label: "Product limits"
-    agents:
-      queue: linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: limits
-    timeout_in_minutes: 50
+  - group: Limits
+    key: limits-group
+    steps:
+    - id: limits
+      label: "Product limits"
+      agents:
+        queue: linux-x86_64
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: limits
+      timeout_in_minutes: 50
 
-  - id: limits-instance-size
-    label: "Instance size limits"
-    agents:
-      # A larger instance is needed due to the
-      # many containers that are being created
-      queue: builder-linux-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: limits
-          run: instance-size
-    timeout_in_minutes: 50
+    - id: limits-instance-size
+      label: "Instance size limits"
+      agents:
+        # A larger instance is needed due to the
+        # many containers that are being created
+        queue: builder-linux-x86_64
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: limits
+            run: instance-size
+      timeout_in_minutes: 50
 
-  - id: upsert-compaction-enabled
-    label: Upsert (compaction enabled)
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: upsert
-    agents:
-      queue: linux-x86_64
+    - id: bounded-memory
+      label: "Bounded Memory"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 3600
+      agents:
+        queue: builder-linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: bounded-memory
+
+  - group: Upsert
+    key: upsert
+    steps:
+    - id: upsert-compaction-enabled
+      label: Upsert (compaction enabled)
+      timeout_in_minutes: 30
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: upsert
+      agents:
+        queue: linux-x86_64
+
+    - id: upsert-compaction-disabled
+      label: Upsert (compaction disabled)
+      timeout_in_minutes: 30
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: upsert
+            args: [--compaction-disabled]
+      agents:
+        queue: linux-x86_64
 
   - id: ssh-connection-extended
     label: Extended SSH connection tests
@@ -244,7 +285,6 @@ steps:
           args: [--extended]
     agents:
       queue: linux-x86_64
-
 
   - group: Zippy
     key: zippy
@@ -711,46 +751,28 @@ steps:
           run: failpoints
     skip: Persistence tests disabled
 
-  - id: unused-deps
-    label: Unused dependencies
-    command: bin/ci-builder run nightly bin/unused-deps
-    # inputs:
-    #  - Cargo.lock
-    #  - "**/Cargo.toml"
-    #  - "**/*.rs"
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
+  - group: LD
+    key: ld
+    steps:
+    - id: sql-feature-flags
+      label: "SQL-level feature flags"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 30
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: sql-feature-flags
 
-  - id: sql-feature-flags
-    label: "SQL-level feature flags"
-    artifact_paths: junit_*.xml
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: sql-feature-flags
-
-  - id: launchdarkly
-    label: "LaunchDarkly"
-    artifact_paths: junit_*.xml
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: launchdarkly
-
-  - id: bounded-memory
-    label: "Bounded Memory"
-    artifact_paths: junit_*.xml
-    timeout_in_minutes: 3600
-    agents:
-      queue: builder-linux-x86_64
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: bounded-memory
+    - id: launchdarkly
+      label: "LaunchDarkly"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 30
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: launchdarkly
 
   - id: cloud-canary
     label: "Canary Deploy in Staging Cloud"
@@ -1029,17 +1051,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: balancerd
-
-  - id: upsert-compaction-disabled
-    label: Upsert (compaction disabled)
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: upsert
-          args: [--compaction-disabled]
-    agents:
-      queue: linux-x86_64
 
   - id: restarts
     label: Restart test
