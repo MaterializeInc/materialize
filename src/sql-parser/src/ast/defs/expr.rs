@@ -886,7 +886,7 @@ impl<T: AstInfo> FunctionArgs<T> {
     }
 
     /// Returns the number of arguments. Star (`*`) is None.
-    fn len(&self) -> Option<usize> {
+    pub fn len(&self) -> Option<usize> {
         match self {
             FunctionArgs::Star => None,
             FunctionArgs::Args { args, .. } => Some(args.len()),
