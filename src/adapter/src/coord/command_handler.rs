@@ -285,11 +285,11 @@ impl Coordinator {
 
                 // Note: Do NOT await the notify here, we pass this back to whatever requested the
                 // startup to prevent blocking the Coordinator on a builtin table update.
-                let notify = self.send_builtin_table_updates_defer(vec![update]);
+                let notify = self.builtin_table_update().defer(vec![update]);
 
                 let resp = Ok(StartupResponse {
                     role_id,
-                    write_notify: notify,
+                    write_notify: Box::pin(notify),
                     session_defaults,
                     role_defaults,
                     catalog: self.owned_catalog(),
@@ -825,7 +825,7 @@ impl Coordinator {
         // this to prevent blocking the Coordinator in the case that a lot of connections are
         // closed at once, which occurs regularly in some workflows.
         let update = self.catalog().state().pack_session_update(&conn, -1);
-        self.send_builtin_table_updates_defer(vec![update]);
+        let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
     }
 
     #[tracing::instrument(level = "debug", skip(self, tx))]

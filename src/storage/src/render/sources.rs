@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use mz_ore::cast::CastLossy;
+use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_operators::persist_source;
 use mz_storage_operators::persist_source::Subtime;
@@ -349,6 +350,7 @@ where
                                     persist_clients,
                                     tx_storage_metadata,
                                     Some(as_of),
+                                    SnapshotMode::Include,
                                     Antichain::new(),
                                     None,
                                     None,
@@ -445,6 +447,7 @@ where
                                         persist_clients,
                                         description.ingestion_metadata,
                                         Some(as_of),
+                                        SnapshotMode::Include,
                                         Antichain::new(),
                                         None,
                                         flow_control,

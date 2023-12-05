@@ -20,7 +20,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
-use mz_persist_client::operators::shard_source::shard_source;
+use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
@@ -515,6 +515,7 @@ impl DataSubscribe {
                     move || std::future::ready(client.clone()),
                     data_id,
                     Some(Antichain::from_elem(as_of)),
+                    SnapshotMode::Include,
                     Antichain::new(),
                     false.then_some(|_, _: &_, _| unreachable!()),
                     Arc::new(StringSchema),

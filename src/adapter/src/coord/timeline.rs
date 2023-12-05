@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -27,7 +28,7 @@ use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_sql::session::vars::TimestampOracleImpl;
 use mz_storage_types::sources::Timeline;
 use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, Instrument};
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
@@ -119,7 +120,6 @@ impl Coordinator {
             .as_ref()
     }
 
-    #[allow(unused)]
     pub(crate) fn get_shared_timestamp_oracle(
         &self,
         timeline: &Timeline,
@@ -135,6 +135,13 @@ impl Coordinator {
     /// from/to a local input.
     fn get_local_timestamp_oracle(&self) -> &dyn TimestampOracle<Timestamp> {
         self.get_timestamp_oracle(&Timeline::EpochMilliseconds)
+    }
+
+    /// Returns a [`ShareableTimestampOracle`] used for reads and writes from/to a local input.
+    fn get_local_shared_timestamp_oracle(
+        &self,
+    ) -> Option<Arc<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
+        self.get_shared_timestamp_oracle(&Timeline::EpochMilliseconds)
     }
 
     /// Assign a timestamp for a read from a local input. Reads following writes
@@ -182,6 +189,34 @@ impl Coordinator {
             .oracle
             .apply_write(timestamp)
             .await;
+    }
+
+    /// Marks a write at `timestamp` as completed, using a [`ShareableTimestampOracle`].
+    ///
+    /// TODO(parkmycar): [`ShareableTimestampOracle`] is a new concept and not always available.
+    /// When we move entirely to the shareable model, this method and
+    /// [`Coordinator::apply_local_write`] should get merged.
+    pub(crate) fn apply_local_write_shareable(
+        &mut self,
+        timestamp: Timestamp,
+    ) -> Option<impl Future<Output = ()> + Send + 'static> {
+        let now = self.now().into();
+
+        if timestamp > timestamp_oracle::catalog_oracle::upper_bound(&now) {
+            error!(
+                "Setting local read timestamp to {timestamp}, which is more than \
+                {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than now, {now}",
+                *TIMESTAMP_PERSIST_INTERVAL
+            );
+        }
+
+        self.get_local_shared_timestamp_oracle()
+            .map(|oracle| async move {
+                oracle
+                    .apply_write(timestamp)
+                    .instrument(tracing::debug_span!("apply_local_write_static", ?timestamp))
+                    .await
+            })
     }
 
     /// Ensures that a global timeline state exists for `timeline`.

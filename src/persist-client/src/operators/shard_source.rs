@@ -14,6 +14,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
+use std::pin::pin;
 use std::rc::Rc;
 use std::slice;
 use std::sync::Arc;
@@ -22,6 +23,7 @@ use std::time::Instant;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
+use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::{Codec, Codec64};
@@ -35,13 +37,12 @@ use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{timestamp::Refines, Antichain, Timestamp};
-use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tracing::{debug, trace};
 
 use crate::cfg::RetryParameters;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
-use crate::read::{ListenEvent, SubscriptionLeaseReturner};
+use crate::read::SubscriptionLeaseReturner;
 use crate::stats::PartStats;
 use crate::{Diagnostics, PersistClient, ShardId};
 
@@ -64,6 +65,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     client: impl Fn() -> C,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
+    snapshot_mode: SnapshotMode,
     until: Antichain<G::Timestamp>,
     desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
@@ -124,6 +126,7 @@ where
         client(),
         shard_id.clone(),
         as_of,
+        snapshot_mode,
         until,
         completed_fetches_feedback_stream.leave(),
         chosen_worker,
@@ -152,17 +155,13 @@ where
     (parts, tokens)
 }
 
-#[derive(Debug)]
-struct ActivateOnDrop {
-    token_rx: tokio::sync::mpsc::Receiver<()>,
-    activator: Activator,
-}
-
-impl Drop for ActivateOnDrop {
-    fn drop(&mut self) {
-        self.token_rx.close();
-        self.activator.activate();
-    }
+/// An enum describing whether a snapshot should be emitted
+#[derive(Debug, Clone, Copy)]
+pub enum SnapshotMode {
+    /// The snapshot will be included in the stream
+    Include,
+    /// The snapshot will not be included in the stream
+    Exclude,
 }
 
 pub(crate) fn shard_source_descs<K, V, D, F, G>(
@@ -171,6 +170,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
+    snapshot_mode: SnapshotMode,
     until: Antichain<G::Timestamp>,
     completed_fetches_stream: Stream<G, SerdeLeasedBatchPart>,
     chosen_worker: usize,
@@ -196,9 +196,9 @@ where
     // values that are `yield`-ed from it's body.
     let name_owned = name.to_owned();
 
-    // Create a shared slot between the operator to store the subscription handle
-    let subscription_handle = Rc::new(RefCell::new(None));
-    let return_subscription_handle = Rc::clone(&subscription_handle);
+    // Create a shared slot between the operator to store the listen handle
+    let listen_handle = Rc::new(RefCell::new(None));
+    let return_listen_handle = Rc::clone(&listen_handle);
 
     // Create a oneshot channel to give the part returner a SubscriptionLeaseReturner
     let (tx, rx) = tokio::sync::oneshot::channel::<SubscriptionLeaseReturner>();
@@ -231,7 +231,7 @@ where
             }
         }
         // Make it explicit that the subscriber is kept alive until we have finished returning parts
-        drop(return_subscription_handle);
+        drop(return_listen_handle);
     });
 
     let mut builder =
@@ -260,7 +260,7 @@ where
         // TODO: Really we likely need to swap the inners of all persist operators to be
         // communicating with a tokio task over a channel, but that's much much harder, so for now
         // we whack the moles as we see them.
-        let read = mz_ore::task::spawn(|| format!("shard_source_reader({})", name_owned), {
+        let mut read = mz_ore::task::spawn(|| format!("shard_source_reader({})", name_owned), {
             let diagnostics = Diagnostics {
                 handle_purpose: format!("shard_source({})", name_owned),
                 shard_name: name_owned.clone(),
@@ -299,9 +299,8 @@ where
         // through, including the initial downgrade of the shard upper to the
         // `as_of`.
         //
-        // NOTE: We have to do this before our `subscribe()` call (which
-        // internally calls `snapshot()` because that call will block when there
-        // is no data yet available in the shard.
+        // NOTE: We have to do this before our `snapshot()` call because that
+        // will block when there is no data yet available in the shard.
         cap_set.downgrade(as_of.clone());
         let mut current_ts = match as_of.clone().into_option() {
             Some(ts) => ts,
@@ -310,104 +309,118 @@ where
             }
         };
 
-        // Store the subscription handle in the shared slot so that it stays alive until both
-        // operators exit
-        let mut subscription = subscription_handle.borrow_mut();
-        let subscription =
-            subscription.insert(read.subscribe(as_of.clone()).await.unwrap_or_else(|e| {
-                panic!(
-                    "{}: {} cannot serve requested as_of {:?}: {:?}",
-                    name_owned, shard_id, as_of, e
-                )
-            }));
+        let mut snapshot_parts = match snapshot_mode {
+            SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
+                Ok(parts) => parts,
+                Err(e) => {
+                    panic!("{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}")
+                }
+            },
+            SnapshotMode::Exclude => vec![],
+        };
 
         // We're about to start producing parts to be fetched whose leases will be returned by the
         // `shard_source_descs_return` operator above. In order for that operator to successfully
         // return the leases we send it the lease returner associated with our shared subscriber.
-        tx.send(subscription.lease_returner().clone())
+        tx.send(read.lease_returner().clone())
             .expect("lease returner exited before desc producer");
-        let mut lease_returner = subscription.lease_returner().clone();
+        let mut lease_returner = read.lease_returner().clone();
+
+        // Store the listen handle in the shared slot so that it stays alive until both operators
+        // exit
+        let mut listen = listen_handle.borrow_mut();
+        let listen = match read.listen(as_of.clone()).await {
+            Ok(handle) => listen.insert(handle),
+            Err(e) => {
+                panic!("{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}")
+            }
+        };
+
+        let listen_retry = listen_sleep.as_ref().map(|retry| retry());
+
+        // The head of the stream is enriched with the snapshot parts if they exist
+        let listen_head = if !snapshot_parts.is_empty() {
+            let (mut parts, progress) = listen.next(listen_retry).await;
+            snapshot_parts.append(&mut parts);
+            futures::stream::iter(Some((snapshot_parts, progress)))
+        } else {
+            futures::stream::iter(None)
+        };
+
+        // The tail of the stream is all subsequent parts
+        let listen_tail = futures::stream::unfold(listen, |listen| async move {
+            Some((listen.next(listen_retry).await, listen))
+        });
+
+        let mut shard_stream = pin!(listen_head.chain(listen_tail));
 
         // Read from the subscription and pass them on.
-        let mut batch_parts = vec![];
-        let listen_retry = listen_sleep.as_ref().map(|retry| retry());
         let mut upper = Antichain::from_elem(Timestamp::minimum());
         // If `until.less_equal(progress)`, it means that all subsequent batches will contain only
         // times greater or equal to `until`, which means they can be dropped in their entirety.
         while !PartialOrder::less_equal(&until, &upper) {
-            for event in subscription.next(listen_retry).await {
-                match event {
-                    ListenEvent::Updates(mut parts) => {
-                        batch_parts.append(&mut parts);
-                    }
-                    ListenEvent::Progress(progress) => {
-                        // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
-                        // operator will refine this further, if its enabled.
-                        let session_cap = cap_set.delayed(&current_ts);
+            let (parts, progress) = shard_stream.next().await.expect("infinite stream");
 
-                        for mut part_desc in std::mem::take(&mut batch_parts) {
-                            // TODO: Push the filter down into the Subscribe?
-                            if cfg.dynamic.stats_filter_enabled() {
-                                let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
-                                    should_fetch_part(
-                                        &stats.decode(),
-                                        AntichainRef::new(slice::from_ref(&current_ts)),
-                                    )
-                                });
-                                let bytes = u64::cast_from(part_desc.encoded_size_bytes);
-                                if should_fetch {
-                                    metrics.pushdown.parts_fetched_count.inc();
-                                    metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
-                                } else {
-                                    metrics.pushdown.parts_filtered_count.inc();
-                                    metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
-                                    let should_audit = {
-                                        let mut h = DefaultHasher::new();
-                                        part_desc.key.hash(&mut h);
-                                        usize::cast_from(h.finish()) % 100
-                                            < cfg.dynamic.stats_audit_percent()
-                                    };
-                                    if should_audit {
-                                        metrics.pushdown.parts_audited_count.inc();
-                                        metrics.pushdown.parts_audited_bytes.inc_by(bytes);
-                                        part_desc.request_filter_pushdown_audit();
-                                    } else {
-                                        debug!(
-                                            "skipping part because of stats filter {:?}",
-                                            part_desc.stats
-                                        );
-                                        lease_returner.return_leased_part(part_desc);
-                                        continue;
-                                    }
-                                }
-                            }
+            // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
+            // operator will refine this further, if its enabled.
+            let session_cap = cap_set.delayed(&current_ts);
 
-                            // Give the part to a random worker. This isn't
-                            // round robin in an attempt to avoid skew issues:
-                            // if your parts alternate size large, small, then
-                            // you'll end up only using half of your workers.
-                            //
-                            // There's certainly some other things we could be
-                            // doing instead here, but this has seemed to work
-                            // okay so far. Continue to revisit as necessary.
-                            let worker_idx =
-                                usize::cast_from(Instant::now().hashed()) % num_workers;
-                            descs_output
-                                .give(
-                                    &session_cap,
-                                    (worker_idx, part_desc.into_exchangeable_part()),
-                                )
-                                .await;
+            for mut part_desc in parts {
+                // TODO: Push the filter down into the Subscribe?
+                if cfg.dynamic.stats_filter_enabled() {
+                    let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
+                        should_fetch_part(
+                            &stats.decode(),
+                            AntichainRef::new(slice::from_ref(&current_ts)),
+                        )
+                    });
+                    let bytes = u64::cast_from(part_desc.encoded_size_bytes);
+                    if should_fetch {
+                        metrics.pushdown.parts_fetched_count.inc();
+                        metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
+                    } else {
+                        metrics.pushdown.parts_filtered_count.inc();
+                        metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
+                        let should_audit = {
+                            let mut h = DefaultHasher::new();
+                            part_desc.key.hash(&mut h);
+                            usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()
+                        };
+                        if should_audit {
+                            metrics.pushdown.parts_audited_count.inc();
+                            metrics.pushdown.parts_audited_bytes.inc_by(bytes);
+                            part_desc.request_filter_pushdown_audit();
+                        } else {
+                            debug!(
+                                "skipping part because of stats filter {:?}",
+                                part_desc.stats
+                            );
+                            lease_returner.return_leased_part(part_desc);
+                            continue;
                         }
-
-                        if let Some(ts) = progress.as_option() {
-                            current_ts = ts.clone();
-                        }
-                        cap_set.downgrade(progress.iter());
-                        upper = progress;
                     }
                 }
+
+                // Give the part to a random worker. This isn't round robin in an attempt to avoid
+                // skew issues: if your parts alternate size large, small, then you'll end up only
+                // using half of your workers.
+                //
+                // There's certainly some other things we could be doing instead here, but this has
+                // seemed to work okay so far. Continue to revisit as necessary.
+                let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
+                descs_output
+                    .give(
+                        &session_cap,
+                        (worker_idx, part_desc.into_exchangeable_part()),
+                    )
+                    .await;
             }
+
+            if let Some(ts) = progress.as_option() {
+                current_ts = ts.clone();
+            }
+            cap_set.downgrade(progress.iter());
+            upper = progress;
         }
     });
 
@@ -540,6 +553,7 @@ mod tests {
                         move || std::future::ready(persist_client.clone()),
                         shard_id,
                         None, // No explicit as_of!
+                        SnapshotMode::Include,
                         until,
                         Some(transformer),
                         Arc::new(
@@ -606,6 +620,7 @@ mod tests {
                         move || std::future::ready(persist_client.clone()),
                         shard_id,
                         Some(as_of), // We specify the as_of explicitly!
+                        SnapshotMode::Include,
                         until,
                         Some(transformer),
                         Arc::new(

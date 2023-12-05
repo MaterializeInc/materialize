@@ -1624,10 +1624,10 @@ SELECT pg_stat_get_numscans('pg_views'::regclass::oid)
 ----
 -1
 
-# mz_unsafe functions can't be executed with the enable_dangerous_functions flag turned off
+# mz_unsafe functions can't be executed with the enable_unsafe_functions flag turned off
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_dangerous_functions = false
+ALTER SYSTEM SET enable_unsafe_functions = false
 ----
 COMPLETE 0
 
@@ -1662,7 +1662,7 @@ statement ok
 SELECT mz_internal.mz_resolve_object_name('t');
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_dangerous_functions = true
+ALTER SYSTEM SET enable_unsafe_functions = true
 ----
 COMPLETE 0
 

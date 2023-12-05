@@ -558,6 +558,10 @@ pub struct Args {
     #[clap(long, env = "AWS_ACCOUNT_ID")]
     aws_account_id: Option<String>,
 
+    /// The Materialize role arn to assume when connecting to external user's AWS account.
+    #[clap(long, env = "AWS_EXTERNAL_CONNECTION_ROLE")]
+    aws_external_connection_role: Option<String>,
+
     /// The list of supported AWS PrivateLink availability zone ids.
     /// Must be zone IDs, of format e.g. "use-az1".
     #[clap(
@@ -993,6 +997,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 segment_api_key: args.segment_api_key,
                 egress_ips: args.announce_egress_ip,
                 aws_account_id: args.aws_account_id,
+                aws_external_connection_role: args.aws_external_connection_role,
                 aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
                 launchdarkly_sdk_key: args.launchdarkly_sdk_key,
                 launchdarkly_key_map: args

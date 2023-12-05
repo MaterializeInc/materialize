@@ -147,9 +147,12 @@ class Workspace:
             crate = Crate(root, root / path)
             self.crates[crate.name] = crate
         self.exclude: dict[str, Crate] = {}
-        for path in workspace_config["exclude"]:
-            crate = Crate(root, root / path)
-            self.exclude[crate.name] = crate
+        for path in workspace_config.get("exclude", []):
+            if path.endswith("*"):
+                for item in (root / path.rstrip("*")).iterdir():
+                    if item.is_dir() and (item / "Cargo.toml").exists():
+                        crate = Crate(root, root / item)
+                        self.exclude[crate.name] = crate
         self.all_crates = self.crates | self.exclude
 
         self.rust_version: str | None = None
