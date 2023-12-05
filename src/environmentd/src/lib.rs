@@ -457,20 +457,13 @@ impl Listeners {
             }
         }
 
-        let mut openable_adapter_storage = catalog_opener(
+        let openable_adapter_storage = catalog_opener(
             &config.catalog_config,
             &config.controller,
             &config.environment_id,
         )
         .boxed()
         .await?;
-        // Get the value from Launch Darkly as of the last time this environment
-        // was running. (Ideally it would be the current value, but that's
-        // harder: we don't want to block startup on it if LD is down and it
-        // would also require quite a bit of abstraction breakage.)
-        let enable_persist_txn_tables_stash_ld = openable_adapter_storage
-            .get_enable_persist_txn_tables()
-            .await?;
         let mut adapter_storage = openable_adapter_storage
             .open(
                 boot_ts,
@@ -483,6 +476,12 @@ impl Listeners {
                 config.deploy_generation,
             )
             .await?;
+        // Get the value from Launch Darkly as of the last time this environment
+        // was running. (Ideally it would be the current value, but that's
+        // harder: we don't want to block startup on it if LD is down and it
+        // would also require quite a bit of abstraction breakage.)
+        let enable_persist_txn_tables_stash_ld =
+            adapter_storage.get_enable_persist_txn_tables().await?;
 
         // Load the adapter catalog from disk.
         if !config
