@@ -16,7 +16,7 @@
 # > on server 67f36c260951 executing sys.sp_cdc_enable_db_internal on line 205 (code: 22830, state: 1, class: 16)
 #
 
-> SELECT mz_internal.mz_sleep(10);
+> SELECT mz_unsafe.mz_sleep(10);
 <null>
 
 $ sql-server-connect name=sql-server

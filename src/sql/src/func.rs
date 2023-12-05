@@ -3491,7 +3491,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 CASE
                 -- We need to validate the name and privileges to return a proper error before
                 -- anything else.
-                WHEN mz_internal.mz_error_if_null(
+                WHEN mz_unsafe.mz_error_if_null(
                     (SELECT name FROM mz_clusters WHERE name = $2),
                     'error cluster \"' || $2 || '\" does not exist'
                 ) IS NULL
@@ -3785,16 +3785,202 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         "mz_aclitem_privileges" => Scalar {
             params!(MzAclItem) => UnaryFunc::MzAclItemPrivileges(func::MzAclItemPrivileges) => String, oid::FUNC_MZ_ACL_ITEM_PRIVILEGES_OID;
         },
+        "mz_format_privileges" => Scalar {
+            params!(String) => UnaryFunc::MzFormatPrivileges(func::MzFormatPrivileges) => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_FORMAT_PRIVILEGES_OID;
+        },
+        "mz_resolve_object_name" => Table {
+            // This implementation is available primarily to drive the other, single-param
+            // implementation.
+            params!(
+                // Database
+                String,
+                // Schemas/search path
+                ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))),
+                // Item name
+                String
+            ) =>
+            // credit for using rank() to @def-
+            sql_impl_table_func("
+                SELECT id, oid, schema_id, name, type, owner_id, privileges
+                FROM (
+                    SELECT o.*, rank() OVER (ORDER BY pg_catalog.array_position($2, search_schema.name))
+                    FROM
+                        mz_catalog.mz_objects AS o
+                        JOIN mz_catalog.mz_schemas AS s
+                            ON o.schema_id = s.id
+                        JOIN unnest($2::text[]) AS search_schema (name)
+                            ON search_schema.name = s.name
+                        JOIN mz_catalog.mz_databases AS d
+                            -- Schemas without database IDs are present in every
+                            -- database that exists.
+                            ON d.id = COALESCE(s.database_id, d.id)
+                    WHERE
+                        o.name = $3::pg_catalog.text
+                        AND d.name = $1::pg_catalog.text
+                )
+                WHERE rank = 1;
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME_FULL;
+            params!(String) =>
+            // Normalize the input name, and for any NULL values (e.g. not database qualified), use
+            // the defaults used during name resolution.
+            sql_impl_table_func("
+                SELECT
+                    o.id, o.oid, o.schema_id, o.name, o.type, o.owner_id, o.privileges
+                FROM
+                    (SELECT mz_internal.mz_normalize_object_name($1))
+                            AS normalized (n),
+                    mz_internal.mz_resolve_object_name(
+                        COALESCE(n[1], pg_catalog.current_database()),
+                        CASE
+                            WHEN n[2] IS NULL
+                                THEN pg_catalog.current_schemas(true)
+                            ELSE
+                                ARRAY[n[2]]
+                        END,
+                        n[3]
+                    ) AS o
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME;
+        },
+        "mz_global_id_to_name" => Scalar {
+            params!(String) => sql_impl_func("
+            CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    SELECT mz_unsafe.mz_error_if_null(
+                        (
+                            SELECT DISTINCT
+                                concat_ws(
+                                    '.',
+                                    qual.d,
+                                    qual.s,
+                                    pg_catalog.quote_ident(item.name)
+                                )
+                            FROM
+                                mz_objects AS item
+                            JOIN
+                            (
+                                SELECT
+                                    pg_catalog.quote_ident(d.name) AS d,
+                                    pg_catalog.quote_ident(s.name) AS s,
+                                    s.id AS schema_id
+                                FROM
+                                    mz_schemas AS s
+                                    LEFT JOIN
+                                        (SELECT id, name FROM mz_databases)
+                                        AS d
+                                        ON s.database_id = d.id
+                            ) AS qual
+                            ON qual.schema_id = item.schema_id
+                            WHERE item.id = CAST($1 AS text)
+                        ),
+                        'global ID ' || $1 || ' does not exist'
+                    )
+                )
+                END
+            ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
+        },
+        "mz_normalize_object_name" => Scalar {
+            params!(String) => sql_impl_func("
+            (
+                SELECT
+                    CASE
+                        WHEN $1 IS NULL THEN NULL
+                        WHEN pg_catalog.array_length(ident, 1) > 3
+                            THEN mz_unsafe.mz_error_if_null(
+                                NULL::pg_catalog.text[],
+                                'improper relation name (too many dotted names): ' || $1
+                            )
+                        ELSE pg_catalog.array_cat(
+                            pg_catalog.array_fill(
+                                CAST(NULL AS pg_catalog.text),
+                                ARRAY[3 - pg_catalog.array_length(ident, 1)]
+                            ),
+                            ident
+                        )
+                    END
+                FROM (
+                    SELECT pg_catalog.parse_ident($1) AS ident
+                ) AS i
+            )") => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_NORMALIZE_OBJECT_NAME;
+        },
+        "mz_render_typmod" => Scalar {
+            params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
+        },
+        "mz_role_oid_memberships" => Scalar {
+            params!() => UnmaterializableFunc::MzRoleOidMemberships => ScalarType::Map{ value_type: Box::new(ScalarType::Array(Box::new(ScalarType::String))), custom_id: None }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
+        },
+        // There is no regclass equivalent for databases to look up oids, so we have this helper function instead.
+        "mz_database_oid" => Scalar {
+            params!(String) => sql_impl_func("
+                CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    mz_unsafe.mz_error_if_null(
+                        (SELECT oid FROM mz_databases WHERE name = $1),
+                        'database \"' || $1 || '\" does not exist'
+                    )
+                )
+                END
+            ") => Oid, oid::FUNC_DATABASE_OID_OID;
+        },
+        // There is no regclass equivalent for schemas to look up oids, so we have this helper function instead.
+        // TODO: Support qualified names.
+        // TODO: This should take into account the search path when looking for an object.
+        "mz_schema_oid" => Scalar {
+            params!(String) => sql_impl_func("
+                CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    mz_unsafe.mz_error_if_null(
+                        (SELECT oid FROM mz_schemas WHERE name = $1),
+                        'schema \"' || $1 || '\" does not exist'
+                    )
+                )
+                END
+            ") => Oid, oid::FUNC_SCHEMA_OID_OID;
+        },
+        // There is no regclass equivalent for roles to look up oids, so we have this helper function instead.
+        "mz_role_oid" => Scalar {
+            params!(String) => sql_impl_func("
+                CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    mz_unsafe.mz_error_if_null(
+                        (SELECT oid FROM mz_roles WHERE name = $1),
+                        'role \"' || $1 || '\" does not exist'
+                    )
+                )
+                END
+            ") => Oid, oid::FUNC_ROLE_OID_OID;
+        },
+        // This ought to be exposed in `mz_catalog`, but its name is rather
+        // confusing. It does not identify the SQL session, but the
+        // invocation of this `environmentd` process.
+        "mz_session_id" => Scalar {
+            params!() => UnmaterializableFunc::MzSessionId => Uuid, oid::FUNC_MZ_SESSION_ID_OID;
+        },
+        "mz_type_name" => Scalar {
+            params!(Oid) => UnaryFunc::MzTypeName(func::MzTypeName) => String, oid::FUNC_MZ_TYPE_NAME;
+        },
+        "mz_validate_privileges" => Scalar {
+            params!(String) => UnaryFunc::MzValidatePrivileges(func::MzValidatePrivileges) => Bool, oid::FUNC_MZ_VALIDATE_PRIVILEGES_OID;
+        },
+        "mz_validate_role_privilege" => Scalar {
+            params!(String) => UnaryFunc::MzValidateRolePrivilege(func::MzValidateRolePrivilege) => Bool, oid::FUNC_MZ_VALIDATE_ROLE_PRIVILEGE_OID;
+        }
+    }
+});
+
+pub static MZ_UNSAFE_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
+    use ParamType::*;
+    use ScalarBaseType::*;
+    builtins! {
         "mz_all" => Aggregate {
             params!(Any) => AggregateFunc::All => Bool, oid::FUNC_MZ_ALL_OID;
         },
         "mz_any" => Aggregate {
             params!(Any) => AggregateFunc::Any => Bool, oid::FUNC_MZ_ANY_OID;
         },
-        // Note: See "avg_internal_v1" for why this duplicate function exists.
-        //
-        // TODO(parkmycar): Once there are no customers with objects using `avg_internal_v1` we can
-        // delete this function.
         "mz_avg_promotion_internal_v1" => Scalar {
             // Promotes a numeric type to the smallest fractional type that
             // can represent it. This is primarily useful for the avg
@@ -3873,194 +4059,11 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             // message is the second argument.
             params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
         },
-        "mz_format_privileges" => Scalar {
-            params!(String) => UnaryFunc::MzFormatPrivileges(func::MzFormatPrivileges) => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_FORMAT_PRIVILEGES_OID;
-        },
-        "mz_resolve_object_name" => Table {
-            // This implementation is available primarily to drive the other, single-param
-            // implementation.
-            params!(
-                // Database
-                String,
-                // Schemas/search path
-                ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))),
-                // Item name
-                String
-            ) =>
-            // credit for using rank() to @def-
-            sql_impl_table_func("
-                SELECT id, oid, schema_id, name, type, owner_id, privileges
-                FROM (
-                    SELECT o.*, rank() OVER (ORDER BY pg_catalog.array_position($2, search_schema.name))
-                    FROM
-                        mz_catalog.mz_objects AS o
-                        JOIN mz_catalog.mz_schemas AS s
-                            ON o.schema_id = s.id
-                        JOIN unnest($2::text[]) AS search_schema (name)
-                            ON search_schema.name = s.name
-                        JOIN mz_catalog.mz_databases AS d
-                            -- Schemas without database IDs are present in every
-                            -- database that exists.
-                            ON d.id = COALESCE(s.database_id, d.id)
-                    WHERE
-                        o.name = $3::pg_catalog.text
-                        AND d.name = $1::pg_catalog.text
-                )
-                WHERE rank = 1;
-            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME_FULL;
-            params!(String) =>
-            // Normalize the input name, and for any NULL values (e.g. not database qualified), use
-            // the defaults used during name resolution.
-            sql_impl_table_func("
-                SELECT
-                    o.id, o.oid, o.schema_id, o.name, o.type, o.owner_id, o.privileges
-                FROM
-                    (SELECT mz_internal.mz_normalize_object_name($1))
-                            AS normalized (n),
-                    mz_internal.mz_resolve_object_name(
-                        COALESCE(n[1], pg_catalog.current_database()),
-                        CASE
-                            WHEN n[2] IS NULL
-                                THEN pg_catalog.current_schemas(true)
-                            ELSE
-                                ARRAY[n[2]]
-                        END,
-                        n[3]
-                    ) AS o
-            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME;
-        },
-        "mz_global_id_to_name" => Scalar {
-            params!(String) => sql_impl_func("
-            CASE
-                WHEN $1 IS NULL THEN NULL
-                ELSE (
-                    SELECT mz_internal.mz_error_if_null(
-                        (
-                            SELECT DISTINCT
-                                concat_ws(
-                                    '.',
-                                    qual.d,
-                                    qual.s,
-                                    pg_catalog.quote_ident(item.name)
-                                )
-                            FROM
-                                mz_objects AS item
-                            JOIN
-                            (
-                                SELECT
-                                    pg_catalog.quote_ident(d.name) AS d,
-                                    pg_catalog.quote_ident(s.name) AS s,
-                                    s.id AS schema_id
-                                FROM
-                                    mz_schemas AS s
-                                    LEFT JOIN
-                                        (SELECT id, name FROM mz_databases)
-                                        AS d
-                                        ON s.database_id = d.id
-                            ) AS qual
-                            ON qual.schema_id = item.schema_id
-                            WHERE item.id = CAST($1 AS text)
-                        ),
-                        'global ID ' || $1 || ' does not exist'
-                    )
-                )
-                END
-            ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
-        },
-        "mz_normalize_object_name" => Scalar {
-            params!(String) => sql_impl_func("
-            (
-                SELECT
-                    CASE
-                        WHEN $1 IS NULL THEN NULL
-                        WHEN pg_catalog.array_length(ident, 1) > 3
-                            THEN mz_internal.mz_error_if_null(
-                                NULL::pg_catalog.text[],
-                                'improper relation name (too many dotted names): ' || $1
-                            )
-                        ELSE pg_catalog.array_cat(
-                            pg_catalog.array_fill(
-                                CAST(NULL AS pg_catalog.text),
-                                ARRAY[3 - pg_catalog.array_length(ident, 1)]
-                            ),
-                            ident
-                        )
-                    END
-                FROM (
-                    SELECT pg_catalog.parse_ident($1) AS ident
-                ) AS i
-            )") => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_NORMALIZE_OBJECT_NAME;
-        },
-        "mz_render_typmod" => Scalar {
-            params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
-        },
-        "mz_role_oid_memberships" => Scalar {
-            params!() => UnmaterializableFunc::MzRoleOidMemberships => ScalarType::Map{ value_type: Box::new(ScalarType::Array(Box::new(ScalarType::String))), custom_id: None }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
-        },
-        // There is no regclass equivalent for databases to look up oids, so we have this helper function instead.
-        "mz_database_oid" => Scalar {
-            params!(String) => sql_impl_func("
-                CASE
-                WHEN $1 IS NULL THEN NULL
-                ELSE (
-                    mz_internal.mz_error_if_null(
-                        (SELECT oid FROM mz_databases WHERE name = $1),
-                        'database \"' || $1 || '\" does not exist'
-                    )
-                )
-                END
-            ") => Oid, oid::FUNC_DATABASE_OID_OID;
-        },
-        // There is no regclass equivalent for schemas to look up oids, so we have this helper function instead.
-        // TODO: Support qualified names.
-        // TODO: This should take into account the search path when looking for an object.
-        "mz_schema_oid" => Scalar {
-            params!(String) => sql_impl_func("
-                CASE
-                WHEN $1 IS NULL THEN NULL
-                ELSE (
-                    mz_internal.mz_error_if_null(
-                        (SELECT oid FROM mz_schemas WHERE name = $1),
-                        'schema \"' || $1 || '\" does not exist'
-                    )
-                )
-                END
-            ") => Oid, oid::FUNC_SCHEMA_OID_OID;
-        },
-        // There is no regclass equivalent for roles to look up oids, so we have this helper function instead.
-        "mz_role_oid" => Scalar {
-            params!(String) => sql_impl_func("
-                CASE
-                WHEN $1 IS NULL THEN NULL
-                ELSE (
-                    mz_internal.mz_error_if_null(
-                        (SELECT oid FROM mz_roles WHERE name = $1),
-                        'role \"' || $1 || '\" does not exist'
-                    )
-                )
-                END
-            ") => Oid, oid::FUNC_ROLE_OID_OID;
-        },
-        // This ought to be exposed in `mz_catalog`, but its name is rather
-        // confusing. It does not identify the SQL session, but the
-        // invocation of this `environmentd` process.
-        "mz_session_id" => Scalar {
-            params!() => UnmaterializableFunc::MzSessionId => Uuid, oid::FUNC_MZ_SESSION_ID_OID;
-        },
         "mz_sleep" => Scalar {
             params!(Float64) => UnaryFunc::Sleep(func::Sleep) => TimestampTz, oid::FUNC_MZ_SLEEP_OID;
         },
         "mz_panic" => Scalar {
             params!(String) => UnaryFunc::Panic(func::Panic) => String, oid::FUNC_MZ_PANIC_OID;
-        },
-        "mz_type_name" => Scalar {
-            params!(Oid) => UnaryFunc::MzTypeName(func::MzTypeName) => String, oid::FUNC_MZ_TYPE_NAME;
-        },
-        "mz_validate_privileges" => Scalar {
-            params!(String) => UnaryFunc::MzValidatePrivileges(func::MzValidatePrivileges) => Bool, oid::FUNC_MZ_VALIDATE_PRIVILEGES_OID;
-        },
-        "mz_validate_role_privilege" => Scalar {
-            params!(String) => UnaryFunc::MzValidateRolePrivilege(func::MzValidateRolePrivilege) => Bool, oid::FUNC_MZ_VALIDATE_ROLE_PRIVILEGE_OID;
         }
     }
 });

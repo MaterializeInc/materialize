@@ -43,7 +43,7 @@ send
 Parse {"query": "SELECT 1 FROM pg_type LIMIT 1"}
 Bind
 Execute
-Parse {"query": "SELECT mz_internal.mz_sleep(1) FROM pg_type LIMIT 1"}
+Parse {"query": "SELECT mz_unsafe.mz_sleep(1) FROM pg_type LIMIT 1"}
 Bind
 Execute
 Parse {"query": "SELECT 1 FROM pg_type LIMIT 1"}

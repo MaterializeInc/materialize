@@ -15,7 +15,7 @@
 # received the "new" snapshot, ensuring we don't double count, but we add additional
 # sleeping here to ensure that we aren't just reading the original snapshot committed
 # to `one`.
-> SELECT mz_internal.mz_sleep(10)
+> SELECT mz_unsafe.mz_sleep(10)
 <null>
 
 # But the other one has duplicated data!

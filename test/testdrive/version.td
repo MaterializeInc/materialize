@@ -18,8 +18,8 @@
 >[version<=9999999] SELECT 3;
 3
 
->[version<5500] SELECT mz_internal.mz_panic('');
+>[version<5500] SELECT mz_unsafe.mz_panic('');
 3
 
->[version<5500] SELECT mz_internal.mz_panic('');
+>[version<5500] SELECT mz_unsafe.mz_panic('');
 1

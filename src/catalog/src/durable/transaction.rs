@@ -12,6 +12,7 @@ use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
+use mz_ore::soft_assert;
 use mz_proto::RustType;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
@@ -182,6 +183,18 @@ impl<'a> Transaction<'a> {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::DatabaseAlreadyExists(database_name.to_owned()).into()),
         }
+    }
+
+    pub fn insert_system_schema(
+        &mut self,
+        id: SchemaId,
+        schema_name: &str,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+    ) -> Result<SchemaId, CatalogError> {
+        soft_assert!(id.is_system(), "ID {id:?} is not system variant");
+        self.insert_schema(id, None, schema_name.to_string(), owner_id, privileges)?;
+        Ok(id)
     }
 
     pub fn insert_user_schema(

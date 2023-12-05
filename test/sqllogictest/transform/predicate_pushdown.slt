@@ -862,7 +862,7 @@ with
                     object_type = 'cluster-replica' AND event_type = 'create'
             )
         SELECT
-            mz_internal.mz_error_if_null(
+            mz_unsafe.mz_error_if_null(
                     mz_cluster_replica_sizes.credits_per_hour, 'Replica of unknown size'
                 )
                 AS credits_per_hour

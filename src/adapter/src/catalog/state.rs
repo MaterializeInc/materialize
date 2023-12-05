@@ -46,7 +46,8 @@ use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
 use mz_ore::soft_assert;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
+    PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
@@ -589,6 +590,7 @@ impl CatalogState {
             INFORMATION_SCHEMA,
             MZ_CATALOG_SCHEMA,
             MZ_INTERNAL_SCHEMA,
+            MZ_UNSAFE_SCHEMA,
         ] {
             let schema_id = &self.ambient_schemas_by_name[*system_schema];
             let schema = &self.ambient_schemas_by_id[schema_id];
@@ -1538,11 +1540,16 @@ impl CatalogState {
         &self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA]
     }
 
+    pub fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+        &self.ambient_schemas_by_name[MZ_UNSAFE_SCHEMA]
+    }
+
     pub fn is_system_schema(&self, schema: &str) -> bool {
         schema == MZ_CATALOG_SCHEMA
             || schema == PG_CATALOG_SCHEMA
             || schema == INFORMATION_SCHEMA
             || schema == MZ_INTERNAL_SCHEMA
+            || schema == MZ_UNSAFE_SCHEMA
     }
 
     pub fn is_system_schema_id(&self, id: &SchemaId) -> bool {
@@ -1550,6 +1557,7 @@ impl CatalogState {
             || id == self.get_pg_catalog_schema_id()
             || id == self.get_information_schema_id()
             || id == self.get_mz_internal_schema_id()
+            || id == self.get_mz_unsafe_schema_id()
     }
 
     pub fn is_system_schema_specifier(&self, spec: &SchemaSpecifier) -> bool {

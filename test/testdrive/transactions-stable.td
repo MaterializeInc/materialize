@@ -14,7 +14,7 @@
 > INSERT INTO now_inc VALUES (now())
 
 # Sleep 2ms to ensure now() has increased, due to its ms resolution.
-> SELECT mz_internal.mz_sleep(0.002)
+> SELECT mz_unsafe.mz_sleep(0.002)
 <null>
 
 # These execute in a single txn, so should be the same, and should
@@ -24,7 +24,7 @@
 > INSERT INTO now_inc VALUES (now())
 > COMMIT
 
-> SELECT mz_internal.mz_sleep(0.002)
+> SELECT mz_unsafe.mz_sleep(0.002)
 <null>
 
 > INSERT INTO now_inc VALUES (now())

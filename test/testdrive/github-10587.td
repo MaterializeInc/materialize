@@ -144,49 +144,49 @@ count
 
 $ set-max-tries max-tries=1
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count

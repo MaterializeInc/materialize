@@ -285,7 +285,7 @@ pub fn plan(
         .any(|item| {
             item.func().is_ok()
                 && item.name().qualifiers.schema_spec
-                    == SchemaSpecifier::Id(*catalog.get_mz_internal_schema_id())
+                    == SchemaSpecifier::Id(*catalog.get_mz_unsafe_schema_id())
         })
     {
         scx.require_feature_flag(&vars::ENABLE_UNSAFE_FUNCTIONS)?;

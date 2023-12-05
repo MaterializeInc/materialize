@@ -2754,7 +2754,7 @@ fn test_cancel_read_then_write() {
 
             let handle1 = thread::spawn(move || {
                 let err =  client1
-                    .batch_execute("insert into foo select a, case when mz_internal.mz_sleep(ts) > 0 then 0 end as ts from foo")
+                    .batch_execute("insert into foo select a, case when mz_unsafe.mz_sleep(ts) > 0 then 0 end as ts from foo")
                     .unwrap_err();
                 assert_contains!(
                     err.to_string(),
@@ -3043,7 +3043,7 @@ fn webhook_concurrency_limit() {
         .execute(
             "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK \
              BODY FORMAT TEXT \
-             CHECK ( WITH(BODY) body IS NOT NULL AND mz_internal.mz_sleep(5) IS NULL )",
+             CHECK ( WITH(BODY) body IS NOT NULL AND mz_unsafe.mz_sleep(5) IS NULL )",
             &[],
         )
         .expect("failed to create source");

@@ -104,7 +104,7 @@ database_objects = [
     #        f"""
     #        > CREATE TABLE obj (f1 TEXT)
     #        > INSERT INTO obj SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
-    #        > SELECT mz_internal.mz_sleep({COLLECTION_INTERVAL_SECS} + 1)
+    #        > SELECT mz_unsafe.mz_sleep({COLLECTION_INTERVAL_SECS} + 1)
     #        <null>
     #        > DELETE FROM obj;
     #        """
