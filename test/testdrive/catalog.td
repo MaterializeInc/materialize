@@ -47,7 +47,7 @@ mz_internal
 pg_catalog
 $ psql-execute command=\dn
 \     List of schemas
-     Name    |   Owner
+    Name     |   Owner
 -------------+-----------
  mz_catalog  | mz_system
  mz_internal | mz_system
