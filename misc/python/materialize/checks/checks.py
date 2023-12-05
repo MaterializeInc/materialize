@@ -35,6 +35,15 @@ class Check:
             result += ", SECURITY PROTOCOL PLAINTEXT"
         return result
 
+    def _unsafe_schema(self) -> str:
+        """
+        :return: the schema containing unsafe functions, such as `mz_sleep`.
+        """
+        if self.current_version >= MzVersion.parse_mz("v0.79.0-dev"):
+            return "mz_unsafe"
+        else:
+            return "mz_internal"
+
     def initialize(self) -> Testdrive:
         return Testdrive(TESTDRIVE_NOP)
 

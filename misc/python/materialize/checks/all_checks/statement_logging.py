@@ -36,14 +36,18 @@ class StatementLogging(Check):
                 > SET statement_logging_sample_rate TO 1.0
                 > SELECT 'hello' /* Btv was here */;
                 hello
-                > SELECT mz_unsafe.mz_sleep(5);
+                """
+                f"> SELECT {self._unsafe_schema()}.mz_sleep(5);"
+                """
                 <null>
                 """,
                 """
                 > SET statement_logging_sample_rate TO 1.0
                 > SELECT 'goodbye' /* Btv was here */;
                 goodbye
-                > SELECT mz_unsafe.mz_sleep(5);
+                """
+                f"> SELECT {self._unsafe_schema()}.mz_sleep(5);"
+                """
                 <null>
                 """,
             ]
