@@ -59,6 +59,12 @@ use crate::durable::{
 /// New-type used to represent timestamps in persist.
 pub(crate) type Timestamp = mz_repr::Timestamp;
 
+/// The minimum value of an epoch.
+///
+/// # Safety
+/// `new_unchecked` is safe to call with a non-zero value.
+const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
+
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug)]
 enum Mode {
@@ -86,6 +92,8 @@ pub struct PersistHandle {
     shard_id: ShardId,
     /// Cache of the most recent catalog snapshot.
     snapshot_cache: Option<(Timestamp, Vec<StateUpdate<StateUpdateKindBinary>>)>,
+    /// The epoch of the catalog.
+    epoch: Epoch,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
@@ -118,14 +126,19 @@ impl PersistHandle {
             )
             .await
             .expect("invalid usage");
-        PersistHandle {
+        let mut handle = PersistHandle {
             write_handle,
             read_handle,
             persist_client,
             shard_id,
             snapshot_cache: None,
             metrics,
+            epoch: MIN_EPOCH,
+        };
+        if let Some(epoch) = handle.get_current_epoch().await {
+            handle.epoch = epoch;
         }
+        handle
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -149,11 +162,11 @@ impl PersistHandle {
                 ts: upper,
                 diff: -1,
             });
-            Some(prev_epoch.get())
+            Some(prev_epoch)
         } else {
             None
         };
-        let mut current_epoch = prev_epoch.unwrap_or(1);
+        let mut current_epoch = prev_epoch.unwrap_or(MIN_EPOCH).get();
         // Only writable catalogs attempt to increment the epoch.
         if matches!(mode, Mode::Writable) {
             current_epoch = current_epoch + 1;
@@ -175,8 +188,9 @@ impl PersistHandle {
             self.compare_and_append(fence_updates, upper, next_upper)
                 .await?;
         }
+        self.epoch = current_epoch;
 
-        let (is_initialized, mut upper) = self.is_initialized_inner().await;
+        let (is_initialized, mut upper) = self.is_initialized_inner().await?;
         if !matches!(mode, Mode::Writable) && !is_initialized {
             return Err(CatalogError::Durable(DurableCatalogError::NotWritable(
                 format!("catalog tables do not exist; will not create in {mode:?} mode"),
@@ -256,7 +270,7 @@ impl PersistHandle {
     }
 
     /// Reports if the catalog state has been initialized, and the current upper.
-    async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
+    async fn is_initialized_inner(&mut self) -> Result<(bool, Timestamp), CatalogError> {
         let (persist_shard_readable, upper) = self.is_persist_shard_readable().await;
         let is_initialized = if !persist_shard_readable {
             false
@@ -264,9 +278,9 @@ impl PersistHandle {
             let as_of = self.as_of(upper);
             // Configs are readable using any catalog version since they can't be migrated, so they
             // can be used to tell if the catalog is populated.
-            self.get_configs(as_of).await.next().is_some()
+            !self.get_configs(as_of).await?.is_empty()
         };
-        (is_initialized, upper)
+        Ok((is_initialized, upper))
     }
 
     /// Reports if the persist shard can be read at some time, and the current upper. A persist
@@ -360,23 +374,28 @@ impl PersistHandle {
     /// Get the current value of config `key`.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
-    async fn get_current_config(&mut self, key: &str) -> Option<u64> {
+    async fn get_current_config(&mut self, key: &str) -> Result<Option<u64>, CatalogError> {
         let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
         if persist_shard_readable {
             let as_of = self.as_of(current_upper);
             self.get_config(key, as_of).await
         } else {
-            None
+            Ok(None)
         }
     }
 
     /// Get value of config `key` at `as_of`.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
-    async fn get_config(&mut self, key: &str, as_of: Timestamp) -> Option<u64> {
+    async fn get_config(
+        &mut self,
+        key: &str,
+        as_of: Timestamp,
+    ) -> Result<Option<u64>, CatalogError> {
         let mut configs: Vec<_> = self
             .get_configs(as_of)
-            .await
+            .await?
+            .into_iter()
             .filter_map(|config| {
                 if key == &config.key {
                     Some(config.value)
@@ -389,19 +408,20 @@ impl PersistHandle {
             configs.len() <= 1,
             "multiple configs should not share the same key: {configs:?}"
         );
-        configs.pop()
+        Ok(configs.pop())
     }
 
     /// Get all Configs.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
-    async fn get_configs(&mut self, as_of: Timestamp) -> impl Iterator<Item = Config> + '_ {
+    async fn get_configs(&mut self, as_of: Timestamp) -> Result<Vec<Config>, DurableCatalogError> {
+        let current_epoch = self.epoch.clone();
         self.snapshot_binary(as_of)
             .await
             .into_iter()
             .rev()
-            // Configs can never be migrated so we know that they will always convert successfully
-            // from binary.
+            // Configs and the epoch can never be migrated so we know that they will always convert
+            // successfully from binary.
             .filter_map(|update| {
                 soft_assert_eq!(update.diff, 1, "snapshot returns consolidated results");
                 let kind: Option<StateUpdateKind> = update.kind.clone().try_into().ok();
@@ -414,18 +434,39 @@ impl PersistHandle {
                         .clone()
                         .into_rust()
                         .expect("invalid config value persisted");
-                    Some(Config::from_key_value(k, v))
+                    Some(Ok(Config::from_key_value(k, v)))
+                }
+                StateUpdateKind::Epoch(epoch) if epoch > current_epoch => {
+                    Some(Err(DurableCatalogError::Fence(format!(
+                        "current catalog epoch {} fenced by new catalog epoch {}",
+                        current_epoch, epoch
+                    ))))
                 }
                 _ => None,
             })
+            .collect::<Result<_, _>>()
     }
 
     /// Get the user version of this instance.
     ///
     /// The user version is used to determine if a migration is needed.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn get_user_version(&mut self, as_of: Timestamp) -> Option<u64> {
+    pub(crate) async fn get_user_version(
+        &mut self,
+        as_of: Timestamp,
+    ) -> Result<Option<u64>, CatalogError> {
         self.get_config(USER_VERSION_KEY, as_of).await
+    }
+
+    /// Get the current epoch.
+    async fn get_current_epoch(&mut self) -> Option<Epoch> {
+        let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
+        if persist_shard_readable {
+            let as_of = self.as_of(current_upper);
+            Some(self.get_epoch(as_of).await)
+        } else {
+            None
+        }
     }
 
     /// Get epoch at `as_of`.
@@ -510,12 +551,12 @@ impl OpenableDurableCatalogState for PersistHandle {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
-        Ok(self.is_initialized_inner().await.0)
+        Ok(self.is_initialized_inner().await?.0)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
-        Ok(self.get_current_config(DEPLOY_GENERATION).await)
+        self.get_current_config(DEPLOY_GENERATION).await
     }
 
     #[tracing::instrument(level = "info", skip_all)]

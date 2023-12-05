@@ -186,7 +186,7 @@ pub(crate) mod persist {
     use crate::durable::upgrade::{
         CATALOG_VERSION, FUTURE_VERSION, MIN_CATALOG_VERSION, TOO_OLD_VERSION,
     };
-    use crate::durable::DurableCatalogError;
+    use crate::durable::{CatalogError, DurableCatalogError};
 
     #[allow(unused)]
     enum MigrationAction<V1: IntoStateUpdateKindBinary, V2: IntoStateUpdateKindBinary> {
@@ -237,7 +237,7 @@ pub(crate) mod persist {
     pub(crate) async fn upgrade(
         persist_handle: &mut PersistHandle,
         mut upper: Timestamp,
-    ) -> Result<Timestamp, DurableCatalogError> {
+    ) -> Result<Timestamp, CatalogError> {
         soft_assert_ne!(
             upper,
             Timestamp::minimum(),
@@ -247,7 +247,7 @@ pub(crate) mod persist {
         let as_of = persist_handle.as_of(upper);
         let mut version = persist_handle
             .get_user_version(as_of)
-            .await
+            .await?
             .expect("initialized catalog must have a version");
         // Run migrations until we're up-to-date.
         while version < CATALOG_VERSION {
