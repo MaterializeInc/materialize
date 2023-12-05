@@ -153,12 +153,6 @@ where
         compare_and_return_async!(self, get_deployment_generation)
     }
 
-    async fn get_enable_persist_txn_tables(
-        &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
-        compare_and_return_async!(self, get_enable_persist_txn_tables)
-    }
-
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         panic!("ShadowCatalog is not used for catalog-debug tool");
     }
@@ -340,6 +334,12 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
         } else {
             compare_and_return_async!(self, get_next_id, id_type)
         }
+    }
+
+    async fn get_enable_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
+        compare_and_return_async!(self, get_enable_persist_txn_tables)
     }
 
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {

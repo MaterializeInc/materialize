@@ -518,20 +518,6 @@ impl OpenableDurableCatalogState for PersistHandle {
         Ok(self.get_current_config(DEPLOY_GENERATION).await)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn get_enable_persist_txn_tables(
-        &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
-        let value = self.get_current_config(ENABLE_PERSIST_TXN_TABLES).await;
-        value
-            .map(EnablePersistTxnTables::try_from)
-            .transpose()
-            .map_err(|err| {
-                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
-                    .into()
-            })
-    }
-
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
@@ -873,6 +859,29 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             Ok(snapshot.id_allocator.get(&key).expect("must exist").next_id)
         })
         .await
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn get_enable_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
+        let value = self
+            .with_snapshot(|snapshot| {
+                Ok(snapshot
+                    .configs
+                    .get(&proto::ConfigKey {
+                        key: ENABLE_PERSIST_TXN_TABLES.to_string(),
+                    })
+                    .map(|value| value.value))
+            })
+            .await?;
+        value
+            .map(EnablePersistTxnTables::try_from)
+            .transpose()
+            .map_err(|err| {
+                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
+                    .into()
+            })
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

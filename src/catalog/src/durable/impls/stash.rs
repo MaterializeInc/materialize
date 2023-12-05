@@ -255,37 +255,6 @@ impl OpenableDurableCatalogState for OpenableConnection {
         Ok(deployment_generation)
     }
 
-    async fn get_enable_persist_txn_tables(
-        &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
-        let stash = match &mut self.stash {
-            None => match self.open_stash_read_only().await {
-                Ok(stash) => stash,
-                Err(e) if e.can_recover_with_write_mode() => return Ok(None),
-                Err(e) => return Err(e.into()),
-            },
-            Some(stash) => stash,
-        };
-
-        let value = CONFIG_COLLECTION
-            .peek_key_one(
-                stash,
-                proto::ConfigKey {
-                    key: ENABLE_PERSIST_TXN_TABLES.into(),
-                },
-            )
-            .await?
-            .map(|v| v.value);
-
-        value
-            .map(EnablePersistTxnTables::try_from)
-            .transpose()
-            .map_err(|err| {
-                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
-                    .into()
-            })
-    }
-
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         fn stringify<T: Collection>(
@@ -619,6 +588,28 @@ impl ReadOnlyDurableCatalogState for Connection {
             .await
             .map(|x| x.expect("must exist").next_id)
             .map_err(Into::into)
+    }
+
+    async fn get_enable_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
+        let value = CONFIG_COLLECTION
+            .peek_key_one(
+                &mut self.stash,
+                proto::ConfigKey {
+                    key: ENABLE_PERSIST_TXN_TABLES.into(),
+                },
+            )
+            .await?
+            .map(|v| v.value);
+
+        value
+            .map(EnablePersistTxnTables::try_from)
+            .transpose()
+            .map_err(|err| {
+                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
+                    .into()
+            })
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1166,14 +1157,6 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.openable_connection.get_deployment_generation().await
-    }
-
-    async fn get_enable_persist_txn_tables(
-        &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
-        self.openable_connection
-            .get_enable_persist_txn_tables()
-            .await
     }
 
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
