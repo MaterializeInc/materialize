@@ -44,6 +44,14 @@ def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
             c.run("testdrive", "override/insufficient-wal-level.td")
 
 
+def workflow_replication_disabled(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    with c.override(Postgres(extra_command=["-c", "max_wal_senders=0"])):
+        c.up("materialized", "postgres")
+        c.run("testdrive", "override/replication-disabled.td")
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "filter",
