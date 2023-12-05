@@ -131,6 +131,9 @@ pub struct ConnectionContext {
     pub librdkafka_log_level: tracing::Level,
     /// A prefix for an external ID to use for all AWS AssumeRole operations.
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
+    /// The ARN for a Materialize-controlled role to assume before assuming
+    /// a customer's requested role for an AWS connection.
+    pub aws_connection_role_arn: Option<String>,
     /// A secrets reader.
     pub secrets_reader: Arc<dyn SecretsReader>,
     /// A cloud resource reader, if supported in this configuration.
@@ -151,6 +154,7 @@ impl ConnectionContext {
         environment_id: String,
         startup_log_level: &CloneableEnvFilter,
         aws_external_id_prefix: Option<AwsExternalIdPrefix>,
+        aws_connection_role_arn: Option<String>,
         secrets_reader: Arc<dyn SecretsReader>,
         cloud_resource_reader: Option<Arc<dyn CloudResourceReader>>,
     ) -> ConnectionContext {
@@ -161,6 +165,7 @@ impl ConnectionContext {
                 "librdkafka",
             ),
             aws_external_id_prefix,
+            aws_connection_role_arn,
             secrets_reader,
             cloud_resource_reader,
             ssh_tunnel_manager: SshTunnelManager::default(),
@@ -173,6 +178,7 @@ impl ConnectionContext {
             environment_id: "test-environment-id".into(),
             librdkafka_log_level: tracing::Level::INFO,
             aws_external_id_prefix: None,
+            aws_connection_role_arn: None,
             secrets_reader,
             cloud_resource_reader: None,
             ssh_tunnel_manager: SshTunnelManager::default(),

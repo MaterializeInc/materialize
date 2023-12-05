@@ -41,5 +41,4 @@ message ProtoMaterializePrincipal {
 message ProtoAwsAssumeRole {
     string arn = 1;
     optional string session_name = 2;
-    ProtoMaterializePrincipal mz_principal = 3;
 }
