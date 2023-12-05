@@ -121,7 +121,7 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -235,7 +235,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     persist_pubsub_url: String,
     /// Whether to use the new persist-txn tables implementation or the legacy
     /// one.
-    enable_persist_txn_tables: EnablePersistTxnTables,
+    persist_txn_tables: PersistTxnTablesImpl,
 
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
@@ -386,7 +386,7 @@ where
         envd_epoch: NonZeroI64,
         // Whether to use the new persist-txn tables implementation or the
         // legacy one.
-        enable_persist_txn_tables: EnablePersistTxnTables,
+        persist_txn_tables: PersistTxnTablesImpl,
     ) -> Self {
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
@@ -397,7 +397,7 @@ where
             config.stash_metrics,
             envd_epoch,
             config.metrics_registry.clone(),
-            enable_persist_txn_tables,
+            persist_txn_tables,
         )
         .await;
 
@@ -423,7 +423,7 @@ where
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
             frontiers_ticker,
             persist_pubsub_url: config.persist_pubsub_url,
-            enable_persist_txn_tables,
+            persist_txn_tables,
             secrets_args: config.secrets_args,
             connection_context: config.connection_context,
         }

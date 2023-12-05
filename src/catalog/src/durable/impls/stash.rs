@@ -9,7 +9,7 @@
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin;
 use std::sync::Arc;
@@ -33,7 +33,7 @@ use mz_stash_types::StashError;
 use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{Collection, CollectionTrace, Trace};
-use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, USER_VERSION_KEY};
+use crate::durable::initialize::{DEPLOY_GENERATION, PERSIST_TXN_TABLES, USER_VERSION_KEY};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, DurableType, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey,
@@ -590,21 +590,21 @@ impl ReadOnlyDurableCatalogState for Connection {
             .map_err(Into::into)
     }
 
-    async fn get_enable_persist_txn_tables(
+    async fn get_persist_txn_tables(
         &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
+    ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
         let value = CONFIG_COLLECTION
             .peek_key_one(
                 &mut self.stash,
                 proto::ConfigKey {
-                    key: ENABLE_PERSIST_TXN_TABLES.into(),
+                    key: PERSIST_TXN_TABLES.into(),
                 },
             )
             .await?
             .map(|v| v.value);
 
         value
-            .map(EnablePersistTxnTables::try_from)
+            .map(PersistTxnTablesImpl::try_from)
             .transpose()
             .map_err(|err| {
                 DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))

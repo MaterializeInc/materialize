@@ -43,10 +43,10 @@ pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
 pub(crate) const USER_VERSION_KEY: &str = "user_version";
 
 /// The key used within the "config" collection where we store a mirror of the
-/// `enable_persist_txn_tables` "system var" value. This is mirrored so that we
+/// `persist_txn_tables` "system var" value. This is mirrored so that we
 /// can toggle the flag with Launch Darkly, but use it in boot before Launch
 /// Darkly is available.
-pub(crate) const ENABLE_PERSIST_TXN_TABLES: &str = "enable_persist_txn_tables";
+pub(crate) const PERSIST_TXN_TABLES: &str = "persist_txn_tables";
 
 const USER_ID_ALLOC_KEY: &str = "user";
 const SYSTEM_ID_ALLOC_KEY: &str = "system";

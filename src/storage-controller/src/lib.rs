@@ -125,8 +125,7 @@ use mz_storage_client::controller::{
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
 use mz_storage_types::controller::{
-    CollectionMetadata, DurableCollectionMetadata, EnablePersistTxnTables, StorageError,
-    TxnsCodecRow,
+    CollectionMetadata, DurableCollectionMetadata, PersistTxnTablesImpl, StorageError, TxnsCodecRow,
 };
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
@@ -2251,7 +2250,7 @@ where
         stash_metrics: Arc<StashMetrics>,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
-        enable_persist_txn_tables: EnablePersistTxnTables,
+        persist_txn_tables: PersistTxnTablesImpl,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -2331,12 +2330,12 @@ where
             .open(persist_location.clone())
             .await
             .expect("location should be valid");
-        let (enable_persist_txn_tables, lazy_persist_txn_tables) = match enable_persist_txn_tables {
-            EnablePersistTxnTables::Off => (false, false),
-            EnablePersistTxnTables::Eager => (true, false),
-            EnablePersistTxnTables::Lazy => (true, true),
+        let (persist_txn_tables, lazy_persist_txn_tables) = match persist_txn_tables {
+            PersistTxnTablesImpl::Off => (false, false),
+            PersistTxnTablesImpl::Eager => (true, false),
+            PersistTxnTablesImpl::Lazy => (true, true),
         };
-        let (persist_table_worker, txns) = if enable_persist_txn_tables {
+        let (persist_table_worker, txns) = if persist_txn_tables {
             let txns_id = PERSIST_TXNS_SHARD
                 .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
                 .await

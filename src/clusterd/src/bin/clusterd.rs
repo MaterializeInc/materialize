@@ -105,7 +105,7 @@ use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use once_cell::sync::Lazy;
 use tracing::info;
 
@@ -161,11 +161,11 @@ struct Args {
     /// environmentd is changed.
     #[clap(
         long,
-        env = "ENABLE_PERSIST_TXN_TABLES",
+        env = "PERSIST_TXN_TABLES",
         default_value = "off",
         parse(try_from_str)
     )]
-    enable_persist_txn_tables: EnablePersistTxnTables,
+    persist_txn_tables: PersistTxnTablesImpl,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
