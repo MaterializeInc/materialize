@@ -10,11 +10,16 @@
 //! AWS configuration for sources and sinks.
 
 use anyhow::anyhow;
+use aws_config::default_provider::region::DefaultRegionChain;
+use aws_config::environment::EnvironmentVariableCredentialsProvider;
+use aws_config::sts::AssumeRoleProvider;
+use aws_credential_types::provider::SharedCredentialsProvider;
+use aws_credential_types::Credentials;
+use aws_types::region::Region;
 use aws_types::SdkConfig;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
-use mz_secrets::SecretsReader;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -96,6 +101,30 @@ pub struct AwsCredentials {
     pub session_token: Option<StringOrSecret>,
 }
 
+impl AwsCredentials {
+    async fn load_shared_credentials_provider(
+        &self,
+        connection_context: &ConnectionContext,
+    ) -> Result<SharedCredentialsProvider, anyhow::Error> {
+        let secrets_reader = connection_context.secrets_reader.as_ref();
+        Ok(SharedCredentialsProvider::new(Credentials::from_keys(
+            self.access_key_id
+                .get_string(secrets_reader)
+                .await
+                .map_err(|_| anyhow!("internal error"))?,
+            connection_context
+                .secrets_reader
+                .read_string(self.secret_access_key)
+                .await
+                .map_err(|_| anyhow!("internal error"))?,
+            match &self.session_token {
+                Some(t) => Some(t.get_string(secrets_reader).await.unwrap()),
+                None => None,
+            },
+        )))
+    }
+}
+
 impl RustType<ProtoAwsCredentials> for AwsCredentials {
     fn into_proto(&self) -> ProtoAwsCredentials {
         ProtoAwsCredentials {
@@ -128,6 +157,67 @@ pub struct AwsAssumeRole {
 }
 
 impl AwsAssumeRole {
+    fn load_shared_credentials_provider(
+        &self,
+        connection_context: &ConnectionContext,
+        connection_id: &GlobalId,
+    ) -> Result<SharedCredentialsProvider, anyhow::Error> {
+        let mz_principal = connection_context
+            .aws_connection_role_arn
+            .clone()
+            .ok_or(anyhow!("error!"))?;
+        let mz_assume_role = AssumeRoleProvider::builder(mz_principal)
+            .session_name("mz_assume_role")
+            .build(EnvironmentVariableCredentialsProvider::default());
+
+        let session_name = self
+            .session_name
+            .to_owned()
+            .unwrap_or("materialize".to_string());
+
+        let mut aws_connection_role =
+            AssumeRoleProvider::builder(self.arn.clone()).session_name(session_name);
+
+        let external_id_prefix = connection_context
+            .aws_external_id_prefix
+            .as_ref()
+            .ok_or_else(|| anyhow!("error!"))?;
+        aws_connection_role = aws_connection_role.external_id(AwsAssumeRole::get_external_id(
+            external_id_prefix,
+            connection_id,
+        ));
+
+        Ok(SharedCredentialsProvider::new(
+            aws_connection_role.build(mz_assume_role),
+        ))
+    }
+
+    // To be only used for validating connections
+    fn dangerously_load_shared_credentials_provider_without_external_id(
+        &self,
+        connection_context: &ConnectionContext,
+    ) -> Result<SharedCredentialsProvider, anyhow::Error> {
+        let mz_principal = connection_context
+            .aws_connection_role_arn
+            .clone()
+            .ok_or(anyhow!("error!"))?;
+        let mz_assume_role = AssumeRoleProvider::builder(mz_principal)
+            .session_name("mz_assume_role")
+            .build(EnvironmentVariableCredentialsProvider::default());
+
+        let session_name = self
+            .session_name
+            .to_owned()
+            .unwrap_or("materialize".to_string());
+
+        let aws_connection_role =
+            AssumeRoleProvider::builder(self.arn.clone()).session_name(session_name);
+
+        Ok(SharedCredentialsProvider::new(
+            aws_connection_role.build(mz_assume_role),
+        ))
+    }
+
     pub fn get_external_id(
         external_id_prefix: &AwsExternalIdPrefix,
         connection_id: &GlobalId,
@@ -183,16 +273,34 @@ impl AwsConfig {
     /// applies the overrides from this object.
     pub async fn load_sdk_config(
         &self,
-        secrets_reader: &dyn SecretsReader,
-        connection_id: Option<GlobalId>,
+        connection_context: &ConnectionContext,
+        connection_id: &GlobalId,
     ) -> Result<SdkConfig, anyhow::Error> {
-        use aws_config::default_provider::region::DefaultRegionChain;
-        use aws_config::sts::AssumeRoleProvider;
-        use aws_credential_types::provider::SharedCredentialsProvider;
-        use aws_credential_types::Credentials;
-        use aws_types::region::Region;
+        let cred_provider = match &self.auth {
+            AwsAuth::Credentials(credentials) => {
+                credentials
+                    .load_shared_credentials_provider(connection_context)
+                    .await?
+            }
+            AwsAuth::AssumeRole(assume_role) => {
+                assume_role.load_shared_credentials_provider(connection_context, connection_id)?
+            }
+        };
 
-        let region = match &self.region {
+        Ok(Self::load_sdk_config_from_credentials(
+            cred_provider,
+            self.region.as_ref(),
+            self.endpoint.as_ref(),
+        )
+        .await)
+    }
+
+    async fn load_sdk_config_from_credentials(
+        shared_credential_provider: SharedCredentialsProvider,
+        region: Option<&String>,
+        endpoint: Option<&String>,
+    ) -> SdkConfig {
+        let region = match region {
             Some(region) => Some(Region::new(region.clone())),
             _ => {
                 let rc = DefaultRegionChain::builder();
@@ -200,76 +308,13 @@ impl AwsConfig {
             }
         };
 
-        let cred_provider = match &self.auth {
-            AwsAuth::Credentials(credentials) => {
-                let AwsCredentials {
-                    access_key_id,
-                    secret_access_key,
-                    session_token,
-                } = credentials;
-
-                SharedCredentialsProvider::new(Credentials::from_keys(
-                    access_key_id.get_string(secrets_reader).await.unwrap(),
-                    secrets_reader
-                        .read_string(*secret_access_key)
-                        .await
-                        .unwrap(),
-                    match session_token {
-                        Some(t) => Some(t.get_string(secrets_reader).await.unwrap()),
-                        None => None,
-                    },
-                ))
-            }
-            AwsAuth::AssumeRole(assume_role) => {
-                let sts_client = aws_sdk_sts::Client::new(&aws_config::from_env().load().await);
-                let AwsAssumeRole { arn, session_name } = assume_role;
-                let assume_role_response = sts_client
-                    .assume_role()
-                    // .role_arn(mz_principal.arn.clone()) TODO(mouli): fix
-                    .role_session_name("materialize_assume_role")
-                    .send()
-                    .await?;
-
-                let temp_credentials = assume_role_response.credentials().ok_or_else(|| {
-                    anyhow!("Could not fetch temporary credentials with materialize role")
-                })?;
-
-                let access_key = temp_credentials
-                    .access_key_id()
-                    .ok_or_else(|| anyhow!("missing access_key"))?;
-                let secret_key = temp_credentials
-                    .secret_access_key()
-                    .ok_or_else(|| anyhow!("missing secret key"))?;
-
-                let credentials = aws_credential_types::Credentials::from_keys(
-                    access_key,
-                    secret_key,
-                    temp_credentials.session_token().map(|t| t.to_string()),
-                );
-
-                let session_name = session_name.to_owned().unwrap_or("materialize".to_string());
-                let mut role = AssumeRoleProvider::builder(arn).session_name(session_name);
-
-                if let Some(region) = &region {
-                    role = role.region(region.clone());
-                }
-
-                // TODO (mouli): fix
-                // if let Some(external_id_suffix) = external_id_suffix {
-                //     role = role.external_id(mz_principal.get_external_id(external_id_suffix));
-                // }
-
-                SharedCredentialsProvider::new(role.build(credentials))
-            }
-        };
-
         let mut loader = aws_config::from_env()
             .region(region)
-            .credentials_provider(cred_provider);
-        if let Some(endpoint) = &self.endpoint {
+            .credentials_provider(shared_credential_provider);
+        if let Some(endpoint) = endpoint {
             loader = loader.endpoint_url(endpoint);
         }
-        Ok(loader.load().await)
+        loader.load().await
     }
 
     pub(crate) async fn validate(
@@ -280,46 +325,43 @@ impl AwsConfig {
         match &self.auth {
             AwsAuth::Credentials(_) => {
                 let aws_config = self
-                    .load_sdk_config(
-                        storage_configuration
-                            .connection_context
-                            .secrets_reader
-                            .as_ref(),
-                        None,
-                    )
+                    .load_sdk_config(&storage_configuration.connection_context, &id)
                     .await?;
 
                 let sts_client = aws_sdk_sts::Client::new(&aws_config);
+                // TODO(mouli): Update this to return user friendly error in case of failure
                 let _ = sts_client.get_caller_identity().send().await?;
                 Ok(())
             }
-            AwsAuth::AssumeRole(_) => {
+            AwsAuth::AssumeRole(assume_role) => {
                 let aws_config = self
-                    .load_sdk_config(
-                        storage_configuration
-                            .connection_context
-                            .secrets_reader
-                            .as_ref(),
-                        Some(id),
-                    )
+                    .load_sdk_config(&storage_configuration.connection_context, &id)
                     .await?;
 
                 let sts_client = aws_sdk_sts::Client::new(&aws_config);
+                // TODO(mouli): Update this to return user friendly error in case of failure
                 let _ = sts_client.get_caller_identity().send().await?;
 
-                let aws_config_without_external_id = self
-                    .load_sdk_config(
-                        storage_configuration
-                            .connection_context
-                            .secrets_reader
-                            .as_ref(),
-                        None,
-                    )
-                    .await?;
+                // Also validating that we should not be able to access without
+                // specifying the External ID
+                let credentials_without_external_id = assume_role
+                    .dangerously_load_shared_credentials_provider_without_external_id(
+                        &storage_configuration.connection_context,
+                    )?;
+                let aws_config_without_external_id = Self::load_sdk_config_from_credentials(
+                    credentials_without_external_id,
+                    self.region.as_ref(),
+                    self.endpoint.as_ref(),
+                )
+                .await;
 
                 let sts_client = aws_sdk_sts::Client::new(&aws_config_without_external_id);
                 if sts_client.get_caller_identity().send().await.is_ok() {
-                    Err(anyhow!("Validate succeeded without external_id!"))
+                    // TODO(mouli): Return structured ValidateConnectionError instead of anyhow!
+                    // so that additional hint and details can be displayed to the user
+                    Err(anyhow!(
+                        "validate AWS connection succeeded without external_id!"
+                    ))
                 } else {
                     Ok(())
                 }

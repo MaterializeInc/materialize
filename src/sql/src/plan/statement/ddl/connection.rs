@@ -28,8 +28,8 @@ use mz_storage_types::connections::{
     StringOrSecret, TlsIdentity, Tunnel,
 };
 
-use crate::catalog::CatalogItemType;
 use crate::names::Aug;
+use crate::plan::error::ConnectionParsingError;
 use crate::plan::statement::{Connection, ResolvedItemName};
 use crate::plan::with_options::{self, TryFromValue};
 use crate::plan::{PlanError, StatementContext};
@@ -175,31 +175,12 @@ impl ConnectionOptionExtracted {
                             session_token,
                         }))
                     }
-                    (None, Some(_), _) => {
-                        return Err(PlanError::MissingRequiredOptions {
-                            option_names: vec![ConnectionOptionName::AccessKeyId.to_string()],
-                            item_type: CatalogItemType::Connection,
-                            item_sub_type: Some("AWS Credentials".to_string()),
-                        })
+                    (None, None, None) => None,
+                    _ => {
+                        return Err(PlanError::ConnectionParsingError(
+                            ConnectionParsingError::MissingAwsCredentials,
+                        ))
                     }
-                    (Some(_), None, _) => {
-                        return Err(PlanError::MissingRequiredOptions {
-                            option_names: vec![ConnectionOptionName::SecretAccessKey.to_string()],
-                            item_type: CatalogItemType::Connection,
-                            item_sub_type: Some("AWS Credentials".to_string()),
-                        })
-                    }
-                    (None, None, Some(_)) => {
-                        return Err(PlanError::MissingRequiredOptions {
-                            option_names: vec![
-                                ConnectionOptionName::AccessKeyId.to_string(),
-                                ConnectionOptionName::SecretAccessKey.to_string(),
-                            ],
-                            item_type: CatalogItemType::Connection,
-                            item_sub_type: Some("AWS Credentials".to_string()),
-                        })
-                    }
-                    _ => None,
                 };
 
                 let assume_role = match (self.assume_role_arn, self.assume_role_session_name) {
@@ -207,42 +188,24 @@ impl ConnectionOptionExtracted {
                         Some(AwsAuth::AssumeRole(AwsAssumeRole { arn, session_name }))
                     }
                     (None, Some(_)) => {
-                        return Err(PlanError::MissingRequiredOptions {
-                            option_names: vec![ConnectionOptionName::AssumeRoleArn.to_string()],
-                            item_type: CatalogItemType::Connection,
-                            item_sub_type: Some("AWS AssumeRole".to_string()),
-                        })
+                        return Err(PlanError::ConnectionParsingError(
+                            ConnectionParsingError::MissingAssumeRoleArn,
+                        ))
                     }
                     _ => None,
                 };
 
                 if credentials.is_some() && assume_role.is_some() {
-                    return Err(PlanError::ConflictingOptions {
-                        option_names: vec![
-                            format!(
-                                "{} and {}",
-                                ConnectionOptionName::AccessKeyId,
-                                ConnectionOptionName::SecretAccessKey
-                            ),
-                            ConnectionOptionName::AssumeRoleArn.to_string(),
-                        ],
-                        item_type: CatalogItemType::Connection,
-                        item_sub_type: Some(CreateConnectionType::Aws.to_string()),
-                    });
+                    return Err(PlanError::ConnectionParsingError(
+                        ConnectionParsingError::ConflictingOptions,
+                    ));
                 }
 
                 Connection::Aws(AwsConfig {
                     auth: credentials.or(assume_role).ok_or_else(|| {
-                        PlanError::MissingRequiredOptions {
-                            option_names: vec![format!(
-                                "{} and {} or {}",
-                                ConnectionOptionName::AccessKeyId,
-                                ConnectionOptionName::SecretAccessKey,
-                                ConnectionOptionName::AssumeRoleArn
-                            )],
-                            item_type: CatalogItemType::Connection,
-                            item_sub_type: Some(CreateConnectionType::Aws.to_string()),
-                        }
+                        PlanError::ConnectionParsingError(
+                            ConnectionParsingError::MissingRequiredOptions,
+                        )
                     })?,
                     endpoint: match self.endpoint {
                         // TODO(benesch): this should not treat an empty endpoint as equivalent to a `NULL`
