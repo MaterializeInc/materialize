@@ -15,16 +15,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::iter;
+use std::time::Duration;
 
 use itertools::{Either, Itertools};
-use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
+use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
-use mz_ore::cast::{self, CastFrom, TryCastFrom};
+use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::HashSet;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
-use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
@@ -99,7 +99,7 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
-use crate::plan::with_options::{OptionalInterval, TryFromValue};
+use crate::plan::with_options::{OptionalDuration, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan,
@@ -383,7 +383,7 @@ generate_extracted_config!(
     (IgnoreKeys, bool),
     (Size, String),
     (Timeline, String),
-    (TimestampInterval, Interval)
+    (TimestampInterval, Duration)
 );
 
 generate_extracted_config!(
@@ -985,10 +985,7 @@ pub fn plan_create_source(
 
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
-                Some(interval) => {
-                    let micros: u64 = interval.as_microseconds().try_into()?;
-                    Some(micros)
-                }
+                Some(interval) => Some(interval.as_micros().try_into()?),
                 None => None,
             };
 
@@ -1212,8 +1209,7 @@ pub fn plan_create_source(
     let cluster_config = source_sink_cluster_config(scx, "source", in_cluster.as_ref(), size)?;
 
     let timestamp_interval = match timestamp_interval {
-        Some(timestamp_interval) => {
-            let duration = timestamp_interval.duration()?;
+        Some(duration) => {
             let min = scx.catalog.system_vars().min_timestamp_interval();
             let max = scx.catalog.system_vars().max_timestamp_interval();
             if duration < min || duration > max {
@@ -1465,7 +1461,7 @@ pub fn plan_create_subsource(
 
 generate_extracted_config!(
     LoadGeneratorOption,
-    (TickInterval, Interval),
+    (TickInterval, Duration),
     (ScaleFactor, f64),
     (MaxCardinality, u64)
 );
@@ -3060,7 +3056,7 @@ generate_extracted_config!(
     (Disk, bool),
     (IdleArrangementMergeEffort, u32),
     (IntrospectionDebugging, bool),
-    (IntrospectionInterval, OptionalInterval),
+    (IntrospectionInterval, OptionalDuration),
     (Managed, bool),
     (Replicas, Vec<ReplicaDefinition<Aug>>),
     (ReplicationFactor, u32),
@@ -3160,12 +3156,6 @@ pub fn plan_create_cluster(
     }
 }
 
-const DEFAULT_REPLICA_INTROSPECTION_INTERVAL: Interval = Interval {
-    micros: cast::u32_to_i64(DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS),
-    months: 0,
-    days: 0,
-};
-
 generate_extracted_config!(
     ReplicaOption,
     (AvailabilityZone, String),
@@ -3176,7 +3166,7 @@ generate_extracted_config!(
     (IdleArrangementMergeEffort, u32),
     (Internal, bool, Default(false)),
     (IntrospectionDebugging, bool, Default(false)),
-    (IntrospectionInterval, OptionalInterval),
+    (IntrospectionInterval, OptionalDuration),
     (Size, String),
     (StorageAddresses, Vec<String>),
     (StoragectlAddresses, Vec<String>),
@@ -3311,16 +3301,16 @@ fn plan_replica_config(
 }
 
 fn plan_compute_replica_config(
-    introspection_interval: Option<OptionalInterval>,
+    introspection_interval: Option<OptionalDuration>,
     introspection_debugging: bool,
     idle_arrangement_merge_effort: Option<u32>,
 ) -> Result<ComputeReplicaConfig, PlanError> {
     let introspection_interval = introspection_interval
-        .map(|OptionalInterval(i)| i)
-        .unwrap_or(Some(DEFAULT_REPLICA_INTROSPECTION_INTERVAL));
+        .map(|OptionalDuration(i)| i)
+        .unwrap_or(Some(DEFAULT_REPLICA_LOGGING_INTERVAL));
     let introspection = match introspection_interval {
         Some(interval) => Some(ComputeReplicaIntrospectionConfig {
-            interval: interval.duration()?,
+            interval,
             debugging: introspection_debugging,
         }),
         None if introspection_debugging => {
@@ -4092,7 +4082,7 @@ pub fn plan_drop_owned(
     }))
 }
 
-generate_extracted_config!(IndexOption, (LogicalCompactionWindow, OptionalInterval));
+generate_extracted_config!(IndexOption, (LogicalCompactionWindow, OptionalDuration));
 
 fn plan_index_options(
     scx: &StatementContext,
@@ -4110,11 +4100,9 @@ fn plan_index_options(
 
     let mut out = Vec::with_capacity(1);
 
-    if let Some(OptionalInterval(lcw)) = logical_compaction_window {
+    if let Some(OptionalDuration(lcw)) = logical_compaction_window {
         scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-        out.push(crate::plan::IndexOption::LogicalCompactionWindow(
-            lcw.map(|interval| interval.duration()).transpose()?,
-        ))
+        out.push(crate::plan::IndexOption::LogicalCompactionWindow(lcw));
     }
 
     Ok(out)

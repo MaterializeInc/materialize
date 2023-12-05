@@ -11,7 +11,6 @@
 
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use std::collections::BTreeSet;
-use std::time::Duration;
 
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
 use mz_compute_client::controller::ComputeReplicaConfig;
@@ -19,7 +18,7 @@ use mz_controller::clusters::{
     CreateReplicaConfig, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaConfig,
     ReplicaLocation, ReplicaLogging,
 };
-use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
+use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType, SessionCatalog};
@@ -557,9 +556,7 @@ impl Coordinator {
                 let disk = false;
                 let logging = ReplicaLogging {
                     log_logging: false,
-                    interval: Some(Duration::from_micros(
-                        DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS.into(),
-                    )),
+                    interval: Some(DEFAULT_REPLICA_LOGGING_INTERVAL),
                 };
                 new_config.variant = Managed(ClusterVariantManaged {
                     size,
@@ -603,17 +600,8 @@ impl Coordinator {
                     Unchanged => {}
                 }
                 match &options.introspection_interval {
-                    Set(ii) => {
-                        logging.interval =
-                            ii.0.map(|ii| ii.duration())
-                                .transpose()
-                                .map_err(AdapterError::Unstructured)?
-                    }
-                    Reset => {
-                        logging.interval = Some(Duration::from_micros(
-                            DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS.into(),
-                        ))
-                    }
+                    Set(ii) => logging.interval = ii.0,
+                    Reset => logging.interval = Some(DEFAULT_REPLICA_LOGGING_INTERVAL),
                     Unchanged => {}
                 }
                 match &options.idle_arrangement_merge_effort {

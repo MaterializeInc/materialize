@@ -77,7 +77,7 @@ FETCH c WITH (TIMEOUT = '1s')
 
 # Test some FETCH timeout errors. The actual timeout functionality is
 # tested elsewhere.
-statement error timeout out of range
+statement error invalid TIMEOUT: cannot convert negative interval to duration
 FETCH c WITH (TIMEOUT = '-1s')
 
 statement ok

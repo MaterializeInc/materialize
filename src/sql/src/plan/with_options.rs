@@ -9,11 +9,11 @@
 
 //! Provides tooling to handle `WITH` options.
 
-use mz_repr::adt::interval::Interval;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::{Ident, KafkaBroker, ReplicaDefinition};
 use mz_storage_types::connections::StringOrSecret;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use crate::ast::{AstInfo, IntervalValue, UnresolvedItemName, Value, WithOptionValue};
 use crate::names::{ResolvedDataType, ResolvedItemName};
@@ -162,46 +162,50 @@ impl ImpliedValue for StringOrSecret {
     }
 }
 
-impl TryFromValue<Value> for Interval {
+// This conversion targets the standard library's `Duration` type rather than
+// the Materialize SQL-specific `Interval` type because, at the time of writing,
+// `Duration` was the desired Rust type for every interval-valued option.
+//
+// In the future, it would be reasonable to add an implementation that targets
+// `Interval` for options that want it as such, e.g., because they need to
+// support negative intervals.
+impl TryFromValue<Value> for Duration {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
-        Ok(match v {
+        let interval = match v {
             Value::Interval(IntervalValue { value, .. })
             | Value::Number(value)
             | Value::String(value) => strconv::parse_interval(&value)?,
             _ => sql_bail!("cannot use value as interval"),
-        })
+        };
+        Ok(interval.duration()?)
     }
     fn name() -> String {
         "interval".to_string()
     }
 }
 
-impl ImpliedValue for Interval {
+impl ImpliedValue for Duration {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an interval value")
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
-pub struct OptionalInterval(pub Option<Interval>);
+pub struct OptionalDuration(pub Option<Duration>);
 
-impl From<Interval> for OptionalInterval {
-    fn from(i: Interval) -> OptionalInterval {
+impl From<Duration> for OptionalDuration {
+    fn from(i: Duration) -> OptionalDuration {
         // An interval of 0 disables the setting.
-        let inner = if i == Interval::default() {
-            None
-        } else {
-            Some(i)
-        };
-        OptionalInterval(inner)
+        let inner = if i == Duration::ZERO { None } else { Some(i) };
+        OptionalDuration(inner)
     }
 }
 
-impl TryFromValue<Value> for OptionalInterval {
+impl TryFromValue<Value> for OptionalDuration {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         Ok(match v {
-            Value::Null => OptionalInterval(None),
-            v => Interval::try_from_value(v)?.into(),
+            Value::Null => OptionalDuration(None),
+            v => Duration::try_from_value(v)?.into(),
         })
     }
     fn name() -> String {
@@ -209,7 +213,7 @@ impl TryFromValue<Value> for OptionalInterval {
     }
 }
 
-impl ImpliedValue for OptionalInterval {
+impl ImpliedValue for OptionalDuration {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an interval value")
     }

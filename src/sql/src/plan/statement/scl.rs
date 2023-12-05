@@ -12,9 +12,9 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use mz_repr::adt::interval::Interval;
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::InspectShardStatement;
+use std::time::Duration;
 use uncased::UncasedStr;
 
 use crate::ast::display::AstDisplay;
@@ -192,7 +192,7 @@ pub fn describe_fetch(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(FetchOption, (Timeout, Interval));
+generate_extracted_config!(FetchOption, (Timeout, Duration));
 
 pub fn plan_fetch(
     _: &StatementContext,
@@ -208,12 +208,11 @@ pub fn plan_fetch(
             // Limit FETCH timeouts to 1 day. If users have a legitimate need it can be
             // bumped. If we do bump it, ensure that the new upper limit is within the
             // bounds of a tokio time future, otherwise it'll panic.
-            const SECS_PER_DAY: f64 = 60f64 * 60f64 * 24f64;
-            let timeout_secs = timeout.as_epoch_seconds::<f64>();
-            if !timeout_secs.is_finite() || timeout_secs < 0f64 || timeout_secs > SECS_PER_DAY {
-                sql_bail!("timeout out of range: {:#}", timeout);
+            const DAY: Duration = Duration::from_secs(60 * 60 * 24);
+            if timeout > DAY {
+                sql_bail!("timeout out of range: {}s", timeout.as_secs_f64());
             }
-            ExecuteTimeout::Seconds(timeout_secs)
+            ExecuteTimeout::Seconds(timeout.as_secs_f64())
         }
         // FETCH defaults to WaitOnce.
         None => ExecuteTimeout::WaitOnce,

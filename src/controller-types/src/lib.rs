@@ -83,4 +83,4 @@ pub type ClusterId = mz_compute_types::ComputeInstanceId;
 /// Identifies a cluster replica.
 pub type ReplicaId = mz_cluster_client::ReplicaId;
 
-pub use mz_compute_types::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS as DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
+pub use mz_compute_types::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL as DEFAULT_REPLICA_LOGGING_INTERVAL;
