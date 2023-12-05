@@ -2227,6 +2227,10 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
 pub struct PostgresSourcePublicationDetails {
     pub tables: Vec<mz_postgres_util::desc::PostgresTableDesc>,
     pub slot: String,
+    /// The active timeline_id when this source was created
+    /// The None value indicates an unknown timeline, to account for sources that existed
+    /// prior to this field being introduced
+    pub timeline_id: Option<u64>,
 }
 
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {
@@ -2234,6 +2238,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
         ProtoPostgresSourcePublicationDetails {
             tables: self.tables.iter().map(|t| t.into_proto()).collect(),
             slot: self.slot.clone(),
+            timeline_id: self.timeline_id.clone(),
         }
     }
 
@@ -2245,6 +2250,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
                 .map(mz_postgres_util::desc::PostgresTableDesc::from_proto)
                 .collect::<Result<_, _>>()?,
             slot: proto.slot,
+            timeline_id: proto.timeline_id,
         })
     }
 }

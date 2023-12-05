@@ -87,7 +87,7 @@ use differential_dataflow::Collection;
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::PostgresError;
+use mz_postgres_util::{simple_query_opt, PostgresError};
 use mz_repr::{Datum, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::connections::ConnectionContext;
@@ -100,7 +100,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
-use tokio_postgres::{Client, SimpleQueryMessage, SimpleQueryRow};
+use tokio_postgres::Client;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::SourceRender;
@@ -259,8 +259,6 @@ pub enum TransientError {
     InvalidTransaction,
     #[error("BEGIN within existing BEGIN stream")]
     NestedTransaction,
-    #[error("query returned more rows than expected")]
-    UnexpectedRow,
     #[error("recoverable errors should crash the process during snapshots")]
     SyntheticError,
     #[error("sql client error")]
@@ -286,6 +284,8 @@ pub enum DefiniteError {
     MissingColumn,
     #[error("failed to parse COPY protocol")]
     InvalidCopyInput,
+    #[error("invalid timeline ID from PostgreSQL server. Expected {expected} but got {actual}")]
+    InvalidTimelineId { expected: u64, actual: u64 },
     #[error("TOASTed value missing from old row. Did you forget to set REPLICA IDENTITY to FULL for your table?")]
     MissingToast,
     #[error("old row missing from replication stream. Did you forget to set REPLICA IDENTITY to FULL for your table?")]
@@ -315,10 +315,10 @@ async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), Tran
     match simple_query_opt(client, &query).await {
         Ok(_) => Ok(()),
         // If the slot already exists that's still ok
-        Err(TransientError::SQLClient(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
+        Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
             Ok(())
         }
-        Err(err) => Err(err),
+        Err(err) => Err(TransientError::PostgresError(err)),
     }
 }
 
@@ -355,23 +355,6 @@ fn verify_schema(
     match expected_desc.determine_compatibility(current_desc) {
         Ok(()) => Ok(()),
         Err(err) => Err(DefiniteError::IncompatibleSchema(err.to_string())),
-    }
-}
-
-/// Runs the given query using the client and expects at most a single row to be returned.
-async fn simple_query_opt(
-    client: &Client,
-    query: &str,
-) -> Result<Option<SimpleQueryRow>, TransientError> {
-    let result = client.simple_query(query).await?;
-    let mut rows = result.into_iter().filter_map(|msg| match msg {
-        SimpleQueryMessage::Row(row) => Some(row),
-        _ => None,
-    });
-    match (rows.next(), rows.next()) {
-        (Some(row), None) => Ok(Some(row)),
-        (None, None) => Ok(None),
-        _ => Err(TransientError::UnexpectedRow),
     }
 }
 

@@ -8,10 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::str::FromStr;
+use tokio_postgres::Client;
 
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
-use crate::{Config, PostgresError};
+use crate::{simple_query_opt, Config, PostgresError};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WalLevel {
@@ -140,4 +141,22 @@ pub async fn drop_replication_slots(
         }
     }
     Ok(())
+}
+
+pub async fn get_timeline_id(replication_client: &Client) -> Result<u64, PostgresError> {
+    if let Some(r) = simple_query_opt(replication_client, "IDENTIFY_SYSTEM").await? {
+        r.get("timeline")
+            .expect("Returns a row with a timeline ID")
+            .parse::<u64>()
+            .map_err(|err| {
+                PostgresError::Generic(anyhow::anyhow!(
+                    "Failed to parse timeline ID from IDENTIFY_SYSTEM: {}",
+                    err
+                ))
+            })
+    } else {
+        Err(PostgresError::Generic(anyhow::anyhow!(
+            "IDENTIFY_SYSTEM did not return a result row"
+        )))
+    }
 }

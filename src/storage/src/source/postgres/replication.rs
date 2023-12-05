@@ -249,6 +249,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 replication_client,
                 client,
                 &connection.publication_details.slot,
+                &connection.publication_details.timeline_id,
                 &connection.publication,
                 *data_cap_set[0].time(),
                 committed_uppers.as_mut()
@@ -378,6 +379,7 @@ async fn raw_stream<'a>(
     replication_client: Client,
     metadata_client: Client,
     slot: &'a str,
+    timeline_id: &'a Option<u64>,
     publication: &'a str,
     resume_lsn: MzOffset,
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
@@ -390,6 +392,16 @@ async fn raw_stream<'a>(
     >,
     TransientError,
 > {
+    // Skip the timeline ID check for sources without a known timeline ID
+    // (sources created before the timeline ID was added to the source details)
+    if let Some(expected_timeline_id) = timeline_id {
+        if let Err(err) =
+            ensure_replication_timeline_id(&replication_client, expected_timeline_id).await?
+        {
+            return Ok(Err(err));
+        }
+    }
+
     // Postgres will return all transactions that commit *at or after* after the provided LSN,
     // following the timely upper semantics.
     let lsn = PgLsn::from(resume_lsn.offset);
@@ -621,5 +633,23 @@ async fn ensure_publication_exists(
         None => Ok(Err(DefiniteError::PublicationDropped(
             publication.to_owned(),
         ))),
+    }
+}
+
+/// Ensure the active replication timeline_id matches the one we expect such that we can safely
+/// resume replication. It returns an outer transient error in case of
+/// connection issues and an inner definite error if the timeline id does not match.
+async fn ensure_replication_timeline_id(
+    replication_client: &Client,
+    expected_timeline_id: &u64,
+) -> Result<Result<(), DefiniteError>, TransientError> {
+    let timeline_id = mz_postgres_util::get_timeline_id(replication_client).await?;
+    if timeline_id == *expected_timeline_id {
+        Ok(Ok(()))
+    } else {
+        Ok(Err(DefiniteError::InvalidTimelineId {
+            expected: *expected_timeline_id,
+            actual: timeline_id,
+        }))
     }
 }

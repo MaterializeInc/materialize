@@ -150,6 +150,7 @@ use tracing::trace;
 use mz_expr::MirScalarExpr;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
+use mz_postgres_util::simple_query_opt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::connections::ConnectionContext;
@@ -160,7 +161,7 @@ use mz_timely_util::builder_async::{
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 
 use crate::source::postgres::replication::RewindRequest;
-use crate::source::postgres::{simple_query_opt, verify_schema, DefiniteError, TransientError};
+use crate::source::postgres::{verify_schema, DefiniteError, TransientError};
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
