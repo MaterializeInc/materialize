@@ -64,7 +64,7 @@ $ psql-execute command="\dn mz_catalog"
 
 $ psql-execute command="\dn mz_*"
 \     List of schemas
-     Name    |   Owner
+    Name     |   Owner
 -------------+-----------
  mz_catalog  | mz_system
  mz_internal | mz_system
