@@ -2713,7 +2713,7 @@ impl RustType<ProtoTestScriptSourceConnection> for TestScriptSourceConnection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Arbitrary, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct SourceData(pub Result<Row, DataflowError>);
 
@@ -2922,6 +2922,7 @@ impl Schema<SourceData> for RelationDesc {
 mod tests {
     use mz_repr::is_no_stats_type;
     use proptest::prelude::*;
+    use proptest::strategy::ValueTree;
 
     use crate::errors::EnvelopeError;
 
@@ -2973,5 +2974,56 @@ mod tests {
             // The proptest! macro interferes with rustfmt.
             scalar_type_columnar_roundtrip(scalar_type)
         });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn source_proto_serialization_stability() {
+        let min_protos = 10;
+        let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
+        let encoded = include_str!("snapshots/source-datas.txt");
+
+        // Decode the pre-generated source datas
+        let mut decoded: Vec<SourceData> = encoded
+            .lines()
+            .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
+            .map(|b| SourceData::decode(&b).expect("valid proto"))
+            .collect();
+
+        // If there are fewer than the minimum examples, generate some new ones arbitrarily
+        while decoded.len() < min_protos {
+            let mut runner = proptest::test_runner::TestRunner::deterministic();
+            let arbitrary_data: SourceData = SourceData::arbitrary()
+                .new_tree(&mut runner)
+                .expect("source data")
+                .current();
+            decoded.push(arbitrary_data);
+        }
+
+        // Reencode and compare the strings
+        let mut reencoded = String::new();
+        let mut buf = vec![];
+        for s in decoded {
+            buf.clear();
+            s.encode(&mut buf);
+            base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
+            reencoded.push('\n');
+        }
+
+        // Optimizations in Persist, particularly consolidation on read,
+        // depend on a stable serialization for the serialized data.
+        // For example, reordering proto fields could cause us
+        // to generate a different (equivalent) serialization for a record,
+        // and the two versions would not consolidate out.
+        // This can impact correctness!
+        //
+        // If you need to change how SourceDatas are encoded, that's still fine...
+        // but we'll also need to increase
+        // the MINIMUM_CONSOLIDATED_VERSION as part of the same release.
+        assert_eq!(
+            encoded,
+            reencoded.as_str(),
+            "SourceData serde should be stable"
+        )
     }
 }
