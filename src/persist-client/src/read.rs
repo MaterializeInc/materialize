@@ -199,11 +199,6 @@ where
     pub fn return_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
         self.listen.handle.process_returned_leased_part(leased_part)
     }
-
-    /// Returns a [`SubscriptionLeaseReturner`] tied to this [`Subscribe`].
-    pub(crate) fn lease_returner(&self) -> &SubscriptionLeaseReturner {
-        self.listen.handle.lease_returner()
-    }
 }
 
 impl<K, V, T, D> Drop for Subscribe<K, V, T, D>
