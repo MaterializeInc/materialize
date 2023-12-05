@@ -193,10 +193,9 @@ pub struct Config {
     pub segment_api_key: Option<String>,
     /// IP Addresses which will be used for egress.
     pub egress_ips: Vec<Ipv4Addr>,
-    /// 12-digit AWS account id, which will be used to generate an AWS Principal.
+    /// The AWS account ID, which will be used to generate ARNs for
+    /// Materialize-controlled AWS resources.
     pub aws_account_id: Option<String>,
-    /// The Materialize AWS role arn which will be used to connect to customer's AWS account.
-    pub aws_external_connection_role: Option<String>,
     /// Supported AWS PrivateLink availability zone ids.
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     /// An SDK key for LaunchDarkly. Enables system parameter synchronization
@@ -562,7 +561,6 @@ impl Listeners {
             egress_ips: config.egress_ips,
             system_parameter_sync_config: system_parameter_sync_config.clone(),
             aws_account_id: config.aws_account_id,
-            aws_external_connection_role: config.aws_external_connection_role,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             active_connection_count: Arc::clone(&active_connection_count),
             webhook_concurrency_limit: webhook_concurrency_limit.clone(),
