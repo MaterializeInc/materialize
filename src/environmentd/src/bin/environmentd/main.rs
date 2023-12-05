@@ -127,6 +127,7 @@ use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::EnablePersistTxnTables;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
@@ -427,8 +428,8 @@ pub struct Args {
     /// This value is also configurable via a Launch Darkly parameter of the
     /// same name, but we keep the flag to make testing easier. If specified,
     /// the flag takes precedence over the Launch Darkly param.
-    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", action = clap::ArgAction::Set)]
-    enable_persist_txn_tables: Option<bool>,
+    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", parse(try_from_str))]
+    enable_persist_txn_tables: Option<EnablePersistTxnTables>,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -556,6 +557,10 @@ pub struct Args {
     /// The 12-digit AWS account id, which is used to generate an AWS Principal.
     #[clap(long, env = "AWS_ACCOUNT_ID")]
     aws_account_id: Option<String>,
+
+    /// The Materialize role arn to assume when connecting to external user's AWS account.
+    #[clap(long, env = "AWS_EXTERNAL_CONNECTION_ROLE")]
+    aws_external_connection_role: Option<String>,
 
     /// The list of supported AWS PrivateLink availability zone ids.
     /// Must be zone IDs, of format e.g. "use-az1".
@@ -992,6 +997,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 segment_api_key: args.segment_api_key,
                 egress_ips: args.announce_egress_ip,
                 aws_account_id: args.aws_account_id,
+                aws_external_connection_role: args.aws_external_connection_role,
                 aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
                 launchdarkly_sdk_key: args.launchdarkly_sdk_key,
                 launchdarkly_key_map: args

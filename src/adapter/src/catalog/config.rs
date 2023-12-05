@@ -223,6 +223,10 @@ impl Default for ClusterReplicaSizeMap {
 pub struct AwsPrincipalContext {
     pub aws_account_id: String,
     pub aws_external_id_prefix: AwsExternalIdPrefix,
+    /// TODO(mouli): This is optional temporarily. Once the changes
+    /// (Github issue: <https://github.com/MaterializeInc/cloud/issues/8191>)
+    /// are in place to always pass this value, will make this required.
+    pub aws_external_connection_role: Option<String>,
 }
 
 impl AwsPrincipalContext {

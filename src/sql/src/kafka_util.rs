@@ -43,16 +43,10 @@ pub fn validate_options_for_context<T: AstInfo>(
 
     for KafkaConfigOption { name, .. } in options {
         let limited_to_context = match name {
-            Acks => None,
-            ClientId => None,
             CompressionType => Some(Sink),
-            EnableIdempotence => None,
-            FetchMessageMaxBytes => None,
             GroupIdPrefix => None,
-            IsolationLevel => None,
             Topic => None,
             TopicMetadataRefreshIntervalMs => None,
-            TransactionTimeoutMs => None,
             StartTimestamp => Some(Source),
             StartOffset => Some(Source),
             PartitionCount => Some(Sink),
@@ -77,20 +71,10 @@ pub fn validate_options_for_context<T: AstInfo>(
 
 generate_extracted_config!(
     KafkaConfigOption,
-    (Acks, String),
-    (ClientId, String),
     (CompressionType, String),
-    (EnableIdempotence, bool),
-    (FetchMessageMaxBytes, i32),
     (GroupIdPrefix, String),
-    (
-        IsolationLevel,
-        String,
-        Default(String::from("read_committed"))
-    ),
     (Topic, String),
     (TopicMetadataRefreshIntervalMs, i32),
-    (TransactionTimeoutMs, i32),
     (StartTimestamp, i64),
     (StartOffset, Vec<i64>),
     (PartitionCount, i32, Default(-1)),
@@ -113,14 +97,8 @@ impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
     #[allow(clippy::redundant_closure_call)]
     fn try_from(
         KafkaConfigOptionExtracted {
-            acks,
-            client_id,
             compression_type,
-            enable_idempotence,
-            fetch_message_max_bytes,
-            isolation_level,
             topic_metadata_refresh_interval_ms,
-            transaction_timeout_ms,
             ..
         }: &KafkaConfigOptionExtracted,
     ) -> Result<LibRdKafkaConfig, Self::Error> {
@@ -143,30 +121,12 @@ impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
             };
         }
 
-        fill_options!(acks, "acks");
-        fill_options!(client_id, "client.id");
         fill_options!(compression_type, "compression.type");
         fill_options!(
             topic_metadata_refresh_interval_ms,
             "topic.metadata.refresh.interval.ms",
             |i: &i32| { 0 <= *i && *i <= 3_600_000 },
             "TOPIC METADATA REFRESH INTERVAL MS must be within [0, 3,600,000]"
-        );
-        fill_options!(Some(isolation_level), "isolation.level");
-        fill_options!(
-            transaction_timeout_ms,
-            "transaction.timeout.ms",
-            |i: &i32| 0 <= *i,
-            "TRANSACTION TIMEOUT MS must be greater than or equval to 0"
-        );
-        fill_options!(enable_idempotence, "enable.idempotence");
-        fill_options!(
-            fetch_message_max_bytes,
-            "fetch.message.max_bytes",
-            // The range of values comes from `fetch.message.max.bytes` in
-            // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-            |i: &i32| { 0 <= *i && *i <= 1_000_000_000 },
-            "FETCH MESSAGE MAX BYTES must be within [0, 1,000,000,000]"
         );
 
         Ok(LibRdKafkaConfig(o))

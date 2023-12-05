@@ -110,6 +110,7 @@ use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
+use mz_storage_types::controller::EnablePersistTxnTables;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
@@ -158,7 +159,7 @@ pub struct Config {
     ///
     /// If specified, this overrides the value stored in Launch Darkly (and
     /// mirrored to the catalog storage's "config" collection).
-    pub enable_persist_txn_tables_cli: Option<bool>,
+    pub enable_persist_txn_tables_cli: Option<EnablePersistTxnTables>,
 
     // === Adapter options. ===
     /// Catalog configuration.
@@ -194,6 +195,8 @@ pub struct Config {
     pub egress_ips: Vec<Ipv4Addr>,
     /// 12-digit AWS account id, which will be used to generate an AWS Principal.
     pub aws_account_id: Option<String>,
+    /// The Materialize AWS role arn which will be used to connect to customer's AWS account.
+    pub aws_external_connection_role: Option<String>,
     /// Supported AWS PrivateLink availability zone ids.
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     /// An SDK key for LaunchDarkly. Enables system parameter synchronization
@@ -500,7 +503,8 @@ impl Listeners {
         );
 
         // Initialize controller.
-        let mut enable_persist_txn_tables = enable_persist_txn_tables_stash_ld.unwrap_or(false);
+        let mut enable_persist_txn_tables =
+            enable_persist_txn_tables_stash_ld.unwrap_or(EnablePersistTxnTables::Off);
         if let Some(value) = config.enable_persist_txn_tables_cli {
             enable_persist_txn_tables = value;
         }
@@ -558,6 +562,7 @@ impl Listeners {
             egress_ips: config.egress_ips,
             system_parameter_sync_config: system_parameter_sync_config.clone(),
             aws_account_id: config.aws_account_id,
+            aws_external_connection_role: config.aws_external_connection_role,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             active_connection_count: Arc::clone(&active_connection_count),
             webhook_concurrency_limit: webhook_concurrency_limit.clone(),

@@ -9,6 +9,7 @@
 
 use async_trait::async_trait;
 use derivative::Derivative;
+use mz_storage_types::controller::EnablePersistTxnTables;
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin;
 use std::sync::Arc;
@@ -24,7 +25,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
 use mz_ore::soft_assert_eq;
-use mz_proto::{ProtoType, RustType};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash::{AppendBatch, DebugStashFactory, Diff, Stash, StashFactory, TypedCollection};
@@ -250,9 +251,17 @@ impl OpenableDurableCatalogState for OpenableConnection {
         self.get_config(DEPLOY_GENERATION.into()).await
     }
 
-    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+    async fn get_enable_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
         let value = self.get_config(ENABLE_PERSIST_TXN_TABLES.into()).await?;
-        Ok(value.map(|value| value > 0))
+        value
+            .map(EnablePersistTxnTables::try_from)
+            .transpose()
+            .map_err(|err| {
+                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
+                    .into()
+            })
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -1153,7 +1162,9 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
         self.openable_connection.get_deployment_generation().await
     }
 
-    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+    async fn get_enable_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
         self.openable_connection
             .get_enable_persist_txn_tables()
             .await

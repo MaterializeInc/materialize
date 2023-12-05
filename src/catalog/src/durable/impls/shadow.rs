@@ -13,6 +13,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use mz_storage_types::controller::EnablePersistTxnTables;
 use timely::progress::Timestamp as TimelyTimestamp;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
@@ -152,7 +153,9 @@ where
         compare_and_return_async!(self, get_deployment_generation)
     }
 
-    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+    async fn get_enable_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
         compare_and_return_async!(self, get_enable_persist_txn_tables)
     }
 

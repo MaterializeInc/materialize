@@ -89,6 +89,7 @@ use mz_repr::strconv;
 use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_sql_parser::ident;
+use mz_storage_types::controller::EnablePersistTxnTables;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -691,6 +692,22 @@ const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
         "An exclusive upper bound on the number of results we may return from a Persist fast-path peek; \
         queries that may return more results will follow the normal / slow path. \
         Setting this to 0 disables the feature.",
+    internal: true,
+};
+
+pub const ENABLE_PERSIST_TXN_TABLES: ServerVar<EnablePersistTxnTables> = ServerVar {
+    name: UncasedStr::new("enable_persist_txn_tables"),
+    value: &EnablePersistTxnTables::Off,
+    description: "\
+        Whether to use the new persist-txn tables implementation or the legacy \
+        one.
+
+        Only takes effect on restart. Any changes will also cause clusterd \
+        processes to restart.
+
+        This value is also configurable via a Launch Darkly parameter of the \
+        same name, but we keep the flag to make testing easier. If specified, \
+        the flag takes precedence over the Launch Darkly param.",
     internal: true,
 };
 
@@ -2033,22 +2050,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_persist_txn_tables,
-        desc: "\
-            Whether to use the new persist-txn tables implementation or the legacy \
-            one.
-
-            Only takes effect on restart. Any changes will also cause clusterd \
-            processes to restart.
-
-            This value is also configurable via a Launch Darkly parameter of the \
-            same name, but we keep the flag to make testing easier. If specified, \
-            the flag takes precedence over the Launch Darkly param.",
-        default: &false,
-        internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_aws_connection,
         desc: "CREATE CONNECTION ... TO AWS",
         default: &false,
@@ -2761,6 +2762,7 @@ impl SystemVars {
             .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
             .with_var(&PERSIST_FAST_PATH_LIMIT)
+            .with_var(&ENABLE_PERSIST_TXN_TABLES)
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
@@ -3258,6 +3260,10 @@ impl SystemVars {
 
     pub fn persist_fast_path_limit(&self) -> usize {
         *self.expect_value(&PERSIST_FAST_PATH_LIMIT)
+    }
+
+    pub fn enable_persist_txn_tables(&self) -> EnablePersistTxnTables {
+        *self.expect_value(&ENABLE_PERSIST_TXN_TABLES)
     }
 
     pub fn persist_reader_lease_duration(&self) -> Duration {
@@ -5412,6 +5418,30 @@ impl Value for TimestampOracleImpl {
 
     fn format(&self) -> String {
         self.as_str().into()
+    }
+}
+
+impl Value for EnablePersistTxnTables {
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let s = UncasedStr::new(s);
+
+        EnablePersistTxnTables::from_str(s.as_str()).map_err(|_| VarError::ConstrainedParameter {
+            parameter: (&ENABLE_PERSIST_TXN_TABLES).into(),
+            values: input.to_vec(),
+            valid_values: Some(vec!["off", "eager", "lazy"]),
+        })
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
     }
 }
 

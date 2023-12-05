@@ -1307,26 +1307,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "const_format"
-version = "0.2.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3a214c7af3d04997541b18d432afaff4c455e79e2029079647e72fc2bd27673"
-dependencies = [
- "const_format_proc_macros",
-]
-
-[[package]]
-name = "const_format_proc_macros"
-version = "0.2.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f6ff08fd20f4f299298a28e2dfa8a8ba1036e6cd2460ac1de7b425d76f2500"
-dependencies = [
- "proc-macro2",
- "quote",
- "unicode-xid",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1743,7 +1723,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#fca940b40e7827a9a639f99af45806100ef14954"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#9623aaad1020b799e43c6e59d93624d6c8449699"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1800,7 +1780,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#fca940b40e7827a9a639f99af45806100ef14954"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#9623aaad1020b799e43c6e59d93624d6c8449699"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3660,7 +3640,6 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
- "const_format",
  "derivative",
  "differential-dataflow",
  "futures",
@@ -5746,6 +5725,7 @@ dependencies = [
  "mz-timely-util",
  "mz-tracing",
  "native-tls",
+ "num_enum",
  "once_cell",
  "openssl",
  "proptest",

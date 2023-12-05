@@ -40,6 +40,7 @@ use bytes::BytesMut;
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
+use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_controller::ControllerConfig;
 use mz_environmentd::CatalogConfig;
@@ -1043,6 +1044,7 @@ impl<'a> RunnerInner<'a> {
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,
+            aws_external_connection_role: None,
             aws_privatelink_availability_zones: None,
             launchdarkly_sdk_key: None,
             launchdarkly_key_map: Default::default(),
@@ -1051,7 +1053,7 @@ impl<'a> RunnerInner<'a> {
             deploy_generation: None,
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
-            // TODO(txn): Get this flipped to true before turning anything on in prod.
+            // TODO(txn): Get this flipped on before turning anything on in prod.
             enable_persist_txn_tables_cli: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
@@ -1932,7 +1934,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     if i != 0 {
                         buf.append("\n");
                     }
-                    buf.append(&row.join("  "));
+                    buf.append(&row.iter().map(|col| col.replace(' ', "␠")).join("  "));
                 }
                 // In standard mode, output each value on its own line,
                 // and ignore row boundaries.

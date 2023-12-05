@@ -114,6 +114,7 @@ use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, Id};
+use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Diff, GlobalId};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
@@ -134,7 +135,7 @@ use timely::{Data, PartialOrder};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{ArrangementSize, HeapSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
@@ -215,6 +216,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         Arc::clone(&compute_state.persist_clients),
                         source.storage_metadata.clone(),
                         dataflow.as_of.clone(),
+                        SnapshotMode::Include,
                         dataflow.until.clone(),
                         mfp.as_mut(),
                         compute_state.dataflow_max_inflight_bytes,
@@ -431,7 +433,7 @@ where
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: RenderTimestamp + HeapSize,
+    G::Timestamp: RenderTimestamp,
 {
     pub(crate) fn build_object(&mut self, object: BuildDesc<Plan>) {
         // First, transform the relation expression into a render plan.
@@ -742,7 +744,7 @@ where
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: RenderTimestamp + HeapSize,
+    G::Timestamp: RenderTimestamp,
 {
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///

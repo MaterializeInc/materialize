@@ -112,21 +112,6 @@ employees, or other major contributors, will probably need to run the full test
 suite and should therefore install the Confluent Platform.
 
 
-### WebAssembly / WASM
-
-Some crates are compiled to WebAssembly and published to npm. This is
-accomplished through `wasm-pack`. Install it by running:
-
-```shell
-cargo install wasm-pack
-```
-
-WASM builds can then be initiated through
-
-```shell
-./bin/wasm-build <path/to/crate>
-```
-
 #### All platforms
 
 First, install the CLI. As of early July 2022 you can run this command on
@@ -213,6 +198,24 @@ drive the process:
 cd materialize
 bin/environmentd [--release] [<environmentd arg>...]
 ```
+
+### WebAssembly / WASM
+
+Some crates are compiled to WebAssembly and published to npm. This is
+accomplished through `wasm-pack`. Install it by running:
+
+```shell
+cargo install wasm-pack
+```
+
+WASM builds can then be initiated through
+
+```shell
+./bin/wasm-build <path/to/crate>
+```
+
+WASM crates reside in `misc/wasm/` Cargo workspace, and should be kept out of
+the main Cargo workspace to avoid cache invalidation issues.
 
 ## Running Confluent Platform
 
@@ -322,6 +325,7 @@ This repository has the following basic structure:
       [mzbuild](mzbuild.md).
     * **`misc/nix`** contains an experimental [Nix] configuration for
       developing Materialize.
+    * **`misc/wasm`** contains the Rust crates that are published to NPM as WebAssembly.
     * **`misc/www`** contains the source code for <https://dev.materialize.com>.
   * **`src`** contains the primary Rust crates that comprise Materialize.
   * **`test`** contains test suites, which are described in

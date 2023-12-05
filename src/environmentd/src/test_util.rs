@@ -524,6 +524,7 @@ impl Listeners {
                 segment_api_key: None,
                 egress_ips: vec![],
                 aws_account_id: None,
+                aws_external_connection_role: None,
                 aws_privatelink_availability_zones: None,
                 launchdarkly_sdk_key: None,
                 launchdarkly_key_map: Default::default(),
@@ -532,7 +533,7 @@ impl Listeners {
                 deploy_generation: config.deploy_generation,
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
-                // TODO(txn): Get this flipped to true before turning anything on in prod.
+                // TODO(txn): Get this flipped on before turning anything on in prod.
                 enable_persist_txn_tables_cli: None,
             })
             .await?;

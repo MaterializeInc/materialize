@@ -8,9 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.mzcompose import (
-    DEFAULT_MZ_VOLUMES,
-)
+from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_MZ_VOLUMES
 from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
@@ -33,9 +31,10 @@ class Clusterd(Service):
             *environment_extra,
         ]
 
-        command = [f"--environment-id={environment_id}"]
+        if not environment_id:
+            environment_id = DEFAULT_MZ_ENVIRONMENT_ID
 
-        command += options
+        environment += [f"CLUSTERD_ENVIRONMENT_ID={environment_id}"]
 
         config: ServiceConfig = {}
 
@@ -52,7 +51,7 @@ class Clusterd(Service):
 
         config.update(
             {
-                "command": command,
+                "command": options,
                 "ports": [2100, 2101, 6878],
                 "environment": environment,
                 "volumes": DEFAULT_MZ_VOLUMES,

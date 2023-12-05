@@ -2355,45 +2355,22 @@ impl<'a> Parser<'a> {
 
     fn parse_kafka_config_option(&mut self) -> Result<KafkaConfigOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
-            ACKS,
-            CLIENT,
             COMPRESSION,
-            ENABLE,
-            FETCH,
             GROUP,
-            ISOLATION,
             PARTITION,
             REPLICATION,
             RETENTION,
             SNAPSHOT,
             START,
             TOPIC,
-            TRANSACTION,
         ])? {
-            ACKS => KafkaConfigOptionName::Acks,
-            CLIENT => {
-                self.expect_keyword(ID)?;
-                KafkaConfigOptionName::ClientId
-            }
             COMPRESSION => {
                 self.expect_keyword(TYPE)?;
                 KafkaConfigOptionName::CompressionType
             }
-            ENABLE => {
-                self.expect_keyword(IDEMPOTENCE)?;
-                KafkaConfigOptionName::EnableIdempotence
-            }
-            FETCH => {
-                self.expect_keywords(&[MESSAGE, MAX, BYTES])?;
-                KafkaConfigOptionName::FetchMessageMaxBytes
-            }
             GROUP => {
                 self.expect_keywords(&[ID, PREFIX])?;
                 KafkaConfigOptionName::GroupIdPrefix
-            }
-            ISOLATION => {
-                self.expect_keyword(LEVEL)?;
-                KafkaConfigOptionName::IsolationLevel
             }
             PARTITION => {
                 self.expect_keyword(COUNT)?;
@@ -2415,10 +2392,6 @@ impl<'a> Parser<'a> {
                 } else {
                     KafkaConfigOptionName::Topic
                 }
-            }
-            TRANSACTION => {
-                self.expect_keywords(&[TIMEOUT, MS])?;
-                KafkaConfigOptionName::TransactionTimeoutMs
             }
             START => match self.expect_one_of_keywords(&[OFFSET, TIMESTAMP])? {
                 OFFSET => KafkaConfigOptionName::StartOffset,
@@ -6070,7 +6043,23 @@ impl<'a> Parser<'a> {
             // permits these for symmetry with zero column tables.
             Some(Token::Keyword(kw)) if kw.is_reserved() => vec![],
             Some(Token::Semicolon) | Some(Token::RParen) | None => vec![],
-            _ => self.parse_comma_separated(Parser::parse_select_item)?,
+            _ => {
+                let mut projection = vec![];
+                loop {
+                    projection.push(self.parse_select_item()?);
+                    if !self.consume_token(&Token::Comma) {
+                        break;
+                    }
+                    if self.peek_keyword(FROM) {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            "invalid trailing comma in SELECT list",
+                        );
+                    }
+                }
+                projection
+            }
         };
 
         // Note that for keywords to be properly handled here, they need to be

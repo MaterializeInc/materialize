@@ -23,7 +23,7 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 
-use crate::extensions::arrange::{ArrangementSize, HeapSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{
     ArrangementFlavor, CollectionBundle, Context, SpecializedArrangement,
@@ -38,7 +38,7 @@ fn threshold_arrangement<G, Tr, K, V, T, R, L>(
 ) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
     Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, Diff = Diff> + 'static,
     Tr::Key: Columnation + Data,
     Tr::Val: Columnation + Data,
@@ -67,7 +67,7 @@ fn dispatch_threshold_arrangement_local<G, L>(
 ) -> SpecializedArrangement<G>
 where
     G: Scope,
-    G::Timestamp: Lattice + Columnation + HeapSize,
+    G::Timestamp: Lattice + Columnation,
     L: Fn(&Diff) -> bool + 'static,
 {
     match oks {
@@ -92,7 +92,7 @@ fn dispatch_threshold_arrangement_trace<G, T, L>(
 where
     G: Scope,
     T: Timestamp + Lattice + Columnation,
-    G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
     L: Fn(&Diff) -> bool + 'static,
 {
     match oks {
@@ -118,7 +118,7 @@ pub fn build_threshold_basic<G, T>(
 ) -> CollectionBundle<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
     T: Timestamp + Lattice + Columnation,
 {
     let arrangement = input
@@ -143,7 +143,7 @@ where
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
     T: Timestamp + Lattice + Columnation,
 {
     pub(crate) fn render_threshold(

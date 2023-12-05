@@ -121,6 +121,7 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::EnablePersistTxnTables;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -234,7 +235,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     persist_pubsub_url: String,
     /// Whether to use the new persist-txn tables implementation or the legacy
     /// one.
-    enable_persist_txn_tables: bool,
+    enable_persist_txn_tables: EnablePersistTxnTables,
 
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
@@ -385,7 +386,7 @@ where
         envd_epoch: NonZeroI64,
         // Whether to use the new persist-txn tables implementation or the
         // legacy one.
-        enable_persist_txn_tables: bool,
+        enable_persist_txn_tables: EnablePersistTxnTables,
     ) -> Self {
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
