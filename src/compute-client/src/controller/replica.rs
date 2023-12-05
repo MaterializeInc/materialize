@@ -286,6 +286,24 @@ where
         }
     }
 
+    /// Start tracking the given collection.
+    fn add_collection(&mut self, id: GlobalId, as_of: Antichain<T>) {
+        let metrics = self.metrics.for_collection(id);
+        let hydration_flag = HydrationFlag::new(self.replica_id, id, self.introspection_tx.clone());
+        let state = CollectionState {
+            metrics,
+            hydration_flag,
+            created_at: Instant::now(),
+            as_of,
+        };
+        self.collections.insert(id, state);
+    }
+
+    /// Stop tracking the given collection.
+    fn remove_collection(&mut self, id: GlobalId) {
+        self.collections.remove(&id);
+    }
+
     /// Update task state according to an observed command.
     fn observe_command(&mut self, command: &ComputeCommand<T>) {
         trace!(
@@ -298,22 +316,20 @@ where
 
         // Initialize or drop per-collection state.
         match command {
+            ComputeCommand::CreateInstance(config) => {
+                for &id in config.logging.index_logs.values() {
+                    let as_of = Antichain::from_elem(T::minimum());
+                    self.add_collection(id, as_of);
+                }
+            }
             ComputeCommand::CreateDataflow(dataflow) => {
                 for id in dataflow.export_ids() {
-                    let metrics = self.metrics.for_collection(id);
-                    let hydration_flag =
-                        HydrationFlag::new(self.replica_id, id, self.introspection_tx.clone());
-                    let state = CollectionState {
-                        metrics,
-                        hydration_flag,
-                        created_at: Instant::now(),
-                        as_of: dataflow.as_of.clone().unwrap(),
-                    };
-                    self.collections.insert(id, state);
+                    let as_of = dataflow.as_of.clone().unwrap();
+                    self.add_collection(id, as_of);
                 }
             }
             ComputeCommand::AllowCompaction { id, frontier } if frontier.is_empty() => {
-                self.collections.remove(id);
+                self.remove_collection(*id);
             }
             _ => (),
         }
