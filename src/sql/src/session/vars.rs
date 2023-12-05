@@ -1947,7 +1947,7 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_dangerous_functions,
+        name: enable_unsafe_functions,
         desc: "executing potentially dangerous functions",
         default: false,
         internal: true,

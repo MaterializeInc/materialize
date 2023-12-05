@@ -53,6 +53,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_columnation_lgalloc": "true",
     "enable_rbac_checks": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    "enable_unsafe_functions": "true",
+    # Old name of `enable_unsafe_functions`.
     "enable_dangerous_functions": "true",
     "enable_disk_cluster_replicas": "true",
     "statement_logging_max_sample_rate": "1.0",
