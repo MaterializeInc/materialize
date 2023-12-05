@@ -34,6 +34,7 @@ message ProtoStorageParameters {
     ProtoPgSourceTcpTimeouts pg_source_tcp_timeouts = 16;
     mz_proto.ProtoDuration pg_source_snapshot_statement_timeout = 17;
     bool record_namespaced_errors = 18;
+    uint64 keep_n_privatelink_status_history_entries = 19;
 }
 
 

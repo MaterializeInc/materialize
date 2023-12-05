@@ -1342,6 +1342,14 @@ const OPTIMIZER_ONESHOT_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+const PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("privatelink_status_update_quota_per_minute"),
+    value: &20,
+    description: "Sets the per-minute quota for privatelink vpc status updates to be written to \
+    the storage-collection-backed system table. This value implies the total and burst quota per-minute.",
+    internal: true,
+};
+
 static DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.1.into());
 pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
     ServerVar {
@@ -1447,6 +1455,15 @@ const KEEP_N_SINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_sink_status_history_entries"),
     value: &5,
     description: "On reboot, truncate all but the last n entries per ID in the sink_status_history collection (Materialize).",
+    internal: true
+};
+
+/// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_privatelink_status_history_entries`].
+const KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("keep_n_privatelink_status_history_entries"),
+    value: &5,
+    description: "On reboot, truncate all but the last n entries per ID in the mz_aws_privatelink_connection_status_history \
+    collection (Materialize).",
     internal: true
 };
 
@@ -2794,6 +2811,7 @@ impl SystemVars {
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
             .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
+            .with_var(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
             .with_var(&ENABLE_MZ_JOIN_CORE)
             .with_var(&LINEAR_JOIN_YIELDING)
             .with_var(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
@@ -2831,6 +2849,7 @@ impl SystemVars {
             )
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+            .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
             .with_var(&TIMESTAMP_ORACLE_IMPL);
@@ -3467,6 +3486,10 @@ impl SystemVars {
         *self.expect_value(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
     }
 
+    pub fn keep_n_privatelink_status_history_entries(&self) -> usize {
+        *self.expect_value(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
+    }
+
     /// Returns the `enable_mz_join_core` configuration parameter.
     pub fn enable_mz_join_core(&self) -> bool {
         *self.expect_value(&ENABLE_MZ_JOIN_CORE)
@@ -3576,6 +3599,11 @@ impl SystemVars {
 
     pub fn cluster_soften_az_affinity_weight(&self) -> i32 {
         *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
+    }
+
+    /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.
+    pub fn privatelink_status_update_quota_per_minute(&self) -> u32 {
+        *self.expect_value(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
     }
 
     /// Returns the `statement_logging_max_sample_rate` configuration parameter.

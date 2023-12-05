@@ -104,3 +104,13 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("error", ScalarType::String.nullable(true))
         .with_column("details", ScalarType::Jsonb.nullable(true))
 });
+
+pub static MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty()
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("connection_id", ScalarType::String.nullable(false))
+        .with_column("status", ScalarType::String.nullable(false))
+});

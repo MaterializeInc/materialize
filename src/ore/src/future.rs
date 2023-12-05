@@ -27,8 +27,10 @@ use std::panic::UnwindSafe;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use async_trait::async_trait;
 use futures::future::{CatchUnwind, FutureExt};
 use futures::sink::Sink;
+use futures::Stream;
 use pin_project::pin_project;
 use tokio::task::futures::TaskLocalFuture;
 use tokio::time::{self, Duration, Instant};
@@ -373,5 +375,52 @@ impl<T, E> Sink<T> for DevNull<T, E> {
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
+    }
+}
+
+/// Extension methods for streams.
+#[async_trait]
+pub trait OreStreamExt: Stream {
+    /// Awaits the stream for an event to be available and returns all currently buffered
+    /// events on the stream up to some `max`.
+    ///
+    /// This method returns `None` if the stream has ended.
+    ///
+    /// If there are no events ready on the stream this method will sleep until an event is
+    /// sent or the stream is closed. When woken it will return up to `max` currently buffered
+    /// events.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv_many` is used as the event in a `select!` statement
+    /// and some other branch completes first, it is guaranteed that no messages were received on
+    /// this channel.
+    async fn recv_many(&mut self, max: usize) -> Option<Vec<Self::Item>>;
+}
+
+#[async_trait]
+impl<T> OreStreamExt for T
+where
+    T: futures::stream::Stream + futures::StreamExt + Send + Unpin,
+{
+    async fn recv_many(&mut self, max: usize) -> Option<Vec<Self::Item>> {
+        // Wait for an event to be ready on the stream
+        let first = self.next().await?;
+        let mut buffer = Vec::from([first]);
+
+        // Note(parkmycar): It's very important for cancelation safety that we don't add any more
+        // .await points other than the initial one.
+
+        // Pull all other ready events off the stream, up to the max
+        while let Some(v) = self.next().now_or_never().and_then(|e| e) {
+            buffer.push(v);
+
+            // Break so we don't loop here continuously.
+            if buffer.len() >= max {
+                break;
+            }
+        }
+
+        Some(buffer)
     }
 }

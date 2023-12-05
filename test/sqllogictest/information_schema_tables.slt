@@ -301,6 +301,10 @@ mz_arrangement_sizes_per_worker
 VIEW
 materialize
 mz_internal
+mz_aws_privatelink_connection_status_history
+SOURCE
+materialize
+mz_internal
 mz_cluster_links
 BASE TABLE
 materialize
