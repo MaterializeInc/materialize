@@ -67,7 +67,7 @@ results over the network. However, after some thought, I realized
 there's no good way to do this. We could try to detect when all the
 bytes we've been sent have been `ACK`ed by repeatedly polling a
 Linux system call to get this information. However, this would not
-measure just the time to send the data, but also the tiem for the ACK
+measure just the time to send the data, but also the time for the ACK
 to be returned to us.
 
 ## Solution Proposal
