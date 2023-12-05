@@ -5738,6 +5738,7 @@ dependencies = [
  "aws-config",
  "aws-credential-types",
  "aws-types",
+ "base64 0.13.1",
  "bytes",
  "dec",
  "differential-dataflow",
