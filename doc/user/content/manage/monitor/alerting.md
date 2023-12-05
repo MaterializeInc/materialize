@@ -25,7 +25,8 @@ Metric | Warning | Alert | Description
 -- | -- | -- | --
 CPU | 85% | 100% | Average CPU usage for a cluster in the last *60 minutes*.
 Memory | 80% | 90% | Average memory usage for a cluster in the last *30 minutes*.
-Status | - | On Change | Source status change in the last *5 minutes*.
+Source status | - | On Change | Source status change in the last *5 minutes*.
+Cluster status | - | On Change | Cluster replica status change in the last *5 minutes*.
 Distribution | Time spent by worker > Avg * 1.5 | Time spent by worker > Avg * 2 | Average [work distribution](https://materialize.com/docs/manage/troubleshooting/#is-work-distributed-equally-across-workers) in the last *60 minutes*.
 Freshness | > 5s | > 1m | Average [lag behind an input](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_materialization_lag) in the last *30 minutes*.
 
@@ -35,7 +36,7 @@ For the following table, replace the two variables, _X_ and _Y_, by your organiz
 
 Metric | Warning | Alert | Description
 -- | -- | -- | --
-Latency | p99 > X | p99 > Y | Latency percentile from the activity log in the last *30 minutes*. Where X and Y are the expected latencies in milliseconds.
+Latency | avg > X | avg > Y | Average latency from the activity log in the last *30 minutes*. Where X and Y are the expected latencies in milliseconds.
 Credits | Consumption rate increase by X% | Consumption rate increase by Y% | Average credit consumption in the last *30 minutes*.
 
 ## Maintenance window
@@ -44,5 +45,5 @@ Materialize has a [release and a maintenance window almost every week](https://m
 
 After an upgrade, you’ll experience a few minutes of downtime and the rehydration process. Alerts may get trigger during this brief period of time. For this case, you can configure your moring tool to avoid unnecesary alerts as follows:
 
-* [Datadog dowtimes](https://docs.datadoghq.com/monitors/downtimes/)
+* [Datadog downtimes](https://docs.datadoghq.com/monitors/downtimes/)
 * [Grafana mute timings](https://grafana.com/docs/grafana/latest/alerting/manage-notifications/mute-timings/)
