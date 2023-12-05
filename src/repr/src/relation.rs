@@ -297,7 +297,12 @@ impl ColumnName {
 
     /// Returns if this [`ColumnName`] is similar to the provided one.
     pub fn is_similar(&self, other: &ColumnName) -> bool {
-        self.0.to_lowercase() == other.as_str().to_lowercase()
+        const SIMILARITY_THRESHOLD: f64 = 0.6;
+
+        let a_lowercase = self.0.to_lowercase();
+        let b_lowercase = other.as_str().to_lowercase();
+
+        strsim::normalized_levenshtein(&a_lowercase, &b_lowercase) >= SIMILARITY_THRESHOLD
     }
 }
 
