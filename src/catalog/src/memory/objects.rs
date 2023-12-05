@@ -17,6 +17,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW;
 use mz_adapter_types::connection::ConnectionId;
+use mz_sql_parser::ast::{IndexOptionName, Statement};
 use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
@@ -30,7 +31,7 @@ use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
@@ -48,8 +49,8 @@ use mz_sql::plan::{
     WebhookValidation,
 };
 use mz_sql::rbac;
-use mz_sql::session::vars::OwnedVarInput;
-use mz_storage_client::controller::IntrospectionType;
+use mz_sql::session::vars::{OwnedVarInput, SystemVars};
+use mz_storage_client::controller::{IntrospectionType, ReadPolicy};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
@@ -364,7 +365,6 @@ pub struct Table {
     #[serde(skip)]
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
-    pub custom_logical_compaction_window: Option<Duration>,
     /// Whether the table's logical compaction window is controlled by
     /// METRICS_RETENTION
     pub is_retained_metrics_object: bool,
@@ -447,7 +447,6 @@ pub struct Source {
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub resolved_ids: ResolvedIds,
-    pub custom_logical_compaction_window: Option<Duration>,
     /// Whether the source's logical compaction window is controlled by
     /// METRICS_RETENTION
     pub is_retained_metrics_object: bool,
@@ -465,7 +464,6 @@ impl Source {
         plan: CreateSourcePlan,
         cluster_id: Option<ClusterId>,
         resolved_ids: ResolvedIds,
-        custom_logical_compaction_window: Option<Duration>,
         is_retained_metrics_object: bool,
     ) -> Source {
         Source {
@@ -517,7 +515,6 @@ impl Source {
             desc: plan.source.desc,
             timeline: plan.timeline,
             resolved_ids,
-            custom_logical_compaction_window,
             is_retained_metrics_object,
         }
     }
@@ -687,7 +684,6 @@ pub struct Index {
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
-    pub custom_logical_compaction_window: Option<Duration>,
     pub is_retained_metrics_object: bool,
 }
 
@@ -1064,20 +1060,28 @@ impl CatalogItem {
     // for objects with `is_retained_metrics_object`. That
     // may not always be true in the future, if we enable user-settable
     // compaction windows.
-    pub fn custom_logical_compaction_window(&self) -> Option<Duration> {
-        match self {
-            CatalogItem::Table(table) => table.custom_logical_compaction_window,
-            CatalogItem::Source(source) => source.custom_logical_compaction_window,
-            CatalogItem::Index(index) => index.custom_logical_compaction_window,
-            CatalogItem::MaterializedView(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::View(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+    pub fn custom_logical_compaction_window(&self, system_config: &SystemVars) -> Option<Duration> {
+        if self.is_retained_metrics_object() {
+            return Some(system_config.metrics_retention());
         }
+        if self.id().is_system() {
+            return None;
+        }
+        let create_sql = self.create_sql();
+        let stmt = mz_sql::parse::parse(create_sql)
+            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {create_sql}"))
+            .into_element()
+            .ast;
+        let options = match stmt {
+            Statement::CreateIndex(stmt) => stmt.with_options,
+            Statement::CreateTable(_) => return None,
+            Statement::CreateSource(_) => return None,
+            Statement::CreateMaterializedView(_) => return None,
+            _ => return None,
+        };
+        options
+            .find(|o| o.name == IndexOptionName::LogicalCompactionWindow)
+            .map(|o| o.value)
     }
 
     /// The initial compaction window, for objects that have one; that is,
@@ -1088,12 +1092,17 @@ impl CatalogItem {
     ///
     /// For objects that do not have the concept of compaction window,
     /// return nothing.
-    pub fn initial_logical_compaction_window(&self) -> Option<Duration> {
+    pub fn initial_logical_compaction_window(
+        &self,
+        system_config: &SystemVars,
+    ) -> Option<Duration> {
         let custom_logical_compaction_window = match self {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Index(_)
-            | CatalogItem::MaterializedView(_) => self.custom_logical_compaction_window(),
+            | CatalogItem::MaterializedView(_) => {
+                self.custom_logical_compaction_window(system_config)
+            }
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -1181,6 +1190,28 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => secret.create_sql,
             CatalogItem::Connection(connection) => connection.create_sql,
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+        }
+    }
+
+    fn create_sql(&self) -> &str {
+        match self {
+            CatalogItem::Table(Table { create_sql, .. }) => {
+                create_sql.as_deref().unwrap_or("<builtin>")
+            }
+            CatalogItem::Source(Source { create_sql, .. }) => {
+                create_sql.as_deref().unwrap_or("<builtin>")
+            }
+            CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
+            CatalogItem::View(View { create_sql, .. }) => create_sql,
+            CatalogItem::MaterializedView(MaterializedView { create_sql, .. }) => create_sql,
+            CatalogItem::Index(Index { create_sql, .. }) => create_sql,
+            CatalogItem::Type(Type { create_sql, .. }) => {
+                create_sql.as_deref().unwrap_or("<builtin>")
+            }
+            CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
+            CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
+            CatalogItem::Func(_) => "<builtin>",
+            CatalogItem::Log(_) => "<builtin>",
         }
     }
 }
@@ -1978,25 +2009,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn create_sql(&self) -> &str {
-        match self.item() {
-            CatalogItem::Table(Table { create_sql, .. }) => {
-                create_sql.as_deref().unwrap_or("<builtin>")
-            }
-            CatalogItem::Source(Source { create_sql, .. }) => {
-                create_sql.as_deref().unwrap_or("<builtin>")
-            }
-            CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
-            CatalogItem::View(View { create_sql, .. }) => create_sql,
-            CatalogItem::MaterializedView(MaterializedView { create_sql, .. }) => create_sql,
-            CatalogItem::Index(Index { create_sql, .. }) => create_sql,
-            CatalogItem::Type(Type { create_sql, .. }) => {
-                create_sql.as_deref().unwrap_or("<builtin>")
-            }
-            CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
-            CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
-            CatalogItem::Func(_) => "<builtin>",
-            CatalogItem::Log(_) => "<builtin>",
-        }
+        self.item().create_sql()
     }
 
     fn item_type(&self) -> SqlCatalogItemType {

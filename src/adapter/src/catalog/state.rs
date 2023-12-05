@@ -789,7 +789,7 @@ impl CatalogState {
     ) -> Result<CatalogItem, AdapterError> {
         // TODO - The `None` needs to be changed if we ever allow custom
         // logical compaction windows in user-defined objects.
-        self.parse_item(id, create_sql, Some(&PlanContext::zero()), false, None)
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()), false)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
@@ -800,7 +800,6 @@ impl CatalogState {
         create_sql: String,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
-        custom_logical_compaction_window: Option<Duration>,
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
         // Enable catalog features that might be required during planning in
@@ -826,7 +825,6 @@ impl CatalogState {
                 defaults: table.defaults,
                 conn_id: None,
                 resolved_ids,
-                custom_logical_compaction_window,
                 is_retained_metrics_object,
             }),
             Plan::CreateSource(CreateSourcePlan {

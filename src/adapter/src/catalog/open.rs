@@ -127,7 +127,6 @@ pub enum CatalogItemRebuilder {
         id: GlobalId,
         sql: String,
         is_retained_metrics_object: bool,
-        custom_logical_compaction_window: Option<Duration>,
     },
 }
 
@@ -152,7 +151,6 @@ impl CatalogItemRebuilder {
                 id,
                 sql: create_stmt.to_ast_string_stable(),
                 is_retained_metrics_object: entry.item().is_retained_metrics_object(),
-                custom_logical_compaction_window: entry.item().custom_logical_compaction_window(),
             }
         }
     }
@@ -164,15 +162,8 @@ impl CatalogItemRebuilder {
                 id,
                 sql,
                 is_retained_metrics_object,
-                custom_logical_compaction_window,
             } => state
-                .parse_item(
-                    id,
-                    sql.clone(),
-                    None,
-                    is_retained_metrics_object,
-                    custom_logical_compaction_window,
-                )
+                .parse_item(id, sql.clone(), None, is_retained_metrics_object)
                 .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
         }
     }
@@ -530,9 +521,6 @@ impl Catalog {
                                     defaults: vec![Expr::null(); table.desc.arity()],
                                     conn_id: None,
                                     resolved_ids: ResolvedIds(BTreeSet::new()),
-                                    custom_logical_compaction_window: table
-                                        .is_retained_metrics_object
-                                        .then(|| state.system_config().metrics_retention()),
                                     is_retained_metrics_object: table.is_retained_metrics_object,
                                 }),
                                 MZ_SYSTEM_ROLE_ID,
@@ -548,8 +536,7 @@ impl Catalog {
                                 id,
                                 view.create_sql(),
                                 None,
-                                false,
-                                None
+                                false
                             )
                             .unwrap_or_else(|e| {
                                 panic!(
@@ -639,9 +626,6 @@ impl Catalog {
                                     desc: coll.desc.clone(),
                                     timeline: Timeline::EpochMilliseconds,
                                     resolved_ids: ResolvedIds(BTreeSet::new()),
-                                    custom_logical_compaction_window: coll
-                                        .is_retained_metrics_object
-                                        .then(|| state.system_config().metrics_retention()),
                                     is_retained_metrics_object: coll.is_retained_metrics_object,
                                 }),
                                 MZ_SYSTEM_ROLE_ID,
@@ -760,7 +744,6 @@ impl Catalog {
                             index.create_sql(),
                             None,
                             index.is_retained_metrics_object,
-                            if index.is_retained_metrics_object { Some(state.system_config().metrics_retention()) } else { None },
                         )
                         .unwrap_or_else(|e| {
                             panic!(

@@ -1247,6 +1247,7 @@ impl Coordinator {
 
         debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
+        let system_config = self.catalog().system_config();
 
         for entry in &entries {
             debug!(
@@ -1256,7 +1257,7 @@ impl Coordinator {
             );
             let policy = entry
                 .item()
-                .initial_logical_compaction_window()
+                .initial_logical_compaction_window(system_config)
                 .map(|duration| {
                     let ts =
                         Timestamp::try_from(duration).expect("Timestamp millis must fit in u64");
