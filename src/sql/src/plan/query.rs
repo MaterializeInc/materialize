@@ -1430,11 +1430,24 @@ pub fn plan_ctes(
             for cte in ctes.iter() {
                 let (val, _scope) = plan_nested_query(qcx, &cte.query)?;
 
-                // Validate that the derived and proposed types are the same.
-                let derived_typ = qcx.relation_type(&val);
                 let proposed_typ = qcx.ctes[&cte.id].desc.typ();
 
-                let err = |proposed_typ: &RelationType, derived_typ: RelationType| {
+                if proposed_typ.column_types.iter().any(|c| !c.nullable) {
+                    // Once WMR CTEs support NOT NULL constraints, check that
+                    // nullability of derived column types are compatible.
+                    sql_bail!("[internal error]: WMR CTEs do not support NOT NULL constraints on proposed column types");
+                }
+
+                if !proposed_typ.keys.is_empty() {
+                    // Once WMR CTEs support keys, check that keys exactly
+                    // overlap.
+                    sql_bail!("[internal error]: WMR CTEs do not support keys");
+                }
+
+                // Validate that the derived and proposed types are the same.
+                let derived_typ = qcx.relation_type(&val);
+
+                let type_err = |proposed_typ: &RelationType, derived_typ: RelationType| {
                     let cte_name = normalize::ident(cte.name.clone());
                     let proposed_typ = proposed_typ
                         .column_types
@@ -1453,29 +1466,8 @@ pub fn plan_ctes(
                     ))
                 };
 
-                let all_keys = proposed_typ.keys.iter().all(|key1| {
-                    derived_typ
-                        .keys
-                        .iter()
-                        .any(|key2| key1.iter().all(|k| key2.contains(k)))
-                });
-
-                if !all_keys {
-                    return err(proposed_typ, derived_typ);
-                }
-
                 if derived_typ.column_types.len() != proposed_typ.column_types.len() {
-                    return err(proposed_typ, derived_typ);
-                }
-
-                for (derived_col, proposed_col) in derived_typ
-                    .column_types
-                    .iter()
-                    .zip(proposed_typ.column_types.iter())
-                {
-                    if derived_col.nullable && !proposed_col.nullable {
-                        return err(proposed_typ, derived_typ);
-                    }
+                    return type_err(proposed_typ, derived_typ);
                 }
 
                 // Cast dervied types to proposed types or error.
@@ -1490,7 +1482,7 @@ pub fn plan_ctes(
                     proposed_typ.column_types.iter().map(|c| &c.scalar_type),
                 ) {
                     Ok(val) => val,
-                    Err(_) => return err(proposed_typ, derived_typ),
+                    Err(_) => return type_err(proposed_typ, derived_typ),
                 };
 
                 result.push((cte.id, val, shadowed_descs.remove(&cte.id)));
