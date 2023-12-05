@@ -164,24 +164,7 @@ pub enum PlanError {
         option_name: String,
         err: Box<PlanError>,
     },
-    MissingRequiredOptions {
-        // Expected to be generated from the `to_string` value on the option
-        // name.
-        option_names: Vec<String>,
-        // Type of the item getting created, for eg: Connection type
-        item_type: CatalogItemType,
-        // Optional sub type of the item getting created, for eg. AWS Connection type
-        item_sub_type: Option<String>,
-    },
-    ConflictingOptions {
-        // Expected to be generated from the `to_string` value on the option
-        // name.
-        option_names: Vec<String>,
-        // Type of the item getting created, for eg: Connection type
-        item_type: CatalogItemType,
-        // Optional sub type of the item getting created, for eg. AWS Connection type
-        item_sub_type: Option<String>,
-    },
+    ConnectionParsingError(ConnectionParsingError),
     UnexpectedDuplicateReference {
         name: UnresolvedItemName,
     },
@@ -248,6 +231,23 @@ pub enum PlanError {
     MissingName(CatalogItemType),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
+}
+#[derive(Clone, Debug)]
+pub enum ConnectionParsingError {
+    MissingAwsCredentials,
+    MissingAssumeRoleArn,
+    ConflictingOptions,
+    MissingRequiredOptions,
+}
+impl fmt::Display for ConnectionParsingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingAwsCredentials => f.write_str("invalid CONNECTION: must specify both ACCESS KEY ID and SECRET ACCESS KEY with optional TOKEN"),
+            Self::MissingAssumeRoleArn => f.write_str("invalid CONNECTION: must specify ASSUME ROLE ARN with optional ASSUME ROLE SESSION NAME"),
+            Self::ConflictingOptions => f.write_str("invalid CONNECTION: ASSUME ROLE ARN cannot be provided simultaneously with ACCESS KEY ID and SECRET ACCESS KEY"),
+            Self::MissingRequiredOptions => f.write_str("invalid CONNECTION: must specify either ASSUME ROLE ARN or both ACCESS KEY ID and SECRET ACCESS KEY"),
+        }
+    }
 }
 
 impl PlanError {
@@ -617,21 +617,8 @@ impl fmt::Display for PlanError {
             Self::MissingName(item_type) => {
                 write!(f, "unspecified name for {item_type}")
             }
-            Self::MissingRequiredOptions { option_names, item_type, item_sub_type } => {
-                if let Some(sub_type) = item_sub_type {
-                    write!(f, "Options [{}] are required for {} {}", option_names.join(", "), sub_type, item_type)
-
-                } else {
-                    write!(f, "Options [{}] are required for {}", option_names.join(" ,"), item_type)
-                }
-            }
-            Self::ConflictingOptions { option_names, item_type, item_sub_type } => {
-                if let Some(sub_type) = item_sub_type {
-                    write!(f, "Only one of [{}] can be provided for {} {}", option_names.join(", or "), sub_type, item_type )
-
-                } else {
-                    write!(f, "Only one of [{}] can be provided for {}", option_names.join(" , or "), item_type)
-                }
+            Self::ConnectionParsingError (connection_parsing_error) => {
+                write!(f, "{connection_parsing_error}")
             }
         }
     }

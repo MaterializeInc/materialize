@@ -91,11 +91,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     materialized = Materialized(
         default_size=args.default_size,
-        environment_extra=[
-            "MZ_AWS_ACCOUNT_ID=123456789000",
-            "MZ_AWS_EXTERNAL_CONNECTION_ROLE=arn:aws:iam::123456789000:role/MaterializeConnection",
-            "MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
-        ],
     )
 
     with c.override(testdrive, materialized):
