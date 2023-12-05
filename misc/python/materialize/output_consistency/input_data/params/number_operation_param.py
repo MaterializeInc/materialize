@@ -65,7 +65,7 @@ class NumericOperationParam(OperationParam):
         if self.only_int_type and data_type.is_decimal:
             return False
 
-        if self.no_int_type_larger_int4 and data_type.identifier in {
+        if self.no_int_type_larger_int4 and data_type.internal_identifier in {
             INT8_TYPE_IDENTIFIER,
             UINT4_TYPE_IDENTIFIER,
             UINT8_TYPE_IDENTIFIER,

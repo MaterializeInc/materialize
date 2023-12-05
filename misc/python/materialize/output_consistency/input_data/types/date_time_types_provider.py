@@ -22,7 +22,7 @@ from materialize.output_consistency.operation.return_type_spec import ReturnType
 class DateTimeDataType(DataType):
     def __init__(
         self,
-        identifier: str,
+        internal_identifier: str,
         type_name: str,
         min_value: str,
         max_value: str,
@@ -32,7 +32,7 @@ class DateTimeDataType(DataType):
         is_max_value_pg_compatible: bool = True,
     ):
         super().__init__(
-            identifier,
+            internal_identifier,
             type_name,
             DataTypeCategory.DATE_TIME,
             is_pg_compatible=is_pg_compatible,
@@ -47,7 +47,7 @@ class DateTimeDataType(DataType):
         self, characteristics: set[ExpressionCharacteristics]
     ) -> ReturnTypeSpec:
         return DateTimeReturnTypeSpec(
-            type_identifier=self.identifier,
+            type_identifier=self.internal_identifier,
         )
 
 

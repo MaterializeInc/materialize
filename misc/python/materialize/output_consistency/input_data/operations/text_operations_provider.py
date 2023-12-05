@@ -254,6 +254,7 @@ TEXT_OPERATION_TYPES.append(
         [TextOperationParam(), BooleanOperationParam(optional=True)],
         ArrayReturnTypeSpec(DataTypeCategory.TEXT),
         relevance=OperationRelevance.LOW,
+        is_enabled=False,
     )
 )
 

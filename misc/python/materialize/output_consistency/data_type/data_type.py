@@ -22,12 +22,12 @@ class DataType:
 
     def __init__(
         self,
-        identifier: str,
+        internal_identifier: str,
         type_name: str,
         category: DataTypeCategory,
         is_pg_compatible: bool = True,
     ):
-        self.identifier = identifier
+        self.internal_identifier = internal_identifier
         self.type_name = type_name
         self.category = category
         self.is_pg_compatible = is_pg_compatible

@@ -73,7 +73,10 @@ class PostgresResultComparator(ResultComparator):
             return self.is_timestamp_equal(value1, value2)
 
         # Postgres uses 'mons' instead of 'months'
-        return value1.replace(" mons", " months") == value2.replace(" mons", " months")
+        value1 = value1.replace(" mons", " months")
+        value2 = value2.replace(" mons", " months")
+
+        return value1 == value2
 
     def is_timestamp(self, value1: str) -> bool:
         return TIMESTAMP_PATTERN.match(value1) is not None
