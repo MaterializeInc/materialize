@@ -58,7 +58,10 @@ where
             let mut err_collection = err_input.enter_region(inner);
 
             // Determine if there should be errors due to limit evaluation; update `err_collection`.
-            // We do this f
+            // TODO(vmarcos): We evaluate the limit expression below for each input update. There
+            // is an opportunity to do so for every group key instead if the error handling is
+            // integrated with: 1. The intra-timestamp thinning step in monotonic top-k, e.g., by
+            // adding an error output there; 2. The validating reduction on basic top-k (#23687).
             let limit_err = match &top_k_plan {
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan { .. }) => None,
                 TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => Some(limit),
@@ -66,23 +69,25 @@ where
             };
             if let Some(limit) = limit_err {
                 if let Some(expr) = limit {
-                    if expr.could_error() {
-                        // Produce errors from limit selectors that error or are
-                        // negative, and nothing from limit selectors that do
-                        // not.
-                        let expr = expr.clone();
-                        let mut datum_vec = mz_repr::DatumVec::new();
-                        let errors = ok_input.flat_map(move |row| {
-                            let temp_storage = mz_repr::RowArena::new();
-                            let datums = datum_vec.borrow_with(&row);
-                            match expr.eval(&datums[..], &temp_storage) {
-                                Ok(l) if l.unwrap_int64() < 0 => Some(EvalError::NegLimit.into()),
-                                Ok(_) => None,
-                                Err(e) => Some(e.into()),
+                    // Produce errors from limit selectors that error or are
+                    // negative, and nothing from limit selectors that do
+                    // not. Note that even if expr.could_error() is false,
+                    // the expression might still return a negative limit and
+                    // thus needs to be checked.
+                    let expr = expr.clone();
+                    let mut datum_vec = mz_repr::DatumVec::new();
+                    let errors = ok_input.flat_map(move |row| {
+                        let temp_storage = mz_repr::RowArena::new();
+                        let datums = datum_vec.borrow_with(&row);
+                        match expr.eval(&datums[..], &temp_storage) {
+                            Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
+                                Some(EvalError::NegLimit.into())
                             }
-                        });
-                        err_collection = err_collection.concat(&errors);
-                    }
+                            Ok(_) => None,
+                            Err(e) => Some(e.into()),
+                        }
+                    });
+                    err_collection = err_collection.concat(&errors);
                 }
             }
 
@@ -479,9 +484,14 @@ where
                         let key_datums = datum_vec.borrow_with(&key.0);
                         // Unpack `key` and determine the limit.
                         // If the limit errors, use a zero limit; errors are surfaced elsewhere.
-                        l.eval(&key_datums, &temp_storage)
-                            .unwrap_or(Datum::Int64(0))
-                            .unwrap_int64()
+                        let datum_limit = l
+                            .eval(&key_datums, &temp_storage)
+                            .unwrap_or(Datum::Int64(0));
+                        if datum_limit == Datum::Null {
+                            i64::MAX
+                        } else {
+                            datum_limit.unwrap_int64()
+                        }
                     }
                 });
 
@@ -608,10 +618,14 @@ where
                             let key_datums = datum_vec.borrow_with(&grp_row);
                             // Unpack `key` and determine the limit.
                             // If the limit errors, use a zero limit; errors are surfaced elsewhere.
-                            limit
+                            let datum_limit = limit
                                 .eval(&key_datums, &temp_storage)
-                                .unwrap_or(mz_repr::Datum::Int64(0))
-                                .unwrap_int64()
+                                .unwrap_or(mz_repr::Datum::Int64(0));
+                            if datum_limit == Datum::Null {
+                                i64::MAX
+                            } else {
+                                datum_limit.unwrap_int64()
+                            }
                         };
 
                         let topk = agg_time
