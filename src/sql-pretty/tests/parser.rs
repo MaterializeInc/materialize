@@ -78,8 +78,8 @@
 use datadriven::walk;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::datadriven_testcase;
-use mz_sql_parser::parser::parse_statements;
-use mz_sql_pretty::to_pretty;
+use mz_sql_parser::parser::{parse_expr, parse_statements};
+use mz_sql_pretty::{doc_expr, to_pretty};
 
 // Use the parser's datadriven tests to get a comprehensive set of SQL statements. Assert they all
 // generate identical ASTs when pretty printed. Output the same output as the parser so datadriven
@@ -89,15 +89,40 @@ use mz_sql_pretty::to_pretty;
 fn test_parser() {
     walk("../sql-parser/tests/testdata", |f| {
         f.run(|tc| -> String {
-            if tc.directive == "parse-statement" {
-                verify_pretty_print(&tc.input);
+            match tc.directive.as_str() {
+                "parse-statement" => {
+                    verify_pretty_statement(&tc.input);
+                }
+                "parse-scalar" => {
+                    verify_pretty_expr(&tc.input);
+                }
+                _ => {}
             }
             datadriven_testcase(tc)
         })
     });
 }
 
-fn verify_pretty_print(stmt: &str) {
+fn verify_pretty_expr(expr: &str) {
+    let Ok(original) = parse_expr(expr) else {
+        return;
+    };
+    for n in &[1, 40, 1000000] {
+        let n = *n;
+        let pretty1 = format!("{}", doc_expr(&original).pretty(n));
+        let prettied = parse_expr(&pretty1)
+            .unwrap_or_else(|_| panic!("could not parse: {pretty1}, original: {expr}"));
+        let pretty2 = format!("{}", doc_expr(&prettied).pretty(n));
+        assert_eq!(pretty1, pretty2);
+        assert_eq!(
+            original.to_ast_string_stable(),
+            prettied.to_ast_string_stable(),
+            "\noriginal: {expr}",
+        );
+    }
+}
+
+fn verify_pretty_statement(stmt: &str) {
     let original = match parse_statements(stmt) {
         Ok(stmt) => match stmt.into_iter().next() {
             Some(stmt) => stmt,
@@ -120,9 +145,7 @@ fn verify_pretty_print(stmt: &str) {
             prettied.ast.to_ast_string_stable(),
             "\noriginal: {stmt}",
         );
-        // Everything should always squash to a single line.
-        if n > (stmt.len() * 2) {
-            assert_eq!(pretty1.lines().count(), 1, "{}: {}", n, pretty1);
-        }
+        // It'd be nice to assert that this squashes to a single line at high Ns, but literals and
+        // idents can contain newlines so that's not always possible.
     }
 }
