@@ -65,6 +65,8 @@ pub enum PgSourcePurificationError {
     InsufficientWalLevel {
         wal_level: mz_postgres_util::replication::WalLevel,
     },
+    #[error("replication disabled on server")]
+    ReplicationDisabled,
 }
 
 impl PgSourcePurificationError {
@@ -147,6 +149,7 @@ impl PgSourcePurificationError {
             Self::InsufficientReplicationSlotsAvailable { .. } => Some(
                 "you might be able to wait for other sources to finish snapshotting and try again".into()
             ),
+            Self::ReplicationDisabled => Some("set max_wal_senders to a value > 0".into()),
             _ => None,
         }
     }

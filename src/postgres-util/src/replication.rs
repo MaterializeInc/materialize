@@ -64,6 +64,22 @@ pub async fn get_wal_level(
     Ok(WalLevel::from_str(&wal_level)?)
 }
 
+pub async fn get_max_wal_senders(
+    ssh_tunnel_manager: &SshTunnelManager,
+    config: &Config,
+) -> Result<i64, PostgresError> {
+    let client = config
+        .connect("max_wal_senders_check", ssh_tunnel_manager)
+        .await?;
+    let max_wal_senders = client
+        .query_one(
+            "SELECT CAST(current_setting('max_wal_senders') AS int8) AS max_wal_senders",
+            &[],
+        )
+        .await?;
+    Ok(max_wal_senders.get("max_wal_senders"))
+}
+
 pub async fn available_replication_slots(
     ssh_tunnel_manager: &SshTunnelManager,
     config: &Config,

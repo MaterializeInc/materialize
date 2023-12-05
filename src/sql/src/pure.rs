@@ -584,6 +584,16 @@ async fn purify_create_source(
                 Err(PgSourcePurificationError::InsufficientWalLevel { wal_level })?;
             }
 
+            let max_wal_senders = mz_postgres_util::get_max_wal_senders(
+                &connection_context.ssh_tunnel_manager,
+                &config,
+            )
+            .await?;
+
+            if max_wal_senders < 1 {
+                Err(PgSourcePurificationError::ReplicationDisabled)?;
+            }
+
             let available_replication_slots = mz_postgres_util::available_replication_slots(
                 &connection_context.ssh_tunnel_manager,
                 &config,
