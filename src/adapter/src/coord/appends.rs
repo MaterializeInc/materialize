@@ -14,8 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
-use futures::future::BoxFuture;
-use futures::FutureExt;
+use futures::future::{BoxFuture, FutureExt};
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
@@ -53,11 +52,8 @@ pub(crate) struct DeferredPlan {
 /// Describes what action triggered an update to a builtin table.
 #[derive(Debug)]
 pub(crate) enum BuiltinTableUpdateSource {
-    /// Update was triggered by some DDL.
-    DDL,
-    /// Update was triggered by something we don't want to block on but should notify the caller
-    /// when it's complete.
-    AsyncSystem(oneshot::Sender<()>),
+    /// Internal update, notify the caller when it's complete.
+    Internal(oneshot::Sender<()>),
     /// Update was triggered by some background process, such as periodic heartbeats from COMPUTE.
     Background,
 }
@@ -92,28 +88,13 @@ impl PendingWriteTxn {
         }
     }
 
-    /// Returns true if this transaction should cause group commit to block and not be executed
-    /// asynchronously.
-    fn should_block(&self) -> bool {
+    fn is_internal_system(&self) -> bool {
         match self {
-            PendingWriteTxn::User { .. } => false,
-            PendingWriteTxn::System { source, .. } => match source {
-                BuiltinTableUpdateSource::DDL => true,
-                BuiltinTableUpdateSource::AsyncSystem(_) | BuiltinTableUpdateSource::Background => {
-                    false
-                }
-            },
-        }
-    }
-
-    /// Returns true if this transaction has an external request waiting on its completion.
-    fn is_async_system(&self) -> bool {
-        match self {
-            PendingWriteTxn::User { .. } => false,
-            PendingWriteTxn::System { source, .. } => match source {
-                BuiltinTableUpdateSource::AsyncSystem(_) => true,
-                BuiltinTableUpdateSource::Background | BuiltinTableUpdateSource::DDL => false,
-            },
+            PendingWriteTxn::System {
+                source: BuiltinTableUpdateSource::Internal(_),
+                ..
+            } => true,
+            _ => false,
         }
     }
 }
@@ -186,12 +167,12 @@ impl Coordinator {
         // those tests to advance the walltime while creating a connection is too much.
         //
         // TODO(parkmycar): Get rid of the check below when refactoring group commits.
-        let contains_async_system_write = self
+        let contains_internal_system_write = self
             .pending_writes
             .iter()
-            .any(|write| write.is_async_system());
+            .any(|write| write.is_internal_system());
 
-        if timestamp > now && !contains_async_system_write {
+        if timestamp > now && !contains_internal_system_write {
             // Cap retry time to 1s. In cases where the system clock has retreated by
             // some large amount of time, this prevents against then waiting for that
             // large amount of time in case the system clock then advances back to near
@@ -312,8 +293,8 @@ impl Coordinator {
 
         let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(self.pending_writes.len());
-        let should_block = pending_writes.iter().any(|write| write.should_block());
         let mut notifies = Vec::new();
+
         for pending_write_txn in pending_writes {
             match pending_write_txn {
                 PendingWriteTxn::User {
@@ -351,7 +332,7 @@ impl Coordinator {
                             .push((update.row, update.diff));
                     }
                     // Once the write completes we notify any waiters.
-                    if let BuiltinTableUpdateSource::AsyncSystem(tx) = source {
+                    if let BuiltinTableUpdateSource::Internal(tx) = source {
                         notifies.push(tx);
                     }
                 }
@@ -377,11 +358,10 @@ impl Coordinator {
             .collect();
 
         // Instrument our table writes since they can block the coordinator.
-        let label = should_block.then_some("true").unwrap_or("false");
         let histogram = self
             .metrics
             .append_table_duration_seconds
-            .with_label_values(&[label]);
+            .with_label_values(&[]);
         let append_fut = self
             .controller
             .storage
@@ -390,39 +370,68 @@ impl Coordinator {
             .wall_time()
             .observe(histogram);
 
-        if should_block {
-            // We may panic here if the storage controller has shut down, because we cannot
-            // correctly return control, nor can we simply hang here.
-            // TODO: Clean shutdown.
-            append_fut
-                .await
-                .expect("One-shot dropped while waiting synchronously")
-                .unwrap_or_terminate("cannot fail to apply appends");
-            self.group_commit_apply(timestamp, responses, write_lock_guard, notifies, permit)
-                .await;
-        } else {
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn(
-                || "group_commit_apply",
-                async move {
-                    if let Ok(response) = append_fut.await {
-                        response.unwrap_or_terminate("cannot fail to apply appends");
+        // Spawn a task to do the table writes.
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let apply_write_fut = self.apply_local_write_shareable(timestamp);
+
+        task::spawn(
+            || "group_commit_apply",
+            async move {
+                // Wait for the writes to complete.
+                match append_fut.await {
+                    Ok(append_result) => {
+                        append_result.unwrap_or_terminate("cannot fail to apply appends")
+                    }
+                    Err(_) => warn!("Writer terminated with writes in indefinite state"),
+                };
+
+                // Apply the write by marking the timestamp as complete on the timeline.
+                //
+                // Note: `apply_write_fut` uses a "shareable timestamp oracle" under the hood,
+                // which is what allows us to move this future into a separate task. A shareable
+                // oracle isn't always available, which is why we fallback to an internal command.
+                match apply_write_fut {
+                    Some(fut) => {
+                        // Wait for the timeline update to complete.
+                        fut.await;
+
+                        // Notify the external clients of the result.
+                        for response in responses {
+                            let (ctx, result) = response.finalize();
+                            ctx.retire(result);
+                        }
+
+                        // Advance other timelines.
+                        if let Err(e) = internal_cmd_tx.send(Message::AdvanceTimelines) {
+                            warn!("Server closed with non-advanced timelines, {e}");
+                        }
+                    }
+                    None => {
+                        // Trigger a GroupCommitApply, which will run before any user commands
+                        // since we're sending it on the internal command sender.
+                        //
+                        // Note: while technically we should have `GroupCommitApply` update the
+                        // notifies, we know that internal commands get processed before any user
+                        // commands, so the writes are still guaranteed to be observable before any
+                        // user commands.
                         if let Err(e) = internal_cmd_tx.send(Message::GroupCommitApply(
                             timestamp,
                             responses,
                             write_lock_guard,
-                            notifies,
                             permit,
                         )) {
                             warn!("Server closed with non-responded writes, {e}");
                         }
-                    } else {
-                        warn!("Writer terminated with writes in indefinite state");
                     }
                 }
-                .instrument(Span::current()),
-            );
-        }
+
+                for notify in notifies {
+                    // We don't care if the listeners have gone away.
+                    let _ = notify.send(());
+                }
+            }
+            .instrument(Span::current()),
+        );
     }
 
     /// Applies the results of a completed group commit. The read timestamp of the timeline
@@ -441,16 +450,12 @@ impl Coordinator {
         timestamp: Timestamp,
         responses: Vec<CompletedClientTransmitter>,
         _write_lock_guard: Option<OwnedMutexGuard<()>>,
-        notifies: Vec<oneshot::Sender<()>>,
         _permit: Option<GroupCommitPermit>,
     ) {
         self.apply_local_write(timestamp).await;
         for response in responses {
             let (ctx, result) = response.finalize();
             ctx.retire(result);
-        }
-        for tx in notifies {
-            let _ = tx.send(());
         }
 
         // Advancing timelines will update all timeline read holds, and update the read timestamps
@@ -471,59 +476,9 @@ impl Coordinator {
         self.trigger_group_commit();
     }
 
-    /// Submit a write to a system table be executed during the next group commit. This method does
-    /// not trigger a group commit.
-    ///
-    /// This is useful for non-critical writes like metric updates because it allows us to piggy
-    /// back off the next group commit instead of triggering a potentially expensive group commit.
-    ///
-    /// DO NOT call this for DDL which needs the system tables updated immediately.
-    #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
-    pub(crate) fn buffer_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        self.pending_writes.push(PendingWriteTxn::System {
-            updates,
-            source: BuiltinTableUpdateSource::Background,
-        });
-    }
-
-    /// Submit a write to a system table. This method will block the Coordinator until the write
-    /// has been applied.
-    #[tracing::instrument(level = "debug", skip_all, fields(updates = updates.len()))]
-    pub(crate) async fn send_builtin_table_updates_blocking(
-        &mut self,
-        updates: Vec<BuiltinTableUpdate>,
-    ) {
-        // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
-        // table writes do not wait for a group commit, they explicitly trigger one. There is a
-        // possibility that if a user is executing DDL at a rate faster than 1 query per
-        // millisecond, then the global timeline will unboundedly advance past the system clock.
-        // This can cause future queries to block, but will not affect correctness. Since this
-        // rate of DDL is unlikely, we allow DDL to explicitly trigger group commit.
-        self.pending_writes.push(PendingWriteTxn::System {
-            updates,
-            source: BuiltinTableUpdateSource::DDL,
-        });
-        self.group_commit_initiate(None, None).await;
-        // Avoid excessive group commits by resetting the periodic table advancement timer. The
-        // group commit triggered by above will already advance all tables.
-        self.advance_timelines_interval.reset();
-    }
-
-    /// Submits a write to be executed during the next group commit and triggers a group commit.
-    ///
-    /// Returns a Future that resolves when the write has completed, does not block the
-    /// Coordinator.
-    pub(crate) fn send_builtin_table_updates_defer<'a>(
-        &'a mut self,
-        updates: Vec<BuiltinTableUpdate>,
-    ) -> BoxFuture<'static, ()> {
-        let (tx, rx) = oneshot::channel();
-        self.pending_writes.push(PendingWriteTxn::System {
-            updates,
-            source: BuiltinTableUpdateSource::AsyncSystem(tx),
-        });
-        self.trigger_group_commit();
-        Box::pin(rx.map(|_| ()))
+    /// Append some [`BuiltinTableUpdate`]s, with various degrees of waiting and blocking.
+    pub(crate) fn builtin_table_update<'a>(&'a mut self) -> BuiltinTableAppend<'a> {
+        BuiltinTableAppend { coord: self }
     }
 
     /// Defers executing `deferred` until the write lock becomes available; waiting
@@ -558,6 +513,84 @@ impl Coordinator {
         Arc::clone(&self.write_lock).try_lock_owned().map(|p| {
             session.grant_write_lock(p);
         })
+    }
+}
+
+/// Helper struct to run a builtin table append.
+pub struct BuiltinTableAppend<'a> {
+    coord: &'a mut Coordinator,
+}
+
+/// `Future` that notifies when a builtin table write has completed.
+///
+/// Note: builtin table writes need to talk to persist, which can take 100s of milliseconds. This
+/// type allows you to execute a builtin table write, e.g. via [`BuiltinTableAppend::execute`], and
+/// wait for it to complete, while other long running tasks are concurrently executing.
+pub type BuiltinTableAppendNotify = BoxFuture<'static, ()>;
+
+impl<'a> BuiltinTableAppend<'a> {
+    /// Submit a write to a system table to be executed during the next group commit. This method
+    /// __does not__ trigger a group commit.
+    ///
+    /// This is useful for non-critical writes like metric updates because it allows us to piggy
+    /// back off the next group commit instead of triggering a potentially expensive group commit.
+    ///
+    /// Note: __do not__ call this for DDL which needs the system tables updated immediately.
+    pub fn background(self, updates: Vec<BuiltinTableUpdate>) {
+        self.coord.pending_writes.push(PendingWriteTxn::System {
+            updates,
+            source: BuiltinTableUpdateSource::Background,
+        });
+    }
+
+    /// Submits a write to be executed during the next group commit __and__ triggers a group commit.
+    ///
+    /// Returns a `Future` that resolves when the write has completed, does not block the
+    /// Coordinator.
+    pub fn defer(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
+        let (tx, rx) = oneshot::channel();
+        self.coord.pending_writes.push(PendingWriteTxn::System {
+            updates,
+            source: BuiltinTableUpdateSource::Internal(tx),
+        });
+        self.coord.trigger_group_commit();
+
+        Box::pin(rx.map(|_| ()))
+    }
+
+    /// Submit a write to a system table.
+    ///
+    /// This method will block the Coordinator on acquiring a write timestamp from the timestamp
+    /// oracle, and then returns a `Future` that will complete once the write has been applied.
+    pub async fn execute(self, updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
+        let (tx, rx) = oneshot::channel();
+
+        // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
+        // table writes do not wait for a group commit, they explicitly trigger one. There is a
+        // possibility that if a user is executing DDL at a rate faster than 1 query per
+        // millisecond, then the global timeline will unboundedly advance past the system clock.
+        // This can cause future queries to block, but will not affect correctness. Since this
+        // rate of DDL is unlikely, we allow DDL to explicitly trigger group commit.
+        self.coord.pending_writes.push(PendingWriteTxn::System {
+            updates,
+            source: BuiltinTableUpdateSource::Internal(tx),
+        });
+        self.coord.group_commit_initiate(None, None).await;
+
+        // Avoid excessive group commits by resetting the periodic table advancement timer. The
+        // group commit triggered by above will already advance all tables.
+        self.coord.advance_timelines_interval.reset();
+
+        Box::pin(rx.map(|_| ()))
+    }
+
+    /// Submit a write to a system table, blocking until complete.
+    ///
+    /// Note: if possible you should use the `execute(...)` method, which returns a `Future` that
+    /// can be `await`-ed concurrently with other tasks.
+    pub async fn blocking(self, updates: Vec<BuiltinTableUpdate>) {
+        let notify = self.execute(updates).await;
+        notify.await;
     }
 }
 

@@ -239,19 +239,19 @@ impl Coordinator {
             if_not_exists_ids,
         } = self.create_source_inner(session, plans).await?;
 
-        match self.catalog_transact(Some(session), ops).await {
-            Ok(()) => {
+        let transact_result = self
+            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 let mut source_ids = Vec::with_capacity(sources.len());
                 for (source_id, source) in sources {
                     let source_status_collection_id =
-                        Some(self.catalog().resolve_builtin_storage_collection(
+                        Some(coord.catalog().resolve_builtin_storage_collection(
                             &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
                     let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion(ingestion) => {
                             let ingestion =
-                                ingestion.into_inline_connection(self.catalog().state());
+                                ingestion.into_inline_connection(coord.catalog().state());
 
                             (
                                 DataSource::Ingestion(ingestion),
@@ -266,7 +266,7 @@ impl Coordinator {
                         DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) =
-                                self.catalog().state().try_get_webhook_url(&source_id)
+                                coord.catalog().state().try_get_webhook_url(&source_id)
                             {
                                 session.add_notice(AdapterNotice::WebhookSourceCreated { url })
                             }
@@ -278,9 +278,10 @@ impl Coordinator {
                         }
                     };
 
-                    self.maybe_create_linked_cluster(source_id).await;
+                    coord.maybe_create_linked_cluster(source_id).await;
 
-                    self.controller
+                    coord
+                        .controller
                         .storage
                         .create_collections(
                             None,
@@ -300,14 +301,17 @@ impl Coordinator {
                     source_ids.push(source_id);
                 }
 
-                self.initialize_storage_read_policies(
-                    source_ids,
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                coord
+                    .initialize_storage_read_policies(
+                        source_ids,
+                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                    )
+                    .await;
+            })
+            .await;
 
-                Ok(ExecuteResponse::CreatedSource)
-            }
+        match transact_result {
+            Ok(()) => Ok(ExecuteResponse::CreatedSource),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
@@ -432,24 +436,36 @@ impl Coordinator {
             owner_id: *session.current_role_id(),
         }];
 
-        match self.catalog_transact(Some(session), ops).await {
-            Ok(_) => {
+        let transact_result = self
+            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 match plan.connection.connection {
                     mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
                         let spec = VpcEndpointConfig {
                             aws_service_name: privatelink.service_name.to_owned(),
                             availability_zone_ids: privatelink.availability_zones.to_owned(),
                         };
-                        self.cloud_resource_controller
-                            .as_ref()
-                            .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
+                        let cloud_resource_controller =
+                            match coord.cloud_resource_controller.as_ref().cloned() {
+                                Some(controller) => controller,
+                                None => {
+                                    tracing::warn!("AWS PrivateLink connections unsupported");
+                                    return;
+                                }
+                            };
+                        if let Err(err) = cloud_resource_controller
                             .ensure_vpc_endpoint(connection_gid, spec)
-                            .await?;
+                            .await
+                        {
+                            tracing::warn!(?err, "failed to ensure vpc endpoint!");
+                        }
                     }
                     _ => {}
                 }
-                Ok(ExecuteResponse::CreatedConnection)
-            }
+            })
+            .await;
+
+        match transact_result {
+            Ok(_) => Ok(ExecuteResponse::CreatedConnection),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -566,30 +582,33 @@ impl Coordinator {
             item: CatalogItem::Table(table.clone()),
             owner_id: *ctx.session().current_role_id(),
         }];
-        match self.catalog_transact(Some(ctx.session()), ops).await {
-            Ok(()) => {
+
+        let catalog_result = self
+            .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
                 // Determine the initial validity for the table.
-                let register_ts = self.get_local_write_ts().await.timestamp;
+                let register_ts = coord.get_local_write_ts().await.timestamp;
                 if let Some(id) = ctx.extra().contents() {
-                    self.set_statement_execution_timestamp(id, register_ts);
+                    coord.set_statement_execution_timestamp(id, register_ts);
                 }
 
                 let collection_desc = CollectionDescription::from_desc(
                     table.desc.clone(),
                     DataSourceOther::TableWrites,
                 );
-                self.controller
+                coord
+                    .controller
                     .storage
                     .create_collections(Some(register_ts), vec![(table_id, collection_desc)])
                     .await
                     .unwrap_or_terminate("cannot fail to create collections");
-                self.apply_local_write(register_ts).await;
+                coord.apply_local_write(register_ts).await;
 
-                self.initialize_storage_read_policies(
-                    vec![table_id],
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                coord
+                    .initialize_storage_read_policies(
+                        vec![table_id],
+                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                    )
+                    .await;
 
                 // Advance the new table to a timestamp higher than the current
                 // read timestamp so that the table is immediately readable.
@@ -603,9 +622,10 @@ impl Coordinator {
                 // allocate ranges of timestamps. This whole advancement and
                 // group_commit can be removed once we've finished the migration
                 // to the persist-txn tables.
-                let initial_read_ts = self.get_local_write_ts().await;
+                let initial_read_ts = coord.get_local_write_ts().await;
                 let appends = vec![(table_id, Vec::new())];
-                self.controller
+                coord
+                    .controller
                     .storage
                     .append_table(
                         initial_read_ts.timestamp,
@@ -616,14 +636,16 @@ impl Coordinator {
                     .await
                     .expect("One-shot dropped while waiting synchronously")
                     .unwrap_or_terminate("cannot fail to append");
-                self.apply_local_write(initial_read_ts.timestamp).await;
+                coord.apply_local_write(initial_read_ts.timestamp).await;
 
                 // Kick off a group commit so the new rest of the tables catch up to the new oracle read
                 // ts.
-                self.trigger_group_commit();
+                coord.trigger_group_commit();
+            })
+            .await;
 
-                Ok(ExecuteResponse::CreatedTable)
-            }
+        match catalog_result {
+            Ok(()) => Ok(ExecuteResponse::CreatedTable),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -746,6 +768,8 @@ impl Coordinator {
         let from = self.catalog().get_entry(&catalog_sink.from);
         let from_name = from.name().item.clone();
         let from_type = from.item().typ().to_string();
+
+        // TODO(parkmycar): Move this to a catalog_transact_with_side_effects model.
         let result = self
             .catalog_transact_with(Some(ctx.session().conn_id()), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
@@ -762,8 +786,8 @@ impl Coordinator {
             })
             .await;
 
-        match result {
-            Ok(()) => {}
+        let builtin_table_notify = match result {
+            Ok(((), table_updates)) => table_updates,
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -780,13 +804,18 @@ impl Coordinator {
                 ctx.retire(Err(e));
                 return;
             }
-        }
+        };
 
         self.maybe_create_linked_cluster(id).await;
 
         self.create_storage_export(id, &catalog_sink)
             .await
             .unwrap_or_terminate("cannot fail to create exports");
+
+        // Block on the builtin table updates completing.
+        //
+        // Note: these are run in a separate task, so they're run concurrently to everything else.
+        builtin_table_notify.await;
 
         ctx.retire(Ok(ExecuteResponse::CreatedSink))
     }
@@ -1015,32 +1044,33 @@ impl Coordinator {
             owner_id: *session.current_role_id(),
         });
 
-        match self
-            .catalog_transact_conn(Some(session.conn_id()), ops)
-            .await
-        {
-            Ok(_) => {
+        let transact_result = self
+            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 // Save plan structures.
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_optimized_plan(id, global_mir_plan.df_desc().clone());
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_physical_plan(id, global_lir_plan.df_desc().clone());
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
 
                 // Emit notices.
-                self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
+                coord.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
                 let output_desc = global_lir_plan.desc().clone();
                 let mut df_desc = global_lir_plan.unapply().0;
 
                 // Timestamp selection
                 let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
-                let since = self.least_valid_read(&id_bundle);
+                let since = coord.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since.clone());
 
                 // Announce the creation of the materialized view source.
-                self.controller
+                coord
+                    .controller
                     .storage
                     .create_collections(
                         None,
@@ -1057,16 +1087,19 @@ impl Coordinator {
                     .await
                     .unwrap_or_terminate("cannot fail to append");
 
-                self.initialize_storage_read_policies(
-                    vec![id],
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                coord
+                    .initialize_storage_read_policies(
+                        vec![id],
+                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                    )
+                    .await;
 
-                self.ship_dataflow(df_desc, cluster_id).await;
+                coord.ship_dataflow(df_desc, cluster_id).await;
+            })
+            .await;
 
-                Ok(ExecuteResponse::CreatedMaterializedView)
-            }
+        match transact_result {
+            Ok(_) => Ok(ExecuteResponse::CreatedMaterializedView),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -1146,34 +1179,38 @@ impl Coordinator {
             item: CatalogItem::Index(index),
             owner_id,
         };
-        match self
-            .catalog_transact_conn(Some(session.conn_id()), vec![op])
-            .await
-        {
-            Ok(_) => {
+
+        let transact_result = self
+            .catalog_transact_with_side_effects(Some(session), vec![op], |coord| async {
                 // Save plan structures.
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_optimized_plan(id, global_mir_plan.df_desc().clone());
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_physical_plan(id, global_lir_plan.df_desc().clone());
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
 
                 // Emit notices.
-                self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
+                coord.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
                 let mut df_desc = global_lir_plan.unapply().0;
 
                 // Timestamp selection
                 let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
-                let since = self.least_valid_read(&id_bundle);
+                let since = coord.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since);
 
-                self.ship_dataflow(df_desc, cluster_id).await;
+                coord.ship_dataflow(df_desc, cluster_id).await;
 
-                self.set_index_options(id, options).expect("index enabled");
-                Ok(ExecuteResponse::CreatedIndex)
-            }
+                coord.set_index_options(id, options).expect("index enabled");
+            })
+            .await;
+
+        match transact_result {
+            Ok(_) => Ok(ExecuteResponse::CreatedIndex),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -2960,11 +2997,17 @@ impl Coordinator {
             output,
         };
         active_subscribe.initialize();
-        self.add_active_subscribe(sink_id, active_subscribe).await;
 
+        // Add metadata for the new SUBSCRIBE.
+        let write_notify_fut = self.add_active_subscribe(sink_id, active_subscribe).await;
+
+        // Ship the underlying dataflow.
         let (df_desc, _df_meta) = global_lir_plan.unapply();
+        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
 
-        self.ship_dataflow(df_desc, cluster_id).await;
+        // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
+        // requests to external services, which can take time, so we run them concurrently.
+        let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
 
         if let Some(target) = target_replica {
             self.controller

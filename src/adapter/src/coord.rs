@@ -194,13 +194,6 @@ pub enum Message<T = mz_repr::Timestamp> {
         Vec<CompletedClientTransmitter>,
         /// Optional lock if the group commit contained writes to user tables.
         Option<OwnedMutexGuard<()>>,
-        /// Operations waiting on this group commit to finish.
-        ///
-        /// Note: this differs from the [`CompletedClientTransmitter`]s above because those are
-        /// used to send a response to a request, which indicates the Coordinator has finished all
-        /// of it's work, but these represent auxiliary work that still needs to be done, e.g.
-        /// waiting for a write to Persist to complete.
-        Vec<oneshot::Sender<()>>,
         /// Permit which limits how many group commits we run at once.
         Option<GroupCommitPermit>,
     ),
@@ -1461,37 +1454,57 @@ impl Coordinator {
         }
 
         debug!("coordinator init: sending builtin table updates");
-        self.send_builtin_table_updates_blocking(builtin_table_updates)
+        let builtin_updates_fut = self
+            .builtin_table_update()
+            .execute(builtin_table_updates)
             .await;
+
+        // Destructure Self so we can do some concurrent work.
+        let Self {
+            controller,
+            secrets_controller,
+            catalog,
+            ..
+        } = self;
 
         // Signal to the storage controller that it is now free to reconcile its
         // state with what it has learned from the adapter.
-        self.controller.storage.reconcile_state().await;
+        let storage_reconcile_fut = controller.storage.reconcile_state();
 
         // Cleanup orphaned secrets. Errors during list() or delete() do not
         // need to prevent bootstrap from succeeding; we will retry next
         // startup.
-        match self.secrets_controller.list().await {
-            Ok(controller_secrets) => {
-                // Fetch all IDs from the catalog to future-proof against other
-                // things using secrets. Today, SECRET and CONNECTION objects use
-                // secrets_controller.ensure, but more things could in the future
-                // that would be easy to miss adding here.
-                let catalog_ids: BTreeSet<GlobalId> =
-                    self.catalog().entries().map(|entry| entry.id()).collect();
-                let controller_secrets: BTreeSet<GlobalId> =
-                    controller_secrets.into_iter().collect();
-                let orphaned = controller_secrets.difference(&catalog_ids);
-                for id in orphaned {
-                    info!("coordinator init: deleting orphaned secret {id}");
-                    fail_point!("orphan_secrets");
-                    if let Err(e) = self.secrets_controller.delete(*id).await {
-                        warn!("Dropping orphaned secret has encountered an error: {}", e);
+        let secrets_cleanup_fut = async move {
+            match secrets_controller.list().await {
+                Ok(controller_secrets) => {
+                    // Fetch all IDs from the catalog to future-proof against other
+                    // things using secrets. Today, SECRET and CONNECTION objects use
+                    // secrets_controller.ensure, but more things could in the future
+                    // that would be easy to miss adding here.
+                    let catalog_ids: BTreeSet<GlobalId> =
+                        catalog.entries().map(|entry| entry.id()).collect();
+                    let controller_secrets: BTreeSet<GlobalId> =
+                        controller_secrets.into_iter().collect();
+                    let orphaned = controller_secrets.difference(&catalog_ids);
+                    for id in orphaned {
+                        info!("coordinator init: deleting orphaned secret {id}");
+                        fail_point!("orphan_secrets");
+                        if let Err(e) = secrets_controller.delete(*id).await {
+                            warn!("Dropping orphaned secret has encountered an error: {}", e);
+                        }
                     }
                 }
+                Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
             }
-            Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
-        }
+        };
+
+        // Run all of our final steps concurrently.
+        futures::future::join_all([
+            storage_reconcile_fut,
+            builtin_updates_fut,
+            Box::pin(secrets_cleanup_fut),
+        ])
+        .await;
 
         info!("coordinator init: bootstrap complete");
         Ok(())
@@ -2029,8 +2042,8 @@ impl Coordinator {
                 // cancellation safe and add a comment explaining why. You can refer here for more
                 // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
                 let msg = select! {
-                    // Order matters here. We want to process internal commands
-                    // before processing external commands.
+                    // Order matters here. Some correctness properties rely on us processing
+                    // internal commands before processing external commands.
                     biased;
 
                     // `recv()` on `UnboundedReceiver` is cancel-safe:

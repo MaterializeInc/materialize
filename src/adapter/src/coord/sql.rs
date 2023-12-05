@@ -19,6 +19,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::catalog::Catalog;
+use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::subscribe::ActiveSubscribe;
@@ -208,17 +209,18 @@ impl Coordinator {
         }
     }
 
-    /// Handle adding metadata associated with a SUBSCRIBE query.
+    /// Handle adding metadata associated with a SUBSCRIBE query, returning a notify that resolves
+    /// when our builtin table updates are complete.
     pub(crate) async fn add_active_subscribe(
         &mut self,
         id: GlobalId,
         active_subscribe: ActiveSubscribe,
-    ) {
+    ) -> BuiltinTableAppendNotify {
         let update = self
             .catalog()
             .state()
             .pack_subscribe_update(id, &active_subscribe, 1);
-        self.send_builtin_table_updates_blocking(vec![update]).await;
+        let builtin_update_notify = self.builtin_table_update().execute(vec![update]).await;
 
         let session_type = metrics::session_type_label_value(&active_subscribe.user);
         self.metrics
@@ -227,6 +229,8 @@ impl Coordinator {
             .inc();
 
         self.active_subscribes.insert(id, active_subscribe);
+
+        builtin_update_notify
     }
 
     /// Handle removing metadata associated with a SUBSCRIBE query.
@@ -237,7 +241,7 @@ impl Coordinator {
                 .catalog()
                 .state()
                 .pack_subscribe_update(id, &active_subscribe, -1);
-            self.send_builtin_table_updates_blocking(vec![update]).await;
+            self.builtin_table_update().blocking(vec![update]).await;
 
             let session_type = metrics::session_type_label_value(&active_subscribe.user);
             self.metrics
