@@ -39,9 +39,17 @@ fn threshold_arrangement<G, Tr, K, V, T, R, L>(
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T> + Columnation,
-    Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, Diff = Diff> + 'static,
-    Tr::Key: Columnation + Data,
-    Tr::Val: Columnation + Data,
+    Tr: Trace
+        + for<'a> TraceReader<
+            Key<'a> = &'a K,
+            KeyOwned = K,
+            Val<'a> = &'a V,
+            ValOwned = V,
+            Time = G::Timestamp,
+            Diff = Diff,
+        > + 'static,
+    Tr::KeyOwned: Columnation + Data,
+    Tr::ValOwned: Columnation + Data,
     Tr::Batch: Batch,
     Tr::Batcher: Batcher<Item = ((K, V), G::Timestamp, Diff)>,
     T: Timestamp + Lattice,
