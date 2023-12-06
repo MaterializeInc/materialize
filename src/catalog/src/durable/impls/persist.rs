@@ -73,7 +73,7 @@ enum Mode {
 /// A Handle to an unopened catalog stored in persist. The unopened catalog can serve `Config` data
 /// or the current epoch. All other catalog data may be un-migrated and should not be read until the
 /// catalog has been opened. The [`UnopenedPersistCatalogState`] is responsible for opening the
-/// catalog, see [`DurableCatalogState::open`] for more details.
+/// catalog, see [`OpenableDurableCatalogState::open`] for more details.
 ///
 /// Production users should call [`Self::expire`] before dropping a [`UnopenedPersistCatalogState`]
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
