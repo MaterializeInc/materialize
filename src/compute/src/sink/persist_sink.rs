@@ -589,6 +589,7 @@ where
         // to `persist` in order to "correct" it to track `desired`. This collection is
         // only modified by updates received from either the `desired` or `persist` inputs.
         let mut correction = Vec::new();
+        let mut last_consolidated_correction_len = 0;
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -774,7 +775,9 @@ where
                     ready_batches,
                 );
 
-                if !ready_batches.is_empty() {
+                if !ready_batches.is_empty()
+                    || correction.len() >= 2 * last_consolidated_correction_len
+                {
                     // Prior to potentially reducing the size of the `correction`
                     // buffer, report its length.
                     sink_worker_metrics.report_correction_len(correction.len());
@@ -784,6 +787,7 @@ where
                     // spend a lot of time "consolidating" the same updates
                     // over and over again, with no changes.
                     consolidate_updates(&mut correction);
+                    last_consolidated_correction_len = correction.len();
 
                     // `correction` starts large as it diffs the initial snapshots,
                     // but in steady state contains substantially fewer updates.
