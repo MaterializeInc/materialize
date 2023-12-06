@@ -150,7 +150,8 @@ try_wait() {
 
 # try_last_bg
 #
-# Reports whether the last command executed with `try_bg` or `try`.
+# Reports whether the last command executed with `try` (in the background) or `try_now`
+# (immediately, in the foreground).
 try_last_bg() {
     $try_last_bg
 }
