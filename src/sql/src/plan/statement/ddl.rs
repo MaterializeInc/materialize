@@ -2528,12 +2528,11 @@ fn kafka_sink_builder(
 
     let extracted_options: KafkaConfigOptionExtracted = options.try_into()?;
 
-    let connection_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
-
     let KafkaConfigOptionExtracted {
         topic,
         partition_count,
         replication_factor,
+        compression_type,
         retention_ms,
         retention_bytes,
         ..
@@ -2671,7 +2670,7 @@ fn kafka_sink_builder(
         key_desc_and_indices,
         value_desc,
         retention,
-        connection_options,
+        compression_type,
     }))
 }
 
