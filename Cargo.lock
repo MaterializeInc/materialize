@@ -5775,7 +5775,6 @@ dependencies = [
  "rdkafka",
  "scopeguard",
  "serde",
- "serde_plain",
  "thiserror",
  "timely",
  "tokio",
