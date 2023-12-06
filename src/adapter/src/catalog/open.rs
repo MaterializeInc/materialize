@@ -57,7 +57,7 @@ use mz_sql::names::{
     ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds,
     SchemaId, SchemaSpecifier,
 };
-use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_sql::session::vars::{OwnedVarInput, SystemVars, VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
