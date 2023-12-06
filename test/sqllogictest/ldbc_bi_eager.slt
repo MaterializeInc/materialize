@@ -3497,6 +3497,68 @@ EOF
 # \set city1Id 655::bigint
 # \set city2Id 1138::bigint
 
+query T multiline
+EXPLAIN WITH(humanized_exprs, arity, join_impls) CREATE OR REPLACE MATERIALIZED VIEW PathQ19 AS
+WITH
+  -- asymmetrize...
+  knows_asymmetric AS (
+    SELECT person1id, person2id
+      FROM Person_knows_person
+     WHERE person1id < person2id
+  ),
+  -- compute interaction scores (no interactions means we ignore that 'knows' relationship)
+  weights(src, dst, w) AS (
+    SELECT
+        person1id AS src,
+        person2id AS dst,
+        greatest(round(40 - sqrt(count(*)))::bigint, 1) AS w
+    FROM knows_asymmetric pp,
+         Message m1,
+         Message m2
+    WHERE pp.person1id = least(m1.creatorpersonid, m2.creatorpersonid)
+      AND pp.person2id = greatest(m1.creatorpersonid, m2.creatorpersonid)
+      AND m1.parentmessageid = m2.messageid
+      AND m1.creatorpersonid <> m2.creatorpersonid
+ GROUP BY src, dst
+)
+-- resymmetrize
+SELECT src, dst, w FROM weights
+UNION ALL
+SELECT dst, src, w FROM weights;
+----
+materialize.public.pathq19:
+  Return // { arity: 3 }
+    Union // { arity: 3 }
+      Get l0 // { arity: 3 }
+      Project (#1, #0, #2) // { arity: 3 }
+        Get l0 // { arity: 3 }
+  With
+    cte l0 =
+      Project (#0, #1, #3) // { arity: 3 }
+        Map (greatest(f64toi64(roundf64((40 - sqrtf64(bigint_to_double(#2))))), 1)) // { arity: 4 }
+          Reduce group_by=[#0{person1id}, #1{person2id}] aggregates=[count(*)] // { arity: 3 }
+            Project (#1, #2) // { arity: 2 }
+              Filter (#3{creatorpersonid} != #14{creatorpersonid}) AND (#1{person1id} < #2{person2id}) // { arity: 18 }
+                Join on=(#1{person1id} = least(#3{creatorpersonid}, #14{creatorpersonid}) AND #2{person2id} = greatest(#3{creatorpersonid}, #14{creatorpersonid}) AND #4{parentmessageid} = #6{messageid}) type=delta // { arity: 18 }
+                  implementation
+                    %0:person_knows_person » %1:message[×] » %2:message[#1]KA
+                    %1:message » %2:message[#1]KA » %0:person_knows_person[#1, #2]KKAf
+                    %2:message » %1:message[#1]KA » %0:person_knows_person[#1, #2]KKAf
+                  ArrangeBy keys=[[#1{person1id}, #2{person2id}]] // { arity: 3 }
+                    ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[delta join 1st input (full scan)] // { arity: 3 }
+                  ArrangeBy keys=[[], [#1{parentmessageid}]] // { arity: 2 }
+                    Project (#9, #12) // { arity: 2 }
+                      Filter (#12{parentmessageid}) IS NOT NULL // { arity: 13 }
+                        ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
+                  ArrangeBy keys=[[#1{messageid}]] // { arity: 13 }
+                    ReadIndex on=message message_messageid=[delta join lookup] // { arity: 13 }
+
+Used Indexes:
+  - materialize.public.person_knows_person_person1id_person2id (delta join 1st input (full scan))
+  - materialize.public.message_messageid (*** full scan ***, delta join lookup)
+
+EOF
+
 statement ok
 CREATE OR REPLACE MATERIALIZED VIEW PathQ19 AS
 WITH
