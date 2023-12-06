@@ -89,7 +89,11 @@ def expand_globs(root: Path, *specs: Path | str) -> set[str]:
 
 
 def get_version_tags(
-    *, version_type: type[VERSION_TYPE], newest_first: bool = True, fetch: bool = True
+    *,
+    version_type: type[VERSION_TYPE],
+    newest_first: bool = True,
+    fetch: bool = True,
+    remote_url: str = "https://github.com/MaterializeInc/materialize",
 ) -> list[VERSION_TYPE]:
     """List all the version-like tags in the repo
 
@@ -100,7 +104,10 @@ def get_version_tags(
     """
     if fetch:
         _fetch(
-            all_remotes=True, include_tags=YesNoOnce.ONCE, force=True, only_tags=True
+            remote=get_remote(remote_url),
+            include_tags=YesNoOnce.ONCE,
+            force=True,
+            only_tags=True,
         )
     tags = []
     for t in spawn.capture(["git", "tag"]).splitlines():

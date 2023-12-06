@@ -21,7 +21,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
 use mz_ore::now::EpochMillis;
-use mz_ore::task::RuntimeExt;
+use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
@@ -29,7 +29,6 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tokio::task::JoinHandle;
 use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
@@ -590,7 +589,12 @@ where
                 metrics,
             },
             unexpired_state: Some(UnexpiredReadHandleState {
-                heartbeat_tasks: machine.start_reader_heartbeat_tasks(reader_id, gc).await,
+                _heartbeat_tasks: machine
+                    .start_reader_heartbeat_tasks(reader_id, gc)
+                    .await
+                    .into_iter()
+                    .map(JoinHandle::abort_on_drop)
+                    .collect(),
             }),
         }
     }
@@ -940,15 +944,7 @@ where
 /// State for a read handle that has not been explicitly expired.
 #[derive(Debug)]
 pub(crate) struct UnexpiredReadHandleState {
-    pub(crate) heartbeat_tasks: Vec<JoinHandle<()>>,
-}
-
-impl Drop for UnexpiredReadHandleState {
-    fn drop(&mut self) {
-        for heartbeat_task in &self.heartbeat_tasks {
-            heartbeat_task.abort();
-        }
-    }
+    pub(crate) _heartbeat_tasks: Vec<AbortOnDropHandle<()>>,
 }
 
 /// An incremental cursor through a particular shard, returned from [ReadHandle::snapshot_cursor].

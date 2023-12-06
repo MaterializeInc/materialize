@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::task::{AbortOnDropHandle, JoinHandle};
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
     Blob, Consensus, ExternalError, Tasked, VersionedData, BLOB_GET_LIVENESS_KEY,
@@ -28,7 +29,6 @@ use mz_persist::location::{
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use tokio::sync::{Mutex, OnceCell};
-use tokio::task::JoinHandle;
 use tracing::{debug, instrument};
 
 use crate::async_runtime::IsolatedRuntime;
@@ -61,13 +61,7 @@ pub struct PersistClientCache {
 }
 
 #[derive(Debug)]
-struct RttLatencyTask(JoinHandle<()>);
-
-impl Drop for RttLatencyTask {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
+struct RttLatencyTask(AbortOnDropHandle<()>);
 
 impl PersistClientCache {
     /// Returns a new [PersistClientCache].
@@ -187,7 +181,10 @@ impl PersistClientCache {
                     Self::PROMETHEUS_SCRAPE_INTERVAL,
                 )
                 .await;
-                Arc::clone(&x.insert((RttLatencyTask(task), consensus)).1)
+                Arc::clone(
+                    &x.insert((RttLatencyTask(task.abort_on_drop()), consensus))
+                        .1,
+                )
             }
         };
         Ok(consensus)
@@ -221,7 +218,7 @@ impl PersistClientCache {
                     Self::PROMETHEUS_SCRAPE_INTERVAL,
                 )
                 .await;
-                Arc::clone(&x.insert((RttLatencyTask(task), blob)).1)
+                Arc::clone(&x.insert((RttLatencyTask(task.abort_on_drop()), blob)).1)
             }
         };
         Ok(blob)
@@ -235,7 +232,7 @@ impl PersistClientCache {
 /// traffic, so that we minimize any issues around Futures not being polled
 /// promptly (as can and does happen with the Timely-polled Futures).
 ///
-/// The caller is responsible for shutdown via [JoinHandle::abort].
+/// The caller is responsible for shutdown via aborting the `JoinHandle`.
 ///
 /// No matter whether we wrap MetricsConsensus before or after we start up the
 /// rtt latency task, there's the possibility for it being confusing at some
@@ -276,7 +273,7 @@ async fn blob_rtt_latency_task(
 /// traffic, so that we minimize any issues around Futures not being polled
 /// promptly (as can and does happen with the Timely-polled Futures).
 ///
-/// The caller is responsible for shutdown via [JoinHandle::abort].
+/// The caller is responsible for shutdown via aborting the `JoinHandle`.
 ///
 /// No matter whether we wrap MetricsConsensus before or after we start up the
 /// rtt latency task, there's the possibility for it being confusing at some

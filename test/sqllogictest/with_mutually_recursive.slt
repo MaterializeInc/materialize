@@ -158,21 +158,21 @@ SELECT (SELECT COUNT(*) FROM foo) FROM bar;
 ## Test error cases
 
 ## Test a recursive query with mismatched types.
-statement error did not match inferred type
+statement error db error: ERROR: WITH MUTUALLY RECURSIVE query "bar" declared types \(integer\), but query returns types \(text\)
 WITH MUTUALLY RECURSIVE
     foo (a text, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
 
 ## Test with fewer columns than declared
-statement error did not match inferred type
+statement error db error: ERROR: WITH MUTUALLY RECURSIVE query "foo" declared types \(integer, integer\), but query returns types \(integer\)
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1 UNION SELECT a FROM bar),
     bar (a int) as (SELECT a FROM foo)
 SELECT a FROM foo, bar;
 
 ## Test with more columns than declared
-statement error did not match inferred type
+statement error db error: ERROR: WITH MUTUALLY RECURSIVE query "foo" declared types \(integer, integer\), but query returns types \(integer, integer, integer\)
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2, 3 UNION SELECT a, 5, 6 FROM bar),
     bar (a int) as (SELECT a FROM foo)
@@ -210,14 +210,6 @@ WITH MUTUALLY RECURSIVE
     ),
     bar (a int) as (SELECT a FROM foo)
 SELECT a FROM foo, bar;
-
-## Test incompatible declared and inferred types
-statement error db error: ERROR: declared type \(integer, text\) of WITH MUTUALLY RECURSIVE query "forever" did not match inferred type \(bigint, text\)
-WITH MUTUALLY RECURSIVE
-  forever (i int, y text) as (
-    SELECT COUNT(*), 'oops' FROM mz_views UNION (SELECT i + 1, 'oops' FROM forever)
-  )
-SELECT * FROM forever;
 
 # Tests for nested WITH MUTUALLY RECURSIVE
 

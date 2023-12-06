@@ -81,19 +81,16 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use mz_ore::task::{AbortHandleExt, JoinSetExt};
+use mz_ore::task::JoinSetExt;
 
 #[tokio::test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
 async fn join_set_exts() {
     let mut js = tokio::task::JoinSet::new();
-    let abort_handle = js
-        .spawn_named(|| "test".to_string(), async {
-            std::future::pending::<String>().await
-        })
-        .abort_on_drop();
-
-    drop(abort_handle);
+    js.spawn_named(|| "test".to_string(), async {
+        std::future::pending::<String>().await
+    })
+    .abort();
 
     assert!(matches!(js.join_next().await, Some(Err(je)) if je.is_cancelled()));
 }

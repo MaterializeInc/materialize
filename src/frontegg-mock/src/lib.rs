@@ -89,8 +89,8 @@ use jsonwebtoken::EncodingKey;
 use mz_frontegg_auth::{ApiTokenArgs, ApiTokenResponse, Claims, RefreshToken, REFRESH_SUFFIX};
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
+use mz_ore::task::JoinHandle;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 pub struct FronteggMockServer {

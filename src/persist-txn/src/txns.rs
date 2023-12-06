@@ -25,6 +25,7 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, instrument};
 
+use crate::metrics::Metrics;
 use crate::txn_cache::TxnsCache;
 use crate::txn_write::Txn;
 use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
@@ -104,6 +105,7 @@ where
     O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
+    pub(crate) metrics: Arc<Metrics>,
     pub(crate) txns_cache: TxnsCache<T, C>,
     pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
     pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64, O>,
@@ -131,6 +133,7 @@ where
     pub async fn open(
         init_ts: T,
         client: PersistClient,
+        metrics: Arc<Metrics>,
         txns_id: ShardId,
         // TODO(txn): Get rid of these by introducing a SchemalessWriteHandle to
         // persist.
@@ -165,6 +168,7 @@ where
             .expect("txns schema shouldn't change");
         let txns_cache = TxnsCache::init(init_ts, txns_read, &mut txns_write).await;
         TxnsHandle {
+            metrics,
             txns_cache,
             txns_write,
             txns_since,
@@ -207,81 +211,86 @@ where
         register_ts: T,
         data_writes: impl IntoIterator<Item = WriteHandle<K, V, T, D>>,
     ) -> Result<(), T> {
-        let data_writes = data_writes.into_iter().collect::<Vec<_>>();
-        let updates = data_writes
-            .iter()
-            .map(|data_write| {
-                let data_id = data_write.shard_id();
-                let entry = TxnsEntry::Register(data_id, T::encode(&register_ts));
-                (data_id, C::encode(entry))
-            })
-            .collect::<Vec<_>>();
-        let data_ids_debug = || {
-            data_writes
+        let op = &Arc::clone(&self.metrics).register;
+        op.run(async {
+            let data_writes = data_writes.into_iter().collect::<Vec<_>>();
+            let updates = data_writes
                 .iter()
-                .map(|x| format!("{:.9}", x.shard_id().to_string()))
-                .collect::<Vec<_>>()
-                .join(" ")
-        };
-
-        let mut txns_upper = self
-            .txns_write
-            .shared_upper()
-            .into_option()
-            .expect("txns should not be closed");
-        loop {
-            self.txns_cache.update_ge(&txns_upper).await;
-            // Figure out which are still unregistered as of `txns_upper`. Below
-            // we write conditionally on the upper being what we expect so than
-            // we can re-run this if anything changes from underneath us.
-            let updates = updates
-                .iter()
-                .flat_map(|(data_id, (key, val))| {
-                    let registered = self.txns_cache.registered_at(data_id, &txns_upper);
-                    (!registered).then_some(((key, val), &register_ts, 1))
+                .map(|data_write| {
+                    let data_id = data_write.shard_id();
+                    let entry = TxnsEntry::Register(data_id, T::encode(&register_ts));
+                    (data_id, C::encode(entry))
                 })
                 .collect::<Vec<_>>();
-            // If the txns_upper has passed register_ts, we can no longer write.
-            if register_ts < txns_upper {
-                debug!(
-                    "txns register {} at {:?} mismatch current={:?}",
-                    data_ids_debug(),
-                    register_ts,
-                    txns_upper,
-                );
-                return Err(txns_upper);
-            }
+            let data_ids_debug = || {
+                data_writes
+                    .iter()
+                    .map(|x| format!("{:.9}", x.shard_id().to_string()))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
 
-            let res = crate::small_caa(
-                || format!("txns register {}", data_ids_debug()),
-                &mut self.txns_write,
-                &updates,
-                txns_upper,
-                register_ts.step_forward(),
-            )
-            .await;
-            match res {
-                Ok(()) => {
+            let mut txns_upper = self
+                .txns_write
+                .shared_upper()
+                .into_option()
+                .expect("txns should not be closed");
+            loop {
+                self.txns_cache.update_ge(&txns_upper).await;
+                // Figure out which are still unregistered as of `txns_upper`. Below
+                // we write conditionally on the upper being what we expect so than
+                // we can re-run this if anything changes from underneath us.
+                let updates = updates
+                    .iter()
+                    .flat_map(|(data_id, (key, val))| {
+                        let registered = self.txns_cache.registered_at(data_id, &txns_upper);
+                        (!registered).then_some(((key, val), &register_ts, 1))
+                    })
+                    .collect::<Vec<_>>();
+                // If the txns_upper has passed register_ts, we can no longer write.
+                if register_ts < txns_upper {
                     debug!(
-                        "txns register {} at {:?} success",
+                        "txns register {} at {:?} mismatch current={:?}",
                         data_ids_debug(),
-                        register_ts
+                        register_ts,
+                        txns_upper,
                     );
-                    break;
+                    return Err(txns_upper);
                 }
-                Err(new_txns_upper) => {
-                    txns_upper = new_txns_upper;
-                    continue;
+
+                let res = crate::small_caa(
+                    || format!("txns register {}", data_ids_debug()),
+                    &mut self.txns_write,
+                    &updates,
+                    txns_upper,
+                    register_ts.step_forward(),
+                )
+                .await;
+                match res {
+                    Ok(()) => {
+                        debug!(
+                            "txns register {} at {:?} success",
+                            data_ids_debug(),
+                            register_ts
+                        );
+                        break;
+                    }
+                    Err(new_txns_upper) => {
+                        self.metrics.register.retry_count.inc();
+                        txns_upper = new_txns_upper;
+                        continue;
+                    }
                 }
             }
-        }
-        for data_write in data_writes {
-            self.datas
-                .data_write
-                .insert(data_write.shard_id(), data_write);
-        }
+            for data_write in data_writes {
+                self.datas
+                    .data_write
+                    .insert(data_write.shard_id(), data_write);
+            }
 
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Removes data shards from use with this txn set.
@@ -302,196 +311,206 @@ where
     /// undefined behavior, and (potentially sticky) panics.
     #[instrument(level = "debug", skip_all, fields(ts = ?forget_ts, shard = %data_id))]
     pub async fn forget(&mut self, forget_ts: T, data_id: ShardId) -> Result<(), T> {
-        let mut txns_upper = self
-            .txns_write
-            .shared_upper()
-            .into_option()
-            .expect("txns should not be closed");
-        loop {
-            self.txns_cache.update_ge(&txns_upper).await;
+        let op = &Arc::clone(&self.metrics).forget;
+        op.run(async {
+            let mut txns_upper = self
+                .txns_write
+                .shared_upper()
+                .into_option()
+                .expect("txns should not be closed");
+            loop {
+                self.txns_cache.update_ge(&txns_upper).await;
 
-            let (key, val) = C::encode(TxnsEntry::Register(data_id, T::encode(&forget_ts)));
-            let updates = if self.txns_cache.registered_at(&data_id, &txns_upper) {
-                vec![((&key, &val), &forget_ts, -1)]
-            } else {
-                // Never registered or already forgotten. This could change in
-                // `[txns_upper, forget_ts]` (due to races) so close off that
-                // interval before returning, just don't write any updates.
-                vec![]
-            };
+                let (key, val) = C::encode(TxnsEntry::Register(data_id, T::encode(&forget_ts)));
+                let updates = if self.txns_cache.registered_at(&data_id, &txns_upper) {
+                    vec![((&key, &val), &forget_ts, -1)]
+                } else {
+                    // Never registered or already forgotten. This could change in
+                    // `[txns_upper, forget_ts]` (due to races) so close off that
+                    // interval before returning, just don't write any updates.
+                    vec![]
+                };
 
-            // If the txns_upper has passed forget_ts, we can no longer write.
-            if forget_ts < txns_upper {
-                debug!(
-                    "txns forget {:.9} at {:?} mismatch current={:?}",
-                    data_id.to_string(),
-                    forget_ts,
+                // If the txns_upper has passed forget_ts, we can no longer write.
+                if forget_ts < txns_upper {
+                    debug!(
+                        "txns forget {:.9} at {:?} mismatch current={:?}",
+                        data_id.to_string(),
+                        forget_ts,
+                        txns_upper,
+                    );
+                    return Err(txns_upper);
+                }
+
+                // Ensure the latest write has been applied, so we don't run into
+                // any issues trying to apply it later.
+                //
+                // NB: It's _very_ important for correctness to get this from the
+                // unapplied batches (which compact themselves naturally) and not
+                // from the writes (which are artificially compacted based on when
+                // we need reads for).
+                let data_latest_unapplied = self
+                    .txns_cache
+                    .unapplied_batches
+                    .values()
+                    .rev()
+                    .find(|(x, _, _)| x == &data_id);
+                if let Some((_, _, latest_write)) = data_latest_unapplied {
+                    debug!(
+                        "txns forget {:.9} applying latest write {:?}",
+                        data_id.to_string(),
+                        latest_write,
+                    );
+                    let latest_write = latest_write.clone();
+                    let _tidy = self.apply_le(&latest_write).await;
+                }
+                let res = crate::small_caa(
+                    || format!("txns forget {:.9}", data_id.to_string()),
+                    &mut self.txns_write,
+                    &updates,
                     txns_upper,
-                );
-                return Err(txns_upper);
+                    forget_ts.step_forward(),
+                )
+                .await;
+                match res {
+                    Ok(()) => {
+                        debug!(
+                            "txns forget {:.9} at {:?} success",
+                            data_id.to_string(),
+                            forget_ts
+                        );
+                        break;
+                    }
+                    Err(new_txns_upper) => {
+                        self.metrics.forget.retry_count.inc();
+                        txns_upper = new_txns_upper;
+                        continue;
+                    }
+                }
             }
 
-            // Ensure the latest write has been applied, so we don't run into
-            // any issues trying to apply it later.
-            //
-            // NB: It's _very_ important for correctness to get this from the
-            // unapplied batches (which compact themselves naturally) and not
-            // from the writes (which are artificially compacted based on when
-            // we need reads for).
-            let data_latest_unapplied = self
-                .txns_cache
-                .unapplied_batches
-                .values()
-                .rev()
-                .find(|(x, _, _)| x == &data_id);
-            if let Some((_, _, latest_write)) = data_latest_unapplied {
-                debug!(
-                    "txns forget {:.9} applying latest write {:?}",
-                    data_id.to_string(),
-                    latest_write,
-                );
-                let latest_write = latest_write.clone();
-                let _tidy = self.apply_le(&latest_write).await;
-            }
-            let res = crate::small_caa(
-                || format!("txns forget {:.9}", data_id.to_string()),
-                &mut self.txns_write,
-                &updates,
-                txns_upper,
-                forget_ts.step_forward(),
+            // We know above that we've applied the latest write, so go ahead and
+            // fill the time between that and forget_ts with empty updates. It's
+            // fine if we get interrupted between the forget CaA and here, we just
+            // won't get around to telling the caller that it's safe to use this
+            // shard directly again. Presumably it will retry at some point.
+            let () = crate::empty_caa(
+                || format!("data {:.9} forget fill", data_id.to_string()),
+                self.datas.get_write(&data_id).await,
+                forget_ts,
             )
             .await;
-            match res {
-                Ok(()) => {
-                    debug!(
-                        "txns forget {:.9} at {:?} success",
-                        data_id.to_string(),
-                        forget_ts
-                    );
-                    break;
-                }
-                Err(new_txns_upper) => {
-                    txns_upper = new_txns_upper;
-                    continue;
-                }
-            }
-        }
+            self.datas.data_write.remove(&data_id);
 
-        // We know above that we've applied the latest write, so go ahead and
-        // fill the time between that and forget_ts with empty updates. It's
-        // fine if we get interrupted between the forget CaA and here, we just
-        // won't get around to telling the caller that it's safe to use this
-        // shard directly again. Presumably it will retry at some point.
-        let () = crate::empty_caa(
-            || format!("data {:.9} forget fill", data_id.to_string()),
-            self.datas.get_write(&data_id).await,
-            forget_ts,
-        )
-        .await;
-        self.datas.data_write.remove(&data_id);
-
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Forgets, at the given timestamp, every data shard that is registered.
     /// Returns the ids of the forgotten shards. See [Self::forget].
     #[instrument(level = "debug", skip_all, fields(ts = ?forget_ts))]
     pub async fn forget_all(&mut self, forget_ts: T) -> Result<Vec<ShardId>, T> {
-        let mut txns_upper = self
-            .txns_write
-            .shared_upper()
-            .into_option()
-            .expect("txns should not be closed");
-        let registered = loop {
-            self.txns_cache.update_ge(&txns_upper).await;
+        let op = &Arc::clone(&self.metrics).forget_all;
+        op.run(async {
+            let mut txns_upper = self
+                .txns_write
+                .shared_upper()
+                .into_option()
+                .expect("txns should not be closed");
+            let registered = loop {
+                self.txns_cache.update_ge(&txns_upper).await;
 
-            let registered = self.txns_cache.all_registered_at(&txns_upper);
-            let data_ids_debug = || {
-                registered
+                let registered = self.txns_cache.all_registered_at(&txns_upper);
+                let data_ids_debug = || {
+                    registered
+                        .iter()
+                        .map(|x| format!("{:.9}", x.to_string()))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+                let updates = registered
                     .iter()
-                    .map(|x| format!("{:.9}", x.to_string()))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            };
-            let updates = registered
-                .iter()
-                .map(|data_id| {
-                    C::encode(crate::TxnsEntry::Register(*data_id, T::encode(&forget_ts)))
-                })
-                .collect::<Vec<_>>();
-            let updates = updates
-                .iter()
-                .map(|(key, val)| ((key, val), &forget_ts, -1))
-                .collect::<Vec<_>>();
+                    .map(|data_id| {
+                        C::encode(crate::TxnsEntry::Register(*data_id, T::encode(&forget_ts)))
+                    })
+                    .collect::<Vec<_>>();
+                let updates = updates
+                    .iter()
+                    .map(|(key, val)| ((key, val), &forget_ts, -1))
+                    .collect::<Vec<_>>();
 
-            // If the txns_upper has passed forget_ts, we can no longer write.
-            if forget_ts < txns_upper {
-                debug!(
-                    "txns forget_all {} at {:?} mismatch current={:?}",
-                    data_ids_debug(),
-                    forget_ts,
-                    txns_upper,
-                );
-                return Err(txns_upper);
-            }
-
-            // Ensure the latest write has been applied, so we don't run into
-            // any issues trying to apply it later.
-            //
-            // NB: It's _very_ important for correctness to get this from the
-            // unapplied batches (which compact themselves naturally) and not
-            // from the writes (which are artificially compacted based on when
-            // we need reads for).
-            let data_latest_unapplied = self.txns_cache.unapplied_batches.values().last();
-            if let Some((_, _, latest_write)) = data_latest_unapplied {
-                debug!(
-                    "txns forget_all {} applying latest write {:?}",
-                    data_ids_debug(),
-                    latest_write,
-                );
-                let latest_write = latest_write.clone();
-                let _tidy = self.apply_le(&latest_write).await;
-            }
-            let res = crate::small_caa(
-                || format!("txns forget_all {}", data_ids_debug()),
-                &mut self.txns_write,
-                &updates,
-                txns_upper,
-                forget_ts.step_forward(),
-            )
-            .await;
-            match res {
-                Ok(()) => {
+                // If the txns_upper has passed forget_ts, we can no longer write.
+                if forget_ts < txns_upper {
                     debug!(
-                        "txns forget_all {} at {:?} success",
+                        "txns forget_all {} at {:?} mismatch current={:?}",
                         data_ids_debug(),
-                        forget_ts
+                        forget_ts,
+                        txns_upper,
                     );
-                    break registered;
+                    return Err(txns_upper);
                 }
-                Err(new_txns_upper) => {
-                    txns_upper = new_txns_upper;
-                    continue;
+
+                // Ensure the latest write has been applied, so we don't run into
+                // any issues trying to apply it later.
+                //
+                // NB: It's _very_ important for correctness to get this from the
+                // unapplied batches (which compact themselves naturally) and not
+                // from the writes (which are artificially compacted based on when
+                // we need reads for).
+                let data_latest_unapplied = self.txns_cache.unapplied_batches.values().last();
+                if let Some((_, _, latest_write)) = data_latest_unapplied {
+                    debug!(
+                        "txns forget_all {} applying latest write {:?}",
+                        data_ids_debug(),
+                        latest_write,
+                    );
+                    let latest_write = latest_write.clone();
+                    let _tidy = self.apply_le(&latest_write).await;
                 }
+                let res = crate::small_caa(
+                    || format!("txns forget_all {}", data_ids_debug()),
+                    &mut self.txns_write,
+                    &updates,
+                    txns_upper,
+                    forget_ts.step_forward(),
+                )
+                .await;
+                match res {
+                    Ok(()) => {
+                        debug!(
+                            "txns forget_all {} at {:?} success",
+                            data_ids_debug(),
+                            forget_ts
+                        );
+                        break registered;
+                    }
+                    Err(new_txns_upper) => {
+                        self.metrics.forget_all.retry_count.inc();
+                        txns_upper = new_txns_upper;
+                        continue;
+                    }
+                }
+            };
+
+            // We know above that we've applied the latest write, so go ahead and
+            // fill the time between that and forget_ts with empty updates. It's
+            // fine if we get interrupted between the forget CaA and here, we just
+            // won't get around to telling the caller that it's safe to use this
+            // shard directly again.
+            for data_id in registered.iter() {
+                let () = crate::empty_caa(
+                    || format!("data {:.9} forget_all fill", data_id.to_string()),
+                    self.datas.get_write(data_id).await,
+                    forget_ts.clone(),
+                )
+                .await;
+                self.datas.data_write.remove(data_id);
             }
-        };
 
-        // We know above that we've applied the latest write, so go ahead and
-        // fill the time between that and forget_ts with empty updates. It's
-        // fine if we get interrupted between the forget CaA and here, we just
-        // won't get around to telling the caller that it's safe to use this
-        // shard directly again.
-        for data_id in registered.iter() {
-            let () = crate::empty_caa(
-                || format!("data {:.9} forget_all fill", data_id.to_string()),
-                self.datas.get_write(data_id).await,
-                forget_ts.clone(),
-            )
-            .await;
-            self.datas.data_write.remove(data_id);
-        }
-
-        Ok(registered)
+            Ok(registered)
+        })
+        .await
     }
 
     /// "Applies" all committed txns <= the given timestamp, ensuring that reads
@@ -508,85 +527,95 @@ where
     /// This method is idempotent.
     #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
     pub async fn apply_le(&mut self, ts: &T) -> Tidy {
-        debug!("apply_le {:?}", ts);
-        self.txns_cache.update_gt(ts).await;
+        let op = &self.metrics.apply_le;
+        op.run(async {
+            debug!("apply_le {:?}", ts);
+            self.txns_cache.update_gt(ts).await;
+            self.txns_cache.update_gauges(&self.metrics);
 
-        let mut unapplied_batches_by_data = BTreeMap::<_, Vec<_>>::new();
-        for (data_id, batch_raw, commit_ts) in self.txns_cache.unapplied_batches() {
-            if ts < commit_ts {
-                break;
-            }
-            unapplied_batches_by_data
-                .entry(*data_id)
-                .or_default()
-                .push((batch_raw, commit_ts));
-        }
-
-        let retractions = FuturesUnordered::new();
-        for (data_id, batches) in unapplied_batches_by_data {
-            let mut data_write = self.datas.take_write(&data_id).await;
-            retractions.push(async move {
-                let mut ret = Vec::new();
-                for (batch_raw, commit_ts) in batches {
-                    crate::apply_caa(&mut data_write, batch_raw, commit_ts.clone()).await;
-                    // NB: Protos are not guaranteed to exactly roundtrip the
-                    // encoded bytes, so we intentionally use the raw batch so that
-                    // it definitely retracts.
-                    ret.push((batch_raw.clone(), (T::encode(commit_ts), data_id)));
+            let mut unapplied_batches_by_data = BTreeMap::<_, Vec<_>>::new();
+            for (data_id, batch_raw, commit_ts) in self.txns_cache.unapplied_batches() {
+                if ts < commit_ts {
+                    break;
                 }
-                (data_write, ret)
-            });
-        }
-        let retractions = retractions.collect::<Vec<_>>().await;
-        let retractions = retractions
-            .into_iter()
-            .flat_map(|(data_write, retractions)| {
-                self.datas.put_write(data_write);
-                retractions
-            })
-            .collect();
+                unapplied_batches_by_data
+                    .entry(*data_id)
+                    .or_default()
+                    .push((batch_raw, commit_ts));
+            }
 
-        debug!("apply_le {:?} success", ts);
-        Tidy { retractions }
+            let retractions = FuturesUnordered::new();
+            for (data_id, batches) in unapplied_batches_by_data {
+                let mut data_write = self.datas.take_write(&data_id).await;
+                retractions.push(async move {
+                    let mut ret = Vec::new();
+                    for (batch_raw, commit_ts) in batches {
+                        crate::apply_caa(&mut data_write, batch_raw, commit_ts.clone()).await;
+                        // NB: Protos are not guaranteed to exactly roundtrip the
+                        // encoded bytes, so we intentionally use the raw batch so that
+                        // it definitely retracts.
+                        ret.push((batch_raw.clone(), (T::encode(commit_ts), data_id)));
+                    }
+                    (data_write, ret)
+                });
+            }
+            let retractions = retractions.collect::<Vec<_>>().await;
+            let retractions = retractions
+                .into_iter()
+                .flat_map(|(data_write, retractions)| {
+                    self.datas.put_write(data_write);
+                    retractions
+                })
+                .collect();
+
+            debug!("apply_le {:?} success", ts);
+            Tidy { retractions }
+        })
+        .await
     }
 
     /// [Self::apply_le] but also advances the physical upper of every data
     /// shard registered at the timestamp past the timestamp.
     #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
     pub async fn apply_eager_le(&mut self, ts: &T) -> Tidy {
-        // TODO: Ideally the upper advancements would be done concurrently with
-        // this apply_le.
-        let tidy = self.apply_le(ts).await;
+        let op = &Arc::clone(&self.metrics).apply_eager_le;
+        op.run(async {
+            // TODO: Ideally the upper advancements would be done concurrently with
+            // this apply_le.
+            let tidy = self.apply_le(ts).await;
 
-        let data_writes = FuturesUnordered::new();
-        for data_id in self.txns_cache.all_registered_at(ts) {
-            let mut data_write = self.datas.take_write(&data_id).await;
-            let advance_to = ts.step_forward();
-            data_writes.push(async move {
-                let empty: &[((K, V), T, D)] = &[];
-                let () = data_write
-                    .append(
-                        empty,
-                        Antichain::from_elem(T::minimum()),
-                        Antichain::from_elem(advance_to),
-                    )
-                    .await
-                    .expect("usage was valid")
-                    .expect("nothing before minimum timestamp");
-                data_write
-            });
-        }
-        for data_write in data_writes.collect::<Vec<_>>().await {
-            self.datas.put_write(data_write);
-        }
+            let data_writes = FuturesUnordered::new();
+            for data_id in self.txns_cache.all_registered_at(ts) {
+                let mut data_write = self.datas.take_write(&data_id).await;
+                let advance_to = ts.step_forward();
+                data_writes.push(async move {
+                    let empty: &[((K, V), T, D)] = &[];
+                    let () = data_write
+                        .append(
+                            empty,
+                            Antichain::from_elem(T::minimum()),
+                            Antichain::from_elem(advance_to),
+                        )
+                        .await
+                        .expect("usage was valid")
+                        .expect("nothing before minimum timestamp");
+                    data_write
+                });
+            }
+            for data_write in data_writes.collect::<Vec<_>>().await {
+                self.datas.put_write(data_write);
+            }
 
-        tidy
+            tidy
+        })
+        .await
     }
 
     /// Commits the tidy work at the given time.
     ///
     /// Mostly a helper to make it obvious that we can throw away the apply work
     /// (and not get into an infinite cycle of tidy->apply->tidy).
+    #[cfg(test)]
     pub async fn tidy_at(&mut self, tidy_ts: T, tidy: Tidy) -> Result<(), T> {
         debug!("tidy at {:?}", tidy_ts);
 
@@ -608,25 +637,29 @@ where
     /// In practice, this will likely only be called from the singleton
     /// controller process.
     pub async fn compact_to(&mut self, mut since_ts: T) {
-        tracing::debug!("compact_to {:?}", since_ts);
-        // This call to compact the cache only affects the write and
-        // registration times, not the unapplied batches. The unapplied batches
-        // have a very important correctness invariant to hold, are
-        // self-compacting as batches are applied, and are handled below. This
-        // means it's always safe to compact the cache past where the txns shard
-        // is physically compacted to, so do that regardless of min_unapplied_ts
-        // and of whether the maybe_downgrade goes through.
-        self.txns_cache.update_gt(&since_ts).await;
-        self.txns_cache.compact_to(&since_ts);
+        let op = &self.metrics.compact_to;
+        op.run(async {
+            tracing::debug!("compact_to {:?}", since_ts);
+            // This call to compact the cache only affects the write and
+            // registration times, not the unapplied batches. The unapplied batches
+            // have a very important correctness invariant to hold, are
+            // self-compacting as batches are applied, and are handled below. This
+            // means it's always safe to compact the cache past where the txns shard
+            // is physically compacted to, so do that regardless of min_unapplied_ts
+            // and of whether the maybe_downgrade goes through.
+            self.txns_cache.update_gt(&since_ts).await;
+            self.txns_cache.compact_to(&since_ts);
 
-        // NB: A critical invariant for how this all works is that we never
-        // allow the since of the txns shard to pass any unapplied writes, so
-        // reduce it as necessary.
-        let min_unapplied_ts = self.txns_cache.min_unapplied_ts();
-        if min_unapplied_ts < &since_ts {
-            since_ts.clone_from(min_unapplied_ts);
-        }
-        crate::cads::<T, O, C>(&mut self.txns_since, since_ts).await;
+            // NB: A critical invariant for how this all works is that we never
+            // allow the since of the txns shard to pass any unapplied writes, so
+            // reduce it as necessary.
+            let min_unapplied_ts = self.txns_cache.min_unapplied_ts();
+            if min_unapplied_ts < &since_ts {
+                since_ts.clone_from(min_unapplied_ts);
+            }
+            crate::cads::<T, O, C>(&mut self.txns_since, since_ts).await;
+        })
+        .await
     }
 
     /// Returns the [ShardId] of the txns shard.
@@ -643,7 +676,7 @@ where
 /// A token representing maintenance writes (in particular, retractions) to the
 /// txns shard.
 ///
-/// This can be written on its own with [TxnsHandle::tidy_at] or sidecar'd into
+/// This can be written on its own with `TxnsHandle::tidy_at` or sidecar'd into
 /// a normal txn with [Txn::tidy].
 #[derive(Debug, Default)]
 pub struct Tidy {
@@ -721,6 +754,7 @@ mod tests {
     use differential_dataflow::Hashable;
     use futures::future::BoxFuture;
     use mz_ore::cast::CastFrom;
+    use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::{PersistParameters, RetryParameters};
     use mz_persist_client::PersistLocation;
@@ -745,6 +779,7 @@ mod tests {
             Self::open(
                 0,
                 client,
+                Arc::new(Metrics::new(&MetricsRegistry::new())),
                 txns_id,
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
@@ -1061,7 +1096,7 @@ mod tests {
             oneshot::Sender<u64>,
             ShardId,
             u64,
-            tokio::task::JoinHandle<Vec<(String, u64, i64)>>,
+            mz_ore::task::JoinHandle<Vec<(String, u64, i64)>>,
         )>,
     }
 

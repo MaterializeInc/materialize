@@ -80,12 +80,15 @@ world
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'pied-piper')
   KEY (a) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT
-contains:KAFKA sink validation: admin client errored
-# The detail field of the error message is actually quite descriptive ("Invalid
-# value "pied-piper" for configuration property "compression.codec"), but
-# testdrive cannot assert on the detail field.
+contains:invalid COMPRESSION TYPE: pied-piper
 
-> CREATE SINK none_sink
+> CREATE SINK none_sink_implicit
+  FROM feed
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'none')
+  KEY (a) NOT ENFORCED
+  FORMAT JSON ENVELOPE UPSERT
+
+> CREATE SINK none_sink_explicit
   FROM feed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression')
   KEY (a) NOT ENFORCED
@@ -94,6 +97,12 @@ contains:KAFKA sink validation: admin client errored
 > CREATE SINK gzip_sink
   FROM feed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'gzip')
+  KEY (a) NOT ENFORCED
+  FORMAT JSON ENVELOPE UPSERT
+
+> CREATE SINK gzip_sink_spongebob_case
+  FROM feed
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'gZiP')
   KEY (a) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT
 
@@ -112,7 +121,11 @@ contains:KAFKA sink validation: admin client errored
 # The Kafka APIs do not make it possible to assess whether the compression
 # actually took place, so we settle for just validating that the data is
 # readable.
-$ kafka-verify-data format=json key=false sink=materialize.public.none_sink
+$ kafka-verify-data format=json key=false sink=materialize.public.none_sink_implicit
+{"a": "hello"}
+{"a": "world"}
+{"a": "hello"}
+{"a": "world"}
 {"a": "hello"}
 {"a": "world"}
 {"a": "hello"}

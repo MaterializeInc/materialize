@@ -21,6 +21,8 @@ pub struct Metrics {
     pub catalog_transaction_commit_latency_seconds: Counter,
     pub transaction_errors: IntCounterVec,
     pub query_latency_duration_seconds: HistogramVec,
+    pub connection_attempts: IntCounterVec,
+    pub connection_errors: IntCounter,
 }
 
 impl Metrics {
@@ -49,7 +51,17 @@ impl Metrics {
                 var_labels: ["query_kind"],
                 buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
+            connection_attempts: registry.register(metric!(
+                name: "mz_stash_connection_attempts",
+                help: "Total number of connection attempts.",
+                var_labels: ["status"],
+            )),
+            connection_errors: registry.register(metric!(
+                name: "mz_stash_connection_errors",
+                help: "Total number of connection errors, after the connection has been established.",
+            )),
         };
+
         // Initialize error codes to 0 so we can observe their increase.
         metrics
             .transaction_errors
@@ -63,6 +75,16 @@ impl Metrics {
             .transaction_errors
             .with_label_values(&["other"])
             .inc_by(0);
+
+        metrics
+            .connection_attempts
+            .with_label_values(&["success"])
+            .inc_by(0);
+        metrics
+            .connection_attempts
+            .with_label_values(&["failure"])
+            .inc_by(0);
+
         metrics
     }
 }

@@ -178,18 +178,22 @@
 //! # Usage
 //!
 //! ```
+//! # use std::sync::Arc;
+//! # use mz_ore::metrics::MetricsRegistry;
 //! # use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+//! # use mz_persist_txn::metrics::Metrics;
 //! # use mz_persist_txn::operator::DataSubscribe;
 //! # use mz_persist_txn::txns::TxnsHandle;
 //! # use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 //! #
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! # let client = PersistClient::new_for_tests().await;
+//! # let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 //! # mz_ore::test::init_logging();
 //! // Open a txn shard, initializing it if necessary.
 //! let txns_id = ShardId::new();
 //! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
-//!     0u64, client.clone(), txns_id, StringSchema.into(), UnitSchema.into()
+//!     0u64, client.clone(), metrics, txns_id, StringSchema.into(), UnitSchema.into()
 //! ).await;
 //!
 //! // Register data shards to the txn set.
@@ -284,6 +288,7 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error, instrument};
 
+pub mod metrics;
 pub mod operator;
 pub mod txn_cache;
 pub mod txn_read;

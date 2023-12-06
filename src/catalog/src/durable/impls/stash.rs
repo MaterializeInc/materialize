@@ -9,7 +9,7 @@
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin;
 use std::sync::Arc;
@@ -34,7 +34,7 @@ use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{Collection, CollectionTrace, Trace};
 use crate::durable::initialize::{
-    DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
+    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
@@ -249,19 +249,6 @@ impl OpenableDurableCatalogState for OpenableConnection {
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_config(DEPLOY_GENERATION.into()).await
-    }
-
-    async fn get_enable_persist_txn_tables(
-        &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
-        let value = self.get_config(ENABLE_PERSIST_TXN_TABLES.into()).await?;
-        value
-            .map(EnablePersistTxnTables::try_from)
-            .transpose()
-            .map_err(|err| {
-                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
-                    .into()
-            })
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -606,6 +593,20 @@ impl ReadOnlyDurableCatalogState for Connection {
             .await
             .map(|x| x.expect("must exist").next_id)
             .map_err(Into::into)
+    }
+
+    async fn get_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
+        let value = get_config(&mut self.stash, PERSIST_TXN_TABLES.into()).await?;
+
+        value
+            .map(PersistTxnTablesImpl::try_from)
+            .transpose()
+            .map_err(|err| {
+                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
+                    .into()
+            })
     }
 
     async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
@@ -1160,14 +1161,6 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.openable_connection.get_deployment_generation().await
-    }
-
-    async fn get_enable_persist_txn_tables(
-        &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
-        self.openable_connection
-            .get_enable_persist_txn_tables()
-            .await
     }
 
     async fn trace(&mut self) -> Result<Trace, CatalogError> {

@@ -79,7 +79,7 @@ use mz_sql::plan::{
 };
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
-    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, ENABLE_PERSIST_TXN_TABLES,
+    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, PERSIST_TXN_TABLES,
 };
 use mz_sql::{plan, rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{
@@ -907,6 +907,10 @@ impl Catalog {
 
     pub fn get_mz_internal_schema_id(&self) -> &SchemaId {
         self.state.get_mz_internal_schema_id()
+    }
+
+    pub fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+        self.state.get_mz_unsafe_schema_id()
     }
 
     pub fn get_database(&self, id: &DatabaseId) -> &Database {
@@ -3284,13 +3288,11 @@ impl Catalog {
         state.insert_system_configuration(name, value)?;
         let var = state.get_system_configuration(name)?;
         tx.upsert_system_config(name, var.value())?;
-        // This mirrors the `enabled_persist_txn_tables` "system var" into the
-        // catalog storage "config" collection so that we can toggle the flag with
+        // This mirrors the `persist_txn_tables` "system var" into the catalog
+        // storage "config" collection so that we can toggle the flag with
         // Launch Darkly, but use it in boot before Launch Darkly is available.
-        if name == ENABLE_PERSIST_TXN_TABLES.name() {
-            tx.set_enable_persist_txn_tables(
-                state.system_configuration.enable_persist_txn_tables(),
-            )?;
+        if name == PERSIST_TXN_TABLES.name() {
+            tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
         }
         Ok(())
     }
@@ -4062,6 +4064,10 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn get_mz_internal_schema_id(&self) -> &SchemaId {
         self.state().get_mz_internal_schema_id()
+    }
+
+    fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+        self.state().get_mz_unsafe_schema_id()
     }
 
     fn is_system_schema(&self, schema: &str) -> bool {
@@ -5317,7 +5323,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_smoketest_all_builtins() {
-        fn inner(catalog: Catalog) -> Vec<tokio::task::JoinHandle<()>> {
+        fn inner(catalog: Catalog) -> Vec<mz_ore::task::JoinHandle<()>> {
             let catalog = Arc::new(catalog);
             let conn_catalog = catalog.for_system_session();
 

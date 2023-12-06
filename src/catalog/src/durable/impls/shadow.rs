@@ -13,7 +13,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use timely::progress::Timestamp as TimelyTimestamp;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
@@ -151,12 +151,6 @@ where
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         compare_and_return_async!(self, get_deployment_generation)
-    }
-
-    async fn get_enable_persist_txn_tables(
-        &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
-        compare_and_return_async!(self, get_enable_persist_txn_tables)
     }
 
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
@@ -340,6 +334,12 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
         } else {
             compare_and_return_async!(self, get_next_id, id_type)
         }
+    }
+
+    async fn get_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
+        compare_and_return_async!(self, get_persist_txn_tables)
     }
 
     async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {

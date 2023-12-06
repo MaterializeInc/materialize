@@ -87,6 +87,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::BufMut;
+use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
 use itertools::Itertools;
@@ -102,11 +103,13 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
+use mz_persist_txn::metrics::Metrics as TxnMetrics;
 use mz_persist_txn::txn_read::TxnsRead;
 use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
@@ -123,8 +126,7 @@ use mz_storage_client::controller::{
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
 use mz_storage_types::controller::{
-    CollectionMetadata, DurableCollectionMetadata, EnablePersistTxnTables, StorageError,
-    TxnsCodecRow,
+    CollectionMetadata, DurableCollectionMetadata, PersistTxnTablesImpl, StorageError, TxnsCodecRow,
 };
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
@@ -334,6 +336,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Whether we have run `txns_init` yet (required before create_collections
     /// and the various flavors of append).
     txns_init_run: bool,
+    txns_metrics: Arc<TxnMetrics>,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
@@ -390,6 +393,10 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Write frontiers that have been recorded in the `ReplicaFrontiers` collection, kept to be
     /// able to retract old rows.
     recorded_replica_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<T>>,
+
+    /// The latest timestamp for each id in the mz_privatelink_connection_status_history
+    /// table, read on startup by the adapter to initialize the privatelink vpce watch task
+    privatelink_status_table_latest: Option<BTreeMap<GlobalId, DateTime<Utc>>>,
 }
 
 #[async_trait(?Send)]
@@ -927,6 +934,36 @@ where
                                 IntrospectionType::SinkStatusHistory,
                             )
                             .await;
+                        }
+                        IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                            // Truncate the private link connection status history table and
+                            // store the latest timestamp for each id in the table.
+                            let occurred_at_col =
+                                healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                                    .get_by_name(&ColumnName::from("occurred_at"))
+                                    .expect("schema has not changed")
+                                    .0;
+                            self.privatelink_status_table_latest = self
+                                .partially_truncate_status_history(
+                                    IntrospectionType::PrivatelinkConnectionStatusHistory,
+                                )
+                                .await
+                                .and_then(|map| {
+                                    Some(
+                                        map.into_iter()
+                                            .map(|(id, row)| {
+                                                (
+                                                    id,
+                                                    row.iter()
+                                                        .nth(occurred_at_col)
+                                                        .expect("schema has not changed")
+                                                        .unwrap_timestamptz()
+                                                        .into(),
+                                                )
+                                            })
+                                            .collect(),
+                                    )
+                                });
                         }
 
                         // Truncate compute-maintained collections.
@@ -2126,6 +2163,7 @@ where
         let mut txns = TxnsHandle::<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>::open(
             T::minimum(),
             txns_client.clone(),
+            Arc::clone(&self.txns_metrics),
             *txns_id,
             Arc::new(RelationDesc::empty()),
             Arc::new(UnitSchema),
@@ -2153,6 +2191,10 @@ where
 
         self.txns_init_run = true;
         Ok(())
+    }
+
+    fn get_privatelink_status_table_latest(&self) -> &Option<BTreeMap<GlobalId, DateTime<Utc>>> {
+        &self.privatelink_status_table_latest
     }
 }
 
@@ -2211,7 +2253,7 @@ where
         stash_metrics: Arc<StashMetrics>,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
-        enable_persist_txn_tables: EnablePersistTxnTables,
+        persist_txn_tables: PersistTxnTablesImpl,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -2291,12 +2333,13 @@ where
             .open(persist_location.clone())
             .await
             .expect("location should be valid");
-        let (enable_persist_txn_tables, lazy_persist_txn_tables) = match enable_persist_txn_tables {
-            EnablePersistTxnTables::Off => (false, false),
-            EnablePersistTxnTables::Eager => (true, false),
-            EnablePersistTxnTables::Lazy => (true, true),
+        let (persist_txn_tables, lazy_persist_txn_tables) = match persist_txn_tables {
+            PersistTxnTablesImpl::Off => (false, false),
+            PersistTxnTablesImpl::Eager => (true, false),
+            PersistTxnTablesImpl::Lazy => (true, true),
         };
-        let (persist_table_worker, txns) = if enable_persist_txn_tables {
+        let txns_metrics = Arc::new(TxnMetrics::new(&metrics_registry));
+        let (persist_table_worker, txns) = if persist_txn_tables {
             let txns_id = PERSIST_TXNS_SHARD
                 .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
                 .await
@@ -2306,6 +2349,7 @@ where
             let txns = TxnsHandle::open(
                 T::minimum(),
                 txns_client.clone(),
+                Arc::clone(&txns_metrics),
                 txns_id,
                 Arc::new(RelationDesc::empty()),
                 Arc::new(UnitSchema),
@@ -2369,6 +2413,7 @@ where
             persist_read_handles: persist_handles::PersistReadWorker::new(),
             txns,
             txns_init_run: false,
+            txns_metrics,
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
@@ -2390,6 +2435,7 @@ where
             metrics: StorageControllerMetrics::new(metrics_registry),
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
+            privatelink_status_table_latest: None,
         }
     }
 
@@ -2647,7 +2693,11 @@ where
 
     /// Effectively truncates the source status history shard except for the most recent updates
     /// from each ID.
-    async fn partially_truncate_status_history(&mut self, collection: IntrospectionType) {
+    /// Returns a map with latest row per id
+    async fn partially_truncate_status_history(
+        &mut self,
+        collection: IntrospectionType,
+    ) -> Option<BTreeMap<GlobalId, Row>> {
         let (keep_n, occurred_at_col, id_col) = match collection {
             IntrospectionType::SourceStatusHistory => (
                 self.config.keep_n_source_status_history_entries,
@@ -2671,6 +2721,17 @@ where
                     .expect("schema has not changed")
                     .0,
             ),
+            IntrospectionType::PrivatelinkConnectionStatusHistory => (
+                self.config.keep_n_privatelink_status_history_entries,
+                healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("occurred_at"))
+                    .expect("schema has not changed")
+                    .0,
+                healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("connection_id"))
+                    .expect("schema has not changed")
+                    .0,
+            ),
             _ => unreachable!(),
         };
 
@@ -2684,12 +2745,16 @@ where
             }
             // If collection is closed or the frontier is the minimum, we cannot
             // or don't need to truncate (respectively).
-            _ => return,
+            _ => return None,
         };
 
         // BTreeMap<Id, MinHeap<(OccurredAt, Row)>>, to track the
         // earliest events for each id.
         let mut last_n_entries_per_id: BTreeMap<Datum, BinaryHeap<Reverse<(Datum, Vec<Datum>)>>> =
+            BTreeMap::new();
+
+        // BTreeMap to keep track of the row with the latest timestamp for each id
+        let mut latest_row_per_id: BTreeMap<Datum, (CheckedTimestamp<DateTime<Utc>>, Vec<Datum>)> =
             BTreeMap::new();
 
         // Consolidate the snapshot, so we can process it correctly below.
@@ -2712,6 +2777,15 @@ where
                 id,
                 collection
             );
+
+            // Keep track of the timestamp of the latest row per id
+            let timestamp = occurred_at.unwrap_timestamptz();
+            match latest_row_per_id.get(&id) {
+                Some(existing) if &existing.0 > &timestamp => {}
+                _ => {
+                    latest_row_per_id.insert(id, (timestamp, status_row.clone()));
+                }
+            }
 
             // Consider duplicated rows separately.
             for _ in 0..*diff {
@@ -2751,6 +2825,25 @@ where
             .collect();
 
         self.append_to_managed_collection(id, updates).await;
+
+        Some(
+            latest_row_per_id
+                .into_iter()
+                .filter_map(|(key, (_, row_vec))| {
+                    match GlobalId::from_str(key.unwrap_str()) {
+                        Ok(id) => {
+                            let mut packer = row_buf.packer();
+                            packer.extend(row_vec.into_iter());
+                            Some((id, row_buf.clone()))
+                        }
+                        // Ignore any rows that can't be unwrapped correctly
+                        Err(_) => None,
+                        // TODO(rjobanp): add a dropped status so we can ignore rows that are
+                        // no longer relevant (e.g. dropped connections/sources/sinks)
+                    }
+                })
+                .collect(),
+        )
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.

@@ -58,6 +58,6 @@ Explained Query:
   With
     cte l0 =
       Reduce aggregates=[sum(#0)]
-        Get materialize.public.mv_using_dataflow_rendering
+        ReadStorage materialize.public.mv_using_dataflow_rendering
 
 EOF

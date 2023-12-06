@@ -18,13 +18,15 @@ use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
 use mz_storage_types::connections::StringOrSecret;
+use mz_storage_types::sinks::KafkaSinkCompressionType;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
 use tokio::time::Duration;
 
+use crate::ast::Value;
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
-use crate::plan::with_options::TryFromValue;
+use crate::plan::with_options::{ImpliedValue, TryFromValue};
 use crate::plan::PlanError;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -71,7 +73,11 @@ pub fn validate_options_for_context<T: AstInfo>(
 
 generate_extracted_config!(
     KafkaConfigOption,
-    (CompressionType, String),
+    (
+        CompressionType,
+        KafkaSinkCompressionType,
+        Default(KafkaSinkCompressionType::None)
+    ),
     (GroupIdPrefix, String),
     (Topic, String),
     (TopicMetadataRefreshIntervalMs, i32),
@@ -82,6 +88,34 @@ generate_extracted_config!(
     (RetentionBytes, i64),
     (RetentionMs, i64)
 );
+
+impl TryFromValue<Value> for KafkaSinkCompressionType {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        match v {
+            Value::String(v) => match v.to_lowercase().as_str() {
+                "none" => Ok(KafkaSinkCompressionType::None),
+                "gzip" => Ok(KafkaSinkCompressionType::Gzip),
+                "snappy" => Ok(KafkaSinkCompressionType::Snappy),
+                "lz4" => Ok(KafkaSinkCompressionType::Lz4),
+                "zstd" => Ok(KafkaSinkCompressionType::Zstd),
+                // The caller will add context, resulting in an error like
+                // "invalid COMPRESSION TYPE: <bad-compression-type>".
+                _ => sql_bail!("{}", v),
+            },
+            _ => sql_bail!("compression type must be a string"),
+        }
+    }
+
+    fn name() -> String {
+        "Kafka sink compression type".to_string()
+    }
+}
+
+impl ImpliedValue for KafkaSinkCompressionType {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a compression type value")
+    }
+}
 
 /// The config options we expect to pass along when connecting to librdkafka.
 ///
@@ -97,7 +131,6 @@ impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
     #[allow(clippy::redundant_closure_call)]
     fn try_from(
         KafkaConfigOptionExtracted {
-            compression_type,
             topic_metadata_refresh_interval_ms,
             ..
         }: &KafkaConfigOptionExtracted,
@@ -121,7 +154,6 @@ impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
             };
         }
 
-        fill_options!(compression_type, "compression.type");
         fill_options!(
             topic_metadata_refresh_interval_ms,
             "topic.metadata.refresh.interval.ms",

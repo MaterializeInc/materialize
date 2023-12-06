@@ -413,6 +413,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  details  jsonb
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_status_history' ORDER BY position
+----
+1  occurred_at  timestamp␠with␠time␠zone
+2  connection_id  text
+3  status  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_subscriptions' ORDER BY position
 ----
 1  id  text
@@ -639,6 +646,7 @@ mz_arrangement_sharing_per_worker
 mz_arrangement_sharing_raw
 mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
+mz_aws_privatelink_connection_status_history
 mz_cluster_links
 mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats

@@ -10,7 +10,6 @@
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use mz_ore::cast::CastFrom;
@@ -23,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
-use crate::connections::{ConnectionContext, StringOrSecret};
+use crate::connections::ConnectionContext;
 use crate::controller::{CollectionMetadata, StorageError};
 
 use crate::connections::inline::{
@@ -398,6 +397,29 @@ impl RustType<proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec> for Ve
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KafkaSinkCompressionType {
+    None,
+    Gzip,
+    Snappy,
+    Lz4,
+    Zstd,
+}
+
+impl KafkaSinkCompressionType {
+    /// Format the compression type as expected by `compression.type` librdkafka
+    /// setting.
+    pub fn to_librdkafka_option(&self) -> &'static str {
+        match self {
+            KafkaSinkCompressionType::None => "none",
+            KafkaSinkCompressionType::Gzip => "gzip",
+            KafkaSinkCompressionType::Snappy => "snappy",
+            KafkaSinkCompressionType::Lz4 => "lz4",
+            KafkaSinkCompressionType::Zstd => "zstd",
+        }
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: GlobalId,
     pub connection: C::Kafka,
@@ -412,9 +434,7 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub replication_factor: i32,
     pub fuel: usize,
     pub retention: KafkaSinkConnectionRetention,
-    /// Additional options that need to be set on the connection whenever it's
-    /// inlined.
-    pub connection_options: BTreeMap<String, StringOrSecret>,
+    pub compression_type: KafkaSinkCompressionType,
 }
 
 impl KafkaSinkConnection {
@@ -451,7 +471,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             replication_factor,
             fuel,
             retention,
-            connection_options,
+            compression_type,
         } = self;
 
         let compatibility_checks = [
@@ -475,8 +495,8 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             (fuel == &other.fuel, "fuel"),
             (retention == &other.retention, "retention"),
             (
-                connection_options == &other.connection_options,
-                "connection_options",
+                compression_type == &other.compression_type,
+                "compression_type",
             ),
         ];
         for (compatible, field) in compatibility_checks {
@@ -511,15 +531,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             replication_factor,
             fuel,
             retention,
-            connection_options,
+            compression_type,
         } = self;
-
-        let mut connection = r.resolve_connection(connection).unwrap_kafka();
-        connection.options.extend(connection_options);
-
         KafkaSinkConnection {
             connection_id,
-            connection,
+            connection: r.resolve_connection(connection).unwrap_kafka(),
             format: format.into_inline_connection(r),
             relation_key_indices,
             key_desc_and_indices,
@@ -529,13 +545,14 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             replication_factor,
             fuel,
             retention,
-            connection_options: BTreeMap::default(),
+            compression_type,
         }
     }
 }
 
 impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
     fn into_proto(&self) -> ProtoKafkaSinkConnectionV2 {
+        use crate::sinks::proto_kafka_sink_connection_v2::CompressionType;
         ProtoKafkaSinkConnectionV2 {
             connection_id: Some(self.connection_id.into_proto()),
             connection: Some(self.connection.into_proto()),
@@ -548,15 +565,18 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             replication_factor: self.replication_factor,
             fuel: u64::cast_from(self.fuel),
             retention: Some(self.retention.into_proto()),
-            connection_options: self
-                .connection_options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.into_proto()))
-                .collect(),
+            compression_type: Some(match self.compression_type {
+                KafkaSinkCompressionType::None => CompressionType::None(()),
+                KafkaSinkCompressionType::Gzip => CompressionType::Gzip(()),
+                KafkaSinkCompressionType::Snappy => CompressionType::Snappy(()),
+                KafkaSinkCompressionType::Lz4 => CompressionType::Lz4(()),
+                KafkaSinkCompressionType::Zstd => CompressionType::Zstd(()),
+            }),
         }
     }
 
     fn from_proto(proto: ProtoKafkaSinkConnectionV2) -> Result<Self, TryFromProtoError> {
+        use crate::sinks::proto_kafka_sink_connection_v2::CompressionType;
         Ok(KafkaSinkConnection {
             connection_id: proto
                 .connection_id
@@ -579,11 +599,18 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             retention: proto
                 .retention
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::retention")?,
-            connection_options: proto
-                .connection_options
-                .into_iter()
-                .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
-                .collect::<Result<_, _>>()?,
+            compression_type: match proto.compression_type {
+                Some(CompressionType::None(())) => KafkaSinkCompressionType::None,
+                Some(CompressionType::Gzip(())) => KafkaSinkCompressionType::Gzip,
+                Some(CompressionType::Snappy(())) => KafkaSinkCompressionType::Snappy,
+                Some(CompressionType::Lz4(())) => KafkaSinkCompressionType::Lz4,
+                Some(CompressionType::Zstd(())) => KafkaSinkCompressionType::Zstd,
+                None => {
+                    return Err(TryFromProtoError::missing_field(
+                        "ProtoKafkaSinkConnectionV2::compression_type",
+                    ))
+                }
+            },
         })
     }
 }

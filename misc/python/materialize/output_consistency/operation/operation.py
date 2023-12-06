@@ -141,7 +141,8 @@ class DbOperation(DbOperationOrFunction):
 
     def to_pattern(self, args_count: int) -> str:
         self.validate_args_count_in_range(args_count)
-        return self.pattern
+        # wrap in parentheses
+        return f"({self.pattern})"
 
     def __str__(self) -> str:
         return f"DbOperation: {self.pattern}"

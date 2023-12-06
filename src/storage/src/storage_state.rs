@@ -108,7 +108,6 @@ use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, watch};
-use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 use tracing::{info, trace, warn};
 
@@ -372,7 +371,7 @@ impl StorageInstanceContext {
 /// needed.
 pub struct SinkHandle {
     downgrade_tx: watch::Sender<Antichain<Timestamp>>,
-    _handle: JoinHandle<()>,
+    _handle: mz_ore::task::JoinHandle<()>,
 }
 
 impl SinkHandle {

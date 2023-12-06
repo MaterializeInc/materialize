@@ -197,7 +197,7 @@ steps:
           queue: builder-linux-x86_64
 
       - id: miri-test
-        label: Miri test (fast) %n
+        label: Miri test (fast) %N
         inputs: [src]
         parallelism: 2
         timeout_in_minutes: 30
@@ -212,7 +212,7 @@ steps:
         coverage: skip
 
   - id: testdrive
-    label: Testdrive %n
+    label: Testdrive %N
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/testdrive]
@@ -228,7 +228,7 @@ steps:
       queue: linux-x86_64
 
   - id: cluster-tests
-    label: Cluster tests %n
+    label: Cluster tests %N
     depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
@@ -241,7 +241,7 @@ steps:
       queue: linux-x86_64
 
   - id: sqllogictest-fast
-    label: Fast SQL logic tests %n
+    label: Fast SQL logic tests %N
     depends_on: build-x86_64
     timeout_in_minutes: 30
     parallelism: 6
@@ -400,7 +400,7 @@ steps:
     key: platform-checks
     steps:
       - id: checks-restart-environmentd-clusterd-storage
-        label: "Checks + restart of environmentd & storage clusterd (%n)"
+        label: "Checks + restart of environmentd & storage clusterd (%N)"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
@@ -428,7 +428,7 @@ steps:
               args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: cloudtest
-    label: Cloudtest %n
+    label: Cloudtest %N
     depends_on: build-x86_64
     parallelism: 6
     timeout_in_minutes: 30

@@ -2731,7 +2731,7 @@ fn test_cancel_read_then_write() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
-    server.enable_feature_flags(&["enable_dangerous_functions"]);
+    server.enable_feature_flags(&["enable_unsafe_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
@@ -2754,7 +2754,7 @@ fn test_cancel_read_then_write() {
 
             let handle1 = thread::spawn(move || {
                 let err =  client1
-                    .batch_execute("insert into foo select a, case when mz_internal.mz_sleep(ts) > 0 then 0 end as ts from foo")
+                    .batch_execute("insert into foo select a, case when mz_unsafe.mz_sleep(ts) > 0 then 0 end as ts from foo")
                     .unwrap_err();
                 assert_contains!(
                     err.to_string(),
@@ -3016,7 +3016,7 @@ fn webhook_concurrency_limit() {
     let server = test_util::TestHarness::default().start_blocking();
 
     // Note: we need enable_unstable_dependencies to use mz_sleep.
-    server.enable_feature_flags(&["enable_unstable_dependencies", "enable_dangerous_functions"]);
+    server.enable_feature_flags(&["enable_unstable_dependencies", "enable_unsafe_functions"]);
 
     // Reduce the webhook concurrency limit;
     let mut mz_client = server
@@ -3043,7 +3043,7 @@ fn webhook_concurrency_limit() {
         .execute(
             "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK \
              BODY FORMAT TEXT \
-             CHECK ( WITH(BODY) body IS NOT NULL AND mz_internal.mz_sleep(5) IS NULL )",
+             CHECK ( WITH(BODY) body IS NOT NULL AND mz_unsafe.mz_sleep(5) IS NULL )",
             &[],
         )
         .expect("failed to create source");

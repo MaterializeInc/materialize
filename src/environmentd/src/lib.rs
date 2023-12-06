@@ -91,6 +91,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use futures::FutureExt;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
@@ -110,7 +111,7 @@ use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
@@ -159,7 +160,7 @@ pub struct Config {
     ///
     /// If specified, this overrides the value stored in Launch Darkly (and
     /// mirrored to the catalog storage's "config" collection).
-    pub enable_persist_txn_tables_cli: Option<EnablePersistTxnTables>,
+    pub persist_txn_tables_cli: Option<PersistTxnTablesImpl>,
 
     // === Adapter options. ===
     /// Catalog configuration.
@@ -193,10 +194,9 @@ pub struct Config {
     pub segment_api_key: Option<String>,
     /// IP Addresses which will be used for egress.
     pub egress_ips: Vec<Ipv4Addr>,
-    /// 12-digit AWS account id, which will be used to generate an AWS Principal.
+    /// The AWS account ID, which will be used to generate ARNs for
+    /// Materialize-controlled AWS resources.
     pub aws_account_id: Option<String>,
-    /// The Materialize AWS role arn which will be used to connect to customer's AWS account.
-    pub aws_external_connection_role: Option<String>,
     /// Supported AWS PrivateLink availability zone ids.
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     /// An SDK key for LaunchDarkly. Enables system parameter synchronization
@@ -402,6 +402,7 @@ impl Listeners {
                 &config.controller,
                 &config.environment_id,
             )
+            .boxed()
             .await?;
 
             if !openable_adapter_storage.is_initialized().await? {
@@ -456,19 +457,13 @@ impl Listeners {
             }
         }
 
-        let mut openable_adapter_storage = catalog_opener(
+        let openable_adapter_storage = catalog_opener(
             &config.catalog_config,
             &config.controller,
             &config.environment_id,
         )
+        .boxed()
         .await?;
-        // Get the value from Launch Darkly as of the last time this environment
-        // was running. (Ideally it would be the current value, but that's
-        // harder: we don't want to block startup on it if LD is down and it
-        // would also require quite a bit of abstraction breakage.)
-        let enable_persist_txn_tables_stash_ld = openable_adapter_storage
-            .get_enable_persist_txn_tables()
-            .await?;
         let mut adapter_storage = openable_adapter_storage
             .open(
                 boot_ts,
@@ -481,6 +476,11 @@ impl Listeners {
                 config.deploy_generation,
             )
             .await?;
+        // Get the value from Launch Darkly as of the last time this environment
+        // was running. (Ideally it would be the current value, but that's
+        // harder: we don't want to block startup on it if LD is down and it
+        // would also require quite a bit of abstraction breakage.)
+        let persist_txn_tables_stash_ld = adapter_storage.get_persist_txn_tables().await?;
 
         // Load the adapter catalog from disk.
         if !config
@@ -503,23 +503,19 @@ impl Listeners {
         );
 
         // Initialize controller.
-        let mut enable_persist_txn_tables =
-            enable_persist_txn_tables_stash_ld.unwrap_or(EnablePersistTxnTables::Off);
-        if let Some(value) = config.enable_persist_txn_tables_cli {
-            enable_persist_txn_tables = value;
+        let mut persist_txn_tables =
+            persist_txn_tables_stash_ld.unwrap_or(PersistTxnTablesImpl::Off);
+        if let Some(value) = config.persist_txn_tables_cli {
+            persist_txn_tables = value;
         }
         info!(
-            "enable_persist_txn_tables value of {} computed from catalog {:?} and flag {:?}",
-            enable_persist_txn_tables,
-            enable_persist_txn_tables_stash_ld,
-            config.enable_persist_txn_tables_cli,
+            "persist_txn_tables value of {} computed from catalog {:?} and flag {:?}",
+            persist_txn_tables, persist_txn_tables_stash_ld, config.persist_txn_tables_cli,
         );
-        let controller = mz_controller::Controller::new(
-            config.controller,
-            envd_epoch,
-            enable_persist_txn_tables,
-        )
-        .await;
+        let controller =
+            mz_controller::Controller::new(config.controller, envd_epoch, persist_txn_tables)
+                .boxed()
+                .await;
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
@@ -562,7 +558,6 @@ impl Listeners {
             egress_ips: config.egress_ips,
             system_parameter_sync_config: system_parameter_sync_config.clone(),
             aws_account_id: config.aws_account_id,
-            aws_external_connection_role: config.aws_external_connection_role,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             active_connection_count: Arc::clone(&active_connection_count),
             webhook_concurrency_limit: webhook_concurrency_limit.clone(),

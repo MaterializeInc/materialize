@@ -15,7 +15,7 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::read::{Cursor, ReadHandle, Since};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, ShardId};

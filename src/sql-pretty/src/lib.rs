@@ -88,6 +88,8 @@ use crate::doc::{
     doc_select_statement, doc_subscribe,
 };
 
+pub use crate::doc::doc_expr;
+
 const TAB: isize = 4;
 
 fn to_doc<T: AstInfo>(v: &Statement<T>) -> RcDoc {

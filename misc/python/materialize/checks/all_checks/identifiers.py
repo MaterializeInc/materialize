@@ -167,6 +167,7 @@ class Identifiers(Check):
         public
         information_schema
         mz_catalog
+        mz_unsafe
         mz_internal
         pg_catalog
         {dq_print(self.ident["schema"])}

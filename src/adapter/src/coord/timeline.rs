@@ -661,6 +661,10 @@ impl Coordinator {
                 &ResolvedDatabaseSpecifier::Ambient,
                 &SchemaSpecifier::Id(self.catalog().get_information_schema_id().clone()),
             ),
+            (
+                &ResolvedDatabaseSpecifier::Ambient,
+                &SchemaSpecifier::Id(self.catalog().get_mz_unsafe_schema_id().clone()),
+            ),
         ];
 
         if system_schemas.iter().any(|s| schemas.contains(s)) {

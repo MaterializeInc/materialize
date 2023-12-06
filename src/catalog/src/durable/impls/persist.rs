@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::collections::CollectionExt;
@@ -33,7 +33,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Diff;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -47,7 +47,7 @@ use crate::durable::impls::persist::state_update::{
 };
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
 use crate::durable::initialize::{
-    DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
+    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, Config, DurableType, Snapshot, StorageUsageKey};
@@ -478,6 +478,7 @@ impl OpenableDurableCatalogState for PersistHandle {
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Savepoint, boot_ts, bootstrap_args, deploy_generation)
+            .boxed()
             .await
     }
 
@@ -488,6 +489,7 @@ impl OpenableDurableCatalogState for PersistHandle {
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Readonly, boot_ts, bootstrap_args, None)
+            .boxed()
             .await
     }
 
@@ -499,6 +501,7 @@ impl OpenableDurableCatalogState for PersistHandle {
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Writable, boot_ts, bootstrap_args, deploy_generation)
+            .boxed()
             .await
     }
 
@@ -515,20 +518,6 @@ impl OpenableDurableCatalogState for PersistHandle {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         Ok(self.get_current_config(DEPLOY_GENERATION).await)
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn get_enable_persist_txn_tables(
-        &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
-        let value = self.get_current_config(ENABLE_PERSIST_TXN_TABLES).await;
-        value
-            .map(EnablePersistTxnTables::try_from)
-            .transpose()
-            .map_err(|err| {
-                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
-                    .into()
-            })
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -887,6 +876,29 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .unwrap_or(false))
         })
         .await
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn get_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
+        let value = self
+            .with_snapshot(|snapshot| {
+                Ok(snapshot
+                    .configs
+                    .get(&proto::ConfigKey {
+                        key: PERSIST_TXN_TABLES.to_string(),
+                    })
+                    .map(|value| value.value))
+            })
+            .await?;
+        value
+            .map(PersistTxnTablesImpl::try_from)
+            .transpose()
+            .map_err(|err| {
+                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
+                    .into()
+            })
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

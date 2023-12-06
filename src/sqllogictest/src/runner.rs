@@ -1044,7 +1044,6 @@ impl<'a> RunnerInner<'a> {
             segment_api_key: None,
             egress_ips: vec![],
             aws_account_id: None,
-            aws_external_connection_role: None,
             aws_privatelink_availability_zones: None,
             launchdarkly_sdk_key: None,
             launchdarkly_key_map: Default::default(),
@@ -1054,7 +1053,7 @@ impl<'a> RunnerInner<'a> {
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
             // TODO(txn): Get this flipped on before turning anything on in prod.
-            enable_persist_txn_tables_cli: None,
+            persist_txn_tables_cli: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1136,7 +1135,7 @@ impl<'a> RunnerInner<'a> {
 
         // Dangerous functions are useful for tests so we enable it for all tests.
         self.system_client
-            .execute("ALTER SYSTEM SET enable_dangerous_functions = on", &[])
+            .execute("ALTER SYSTEM SET enable_unsafe_functions = on", &[])
             .await?;
         Ok(())
     }

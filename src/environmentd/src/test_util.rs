@@ -524,7 +524,6 @@ impl Listeners {
                 segment_api_key: None,
                 egress_ips: vec![],
                 aws_account_id: None,
-                aws_external_connection_role: None,
                 aws_privatelink_availability_zones: None,
                 launchdarkly_sdk_key: None,
                 launchdarkly_key_map: Default::default(),
@@ -534,7 +533,7 @@ impl Listeners {
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 // TODO(txn): Get this flipped on before turning anything on in prod.
-                enable_persist_txn_tables_cli: None,
+                persist_txn_tables_cli: None,
             })
             .await?;
 
@@ -732,7 +731,7 @@ impl<'s, T, H> ConnectBuilder<'s, T, H> {
         }
     }
 
-    /// Configures this [`ConnectBuilder`] to return the [`tokio::task::JoinHandle`] that is
+    /// Configures this [`ConnectBuilder`] to return the [`mz_ore::task::JoinHandle`] that is
     /// polling the underlying postgres connection, associated with the returned client.
     pub fn with_handle(self) -> ConnectBuilder<'s, T, WithHandle> {
         ConnectBuilder {
@@ -751,37 +750,37 @@ impl<'s, T, H> ConnectBuilder<'s, T, H> {
     }
 }
 
-/// This trait enables us to either include or omit the [`tokio::task::JoinHandle`] in the result
+/// This trait enables us to either include or omit the [`mz_ore::task::JoinHandle`] in the result
 /// of a client connection.
 pub trait IncludeHandle: Send {
     type Output;
     fn transform_result(
         client: tokio_postgres::Client,
-        handle: tokio::task::JoinHandle<()>,
+        handle: mz_ore::task::JoinHandle<()>,
     ) -> Self::Output;
 }
 
-/// Type parameter that denotes we __will not__ return the [`tokio::task::JoinHandle`] in the
+/// Type parameter that denotes we __will not__ return the [`mz_ore::task::JoinHandle`] in the
 /// result of a [`ConnectBuilder`].
 pub struct NoHandle;
 impl IncludeHandle for NoHandle {
     type Output = tokio_postgres::Client;
     fn transform_result(
         client: tokio_postgres::Client,
-        _handle: tokio::task::JoinHandle<()>,
+        _handle: mz_ore::task::JoinHandle<()>,
     ) -> Self::Output {
         client
     }
 }
 
-/// Type parameter that denotes we __will__ return the [`tokio::task::JoinHandle`] in the result of
+/// Type parameter that denotes we __will__ return the [`mz_ore::task::JoinHandle`] in the result of
 /// a [`ConnectBuilder`].
 pub struct WithHandle;
 impl IncludeHandle for WithHandle {
-    type Output = (tokio_postgres::Client, tokio::task::JoinHandle<()>);
+    type Output = (tokio_postgres::Client, mz_ore::task::JoinHandle<()>);
     fn transform_result(
         client: tokio_postgres::Client,
-        handle: tokio::task::JoinHandle<()>,
+        handle: mz_ore::task::JoinHandle<()>,
     ) -> Self::Output {
         (client, handle)
     }

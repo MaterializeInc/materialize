@@ -36,4 +36,4 @@ class TextOperationParam(OperationParam):
     def supports_type(
         self, data_type: DataType, previous_args: list[Expression]
     ) -> bool:
-        return data_type.identifier == TEXT_TYPE_IDENTIFIER
+        return data_type.internal_identifier == TEXT_TYPE_IDENTIFIER

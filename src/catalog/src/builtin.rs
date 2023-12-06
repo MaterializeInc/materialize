@@ -30,7 +30,7 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::namespaces::{
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHEMA,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
@@ -44,8 +44,9 @@ use mz_sql::session::user::{
 };
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{
-    MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
-    MZ_SOURCE_STATUS_HISTORY_DESC, MZ_STATEMENT_EXECUTION_HISTORY_DESC,
+    MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC,
+    MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
+    MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -2411,6 +2412,16 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
+
+pub static MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY: Lazy<BuiltinSource> =
+    Lazy::new(|| BuiltinSource {
+        name: "mz_aws_privatelink_connection_status_history",
+        schema: MZ_INTERNAL_SCHEMA,
+        data_source: Some(IntrospectionType::PrivatelinkConnectionStatusHistory),
+        desc: MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
+        is_retained_metrics_object: false,
+        sensitivity: DataSensitivity::Public,
+    });
 
 pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_statement_execution_history",
@@ -5105,7 +5116,7 @@ FROM
             (
                 SELECT
                     replica_id,
-                    mz_internal.mz_all(status = 'ready') AS ready
+                    mz_unsafe.mz_all(status = 'ready') AS ready
                 FROM mz_internal.mz_cluster_replica_statuses
                 GROUP BY replica_id
             ) AS statuses
@@ -5437,7 +5448,7 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
             creates.replica_name,
             creates.occurred_at AS created_at,
             drops.occurred_at AS dropped_at,
-            mz_internal.mz_error_if_null(
+            mz_unsafe.mz_error_if_null(
                     mz_cluster_replica_sizes.credits_per_hour, 'Replica of unknown size'
                 )
                 AS credits_per_hour
@@ -6004,6 +6015,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         ),
         (MZ_CATALOG_SCHEMA, &*mz_sql::func::MZ_CATALOG_BUILTINS),
         (MZ_INTERNAL_SCHEMA, &*mz_sql::func::MZ_INTERNAL_BUILTINS),
+        (MZ_UNSAFE_SCHEMA, &*mz_sql::func::MZ_UNSAFE_BUILTINS),
     ] {
         for (name, func) in funcs.iter() {
             builtins.push(Builtin::Func(BuiltinFunc {
@@ -6211,6 +6223,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
+        Builtin::Source(&MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY),
         Builtin::Source(&MZ_STATEMENT_EXECUTION_HISTORY),
         Builtin::View(&MZ_STATEMENT_EXECUTION_HISTORY_REDACTED),
         Builtin::Source(&MZ_PREPARED_STATEMENT_HISTORY),

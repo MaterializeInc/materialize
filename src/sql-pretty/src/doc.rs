@@ -478,7 +478,7 @@ fn doc_select_item<T: AstInfo>(v: &SelectItem<T>) -> RcDoc {
     }
 }
 
-fn doc_expr<T: AstInfo>(v: &Expr<T>) -> RcDoc {
+pub fn doc_expr<T: AstInfo>(v: &Expr<T>) -> RcDoc {
     match v {
         Expr::Op { op, expr1, expr2 } => {
             if let Some(expr2) = expr2 {
@@ -511,18 +511,27 @@ fn doc_expr<T: AstInfo>(v: &Expr<T>) -> RcDoc {
                 docs.push(nest_title("ELSE", doc_expr(else_result)));
             }
             let doc = intersperse_line_nest(docs);
-            bracket("CASE", doc, "END")
+            bracket_doc(RcDoc::text("CASE"), doc, RcDoc::text("END"), RcDoc::line())
         }
-        Expr::Cast { expr, data_type } => bracket(
-            "CAST(",
-            RcDoc::concat([
-                doc_expr(expr),
-                RcDoc::line(),
-                RcDoc::text(format!("AS {}", data_type.to_ast_string())),
-            ])
-            .nest(TAB),
-            ")",
-        ),
+        Expr::Cast { expr, data_type } => {
+            // See AstDisplay for Expr for an explanation of this.
+            let needs_wrap = !matches!(
+                **expr,
+                Expr::Nested(_)
+                    | Expr::Value(_)
+                    | Expr::Cast { .. }
+                    | Expr::Function { .. }
+                    | Expr::Identifier { .. }
+                    | Expr::Collate { .. }
+                    | Expr::HomogenizingFunction { .. }
+                    | Expr::NullIf { .. }
+            );
+            let mut doc = doc_expr(expr);
+            if needs_wrap {
+                doc = bracket("(", doc, ")");
+            }
+            RcDoc::concat([doc, RcDoc::text(format!("::{}", data_type.to_ast_string()))])
+        }
         Expr::Nested(ast) => bracket("(", doc_expr(ast), ")"),
         Expr::Function(fun) => doc_function(fun),
         Expr::Subquery(ast) => bracket("(", doc_query(ast), ")"),
@@ -622,18 +631,25 @@ fn doc_function<T: AstInfo>(v: &Function<T>) -> RcDoc {
         FunctionArgs::Args { args, order_by } => {
             if args.is_empty() {
                 // Nullary, don't allow newline between parens, so just delegate.
-                doc_display_pass(v)
-            } else {
-                if v.filter.is_some() || v.over.is_some() || !order_by.is_empty() {
-                    return doc_display(v, "function filter or over or order by");
-                }
-                let name = format!(
-                    "{}({}",
-                    v.name.to_ast_string(),
-                    if v.distinct { "DISTINCT " } else { "" }
-                );
-                bracket(name, comma_separate(doc_expr, args), ")")
+                return doc_display_pass(v);
             }
+            if v.filter.is_some() || v.over.is_some() || !order_by.is_empty() {
+                return doc_display(v, "function filter or over or order by");
+            }
+            let special = match v.name.to_ast_string_stable().as_str() {
+                r#""extract""# if v.args.len() == Some(2) => true,
+                r#""position""# if v.args.len() == Some(2) => true,
+                _ => false,
+            };
+            if special {
+                return doc_display(v, "special function");
+            }
+            let name = format!(
+                "{}({}",
+                v.name.to_ast_string(),
+                if v.distinct { "DISTINCT " } else { "" }
+            );
+            bracket(name, comma_separate(doc_expr, args), ")")
         }
     }
 }

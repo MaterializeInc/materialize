@@ -26,7 +26,7 @@ class DataColumn(LeafExpression):
     """A column with a value per row (in contrast to an `ExpressionWithArgs`) for VERTICAL storage"""
 
     def __init__(self, data_type: DataType, row_values_of_column: list[DataValue]):
-        column_name = f"{data_type.identifier.lower()}_val"
+        column_name = f"{data_type.internal_identifier.lower()}_val"
         super().__init__(
             column_name, data_type, set(), ValueStorageLayout.VERTICAL, False, False
         )
