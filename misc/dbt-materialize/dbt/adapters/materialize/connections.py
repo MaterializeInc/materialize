@@ -89,13 +89,9 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         # More info: https://www.psycopg.org/docs/usage.html#transactions-control
         connection.handle.autocommit = True
 
-        cursor = connection.handle.cursor()
-
-        # Check for the current DB version using the "mz_introspection" cluster in case "default"
-        # doesn't exist.
-        cursor.execute("SHOW mz_version")
-        mz_version = cursor.fetchone()[0].split()[0].strip("v")
-
+        mz_version = connection.handle.info.parameter_status("mz_version")  # e.g. v0.79.0-dev (937dfde5e)
+        mz_version = mz_version.split()[0]                                  # e.g. v0.79.0-dev
+        mz_version = mz_version.removeprefix("v")                           # e.g. 0.79.0-dev
         if not versions_compatible(mz_version, SUPPORTED_MATERIALIZE_VERSIONS):
             raise dbt.exceptions.DbtRuntimeError(
                 f"Detected unsupported Materialize version {mz_version}\n"
