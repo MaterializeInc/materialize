@@ -153,6 +153,10 @@ where
         compare_and_return_async!(self, get_deployment_generation)
     }
 
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        compare_and_return_async!(self, get_tombstone)
+    }
+
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         panic!("ShadowCatalog is not used for catalog-debug tool");
     }
@@ -346,6 +350,10 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
         compare_and_return_async!(self, has_system_config_synced_once)
     }
 
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        compare_and_return_async!(self, get_tombstone)
+    }
+
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         if self.is_read_only() {
             // Read-only catalogs cannot fix timestamps or storage usage ID so we must ignore them.
@@ -436,6 +444,12 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
             compare_and_return_async!(self, snapshot)
         }
     }
+
+    async fn full_snapshot(
+        &mut self,
+    ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
+        panic!("Shadow catalog should never get a full snapshot")
+    }
 }
 
 #[async_trait]
@@ -471,6 +485,12 @@ impl DurableCatalogState for ShadowCatalogState {
         // both implementations.
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
+    }
+
+    async fn full_transaction(
+        &mut self,
+    ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
+        panic!("Shadow catalog should never get a full transaction")
     }
 
     async fn commit_transaction(

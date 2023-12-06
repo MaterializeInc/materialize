@@ -3676,6 +3676,7 @@ dependencies = [
  "chrono",
  "derivative",
  "differential-dataflow",
+ "fail",
  "futures",
  "insta",
  "itertools",

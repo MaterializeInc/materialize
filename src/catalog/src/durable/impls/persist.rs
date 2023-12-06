@@ -529,6 +529,10 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         self.get_current_config(DEPLOY_GENERATION).await
     }
 
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        panic!("Persist implementation does not have a tombstone")
+    }
+
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
@@ -910,9 +914,40 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             })
     }
 
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        panic!("Persist implementation does not have a tombstone")
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         self.with_snapshot(|snapshot| Ok(snapshot.clone())).await
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn full_snapshot(
+        &mut self,
+    ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
+        self.sync_to_current_upper().await?;
+        let snapshot = self.snapshot.clone();
+        let mut audit_events = Vec::new();
+        let mut storage_usages = Vec::new();
+        for StateUpdate { kind, ts: _, diff } in self.persist_snapshot().await {
+            soft_assert_eq!(1, diff, "updates should be consolidated");
+            match kind {
+                StateUpdateKind::AuditLog(audit_event, ()) => {
+                    let audit_event = AuditLogKey::from_proto(audit_event)?.event;
+                    audit_events.push(audit_event);
+                }
+                StateUpdateKind::StorageUsage(storage_usage, ()) => {
+                    let storage_usage = StorageUsageKey::from_proto(storage_usage)?.metric;
+                    storage_usages.push(storage_usage);
+                }
+                _ => {
+                    // Everything else is already cached in `self.snapshot`.
+                }
+            }
+        }
+        Ok((snapshot, audit_events, storage_usages))
     }
 }
 
@@ -927,6 +962,16 @@ impl DurableCatalogState for PersistCatalogState {
         self.metrics.transactions_started.inc();
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn full_transaction(
+        &mut self,
+    ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
+        self.metrics.transactions_started.inc();
+        let (snapshot, audit_events, storage_usages) = self.full_snapshot().await?;
+        let transaction = Transaction::new(self, snapshot)?;
+        Ok((transaction, audit_events, storage_usages))
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

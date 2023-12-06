@@ -21,6 +21,7 @@ use mz_stash::DebugStashFactory;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
+use crate::durable::impls::migrate::{MigrateToPersist, RollbackToStash};
 pub use crate::durable::impls::persist::metrics::Metrics;
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
 use crate::durable::impls::shadow::OpenableShadowCatalogState;
@@ -130,6 +131,9 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Get the deployment generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError>;
 
+    /// Get the tombstone value of this instance.
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError>;
+
     /// Generate an unconsolidated [`Trace`] of catalog contents.
     async fn trace(&mut self) -> Result<Trace, CatalogError>;
 
@@ -189,8 +193,17 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
         &mut self,
     ) -> Result<Option<PersistTxnTablesImpl>, CatalogError>;
 
+    /// Get the tombstone value of this instance.
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError>;
+
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
+
+    /// Get a full snapshot of all data in the catalog. This includes all audit logs and storage
+    /// usages that isn't included in [`Self::snapshot`].
+    async fn full_snapshot(
+        &mut self,
+    ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError>;
 }
 
 /// A read-write API for the durable catalog state.
@@ -201,6 +214,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
+
+    /// Creates a new durable catalog state transaction. Also returns all the audit logs and storage
+    /// usages that exist at the start of the transaction, which isn't included in
+    /// [`Self::transaction`].
+    async fn full_transaction(
+        &mut self,
+    ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError>;
 
     /// Commits a durable catalog state transaction.
     async fn commit_transaction(&mut self, txn_batch: TransactionBatch)
@@ -314,9 +334,50 @@ pub async fn shadow_catalog_state(
     OpenableShadowCatalogState { stash, persist }
 }
 
+/// Creates an openable durable catalog state that migrates the current state from the stash to
+/// persist.
+pub async fn migrate_from_stash_to_persist_state(
+    stash_config: StashConfig,
+    persist_client: PersistClient,
+    organization_id: Uuid,
+    persist_metrics: Arc<Metrics>,
+) -> MigrateToPersist {
+    let openable_stash = stash_backed_catalog_state(stash_config);
+    let openable_persist =
+        persist_backed_catalog_state(persist_client, organization_id, persist_metrics).await;
+    MigrateToPersist::new(openable_stash, openable_persist)
+}
+
+/// Creates an openable durable catalog state that rolls back the current state from persist to
+/// the stash.
+pub async fn rollback_from_persist_to_stash_state(
+    stash_config: StashConfig,
+    persist_client: PersistClient,
+    organization_id: Uuid,
+    persist_metrics: Arc<Metrics>,
+) -> RollbackToStash {
+    let openable_stash = stash_backed_catalog_state(stash_config);
+    let openable_persist =
+        persist_backed_catalog_state(persist_client, organization_id, persist_metrics).await;
+    RollbackToStash::new(openable_stash, openable_persist)
+}
+
 pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
         default_cluster_replica_size: "1".into(),
         bootstrap_role: None,
     }
+}
+
+pub async fn test_stash_config() -> (DebugStashFactory, StashConfig) {
+    // Creating a debug stash factory does a lot of nice stuff like creating a random schema for us.
+    // Dropping the factory will drop the schema.
+    let debug_stash_factory = DebugStashFactory::new().await;
+    let config = StashConfig {
+        stash_factory: debug_stash_factory.stash_factory().clone(),
+        stash_url: debug_stash_factory.url().to_string(),
+        schema: Some(debug_stash_factory.schema().to_string()),
+        tls: debug_stash_factory.tls().clone(),
+    };
+    (debug_stash_factory, config)
 }

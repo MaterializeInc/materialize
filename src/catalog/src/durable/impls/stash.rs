@@ -34,7 +34,8 @@ use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{Collection, CollectionTrace, Trace};
 use crate::durable::initialize::{
-    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
+    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, TOMBSTONE_KEY,
+    USER_VERSION_KEY,
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
@@ -249,6 +250,13 @@ impl OpenableDurableCatalogState for OpenableConnection {
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_config(DEPLOY_GENERATION.into()).await
+    }
+
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        Ok(self
+            .get_config(DEPLOY_GENERATION.into())
+            .await?
+            .map(|v| v > 0))
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -616,6 +624,12 @@ impl ReadOnlyDurableCatalogState for Connection {
             .unwrap_or(false))
     }
 
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        Ok(get_config(&mut self.stash, TOMBSTONE_KEY.into())
+            .await?
+            .map(|value| value > 0))
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         let (
@@ -707,6 +721,121 @@ impl ReadOnlyDurableCatalogState for Connection {
             system_privileges,
         })
     }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn full_snapshot(
+        &mut self,
+    ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
+        let (
+            databases,
+            schemas,
+            roles,
+            items,
+            comments,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+            audit_events,
+            storage_usages,
+        ): (
+            BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
+            BTreeMap<proto::SchemaKey, proto::SchemaValue>,
+            BTreeMap<proto::RoleKey, proto::RoleValue>,
+            BTreeMap<proto::ItemKey, proto::ItemValue>,
+            BTreeMap<proto::CommentKey, proto::CommentValue>,
+            BTreeMap<proto::ClusterKey, proto::ClusterValue>,
+            BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
+            BTreeMap<
+                proto::ClusterIntrospectionSourceIndexKey,
+                proto::ClusterIntrospectionSourceIndexValue,
+            >,
+            BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
+            BTreeMap<proto::ConfigKey, proto::ConfigValue>,
+            BTreeMap<proto::SettingKey, proto::SettingValue>,
+            BTreeMap<proto::TimestampKey, proto::TimestampValue>,
+            BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
+            BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
+            BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
+            BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+            BTreeMap<proto::AuditLogKey, ()>,
+            BTreeMap<proto::StorageUsageKey, ()>,
+        ) = self
+            .stash
+            .with_transaction(|tx| {
+                Box::pin(async move {
+                    // Peek the catalog collections in any order and a single transaction.
+                    futures::try_join!(
+                        tx.peek_one(tx.collection(DATABASES_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SCHEMAS_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(ROLES_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(ITEM_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(COMMENTS_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(CLUSTER_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(CLUSTER_REPLICA_COLLECTION.name()).await?),
+                        tx.peek_one(
+                            tx.collection(CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION.name())
+                                .await?,
+                        ),
+                        tx.peek_one(tx.collection(ID_ALLOCATOR_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(CONFIG_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SETTING_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(TIMESTAMP_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SYSTEM_GID_MAPPING_COLLECTION.name()).await?),
+                        tx.peek_one(
+                            tx.collection(SYSTEM_CONFIGURATION_COLLECTION.name())
+                                .await?
+                        ),
+                        tx.peek_one(tx.collection(DEFAULT_PRIVILEGES_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(SYSTEM_PRIVILEGES_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(AUDIT_LOG_COLLECTION.name()).await?),
+                        tx.peek_one(tx.collection(STORAGE_USAGE_COLLECTION.name()).await?),
+                    )
+                })
+            })
+            .await?;
+
+        let audit_events = audit_events
+            .into_keys()
+            .map(RustType::from_proto)
+            .map_ok(|key: AuditLogKey| key.event)
+            .collect::<Result<_, _>>()?;
+        let storage_usages = storage_usages
+            .into_keys()
+            .map(RustType::from_proto)
+            .map_ok(|key: StorageUsageKey| key.metric)
+            .collect::<Result<_, _>>()?;
+
+        Ok((
+            Snapshot {
+                databases,
+                schemas,
+                roles,
+                items,
+                comments,
+                clusters,
+                cluster_replicas,
+                introspection_sources,
+                id_allocator,
+                configs,
+                settings,
+                timestamps,
+                system_object_mappings: system_gid_mapping,
+                system_configurations,
+                default_privileges,
+                system_privileges,
+            },
+            audit_events,
+            storage_usages,
+        ))
+    }
 }
 
 #[async_trait]
@@ -719,6 +848,15 @@ impl DurableCatalogState for Connection {
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn full_transaction(
+        &mut self,
+    ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
+        let (snapshot, audit_events, storage_usages) = self.full_snapshot().await?;
+        let transaction = Transaction::new(self, snapshot)?;
+        Ok((transaction, audit_events, storage_usages))
     }
 
     #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
@@ -1161,6 +1299,10 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.openable_connection.get_deployment_generation().await
+    }
+
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        self.openable_connection.get_tombstone().await
     }
 
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
