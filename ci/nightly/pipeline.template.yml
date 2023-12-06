@@ -824,7 +824,7 @@ steps:
               composition: postgres-consistency
               args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
 
-      - id: version-consistency
+      - id: output-consistency-version
         label: "Output consistency (version)"
         timeout_in_minutes: 58
         agents:
