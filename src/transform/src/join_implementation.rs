@@ -616,7 +616,7 @@ mod delta_queries {
                 tracing::info!(
                     insufficiently_arranged_orders = insufficiently_arranged_orders,
                     total_orders = inputs.len(),
-                    missing_orders_by_delta_path = arrangement_counts
+                    missing_arrangements_by_delta_path = arrangement_counts
                         .iter()
                         .map(|count| format!("{}", expected_delta_arrangements - count))
                         .join(" "),
