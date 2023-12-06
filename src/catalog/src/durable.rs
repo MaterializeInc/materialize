@@ -21,6 +21,7 @@ use mz_stash::DebugStashFactory;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
+use crate::durable::impls::migrate::{CatalogMigrator, Direction};
 pub use crate::durable::impls::persist::metrics::Metrics;
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
 use crate::durable::impls::shadow::OpenableShadowCatalogState;
@@ -333,9 +334,54 @@ pub async fn shadow_catalog_state(
     OpenableShadowCatalogState { stash, persist }
 }
 
+/// Creates an openable durable catalog state that migrates the current state from the stash to
+/// persist.
+pub async fn migrate_from_stash_to_persist_state(
+    stash_config: StashConfig,
+    persist_client: PersistClient,
+    organization_id: Uuid,
+    persist_metrics: Arc<Metrics>,
+) -> CatalogMigrator {
+    let openable_stash = stash_backed_catalog_state(stash_config);
+    let openable_persist =
+        persist_backed_catalog_state(persist_client, organization_id, persist_metrics).await;
+    CatalogMigrator::new(
+        openable_stash,
+        openable_persist,
+        Direction::MigrateToPersist,
+    )
+}
+
+/// Creates an openable durable catalog state that rolls back the current state from persist to
+/// the stash.
+pub async fn rollback_from_persist_to_stash_state(
+    stash_config: StashConfig,
+    persist_client: PersistClient,
+    organization_id: Uuid,
+    persist_metrics: Arc<Metrics>,
+) -> CatalogMigrator {
+    let openable_stash = stash_backed_catalog_state(stash_config);
+    let openable_persist =
+        persist_backed_catalog_state(persist_client, organization_id, persist_metrics).await;
+    CatalogMigrator::new(openable_stash, openable_persist, Direction::RollbackToStash)
+}
+
 pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
         default_cluster_replica_size: "1".into(),
         bootstrap_role: None,
     }
+}
+
+pub async fn test_stash_config() -> (DebugStashFactory, StashConfig) {
+    // Creating a debug stash factory does a lot of nice stuff like creating a random schema for us.
+    // Dropping the factory will drop the schema.
+    let debug_stash_factory = DebugStashFactory::new().await;
+    let config = StashConfig {
+        stash_factory: debug_stash_factory.stash_factory().clone(),
+        stash_url: debug_stash_factory.url().to_string(),
+        schema: Some(debug_stash_factory.schema().to_string()),
+        tls: debug_stash_factory.tls().clone(),
+    };
+    (debug_stash_factory, config)
 }
