@@ -63,8 +63,8 @@ ERROR_RE = re.compile(
 # Panics are multiline and our log lines of multiple services are interleaved,
 # making them complex to handle in regular expressions, thus handle them
 # separately.
-PANIC_START_RE = re.compile(rb"^(?P<service>.*) \| thread '.*' panicked at ")
-SERVICES_LOG_LINE_RE = re.compile(rb"^(?P<service>.*) \| (?P<msg>.*)$")
+PANIC_START_RE = re.compile(rb"^(?P<service>[^ ]*) *\| thread '.*' panicked at ")
+SERVICES_LOG_LINE_RE = re.compile(rb"^(?P<service>[^ ]*) *\| (?P<msg>.*)$")
 
 # Expected failures, don't report them
 IGNORE_RE = re.compile(
