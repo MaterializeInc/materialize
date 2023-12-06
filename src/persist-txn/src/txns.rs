@@ -587,18 +587,17 @@ where
             let data_writes = FuturesUnordered::new();
             for data_id in self.txns_cache.all_registered_at(ts) {
                 let mut data_write = self.datas.take_write(&data_id).await;
+                let current = data_write.shared_upper();
                 let advance_to = ts.step_forward();
                 data_writes.push(async move {
                     let empty: &[((K, V), T, D)] = &[];
-                    let () = data_write
-                        .append(
-                            empty,
-                            Antichain::from_elem(T::minimum()),
-                            Antichain::from_elem(advance_to),
-                        )
-                        .await
-                        .expect("usage was valid")
-                        .expect("nothing before minimum timestamp");
+                    if current.less_than(&advance_to) {
+                        let () = data_write
+                            .append(empty, current, Antichain::from_elem(advance_to))
+                            .await
+                            .expect("usage was valid")
+                            .expect("nothing before minimum timestamp");
+                    }
                     data_write
                 });
             }
