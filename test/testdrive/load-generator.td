@@ -82,7 +82,7 @@ contains:invalid MAX CARDINALITY: invalid unsigned numeric value: invalid digit 
 
 # Check that negative tick intervals are rejected
 ! CREATE SOURCE counter4 FROM LOAD GENERATOR COUNTER (TICK INTERVAL '-1s')
-contains: out of range integral type conversion
+contains:invalid TICK INTERVAL: cannot convert negative interval to duration
 
 # Check that out of range tick interval values are rejected
 ! CREATE SOURCE counter5 FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2147483647d')
