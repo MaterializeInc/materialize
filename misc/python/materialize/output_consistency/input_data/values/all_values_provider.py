@@ -14,6 +14,9 @@ from materialize.output_consistency.data_type.data_type_with_values import (
 from materialize.output_consistency.input_data.values.boolean_values_provider import (
     BOOLEAN_DATA_TYPE_WITH_VALUES,
 )
+from materialize.output_consistency.input_data.values.bytea_values_provider import (
+    BYTEA_DATA_TYPE_WITH_VALUES,
+)
 from materialize.output_consistency.input_data.values.date_time_values_provider import (
     DATE_TIME_DATA_TYPES_WITH_VALUES,
 )
@@ -32,6 +35,7 @@ ALL_DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = list(
         list(VALUES_PER_NUMERIC_DATA_TYPE.values()),
         [BOOLEAN_DATA_TYPE_WITH_VALUES],
         DATE_TIME_DATA_TYPES_WITH_VALUES,
+        [BYTEA_DATA_TYPE_WITH_VALUES],
         [TEXT_DATA_TYPE_WITH_VALUES],
         [JSONB_DATA_TYPE_WITH_VALUES],
     )

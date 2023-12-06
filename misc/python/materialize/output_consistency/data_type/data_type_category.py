@@ -22,6 +22,7 @@ class DataTypeCategory(Enum):
     BOOLEAN = 102
     TEXT = 103
     DATE_TIME = 104
+    BYTEA = 105
     JSONB = 106
 
     ENUM = 200
