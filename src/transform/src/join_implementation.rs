@@ -642,7 +642,7 @@ mod delta_queries {
                     )));
                 }
 
-                tracing::info!(
+                tracing::debug!(
                     new_delta_input_arrangements = insufficiently_arranged_orders,
                     expected_differential_arrangements = expected_differential_arrangements,
                     "eager delta join instead of a differential join"
