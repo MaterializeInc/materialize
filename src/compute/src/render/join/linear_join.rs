@@ -82,9 +82,25 @@ impl LinearJoinSpec {
     where
         G: Scope,
         G::Timestamp: Lattice,
-        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-        L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
+        Tr1: for<'a> TraceReader<
+                Key<'a> = &'a K,
+                KeyOwned = K,
+                Val<'a> = &'a V1,
+                ValOwned = V1,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + Clone
+            + 'static,
+        Tr2: for<'a> TraceReader<
+                Key<'a> = &'a K,
+                KeyOwned = K,
+                Val<'a> = &'a V2,
+                ValOwned = V2,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + Clone
+            + 'static,
+        L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
         I: IntoIterator,
         I::Item: Data,
         K: Data,
@@ -410,8 +426,24 @@ where
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+        Tr1: for<'a> TraceReader<
+                Key<'a> = &'a K,
+                KeyOwned = K,
+                Val<'a> = &'a V1,
+                ValOwned = V1,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + Clone
+            + 'static,
+        Tr2: for<'a> TraceReader<
+                Key<'a> = &'a K,
+                KeyOwned = K,
+                Val<'a> = &'a V2,
+                ValOwned = V2,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + Clone
+            + 'static,
         K: Data + IntoRowByTypes,
         V1: Data + IntoRowByTypes,
         V2: Data + IntoRowByTypes,

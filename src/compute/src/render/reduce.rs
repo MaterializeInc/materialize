@@ -466,7 +466,15 @@ where
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        Tr: Trace + TraceReader<Key = Row, Val = V, Time = G::Timestamp, Diff = Diff> + 'static,
+        Tr: Trace
+            + for<'a> TraceReader<
+                Key<'a> = &'a Row,
+                KeyOwned = Row,
+                Val<'a> = &'a V,
+                ValOwned = V,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Item = ((Row, V), G::Timestamp, Diff)>,
         V: Columnation + Default + ExchangeData + IntoRowByTypes,
@@ -679,8 +687,14 @@ where
         S: Scope<Timestamp = G::Timestamp>,
         V: MaybeValidatingRow<(), String>,
         Tr: Trace
-            + TraceReader<Key = (Row, Row), Val = V, Time = G::Timestamp, Diff = Diff>
-            + 'static,
+            + for<'a> TraceReader<
+                Key<'a> = &'a (Row, Row),
+                KeyOwned = (Row, Row),
+                Val<'a> = &'a V,
+                ValOwned = V,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Item = (((Row, Row), V), G::Timestamp, Diff)>,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
