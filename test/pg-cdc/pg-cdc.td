@@ -304,6 +304,27 @@ types_table           subsource <null>  <null>
 utf8_table            subsource <null>  <null>
 таблица               subsource <null>  <null>
 
+> SELECT name, status FROM mz_internal.mz_source_statuses
+array_types_table     running
+conflict_table        running
+create                running
+escaped_text_table    running
+large_text            running
+multipart_pk          running
+mz_source             running
+mz_source_progress    starting
+nonpk_table           running
+nulls_table           running
+pk_table              running
+"space table"         running
+trailing_space_nopk   running
+trailing_space_pk     running
+"\"literal_quotes\""  running
+types_table           running
+utf8_table            running
+таблица               running
+
+
 > SELECT lsn > 0 FROM mz_source_progress
 true
 

@@ -84,6 +84,7 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use differential_dataflow::Collection;
+use itertools::Itertools;
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -95,7 +96,7 @@ use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::{Concat, Map};
+use timely::dataflow::operators::{Concat, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
@@ -197,7 +198,21 @@ impl SourceRender for PostgresSourceConnection {
         // restart we are going to set the status to an ssh error correctly, so we don't do this
         // extra work.
 
-        let health = snapshot_err.concat(&repl_err).flat_map(move |err| {
+        // Ensure that the source + subsources start with the running status.
+        // Without this, subsources are only moved into 'running' when they
+        // produce data for the first time.
+        let health_init = subsource_outputs
+            .iter()
+            .chain(&[0])
+            .map(|index| HealthStatusMessage {
+                index: *index,
+                namespace: StatusNamespace::Postgres,
+                update: HealthStatusUpdate::Running,
+            })
+            .collect_vec()
+            .to_stream(scope);
+
+        let transient_stalls = snapshot_err.concat(&repl_err).flat_map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
@@ -231,7 +246,7 @@ impl SourceRender for PostgresSourceConnection {
         (
             updates,
             Some(uppers),
-            health,
+            health_init.concat(&transient_stalls),
             vec![snapshot_token, repl_token],
         )
     }
