@@ -72,6 +72,7 @@ jobs:
             echo "long=true" >> $GITHUB_OUTPUT
           fi
       - name: "Push to Slack"
+        if: steps.long.outputs.long == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
