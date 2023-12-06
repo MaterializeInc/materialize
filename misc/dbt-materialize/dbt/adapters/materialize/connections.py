@@ -20,6 +20,7 @@ from typing import Optional
 import psycopg2
 
 import dbt.exceptions
+import dbt.adapters.postgres.connections
 from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
 from dbt.events import AdapterLogger
 from dbt.semver import versions_compatible
@@ -28,6 +29,29 @@ from dbt.semver import versions_compatible
 SUPPORTED_MATERIALIZE_VERSIONS = ">=0.68.0"
 
 logger = AdapterLogger("Materialize")
+
+# Override the psycopg2 connect function in order to inject Materialize-specific
+# session parameter defaults.
+#
+# This approach is a bit hacky, but some of these session parameters *must* be
+# set as part of connection initiation, so we can't simply run `SET` commands
+# after the session is established.
+def connect(**kwargs):
+    options = [
+        # Ensure that dbt's introspection queries get routed to the
+        # `mz_introspection` cluster, even if the server or role's default is
+        # different.
+        "--auto_route_introspection_queries=on",
+        # dbt prints notices to stdout, which is very distracting because dbt
+        # can establish many new connections during `dbt run`.
+        "--welcome_message=off",
+        *(kwargs.get("options") or []),
+    ]
+    kwargs["options"] = " ".join(options)
+    return _connect(**kwargs)
+
+_connect = psycopg2.connect
+psycopg2.connect = connect
 
 
 @dataclass
@@ -77,11 +101,6 @@ class MaterializeConnectionManager(PostgresConnectionManager):
                 f"Detected unsupported Materialize version {mz_version}\n"
                 f"  Supported versions: {SUPPORTED_MATERIALIZE_VERSIONS}"
             )
-
-        # Make sure 'auto_route_introspection_queries' is enabled.
-        var_name = "auto_route_introspection_queries"
-        logger.debug(f"Enabling {var_name}")
-        cursor.execute(f"SET {var_name} = true")
 
         return connection
 
