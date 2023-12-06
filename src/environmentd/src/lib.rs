@@ -111,7 +111,7 @@ use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
@@ -160,7 +160,7 @@ pub struct Config {
     ///
     /// If specified, this overrides the value stored in Launch Darkly (and
     /// mirrored to the catalog storage's "config" collection).
-    pub enable_persist_txn_tables_cli: Option<EnablePersistTxnTables>,
+    pub persist_txn_tables_cli: Option<PersistTxnTablesImpl>,
 
     // === Adapter options. ===
     /// Catalog configuration.
@@ -480,8 +480,7 @@ impl Listeners {
         // was running. (Ideally it would be the current value, but that's
         // harder: we don't want to block startup on it if LD is down and it
         // would also require quite a bit of abstraction breakage.)
-        let enable_persist_txn_tables_stash_ld =
-            adapter_storage.get_enable_persist_txn_tables().await?;
+        let persist_txn_tables_stash_ld = adapter_storage.get_persist_txn_tables().await?;
 
         // Load the adapter catalog from disk.
         if !config
@@ -504,24 +503,19 @@ impl Listeners {
         );
 
         // Initialize controller.
-        let mut enable_persist_txn_tables =
-            enable_persist_txn_tables_stash_ld.unwrap_or(EnablePersistTxnTables::Off);
-        if let Some(value) = config.enable_persist_txn_tables_cli {
-            enable_persist_txn_tables = value;
+        let mut persist_txn_tables =
+            persist_txn_tables_stash_ld.unwrap_or(PersistTxnTablesImpl::Off);
+        if let Some(value) = config.persist_txn_tables_cli {
+            persist_txn_tables = value;
         }
         info!(
-            "enable_persist_txn_tables value of {} computed from catalog {:?} and flag {:?}",
-            enable_persist_txn_tables,
-            enable_persist_txn_tables_stash_ld,
-            config.enable_persist_txn_tables_cli,
+            "persist_txn_tables value of {} computed from catalog {:?} and flag {:?}",
+            persist_txn_tables, persist_txn_tables_stash_ld, config.persist_txn_tables_cli,
         );
-        let controller = mz_controller::Controller::new(
-            config.controller,
-            envd_epoch,
-            enable_persist_txn_tables,
-        )
-        .boxed()
-        .await;
+        let controller =
+            mz_controller::Controller::new(config.controller, envd_epoch, persist_txn_tables)
+                .boxed()
+                .await;
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {

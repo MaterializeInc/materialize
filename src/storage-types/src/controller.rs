@@ -306,30 +306,30 @@ impl From<DataflowError> for StorageError {
 
 #[derive(Clone, Copy, Debug, PartialEq, num_enum::TryFromPrimitive, num_enum::IntoPrimitive)]
 #[repr(u64)]
-pub enum EnablePersistTxnTables {
+pub enum PersistTxnTablesImpl {
     Off = 0,
     Eager = 1,
     Lazy = 2,
 }
 
-impl std::fmt::Display for EnablePersistTxnTables {
+impl std::fmt::Display for PersistTxnTablesImpl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EnablePersistTxnTables::Off => f.write_str("off"),
-            EnablePersistTxnTables::Eager => f.write_str("eager"),
-            EnablePersistTxnTables::Lazy => f.write_str("lazy"),
+            PersistTxnTablesImpl::Off => f.write_str("off"),
+            PersistTxnTablesImpl::Eager => f.write_str("eager"),
+            PersistTxnTablesImpl::Lazy => f.write_str("lazy"),
         }
     }
 }
 
-impl std::str::FromStr for EnablePersistTxnTables {
+impl std::str::FromStr for PersistTxnTablesImpl {
     type Err = Box<(dyn std::error::Error + Send + Sync + 'static)>;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "off" => Ok(EnablePersistTxnTables::Off),
-            "eager" => Ok(EnablePersistTxnTables::Eager),
-            "lazy" => Ok(EnablePersistTxnTables::Lazy),
+            "off" => Ok(PersistTxnTablesImpl::Off),
+            "eager" => Ok(PersistTxnTablesImpl::Eager),
+            "lazy" => Ok(PersistTxnTablesImpl::Lazy),
             _ => Err(s.into()),
         }
     }

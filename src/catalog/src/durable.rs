@@ -10,7 +10,7 @@
 //! This crate is responsible for durably storing and modifying the catalog contents.
 
 use async_trait::async_trait;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
@@ -177,14 +177,14 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
 
-    /// Get the `enabled_persist_txn_tables` config value of this instance.
+    /// Get the `persist_txn_tables` config value of this instance.
     ///
-    /// This mirrors the `enabled_persist_txn_tables` "system var" so that we
-    /// can toggle the flag with Launch Darkly, but use it in boot before Launch
-    /// Darkly is available.
-    async fn get_enable_persist_txn_tables(
+    /// This mirrors the `persist_txn_tables` "system var" so that we can toggle
+    /// the flag with Launch Darkly, but use it in boot before Launch Darkly is
+    /// available.
+    async fn get_persist_txn_tables(
         &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError>;
+    ) -> Result<Option<PersistTxnTablesImpl>, CatalogError>;
 
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;

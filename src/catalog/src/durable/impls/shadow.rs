@@ -13,7 +13,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use timely::progress::Timestamp as TimelyTimestamp;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
@@ -336,10 +336,10 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
         }
     }
 
-    async fn get_enable_persist_txn_tables(
+    async fn get_persist_txn_tables(
         &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
-        compare_and_return_async!(self, get_enable_persist_txn_tables)
+    ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
+        compare_and_return_async!(self, get_persist_txn_tables)
     }
 
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {

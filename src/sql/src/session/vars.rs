@@ -89,7 +89,7 @@ use mz_repr::strconv;
 use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_sql_parser::ident;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -695,9 +695,9 @@ const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
-pub const ENABLE_PERSIST_TXN_TABLES: ServerVar<EnablePersistTxnTables> = ServerVar {
-    name: UncasedStr::new("enable_persist_txn_tables"),
-    value: &EnablePersistTxnTables::Off,
+pub const PERSIST_TXN_TABLES: ServerVar<PersistTxnTablesImpl> = ServerVar {
+    name: UncasedStr::new("persist_txn_tables"),
+    value: &PersistTxnTablesImpl::Off,
     description: "\
         Whether to use the new persist-txn tables implementation or the legacy \
         one.
@@ -2789,7 +2789,7 @@ impl SystemVars {
             .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
             .with_var(&PERSIST_FAST_PATH_LIMIT)
-            .with_var(&ENABLE_PERSIST_TXN_TABLES)
+            .with_var(&PERSIST_TXN_TABLES)
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
@@ -3298,8 +3298,8 @@ impl SystemVars {
         *self.expect_value(&PERSIST_FAST_PATH_LIMIT)
     }
 
-    pub fn enable_persist_txn_tables(&self) -> EnablePersistTxnTables {
-        *self.expect_value(&ENABLE_PERSIST_TXN_TABLES)
+    pub fn persist_txn_tables(&self) -> PersistTxnTablesImpl {
+        *self.expect_value(&PERSIST_TXN_TABLES)
     }
 
     pub fn persist_reader_lease_duration(&self) -> Duration {
@@ -5466,7 +5466,7 @@ impl Value for TimestampOracleImpl {
     }
 }
 
-impl Value for EnablePersistTxnTables {
+impl Value for PersistTxnTablesImpl {
     fn type_name() -> String {
         "string".to_string()
     }
@@ -5478,8 +5478,8 @@ impl Value for EnablePersistTxnTables {
         let s = extract_single_value(param, input)?;
         let s = UncasedStr::new(s);
 
-        EnablePersistTxnTables::from_str(s.as_str()).map_err(|_| VarError::ConstrainedParameter {
-            parameter: (&ENABLE_PERSIST_TXN_TABLES).into(),
+        PersistTxnTablesImpl::from_str(s.as_str()).map_err(|_| VarError::ConstrainedParameter {
+            parameter: (&PERSIST_TXN_TABLES).into(),
             values: input.to_vec(),
             valid_values: Some(vec!["off", "eager", "lazy"]),
         })

@@ -33,7 +33,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Diff;
-use mz_storage_types::controller::EnablePersistTxnTables;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -46,7 +46,7 @@ use crate::durable::impls::persist::state_update::{
     IntoStateUpdateKindBinary, StateUpdateKindBinary, StateUpdateKindSchema,
 };
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
-use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, USER_VERSION_KEY};
+use crate::durable::initialize::{DEPLOY_GENERATION, PERSIST_TXN_TABLES, USER_VERSION_KEY};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, Config, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
@@ -862,21 +862,21 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn get_enable_persist_txn_tables(
+    async fn get_persist_txn_tables(
         &mut self,
-    ) -> Result<Option<EnablePersistTxnTables>, CatalogError> {
+    ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
         let value = self
             .with_snapshot(|snapshot| {
                 Ok(snapshot
                     .configs
                     .get(&proto::ConfigKey {
-                        key: ENABLE_PERSIST_TXN_TABLES.to_string(),
+                        key: PERSIST_TXN_TABLES.to_string(),
                     })
                     .map(|value| value.value))
             })
             .await?;
         value
-            .map(EnablePersistTxnTables::try_from)
+            .map(PersistTxnTablesImpl::try_from)
             .transpose()
             .map_err(|err| {
                 DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
