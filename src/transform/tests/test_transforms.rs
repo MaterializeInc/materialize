@@ -225,6 +225,11 @@ fn handle_apply(
             let transform = ColumnKnowledge::default();
             apply_transform(transform, catalog, input)
         }
+        "fold_constants" => {
+            use mz_transform::fold_constants::FoldConstants;
+            let transform = FoldConstants { limit: None };
+            apply_transform(transform, catalog, input)
+        }
         "literal_lifting" => {
             use mz_transform::literal_lifting::LiteralLifting;
             let transform = LiteralLifting::default();
@@ -268,6 +273,11 @@ fn handle_apply(
         "semijoin_idempotence" => {
             use mz_transform::semijoin_idempotence::SemijoinIdempotence;
             let transform = SemijoinIdempotence::default();
+            apply_transform(transform, catalog, input)
+        }
+        "fusion_top_k" => {
+            use mz_transform::fusion::top_k::TopK;
+            let transform = TopK;
             apply_transform(transform, catalog, input)
         }
         transform => Err(format!("unsupported pipeline transform: {transform}")),

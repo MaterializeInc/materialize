@@ -33,3 +33,12 @@ TopK group_by=[#1] limit=5 offset=2 monotonic exp_group_size=4
     - (3, 4)
 ----
 roundtrip OK
+
+# TopK
+roundtrip
+TopK group_by=[#1] limit=(#1 + 5) offset=2 monotonic exp_group_size=4
+  Constant // { types: "(bigint, bigint)" }
+    - (1, 2)
+    - (3, 4)
+----
+roundtrip OK
