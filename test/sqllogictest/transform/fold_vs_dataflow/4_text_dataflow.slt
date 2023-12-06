@@ -47,16 +47,16 @@ Explained Query:
     Filter (#0 ilike #1)
       CrossJoin type=differential
         ArrangeBy keys=[[]]
-          Get materialize.public.t_data
+          ReadStorage materialize.public.t_data
         ArrangeBy keys=[[]]
           Union
-            Get materialize.public.t_operator
+            ReadStorage materialize.public.t_operator
             Map (error("more than one record produced in subquery"))
               Project ()
                 Filter (#0 > 1)
                   Reduce aggregates=[count(*)]
                     Project ()
-                      Get materialize.public.t_operator
+                      ReadStorage materialize.public.t_operator
 
 EOF
 
@@ -128,6 +128,6 @@ FROM t_using_dataflow_rendering;
 Explained Query:
   Project (#6..=#22)
     Map ((#0 || #3), upper(#0), lower(#0), substr(#0, 1), replace(#0, #1, #2), position(#1, #0), split_string(#0, #1, 1), translate(#0, "C", "Z"), btrim(#4), ltrim(#4), btrim(#5), rtrim(#5), lpad(#0, 1), lpad(#0, 10), lpad(#0, 10, #1), regexp_match(#0, #1), regexp_match(#0, #2, "i"))
-      Get materialize.public.t_using_dataflow_rendering
+      ReadStorage materialize.public.t_using_dataflow_rendering
 
 EOF

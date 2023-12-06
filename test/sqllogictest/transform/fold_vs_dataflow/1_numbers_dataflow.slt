@@ -36,7 +36,7 @@ query T multiline
 EXPLAIN SELECT * FROM t_using_dataflow_rendering;
 ----
 Explained Query:
-  Get materialize.public.t_using_dataflow_rendering
+  ReadStorage materialize.public.t_using_dataflow_rendering
 
 EOF
 
@@ -65,6 +65,6 @@ query T multiline
 EXPLAIN SELECT * FROM t_using_dataflow_rendering;
 ----
 Explained Query:
-  Get materialize.public.t_using_dataflow_rendering
+  ReadStorage materialize.public.t_using_dataflow_rendering
 
 EOF
