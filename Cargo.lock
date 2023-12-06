@@ -4765,6 +4765,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-timely-util",
+ "prometheus",
  "prost",
  "rand",
  "serde",
