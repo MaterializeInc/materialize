@@ -29,6 +29,7 @@ from dbt.adapters.capability import (
 from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
+from dbt.adapters.postgres.column import PostgresColumn
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
 from dbt.contracts.graph.nodes import (
     ColumnLevelConstraint,
@@ -178,3 +179,58 @@ class MaterializeAdapter(PostgresAdapter):
                 rendered_column_constraints.append(" ".join(rendered_column_constraint))
 
         return rendered_column_constraints
+
+    def get_column_schema_from_query(self, sql: str) -> List[PostgresColumn]:
+        # The idea is that this function returns the names and types of the
+        # columns returned by `sql` without actually executing the statement.
+        #
+        # The easiest way to do this would be to create a prepared statement
+        # using `sql` and then inspect the result type of the prepared
+        # statement. Unfortunately the Python DB-API and the underlying psycopg2
+        # driver do not support preparing statements.
+        #
+        # So instead we create a temporary view based on the SQL statement and
+        # inspect the types of the columns in the view using `mz_columns`.
+        #
+        # Note that the upstream PostgreSQL adapter takes a different approach.
+        # It executes `SELECT * FROM (<query>) WHERE FALSE LIMIT 0`, which in
+        # PostgreSQL is optimized to a no-op that returns no rows, and then
+        # inspects the description of the returned cursor. That doesn't work
+        # well in Materialize, because `SELECT ... LIMIT 0` requires a cluster
+        # (even though it returns no rows), and we're not guaranteed that the
+        # connection has a valid cluster.
+
+        # Determine the name to use for the view. Unfortunately Materialize
+        # comingles data about temporary views from all sessions in the system
+        # catalog, so we need to manually include the connection ID in the name
+        # to be able to identify the catalog entries for the temporary views
+        # created by this specific connection.
+        connection_id = self.connections.get_thread_connection().handle.info.backend_pid
+        view_name = f"_dbt_column_schema{connection_id}"
+
+        # Create the temporary view.
+        self.connections.execute(f"create temporary view {view_name} as {sql}")
+
+        # Fetch the names and types of each column in the view. Schema ID 0
+        # indicates the temporary schema.
+        _, table = self.connections.execute(
+            f"""select c.name, c.type_oid
+            from mz_columns c
+            join mz_relations r ON c.id = r.id
+            where r.schema_id = '0' AND r.name = '{view_name}'""", fetch=True)
+        columns = [
+            self.Column.create(
+                column_name, self.connections.data_type_code_to_name(column_type_code)
+            )
+            # https://peps.python.org/pep-0249/#description
+            for column_name, column_type_code in table.rows
+        ]
+
+        # Drop the temporary view, so that we can reuse its name if this
+        # function is called again on the same thread. It's okay if we leak this
+        # view (e.g., if an error above causes us to return early), as temporary
+        # views are automatically dropped by Materialize when the connection
+        # terminates.
+        self.connections.execute(f"drop view {view_name}")
+
+        return columns
