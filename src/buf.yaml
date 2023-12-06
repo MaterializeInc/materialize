@@ -45,8 +45,6 @@ breaking:
     - persist-types/src/stats.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
-    # reason: Ignored until #21887 is reverted
-    - storage-types/src/errors.proto
 lint:
   use:
     - DEFAULT

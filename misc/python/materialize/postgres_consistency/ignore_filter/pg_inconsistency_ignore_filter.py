@@ -109,9 +109,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("inconsistent ordering, not an error")
 
-        if db_function.function_name_in_lower_case == "timezone":
-            return YesIgnore("#21999: timezone")
-
         if db_function.function_name_in_lower_case == "jsonb_pretty":
             return YesIgnore("Accepted")
 
