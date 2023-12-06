@@ -188,5 +188,5 @@ AGGREGATE_OPERATION_TYPES.append(
     ),
 )
 
-# TODO: requires JSON type: jsonb_agg(expression)
-# TODO: requires JSON type: jsonb_object_agg(keys, values)
+# TODO: requires subquery / lateral query functionality: jsonb_agg(expression)
+# TODO: requires subquery / lateral query functionality: jsonb_object_agg(keys, values)

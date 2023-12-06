@@ -10,6 +10,7 @@
 import re
 from functools import partial
 
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.enum.enum_constant import EnumConstant
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategyKey,
@@ -22,6 +23,7 @@ from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
+    involves_data_type_category,
     is_function_invoked_only_with_non_nested_parameters,
     matches_fun_by_any_name,
     matches_fun_by_name,
@@ -110,6 +112,9 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         if db_function.function_name_in_lower_case == "timezone":
             return YesIgnore("#21999: timezone")
 
+        if db_function.function_name_in_lower_case == "jsonb_pretty":
+            return YesIgnore("Accepted")
+
         if db_function.function_name_in_lower_case == "date_trunc":
             precision = expression.args[0]
             if isinstance(precision, EnumConstant) and precision.value == "second":
@@ -167,6 +172,17 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#22011: regexp_split_to_array with linebreaks")
 
+        if db_function.function_name_in_lower_case in [
+            "length",
+            "bit_length",
+        ] and expression.matches(
+            partial(
+                involves_data_type_category, data_type_category=DataTypeCategory.JSONB
+            ),
+            True,
+        ):
+            return YesIgnore("Consequence of #23571")
+
         return NoIgnore()
 
     def _matches_problematic_operation_invocation(
@@ -190,6 +206,13 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             return YesIgnore(
                 "Materialize regular expressions are similar to, but not identical to, PostgreSQL regular expressions."
             )
+
+        if (
+            db_operation.pattern in {"$ || $"}
+            and db_operation.params[0].get_declared_type_category()
+            == DataTypeCategory.JSONB
+        ):
+            return YesIgnore("#23578: empty result in || with simple values")
 
         return NoIgnore()
 
@@ -248,6 +271,13 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if _error_message_is_about_zero_or_value_ranges(pg_error_msg):
             return YesIgnore("Caused by a different precision")
+
+        if (
+            "cannot get array length of a scalar" in pg_error_msg
+            or "cannot get array length of a non-array" in pg_error_msg
+            or "cannot delete from scalar" in pg_error_msg
+        ):
+            return YesIgnore("Not supported by pg")
 
         return NoIgnore()
 
