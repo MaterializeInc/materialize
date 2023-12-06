@@ -14,48 +14,65 @@ shard-desc
 ----
 since=[0] upper=[0]
 
+# We'll use a critical reader to determine the since of newly-minted leases
+register-critical-reader reader_id=c22222222-2222-2222-2222-222222222222
+----
+v2 [0]
+
 # A newly registered reader gets that since.
 register-leased-reader reader_id=r00000000-0000-0000-0000-000000000000
 ----
-v2 [0]
+v3 [0]
 
 # Greater
 downgrade-since since=(2) reader_id=r00000000-0000-0000-0000-000000000000
 ----
-v3 [2]
+v4 [2]
 
 shard-desc
 ----
-since=[2] upper=[0]
+since=[0] upper=[0]
 
 # Equal (no-op)
 downgrade-since since=(2) reader_id=r00000000-0000-0000-0000-000000000000
 ----
-v4 [2]
+v5 [2]
 
 # Less (no-op)
 downgrade-since since=(1) reader_id=r00000000-0000-0000-0000-000000000000
 ----
-v5 [2]
+v6 [2]
 
-# Create a second reader. This gets the current since for a capability.
+# Create a second reader. This gets the current critical since for a capability.
+compare-and-downgrade-since since=1 expect_opaque=0 opaque=1 reader_id=c22222222-2222-2222-2222-222222222222
+----
+v7 1 [1]
+
 register-leased-reader reader_id=r11111111-1111-1111-1111-111111111111
 ----
-v6 [2]
+v8 [1]
 
 # Shard since doesn't change until the meet (min) of all reader sinces changes.
 downgrade-since since=(3) reader_id=r11111111-1111-1111-1111-111111111111
 ----
-v7 [3]
+v9 [3]
 
 shard-desc
 ----
-since=[2] upper=[0]
+since=[1] upper=[0]
 
 # Shard since == 3 when all readers have since >= 3.
 downgrade-since since=(5) reader_id=r00000000-0000-0000-0000-000000000000
 ----
-v8 [5]
+v10 [5]
+
+shard-desc
+----
+since=[1] upper=[0]
+
+compare-and-downgrade-since since=3 expect_opaque=1 opaque=2 reader_id=c22222222-2222-2222-2222-222222222222
+----
+v11 2 [3]
 
 shard-desc
 ----
@@ -64,7 +81,7 @@ since=[3] upper=[0]
 # Shard since unaffected readers with since > shard since expiring.
 expire-leased-reader reader_id=r00000000-0000-0000-0000-000000000000
 ----
-v9 ok
+v12 ok
 
 shard-desc
 ----
@@ -73,12 +90,12 @@ since=[3] upper=[0]
 # Create a third reader. It gets the current since of 3.
 register-leased-reader reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v10 [3]
+v13 [3]
 
 # Shard since doesn't change until the meet (min) of all reader sinces changes.
 downgrade-since since=(10) reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v11 [10]
+v14 [10]
 
 shard-desc
 ----
@@ -90,7 +107,7 @@ since=[3] upper=[0]
 # Switch this assertion back when we re-enable this.
 expire-leased-reader reader_id=r11111111-1111-1111-1111-111111111111
 ----
-v12 ok
+v15 ok
 
 shard-desc
 ----
@@ -102,7 +119,7 @@ since=[3] upper=[0]
 # Switch this assertion back when we re-enable this.
 expire-leased-reader reader_id=r22222222-2222-2222-2222-222222222222
 ----
-v13 ok
+v16 ok
 
 shard-desc
 ----

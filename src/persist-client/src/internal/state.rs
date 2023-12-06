@@ -29,7 +29,7 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::info;
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -432,6 +432,14 @@ where
         Continue(removed)
     }
 
+    fn critical_since(&self) -> Antichain<T> {
+        let mut since = Antichain::new();
+        for critical in self.critical_readers.values() {
+            since.meet_assign(&critical.since);
+        }
+        since
+    }
+
     pub fn register_leased_reader(
         &mut self,
         hostname: &str,
@@ -450,7 +458,7 @@ where
                 purpose: purpose.to_owned(),
             },
             seqno,
-            since: self.trace.since().clone(),
+            since: self.critical_since(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
@@ -645,7 +653,31 @@ where
             return Break(NoOpStateTransition(Since(Antichain::new())));
         }
 
+        // Check whether this handle is holding back the global since.
+        // It's a bit dicey to have a leased handle reading state from before the global since,
+        // since if the lessee goes away there's no way to pick up where we left off. However,
+        // since we only downgrade periodically it's likely that our leases will fall behind the
+        // critical since hold for minutes at a time before jumping ahead. So: we only do this
+        // check when we know the lease's hold is up to date, which is right as we're updating it.
+        let mut critical_since = Antichain::new();
+        for critical in self.critical_readers.values() {
+            critical_since.meet_assign(&critical.since);
+        }
+
         let reader_state = self.leased_reader(reader_id);
+
+        if PartialOrder::less_than(new_since, &critical_since) {
+            // Our new since is earlier than the earliest critical handle: we're not holding
+            // things back far enough.
+            error!(
+                reader_id =? reader_id,
+                critical_since =? critical_since,
+                new_since =? new_since,
+                purpose =? reader_state.debug.purpose,
+                "critical since has advanced past some lease's since. \
+                if this reader is not on an abandoned cluster, this may be a bug."
+            )
+        }
 
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
@@ -1629,156 +1661,6 @@ pub(crate) mod tests {
     }
 
     #[mz_ore::test]
-    fn downgrade_since() {
-        let mut state = TypedState::<(), (), u64, i64>::new(
-            DUMMY_BUILD_INFO.semver_version(),
-            ShardId::new(),
-            "".to_owned(),
-            0,
-        );
-        let reader = LeasedReaderId::new();
-        let seqno = SeqNo::minimum();
-        let now = SYSTEM_TIME.clone();
-        let _ = state.collections.register_leased_reader(
-            "",
-            &reader,
-            "",
-            seqno,
-            Duration::from_secs(10),
-            now(),
-        );
-
-        // The shard global since == 0 initially.
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
-
-        // Greater
-        assert_eq!(
-            state.collections.downgrade_since(
-                &reader,
-                seqno,
-                None,
-                &Antichain::from_elem(2),
-                now()
-            ),
-            Continue(Since(Antichain::from_elem(2)))
-        );
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
-        // Equal (no-op)
-        assert_eq!(
-            state.collections.downgrade_since(
-                &reader,
-                seqno,
-                None,
-                &Antichain::from_elem(2),
-                now()
-            ),
-            Continue(Since(Antichain::from_elem(2)))
-        );
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
-        // Less (no-op)
-        assert_eq!(
-            state.collections.downgrade_since(
-                &reader,
-                seqno,
-                None,
-                &Antichain::from_elem(1),
-                now()
-            ),
-            Continue(Since(Antichain::from_elem(2)))
-        );
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
-
-        // Create a second reader.
-        let reader2 = LeasedReaderId::new();
-        let _ = state.collections.register_leased_reader(
-            "",
-            &reader2,
-            "",
-            seqno,
-            Duration::from_secs(10),
-            now(),
-        );
-
-        // Shard since doesn't change until the meet (min) of all reader sinces changes.
-        assert_eq!(
-            state.collections.downgrade_since(
-                &reader2,
-                seqno,
-                None,
-                &Antichain::from_elem(3),
-                now()
-            ),
-            Continue(Since(Antichain::from_elem(3)))
-        );
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
-        // Shard since == 3 when all readers have since >= 3.
-        assert_eq!(
-            state.collections.downgrade_since(
-                &reader,
-                seqno,
-                None,
-                &Antichain::from_elem(5),
-                now()
-            ),
-            Continue(Since(Antichain::from_elem(5)))
-        );
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
-
-        // Shard since unaffected readers with since > shard since expiring.
-        assert_eq!(
-            state.collections.expire_leased_reader(&reader),
-            Continue(true)
-        );
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
-
-        // Create a third reader.
-        let reader3 = LeasedReaderId::new();
-        let _ = state.collections.register_leased_reader(
-            "",
-            &reader3,
-            "",
-            seqno,
-            Duration::from_secs(10),
-            now(),
-        );
-
-        // Shard since doesn't change until the meet (min) of all reader sinces changes.
-        assert_eq!(
-            state.collections.downgrade_since(
-                &reader3,
-                seqno,
-                None,
-                &Antichain::from_elem(10),
-                now()
-            ),
-            Continue(Since(Antichain::from_elem(10)))
-        );
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
-
-        // Shard since advances when reader with the minimal since expires.
-        assert_eq!(
-            state.collections.expire_leased_reader(&reader2),
-            Continue(true)
-        );
-        // TODO(#22789): expiry temporarily doesn't advance since
-        // Switch this assertion back when we re-enable this.
-        //
-        // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
-
-        // Shard since unaffected when all readers are expired.
-        assert_eq!(
-            state.collections.expire_leased_reader(&reader3),
-            Continue(true)
-        );
-        // TODO(#22789): expiry temporarily doesn't advance since
-        // Switch this assertion back when we re-enable this.
-        //
-        // assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
-        assert_eq!(state.collections.trace.since(), &Antichain::from_elem(3));
-    }
-
-    #[mz_ore::test]
     fn compare_and_append() {
         let state = &mut TypedState::<String, String, u64, i64>::new(
             DUMMY_BUILD_INFO.semver_version(),
@@ -1943,25 +1825,18 @@ pub(crate) mod tests {
             ))
         );
 
-        let reader = LeasedReaderId::new();
+        let reader = CriticalReaderId::new();
         // Advance the since to 2.
-        let _ = state.collections.register_leased_reader(
-            "",
-            &reader,
-            "",
-            SeqNo::minimum(),
-            Duration::from_secs(10),
-            now(),
-        );
+        let _ = state
+            .collections
+            .register_critical_reader::<u64>("", &reader, "");
         assert_eq!(
-            state.collections.downgrade_since(
+            state.collections.compare_and_downgrade_since::<u64>(
                 &reader,
-                SeqNo::minimum(),
-                None,
-                &Antichain::from_elem(2),
-                now()
+                &0,
+                (&1, &Antichain::from_elem(2))
             ),
-            Continue(Since(Antichain::from_elem(2)))
+            Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Cannot take a snapshot with as_of < shard_since.

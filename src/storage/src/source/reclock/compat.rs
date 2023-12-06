@@ -101,23 +101,6 @@ where
             .context("error opening persist shard")?;
 
         let upper = write_handle.upper();
-        // We want a leased reader because elsewhere in the code the `as_of`
-        // time may also be determined by another `ReadHandle`, and the pair of
-        // them offer the invariant that we need (that the `as_of` if <= this
-        // `since`). Using a `SinceHandle` here does not offer the same
-        // invariant when paired with a `ReadHandle`.
-        let since = read_handle.since();
-
-        // Allow manually simulating the scenario where the since of the remap
-        // shard has advanced too far.
-        fail_point!("invalid_remap_as_of");
-        assert!(
-            PartialOrder::less_equal(since, &as_of),
-            "invalid as_of: as_of({as_of:?}) < since({since:?}), \
-            source {id}, \
-            remap_shard: {:?}",
-            metadata.remap_shard
-        );
 
         assert!(
             as_of.elements() == [IntoTime::minimum()] || PartialOrder::less_than(&as_of, upper),
@@ -125,7 +108,6 @@ where
         );
 
         tracing::info!(
-            ?since,
             ?as_of,
             ?upper,
             "{operator}({id}) {worker_id}/{worker_count} initializing PersistHandle"
@@ -133,6 +115,10 @@ where
 
         use futures::stream;
         let events = stream::once(async move {
+            // Allow manually simulating the scenario where the since of the remap
+            // shard has advanced too far. The since hold in the controller is responsible
+            // for ensuring this does not advance too far ahead.
+            fail_point!("invalid_remap_as_of");
             let updates = read_handle
                 .snapshot_and_fetch(as_of.clone())
                 .await
