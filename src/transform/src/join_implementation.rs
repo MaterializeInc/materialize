@@ -610,11 +610,11 @@ mod delta_queries {
                         })
                     })
                     .collect();
-            let insufficiently_arranged_orders = missing_arrangements.len();
+            let num_missing_arrangements = missing_arrangements.len();
 
-            if insufficiently_arranged_orders > 0 {
+            if num_missing_arrangements > 0 {
                 tracing::info!(
-                    insufficiently_arranged_orders = insufficiently_arranged_orders,
+                    insufficiently_arranged_orders = num_missing_arrangements,
                     total_orders = inputs.len(),
                     missing_arrangements_by_delta_path = arrangement_counts
                         .iter()
@@ -632,7 +632,7 @@ mod delta_queries {
 
                 // Differential joins need to arrange every intermediate result: #inputs - 1 such arrangements.
                 // Delta joins only arrange inputs... if we would have fewer net arrangements, delta will be a better deal.
-                if insufficiently_arranged_orders > expected_differential_arrangements {
+                if num_missing_arrangements > expected_differential_arrangements {
                     return Err(TransformError::Internal(String::from(
                         "delta join not viable",
                     )));
@@ -643,7 +643,7 @@ mod delta_queries {
                 }
 
                 tracing::debug!(
-                    new_delta_input_arrangements = insufficiently_arranged_orders,
+                    new_delta_input_arrangements = num_missing_arrangements,
                     expected_differential_arrangements = expected_differential_arrangements,
                     "eager delta join instead of a differential join"
                 );
