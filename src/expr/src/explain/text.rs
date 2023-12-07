@@ -790,6 +790,7 @@ impl MirRelationExpr {
                             write!(f, " order_by=[{}]", separated(", ", order_by))?;
                         }
                         if let Some(limit) = limit {
+                            let limit = HumanizedExpr::new(limit, cols);
                             write!(f, " limit={}", limit)?;
                         }
                         if offset > &0 {
