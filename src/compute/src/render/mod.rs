@@ -599,30 +599,22 @@ where
 
     /// Rearranges an arrangement coming from an iterative scope into an arrangement
     /// in the outer timestamp scope.
-    fn rearrange_iterative<Tr, K, V, Tr2>(
+    fn rearrange_iterative<Tr1, Tr2>(
         &self,
-        oks: Arranged<Child<'g, G, T>, TraceAgent<Tr>>,
+        oks: Arranged<Child<'g, G, T>, TraceAgent<Tr1>>,
         name: &str,
     ) -> Arranged<G, TraceAgent<Tr2>>
     where
-        Tr: for<'a> TraceReader<
-            Key<'a> = &'a K,
-            KeyOwned = K,
-            Val<'a> = &'a V,
-            ValOwned = V,
-            Time = T,
-            Diff = Diff,
-        >,
-        Tr::KeyOwned: Columnation + ExchangeData + Hashable,
-        Tr::ValOwned: Columnation + ExchangeData,
-        Tr2: Trace
-            + for<'a> TraceReader<Key<'a> = &'a K, Val<'a> = &'a V, Time = G::Timestamp, Diff = Diff>
-            + 'static,
+        Tr1: TraceReader<Time = T, Diff = Diff>,
+        Tr1::KeyOwned: Columnation + ExchangeData + Hashable,
+        Tr1::ValOwned: Columnation + ExchangeData,
+        Tr2: Trace + TraceReader<Time = G::Timestamp, Diff = Diff> + 'static,
         Tr2::Batch: Batch,
-        Tr2::Batcher: Batcher<Item = ((K, V), G::Timestamp, Diff)>,
+        Tr2::Batcher: Batcher<Item = ((Tr1::KeyOwned, Tr1::ValOwned), G::Timestamp, Diff)>,
         Arranged<G, TraceAgent<Tr2>>: ArrangementSize,
     {
-        oks.as_collection(|k, v| (k.clone(), v.clone()))
+        use differential_dataflow::trace::cursor::MyTrait;
+        oks.as_collection(|k, v| (k.into_owned(), v.into_owned()))
             .leave()
             .mz_arrange(name)
     }
