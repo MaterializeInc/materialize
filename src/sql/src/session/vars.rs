@@ -1847,7 +1847,7 @@ feature_flags!(
     {
         name: enable_mfp_pushdown_explain,
         desc: "`filter_pushdown` explain",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -1952,7 +1952,7 @@ feature_flags!(
     {
         name: enable_try_parse_monotonic_iso8601_timestamp,
         desc: "the try_parse_monotonic_iso8601_timestamp function",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },

@@ -6,9 +6,9 @@ menu:
     parent: 'sql-functions'
 ---
 
-{{< private-preview >}}
+{{< public-preview >}}
 [Temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
-{{</ private-preview >}}
+{{</ public-preview >}}
 
 `try_parse_monotonic_iso8601_timestamp` parses a subset of [ISO 8601]
 timestamps that matches the 24 character length output
