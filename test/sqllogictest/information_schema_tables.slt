@@ -385,6 +385,10 @@ mz_compute_frontiers_per_worker
 SOURCE
 materialize
 mz_internal
+mz_compute_hydration_status
+SOURCE
+materialize
+mz_internal
 mz_compute_import_frontiers
 VIEW
 materialize
