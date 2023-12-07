@@ -83,6 +83,7 @@ impl fmt::Display for StatusNamespace {
     }
 }
 
+#[derive(Debug)]
 struct PerWorkerHealthStatus {
     pub(crate) errors_by_worker: Vec<BTreeMap<StatusNamespace, HealthStatusUpdate>>,
 }
@@ -114,20 +115,27 @@ impl PerWorkerHealthStatus {
         let mut hints: BTreeSet<String> = BTreeSet::new();
 
         for status in self.errors_by_worker.iter() {
-            use HealthStatusUpdate::*;
             for (ns, ns_status) in status.iter() {
-                if let Stalled { error, hint, .. } = ns_status {
-                    if Some(error) > namespaced_errors.get(ns).as_deref() {
-                        namespaced_errors.insert(*ns, error.to_string());
+                match ns_status {
+                    HealthStatusUpdate::Ceased { error } => {
+                        return OverallStatus::Ceased {
+                            error: error.clone(),
+                        };
                     }
+                    HealthStatusUpdate::Stalled { error, hint, .. } => {
+                        if Some(error) > namespaced_errors.get(ns).as_deref() {
+                            namespaced_errors.insert(*ns, error.to_string());
+                        }
 
-                    if let Some(hint) = hint {
-                        hints.insert(hint.to_string());
+                        if let Some(hint) = hint {
+                            hints.insert(hint.to_string());
+                        }
                     }
-                }
-
-                if !ns.is_sidechannel() && matches!(ns_status, HealthStatusUpdate::Running) {
-                    output_status = OverallStatus::Running;
+                    HealthStatusUpdate::Running => {
+                        if !ns.is_sidechannel() {
+                            output_status = OverallStatus::Running;
+                        }
+                    }
                 }
             }
         }
@@ -155,6 +163,9 @@ pub enum OverallStatus {
         hints: BTreeSet<String>,
         namespaced_errors: BTreeMap<StatusNamespace, String>,
     },
+    Ceased {
+        error: String,
+    },
 }
 
 impl OverallStatus {
@@ -164,6 +175,7 @@ impl OverallStatus {
             OverallStatus::Starting => "starting",
             OverallStatus::Running => "running",
             OverallStatus::Stalled { .. } => "stalled",
+            OverallStatus::Ceased { .. } => "ceased",
         }
     }
 
@@ -171,14 +183,16 @@ impl OverallStatus {
     pub(crate) fn error(&self) -> Option<&str> {
         match self {
             OverallStatus::Starting | OverallStatus::Running => None,
-            OverallStatus::Stalled { error, .. } => Some(error),
+            OverallStatus::Stalled { error, .. } | OverallStatus::Ceased { error, .. } => {
+                Some(error)
+            }
         }
     }
 
     /// A set of namespaced errors, if there are any.
     pub(crate) fn errors(&self) -> Option<&BTreeMap<StatusNamespace, String>> {
         match self {
-            OverallStatus::Starting | OverallStatus::Running => None,
+            OverallStatus::Starting | OverallStatus::Running | OverallStatus::Ceased { .. } => None,
             OverallStatus::Stalled {
                 namespaced_errors, ..
             } => Some(namespaced_errors),
@@ -186,14 +200,17 @@ impl OverallStatus {
     }
 
     /// A set of hints, if there are any.
-    pub(crate) fn hints(&self) -> Option<&BTreeSet<String>> {
+    pub(crate) fn hints(&self) -> BTreeSet<String> {
         match self {
-            OverallStatus::Starting | OverallStatus::Running => None,
-            OverallStatus::Stalled { hints, .. } => Some(hints),
+            OverallStatus::Starting | OverallStatus::Running | OverallStatus::Ceased { .. } => {
+                BTreeSet::new()
+            }
+            OverallStatus::Stalled { hints, .. } => hints.clone(),
         }
     }
 }
 
+#[derive(Debug)]
 struct HealthState {
     id: GlobalId,
     healths: PerWorkerHealthStatus,
@@ -378,7 +395,7 @@ where
                             timestamp,
                             status.name(),
                             status.error(),
-                            status.hints().unwrap_or(&BTreeSet::new()),
+                            &status.hints(),
                             status.errors().unwrap_or(&BTreeMap::new()),
                             write_namespaced_map,
                         )
@@ -460,7 +477,7 @@ where
                                 timestamp,
                                 new_status.name(),
                                 new_status.error(),
-                                new_status.hints().unwrap_or(&BTreeSet::new()),
+                                &new_status.hints(),
                                 new_status.errors().unwrap_or(&BTreeMap::new()),
                                 write_namespaced_map,
                             )
@@ -517,6 +534,9 @@ pub enum HealthStatusUpdate {
         hint: Option<String>,
         should_halt: bool,
     },
+    Ceased {
+        error: String,
+    },
 }
 
 impl HealthStatusUpdate {
@@ -543,10 +563,20 @@ impl HealthStatusUpdate {
         }
     }
 
+    /// Generates a ceasing [`HealthStatusUpdate`] with `update`.
+    pub(crate) fn ceasing(error: String) -> Self {
+        HealthStatusUpdate::Ceased { error }
+    }
+
     /// Whether or not we should halt the dataflow instances and restart it.
     pub(crate) fn should_halt(&self) -> bool {
         match self {
-            HealthStatusUpdate::Running => false,
+            HealthStatusUpdate::Running |
+            // HealthStatusUpdate::Ceased should never halt because it can occur
+            // at the subsource level and should not cause the entire dataflow
+            // to halt. Instead, the dataflow itself should handle shutting
+            // itself down if need be.
+            HealthStatusUpdate::Ceased { .. } => false,
             HealthStatusUpdate::Stalled { should_halt, .. } => *should_halt,
         }
     }

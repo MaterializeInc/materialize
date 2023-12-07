@@ -125,6 +125,9 @@ where
             .iter()
             .filter(
                 |r| match (&r.status_name, self.previous_statuses.get(&r.id).as_deref()) {
+                    // Ceased statuses should never be overwritten and always tracked
+                    (_, Some(prev)) if prev == "ceased" => false,
+                    (new, _) if new == "ceased" => true,
                     // TODO(guswynn): Ideally only `failed` sources should not be marked as paused.
                     // Additionally, dropping a replica and then restarting environmentd will
                     // fail this check. This will all be resolved in:
