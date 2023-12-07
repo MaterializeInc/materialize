@@ -311,16 +311,12 @@ where
 
                 let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
 
-                let mut status = HealthStatusMessage {
+                let status = HealthStatusMessage {
                     index: *output_index,
                     namespace: C::STATUS_NAMESPACE.clone(),
                     update: status,
                 };
                 if statuses.last() != Some(&status) {
-                    statuses.push(status.clone());
-                    // The global status contains the most recent update of the subsources
-
-                    status.index = 0;
                     statuses.push(status);
                 }
 
