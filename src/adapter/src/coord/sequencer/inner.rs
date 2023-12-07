@@ -82,6 +82,7 @@ use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::instrument::WithSubscriber;
+use tracing::Instrument;
 use tracing::{event, warn, Level, Span};
 use tracing_core::callsite::rebuild_interest_cache;
 
@@ -1998,6 +1999,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2055,13 +2057,19 @@ impl Coordinator {
                         },
                         created: Instant::now(),
                         num_requeues: 0,
+                        otel_ctx: OpenTelemetryContext::obtain(),
                     })
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
             }
             Ok((Some(TransactionOps::SingleStatement { stmt, params }), _)) => {
                 self.internal_cmd_tx
-                    .send(Message::ExecuteSingleStatementTransaction { ctx, stmt, params })
+                    .send(Message::ExecuteSingleStatementTransaction {
+                        ctx,
+                        otel_ctx: OpenTelemetryContext::obtain(),
+                        stmt,
+                        params,
+                    })
                     .expect("must send");
                 return;
             }
@@ -2078,6 +2086,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
@@ -2168,6 +2177,7 @@ impl Coordinator {
 
         self.sequence_peek_stage(
             ctx,
+            OpenTelemetryContext::obtain(),
             PeekStage::Validate(PeekStageValidate {
                 plan,
                 target_cluster,
@@ -2181,6 +2191,7 @@ impl Coordinator {
     pub(crate) async fn sequence_peek_stage(
         &mut self,
         mut ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
         mut stage: PeekStage,
     ) {
         // Process the current stage and allow for processing the next.
@@ -2204,15 +2215,17 @@ impl Coordinator {
                     (ctx, PeekStage::Timestamp(next))
                 }
                 PeekStage::Timestamp(stage) => {
-                    self.peek_stage_timestamp(ctx, stage).await;
+                    self.peek_stage_timestamp(ctx, root_otel_ctx.clone(), stage)
+                        .await;
                     return;
                 }
                 PeekStage::Optimize(stage) => {
-                    self.peek_stage_optimize(ctx, stage).await;
+                    self.peek_stage_optimize(ctx, root_otel_ctx.clone(), stage)
+                        .await;
                     return;
                 }
                 PeekStage::RealTimeRecency(stage) => {
-                    match self.peek_stage_real_time_recency(ctx, stage) {
+                    match self.peek_stage_real_time_recency(ctx, root_otel_ctx.clone(), stage) {
                         Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
                         None => return,
                     }
@@ -2227,6 +2240,7 @@ impl Coordinator {
     }
 
     /// Do some simple validation. We must defer most of it until after any off-thread work.
+    #[tracing::instrument(level = "debug", skip_all)]
     fn peek_stage_validate(
         &mut self,
         session: &Session,
@@ -2325,9 +2339,11 @@ impl Coordinator {
 
     /// Determine a linearized read timestamp (from a `TimestampOracle`), if
     /// needed.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_timestamp(
         &mut self,
         ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
         PeekStageTimestamp {
             validity,
             source,
@@ -2368,13 +2384,19 @@ impl Coordinator {
                 if let Some(shared_oracle) = shared_oracle {
                     // We can do it in an async task, because we can ship off
                     // the timetamp oracle.
+
+                    let span = tracing::debug_span!("linearized timestamp task");
                     mz_ore::task::spawn(|| "linearized timestamp task", async move {
-                        let oracle_read_ts = shared_oracle.read_ts().await;
+                        let oracle_read_ts = shared_oracle.read_ts().instrument(span).await;
                         let stage = build_optimize_stage(Some(oracle_read_ts));
 
                         let stage = PeekStage::Optimize(stage);
                         // Ignore errors if the coordinator has shut down.
-                        let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+                        let _ = internal_cmd_tx.send(Message::PeekStageReady {
+                            ctx,
+                            otel_ctx: root_otel_ctx,
+                            stage,
+                        });
                     });
                 } else {
                     // Timestamp oracle can't be shipped to an async task, we
@@ -2385,19 +2407,33 @@ impl Coordinator {
 
                     let stage = PeekStage::Optimize(stage);
                     // Ignore errors if the coordinator has shut down.
-                    let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+                    let _ = internal_cmd_tx.send(Message::PeekStageReady {
+                        ctx,
+                        otel_ctx: root_otel_ctx,
+                        stage,
+                    });
                 }
             }
             None => {
                 let stage = build_optimize_stage(None);
                 let stage = PeekStage::Optimize(stage);
                 // Ignore errors if the coordinator has shut down.
-                let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+                let _ = internal_cmd_tx.send(Message::PeekStageReady {
+                    ctx,
+                    otel_ctx: root_otel_ctx,
+                    stage,
+                });
             }
         }
     }
 
-    async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn peek_stage_optimize(
+        &mut self,
+        ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
+        mut stage: PeekStageOptimize,
+    ) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -2437,19 +2473,30 @@ impl Coordinator {
             }
         };
 
+        let span = tracing::debug_span!("optimize peek task");
+
         mz_ore::task::spawn_blocking(
             || "optimize peek",
-            move || match Self::optimize_peek(ctx.session(), stats, id_bundle, stage) {
-                Ok(stage) => {
-                    let stage = PeekStage::RealTimeRecency(stage);
-                    // Ignore errors if the coordinator has shut down.
-                    let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+            move || {
+                let _guard = span.enter();
+
+                match Self::optimize_peek(ctx.session(), stats, id_bundle, stage) {
+                    Ok(stage) => {
+                        let stage = PeekStage::RealTimeRecency(stage);
+                        // Ignore errors if the coordinator has shut down.
+                        let _ = internal_cmd_tx.send(Message::PeekStageReady {
+                            ctx,
+                            otel_ctx: root_otel_ctx,
+                            stage,
+                        });
+                    }
+                    Err(err) => ctx.retire(Err(err)),
                 }
-                Err(err) => ctx.retire(Err(err)),
             },
         );
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn optimize_peek(
         session: &Session,
         stats: Box<dyn StatisticsOracle>,
@@ -2490,6 +2537,7 @@ impl Coordinator {
     fn peek_stage_real_time_recency(
         &mut self,
         ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
         PeekStageRealTimeRecency {
             validity,
             copy_to,
@@ -2512,6 +2560,7 @@ impl Coordinator {
                     conn_id.clone(),
                     RealTimeRecencyContext::Peek {
                         ctx,
+                        root_otel_ctx,
                         copy_to,
                         when,
                         target_replica,
@@ -2640,6 +2689,7 @@ impl Coordinator {
 
     /// Determines the query timestamp and acquires read holds on dependent sources
     /// if necessary.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,
@@ -2762,6 +2812,7 @@ impl Coordinator {
         Ok(determination)
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn plan_peek(
         &mut self,
         session: &mut Session,
@@ -4222,13 +4273,19 @@ impl Coordinator {
                 Ok(Response {
                     result: Ok(resp),
                     session,
-                }) => (resp, session),
+                    otel_ctx,
+                }) => {
+                    otel_ctx.attach_as_parent();
+                    (resp, session)
+                }
                 Ok(Response {
                     result: Err(e),
                     session,
+                    otel_ctx,
                 }) => {
                     let ctx =
                         ExecuteContext::from_parts(tx, internal_cmd_tx.clone(), session, extra);
+                    otel_ctx.attach_as_parent();
                     ctx.retire(Err(e));
                     return;
                 }
@@ -4287,10 +4344,7 @@ impl Coordinator {
                 Ok(diffs)
             };
             let diffs = match peek_response {
-                ExecuteResponse::SendingRows {
-                    future: batch,
-                    span: _,
-                } => {
+                ExecuteResponse::SendingRows { future: batch } => {
                     // TODO(jkosh44): This timeout should be removed;
                     // we should instead periodically ensure clusters are
                     // healthy and actively cancel any work waiting on unhealthy
@@ -4318,7 +4372,7 @@ impl Coordinator {
                         }
                     }
                 }
-                ExecuteResponse::SendingRowsImmediate { rows, span: _ } => make_diffs(rows),
+                ExecuteResponse::SendingRowsImmediate { rows } => make_diffs(rows),
                 resp @ ExecuteResponse::Canceled => {
                     ctx.retire(Ok(resp));
                     return;
@@ -4397,6 +4451,7 @@ impl Coordinator {
                     },
                     created: Instant::now(),
                     num_requeues: 0,
+                    otel_ctx: OpenTelemetryContext::obtain(),
                 });
                 // It is not an error for these results to be ready after `strict_serializable_reads_rx` has been dropped.
                 if let Err(e) = result {

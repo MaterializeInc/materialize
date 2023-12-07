@@ -46,10 +46,23 @@ impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    pub(crate) fn handle_message<'a>(&'a mut self, msg: Message) -> LocalBoxFuture<'a, ()> {
+    ///
+    /// We pass in a span from the outside, rather than instrumenting this
+    /// method using `#instrument[...]` or calling `.instrument()` at the
+    /// callsite so that we can correctly instrument the boxed future here _and_
+    /// so that we can stitch up the OpenTelemetryContext when we're processing
+    /// a `Message::Command` or other commands that pass around a context.
+    pub(crate) fn handle_message<'a>(
+        &'a mut self,
+        span: tracing::Span,
+        msg: Message,
+    ) -> LocalBoxFuture<'a, ()> {
         async move {
             match msg {
-                Message::Command(cmd) => self.message_command(cmd).await,
+                Message::Command(otel_ctx, cmd) => {
+                    otel_ctx.attach_as_parent();
+                    self.message_command(cmd).await
+                }
                 Message::ControllerReady => {
                     if let Some(m) = self
                         .controller
@@ -112,15 +125,31 @@ impl Coordinator {
                     )
                     .await;
                 }
-                Message::RetireExecute { data, reason } => {
+                Message::RetireExecute {
+                    otel_ctx,
+                    data,
+                    reason,
+                } => {
+                    otel_ctx.attach_as_parent();
                     self.retire_execution(reason, data);
                 }
-                Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
+                Message::ExecuteSingleStatementTransaction {
+                    ctx,
+                    otel_ctx,
+                    stmt,
+                    params,
+                } => {
+                    otel_ctx.attach_as_parent();
                     self.sequence_execute_single_statement_transaction(ctx, stmt, params)
                         .await;
                 }
-                Message::PeekStageReady { ctx, stage } => {
-                    self.sequence_peek_stage(ctx, stage).await;
+                Message::PeekStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_peek_stage(ctx, otel_ctx, stage).await;
                 }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
@@ -130,6 +159,7 @@ impl Coordinator {
                 }
             }
         }
+        .instrument(span)
         .boxed_local()
     }
 
@@ -666,12 +696,23 @@ impl Coordinator {
         }
 
         if !ready_txns.is_empty() {
+            // Sniff out one ctx, this is where tracing breaks down because we
+            // do one confirm_leadership for multiple peeks.
+            let otel_ctx = ready_txns.first().expect("known to exist").otel_ctx.clone();
+            let mut span = tracing::debug_span!("message_linearize_reads");
+            otel_ctx.attach_as_parent_to(&mut span);
+
             self.catalog_mut()
                 .confirm_leadership()
+                .instrument(span)
                 .await
                 .unwrap_or_terminate("unable to confirm leadership");
+
             let now = Instant::now();
             for ready_txn in ready_txns {
+                let mut span = tracing::debug_span!("retire_read_results");
+                ready_txn.otel_ctx.attach_as_parent_to(&mut span);
+                let _entered = span.enter();
                 self.metrics
                     .linearize_message_seconds
                     .with_label_values(&[
@@ -747,6 +788,7 @@ impl Coordinator {
             }
             RealTimeRecencyContext::Peek {
                 ctx,
+                root_otel_ctx,
                 copy_to,
                 when,
                 target_replica,
@@ -759,6 +801,7 @@ impl Coordinator {
             } => {
                 self.sequence_peek_stage(
                     ctx,
+                    root_otel_ctx,
                     PeekStage::Finish(PeekStageFinish {
                         validity,
                         copy_to,
