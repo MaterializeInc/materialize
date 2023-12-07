@@ -733,6 +733,12 @@ async fn test_unopened_fencing(
         matches!(err, CatalogError::Durable(DurableCatalogError::Fence(_))),
         "unexpected err: {err:?}"
     );
+
+    let err = openable_state2.is_initialized().await.unwrap_err();
+    assert!(
+        matches!(err, CatalogError::Durable(DurableCatalogError::Fence(_))),
+        "unexpected err: {err:?}"
+    );
 }
 
 async fn stash_config() -> (DebugStashFactory, StashConfig) {
