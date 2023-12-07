@@ -114,9 +114,7 @@ impl LinearJoinSpec {
             self.yielding.after_work,
             self.yielding.after_time,
         ) {
-            (DifferentialDataflow, _, _) => {
-                differential_dataflow::operators::JoinCore::join_core(arranged1, arranged2, result)
-            }
+            (DifferentialDataflow, _, _) => arranged1.join_core(arranged2, result),
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;

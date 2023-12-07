@@ -31,36 +31,33 @@ use crate::render::context::{
 };
 
 /// Shared function to compute an arrangement of values matching `logic`.
-fn threshold_arrangement<G, Tr, K, V, T, R, L>(
-    arrangement: &R,
+fn threshold_arrangement<G, T1, T2, L>(
+    arrangement: &Arranged<G, T1>,
     name: &str,
     logic: L,
-) -> Arranged<G, TraceAgent<Tr>>
+) -> Arranged<G, TraceAgent<T2>>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
-    Tr: Trace
-        + for<'a> TraceReader<
-            Key<'a> = &'a K,
-            KeyOwned = K,
-            Val<'a> = &'a V,
-            ValOwned = V,
+    G::Timestamp: Lattice + Columnation,
+    T1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+    T1::KeyOwned: Columnation + Data,
+    T2: for<'a> Trace<
+            Key<'a> = T1::Key<'a>,
+            ValOwned = T1::ValOwned,
             Time = G::Timestamp,
             Diff = Diff,
         > + 'static,
-    Tr::KeyOwned: Columnation + Data,
-    Tr::ValOwned: Columnation + Data,
-    Tr::Batch: Batch,
-    Tr::Batcher: Batcher<Item = ((K, V), G::Timestamp, Diff)>,
-    T: Timestamp + Lattice,
-    R: MzReduce<G, K, V, Diff>,
+    T2::ValOwned: Columnation + Data,
+    T2::Batch: Batch,
+    T2::Batcher: Batcher<Item = ((T1::KeyOwned, T2::ValOwned), G::Timestamp, Diff)>,
     L: Fn(&Diff) -> bool + 'static,
-    Arranged<G, TraceAgent<Tr>>: ArrangementSize,
+    Arranged<G, TraceAgent<T2>>: ArrangementSize,
 {
     arrangement.mz_reduce_abelian(name, move |_key, s, t| {
         for (record, count) in s.iter() {
             if logic(count) {
-                t.push(((*record).clone(), *count));
+                use differential_dataflow::trace::cursor::MyTrait;
+                t.push(((*record).into_owned(), *count));
             }
         }
     })
