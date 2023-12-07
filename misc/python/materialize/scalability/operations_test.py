@@ -40,7 +40,7 @@ class SleepInEnvironmentd(Operation):
         self.duration_in_sec = duration_in_sec
 
     def sql_statement(self) -> str:
-        return f"SELECT mz_internal.mz_sleep({self.duration_in_sec});"
+        return f"SELECT mz_unsafe.mz_sleep({self.duration_in_sec});"
 
 
 class SleepInClusterd(Operation):
@@ -55,7 +55,7 @@ class SleepInClusterd(Operation):
 
     def sql_statement(self) -> str:
         return f"""
-            SELECT mz_internal.mz_sleep(f1 * {self.duration_in_sec})
+            SELECT mz_unsafe.mz_sleep(f1 * {self.duration_in_sec})
             FROM (
                 (SELECT * FROM t1 WHERE f1 < 0)
                 UNION ALL

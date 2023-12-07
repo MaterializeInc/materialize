@@ -14,11 +14,12 @@ use std::any::Any;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
@@ -41,7 +42,6 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::catalog::{CatalogItem, DataSourceDesc, Source};
 use crate::command::{
     Canceled, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
@@ -126,9 +126,10 @@ impl Coordinator {
                     schema,
                     name,
                     conn_id,
+                    received_at,
                     tx,
                 } => {
-                    self.handle_append_webhook(database, schema, name, conn_id, tx);
+                    self.handle_append_webhook(database, schema, name, conn_id, received_at, tx);
                 }
 
                 Command::GetSystemVars { conn_id, tx } => {
@@ -284,11 +285,11 @@ impl Coordinator {
 
                 // Note: Do NOT await the notify here, we pass this back to whatever requested the
                 // startup to prevent blocking the Coordinator on a builtin table update.
-                let notify = self.send_builtin_table_updates_defer(vec![update]);
+                let notify = self.builtin_table_update().defer(vec![update]);
 
                 let resp = Ok(StartupResponse {
                     role_id,
-                    write_notify: notify,
+                    write_notify: Box::pin(notify),
                     session_defaults,
                     role_defaults,
                     catalog: self.owned_catalog(),
@@ -645,7 +646,7 @@ impl Coordinator {
                 let conn_id = ctx.session().conn_id().clone();
                 let catalog = self.owned_catalog();
                 let now = self.now();
-                let connection_context = self.connection_context.clone();
+                let connection_context = self.connection_context().clone();
                 let otel_ctx = OpenTelemetryContext::obtain();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let catalog = catalog.for_session(ctx.session());
@@ -824,7 +825,7 @@ impl Coordinator {
         // this to prevent blocking the Coordinator in the case that a lot of connections are
         // closed at once, which occurs regularly in some workflows.
         let update = self.catalog().state().pack_session_update(&conn, -1);
-        self.send_builtin_table_updates_defer(vec![update]);
+        let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
     }
 
     #[tracing::instrument(level = "debug", skip(self, tx))]
@@ -834,6 +835,7 @@ impl Coordinator {
         schema: String,
         name: String,
         conn_id: ConnectionId,
+        received_at: DateTime<Utc>,
         tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     ) {
         /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
@@ -846,7 +848,7 @@ impl Coordinator {
             schema: String,
             name: String,
             conn_id: ConnectionId,
-            now_fn: NowFn,
+            received_at: DateTime<Utc>,
         ) -> Result<AppendWebhookResponse, PartialItemName> {
             // Resolve our collection.
             let name = PartialItemName {
@@ -888,7 +890,7 @@ impl Coordinator {
                         AppendWebhookValidator::new(
                             validation,
                             coord.caching_secrets_reader.clone(),
-                            now_fn,
+                            received_at,
                         )
                     });
                     (body, headers.clone(), validator)
@@ -910,15 +912,14 @@ impl Coordinator {
             })
         }
 
-        // Get our current clock for any sources that might use time based validation.
-        let now_fn = self.catalog.config().now.clone();
-        let response = resolve(self, database, schema, name, conn_id, now_fn).map_err(|name| {
-            AdapterError::UnknownWebhookSource {
-                database: name.database.expect("provided"),
-                schema: name.schema.expect("provided"),
-                name: name.item,
-            }
-        });
+        let response =
+            resolve(self, database, schema, name, conn_id, received_at).map_err(|name| {
+                AdapterError::UnknownWebhookSource {
+                    database: name.database.expect("provided"),
+                    schema: name.schema.expect("provided"),
+                    name: name.item,
+                }
+            });
         let _ = tx.send(response);
     }
 }

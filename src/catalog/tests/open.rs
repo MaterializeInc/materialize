@@ -138,12 +138,12 @@ async fn test_is_initialized(
 
     assert!(
         openable_state2.is_initialized().await.unwrap(),
-        "catalog has been opened yet"
+        "catalog has been opened"
     );
-    // Check twice because some implementations will cache a read-only stash.
+    // Check twice because some implementations will cache a read-only connection.
     assert!(
         openable_state2.is_initialized().await.unwrap(),
-        "catalog has been opened yet"
+        "catalog has been opened"
     );
 }
 
@@ -200,7 +200,7 @@ async fn test_get_deployment_generation(
         Some(42),
         "deployment generation has been set to 42"
     );
-    // Check twice because some implementations will cache a read-only stash.
+    // Check twice because some implementations will cache a read-only connection.
     assert_eq!(
         openable_state2.get_deployment_generation().await.unwrap(),
         Some(42),
@@ -283,7 +283,7 @@ async fn test_open_savepoint(
             CatalogError::Durable(e) => assert!(e.can_recover_with_write_mode()),
         }
 
-        // Initialize the stash.
+        // Initialize the catalog.
         {
             let mut state = Box::new(openable_state2)
                 .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
@@ -419,7 +419,7 @@ async fn test_open_read_only(
     openable_state2: impl OpenableDurableCatalogState,
     openable_state3: impl OpenableDurableCatalogState,
 ) {
-    // Can't open a read-only stash until it's been initialized.
+    // Can't open a read-only catalog until it's been initialized.
     let err = Box::new(openable_state1)
         .open_read_only(SYSTEM_TIME(), &test_bootstrap_args())
         .await
@@ -429,7 +429,7 @@ async fn test_open_read_only(
         CatalogError::Durable(e) => assert!(e.can_recover_with_write_mode()),
     }
 
-    // Initialize the stash.
+    // Initialize the catalog.
     let mut state = Box::new(openable_state2)
         .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await

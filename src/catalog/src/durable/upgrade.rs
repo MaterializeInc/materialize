@@ -193,7 +193,7 @@ pub(crate) mod persist {
     use crate::durable::impls::persist::state_update::{
         IntoStateUpdateKindBinary, StateUpdateKindBinary,
     };
-    use crate::durable::impls::persist::{PersistHandle, StateUpdate, Timestamp};
+    use crate::durable::impls::persist::{StateUpdate, Timestamp, UnopenedPersistCatalogState};
     use crate::durable::initialize::USER_VERSION_KEY;
     use crate::durable::objects::serialization::proto;
     use crate::durable::upgrade::{
@@ -259,7 +259,7 @@ pub(crate) mod persist {
     /// Returns the current upper after all migrations have executed.
     #[tracing::instrument(name = "persist::upgrade", level = "debug", skip_all)]
     pub(crate) async fn upgrade(
-        persist_handle: &mut PersistHandle,
+        persist_handle: &mut UnopenedPersistCatalogState,
         mut upper: Timestamp,
     ) -> Result<Timestamp, CatalogError> {
         soft_assert_ne!(
@@ -284,7 +284,7 @@ pub(crate) mod persist {
         ///
         /// Returns the new version and upper.
         async fn run_upgrade(
-            persist_handle: &mut PersistHandle,
+            _unopened_catalog_state: &mut UnopenedPersistCatalogState,
             upper: Timestamp,
             version: u64,
         ) -> Result<(u64, Timestamp), CatalogError> {

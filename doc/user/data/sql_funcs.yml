@@ -293,10 +293,10 @@
     description: Return the `n`th byte from `b`, where the left-most byte in `b` is at the 0th position.
 
   - signature: 'constant_time_eq(a: bytea, b: bytea) -> bool'
-    description: Performs a constant-time comparison between byte arrays `a` and `b`. Returns `true` if the arrays are identical, otherwise returns `false`. This method is designed to mitigate timing attacks by ensuring the comparison takes the same amount of time regardless of the content of the arrays.
+    description: Returns `true` if the arrays are identical, otherwise returns `false`. The implementation mitigates timing attacks by making a best-effort attempt to execute in constant time if the arrays have the same length, regardless of their contents.
 
   - signature: 'constant_time_eq(a: text, b: text) -> bool'
-    description: Performs a constant-time comparison between strings `a` and `b` by first converting them to byte sequences. Returns `true` if the strings are identical, otherwise returns `false`. This method is designed to mitigate timing attacks by ensuring the comparison takes the same amount of time regardless of the content of the strings.
+    description: Returns `true` if the strings are identical, otherwise returns `false`. The implementation mitigates timing attacks by making a best-effort attempt to execute in constant time if the strings have the same length, regardless of their contents.
 
   - signature: 'left(s: str, n: int) -> str'
     description: The first `n` characters of `s`. If `n` is negative, all but the last `|n|` characters of `s`.
@@ -666,6 +666,8 @@
     description: 'Concatenates `a1` and `a2`.'
   - signature: 'array_fill(anyelement, int[], [, int[]]) -> anyarray'
     description: 'Returns an array initialized with supplied value and dimensions, optionally with lower bounds other than 1. (From [PG](https://www.postgresql.org/docs/current/functions-array.html))'
+  - signature: 'array_length(a: arrayany, dim: bigint) -> int'
+    description: 'Returns the length of the specified dimension of the array.'
   - signature: 'array_position(haystack: anycompatiblearray, needle: anycompatible) -> int'
     description: 'Returns the subscript of `needle` in `haystack`. Returns `null` if not found.'
   - signature: 'array_position(haystack: anycompatiblearray, needle: anycompatible, skip: int) -> int'

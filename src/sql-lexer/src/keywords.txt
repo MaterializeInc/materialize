@@ -24,7 +24,6 @@
 # For details on the code that is generated, see keywords.rs.
 
 Access
-Acks
 Add
 Addresses
 Aggregate
@@ -127,7 +126,6 @@ Drop
 Effort
 Element
 Else
-Enable
 End
 Endpoint
 Enforced
@@ -170,7 +168,6 @@ Host
 Hour
 Hours
 Id
-Idempotence
 Idle
 If
 Ignore

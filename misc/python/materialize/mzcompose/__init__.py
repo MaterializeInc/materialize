@@ -53,6 +53,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_columnation_lgalloc": "true",
     "enable_rbac_checks": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    "enable_unsafe_functions": "true",
+    # Old name of `enable_unsafe_functions`.
     "enable_dangerous_functions": "true",
     "enable_disk_cluster_replicas": "true",
     "statement_logging_max_sample_rate": "1.0",
@@ -73,8 +75,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_sink_doc_on_option": "true",
     "enable_assert_not_null": "true",
     "enable_specialized_arrangements": "true",
-    # TODO(def-,bkirwi): Reenable before this is used in production, #22042
-    # "persist_fast_path_limit": "1000",
+    "persist_fast_path_limit": "1000",
     "enable_alter_swap": "true",
     "timestamp_oracle": "postgres",
     "default_idle_arrangement_merge_effort": "0",

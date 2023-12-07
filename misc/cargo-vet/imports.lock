@@ -1072,6 +1072,17 @@ criteria = "safe-to-deploy"
 version = "1.0.1"
 notes = "No unsafe usage or ambient capabilities"
 
+[[audits.embark-studios.audits.no-std-compat]]
+who = "Johan Andersson <opensource@embark-studios.com>"
+criteria = "safe-to-deploy"
+version = "0.2.0"
+notes = "No unsafe usage or ambient capabilities"
+
+[[audits.embark-studios.audits.no-std-compat]]
+who = "Johan Andersson <opensource@embark-studios.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.0 -> 0.4.1"
+
 [[audits.embark-studios.audits.similar]]
 who = "Johan Andersson <opensource@embark-studios.com>"
 criteria = "safe-to-deploy"
@@ -1440,6 +1451,12 @@ aggregated-from = "https://raw.githubusercontent.com/mozilla/cargo-vet/main/supp
 who = "Mike Hommey <mh+mozilla@glandium.org>"
 criteria = "safe-to-deploy"
 version = "0.4.17"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.mach2]]
+who = "Gabriele Svelto <gsvelto@mozilla.com>"
+criteria = "safe-to-deploy"
+version = "0.4.1"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.matches]]

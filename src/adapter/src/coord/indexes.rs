@@ -9,12 +9,12 @@
 
 use std::collections::BTreeSet;
 
+use mz_catalog::memory::objects::{CatalogItem, Index, Log};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, MirScalarExpr};
 use mz_repr::GlobalId;
 use mz_transform::IndexOracle;
 
-use crate::catalog::{CatalogItem, Index, Log};
 use crate::coord::dataflows::DataflowBuilder;
 use crate::coord::{CollectionIdBundle, Coordinator};
 

@@ -512,7 +512,7 @@ class ExpressionGenerator:
         self, type_identifier: str
     ) -> DataTypeWithValues:
         for data_type_with_values in self.input_data.all_data_types_with_values:
-            if data_type_with_values.data_type.identifier == type_identifier:
+            if data_type_with_values.data_type.internal_identifier == type_identifier:
                 return data_type_with_values
 
         raise RuntimeError(f"No data type found with identifier {type_identifier}")

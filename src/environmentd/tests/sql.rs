@@ -329,7 +329,7 @@ async fn test_drop_connection_race() {
 #[mz_ore::test]
 fn test_time() {
     let server = test_util::TestHarness::default().start_blocking();
-    server.enable_feature_flags(&["enable_dangerous_functions"]);
+    server.enable_feature_flags(&["enable_unsafe_functions"]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Confirm that `now()` and `current_timestamp()` both return a
@@ -360,7 +360,7 @@ fn test_time() {
     // Test that `mz_sleep` causes a delay of at least the appropriate time.
     let start = Instant::now();
     client
-        .batch_execute("SELECT mz_internal.mz_sleep(0.3)")
+        .batch_execute("SELECT mz_unsafe.mz_sleep(0.3)")
         .unwrap();
     let elapsed = start.elapsed();
     assert!(
@@ -1124,11 +1124,9 @@ async fn test_subscribe_shutdown() {
         .unwrap();
 
     // Un-gracefully abort the connection.
-    conn_task.abort();
-
-    // Need to await `conn_task` to actually deliver the `abort`. We don't
+    // We need to await `conn_task` to actually deliver the `abort`. We don't
     // care about the result though (it's probably `JoinError` with `is_cancelled` being true).
-    let _ = conn_task.await;
+    conn_task.abort_and_wait().await;
 
     // Dropping the server will initiate a graceful shutdown. We previously had
     // a bug where the server would fail to notice that the client running
@@ -1535,7 +1533,7 @@ async fn test_github_12546() {
         .start()
         .await;
     server
-        .enable_feature_flags(&["enable_dangerous_functions"])
+        .enable_feature_flags(&["enable_unsafe_functions"])
         .await;
 
     let (client, conn_task) = server.connect().with_handle().await.unwrap();
@@ -1549,7 +1547,7 @@ async fn test_github_12546() {
         .await
         .unwrap();
 
-    let query = client.query("SELECT mz_internal.mz_panic(a) FROM test", &[]);
+    let query = client.query("SELECT mz_unsafe.mz_panic(a) FROM test", &[]);
     let timeout = tokio::time::timeout(Duration::from_secs(2), query);
     // We expect the timeout to trigger because the query should be crashing the
     // compute instance.
@@ -1561,10 +1559,9 @@ async fn test_github_12546() {
     // Aborting the connection should cause its pending queries to be cancelled,
     // allowing the compute instances to stop crashing while trying to execute
     // them.
-    conn_task.abort();
-
-    // Need to await `conn_task` to actually deliver the `abort`.
-    let _ = conn_task.await;
+    //
+    // We need to await `conn_task` to actually deliver the `abort`.
+    conn_task.abort_and_wait().await;
 
     // Make a new connection to verify the compute instance can now start.
     let client = server.connect().await.unwrap();
@@ -1775,8 +1772,7 @@ async fn test_timeline_read_holds() {
     let source_name = "source_hold";
     let (pg_client, cleanup_fn) =
         test_util::create_postgres_source_with_table(&mz_client, view_name, "(a INT)", source_name)
-            .await
-            .unwrap();
+            .await;
 
     // Create user table in Materialize.
     mz_client
@@ -1800,9 +1796,7 @@ async fn test_timeline_read_holds() {
             .unwrap();
     }
 
-    test_util::wait_for_view_population(&mz_client, view_name, source_rows)
-        .await
-        .unwrap();
+    test_util::wait_for_view_population(&mz_client, view_name, source_rows).await;
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mz_join_client = server.connect().await.unwrap();
@@ -1818,7 +1812,7 @@ async fn test_timeline_read_holds() {
     .await
     .unwrap();
 
-    cleanup_fn(&mz_client, &pg_client).await.unwrap();
+    cleanup_fn(&mz_client, &pg_client).await;
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -1840,17 +1834,14 @@ async fn test_linearizability() {
     let source_name = "source_lin";
     let (pg_client, cleanup_fn) =
         test_util::create_postgres_source_with_table(&mz_client, view_name, "(a INT)", source_name)
-            .await
-            .unwrap();
+            .await;
     // Insert value into postgres table.
     let _ = pg_client
         .execute(&format!("INSERT INTO {view_name} VALUES (42);"), &[])
         .await
         .unwrap();
 
-    test_util::wait_for_view_population(&mz_client, view_name, 1)
-        .await
-        .unwrap();
+    test_util::wait_for_view_population(&mz_client, view_name, 1).await;
 
     // The user table's write frontier will be close to zero because we use a deterministic
     // now function in this test. It may be slightly higher than zero because bootstrapping
@@ -1904,7 +1895,7 @@ async fn test_linearizability() {
     // If we go back to serializable, then timestamps can revert again.
     assert!(join_ts < view_ts);
 
-    cleanup_fn(&mz_client, &pg_client).await.unwrap();
+    cleanup_fn(&mz_client, &pg_client).await;
 }
 
 #[mz_ore::test]
@@ -2203,7 +2194,7 @@ fn test_introspection_user_permissions() {
 #[mz_ore::test]
 fn test_idle_in_transaction_session_timeout() {
     let server = test_util::TestHarness::default().start_blocking();
-    server.enable_feature_flags(&["enable_dangerous_functions"]);
+    server.enable_feature_flags(&["enable_unsafe_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
@@ -2267,7 +2258,7 @@ fn test_idle_in_transaction_session_timeout() {
         .batch_execute("SET idle_in_transaction_session_timeout TO '50ms'")
         .unwrap();
     client.batch_execute("BEGIN").unwrap();
-    client.query("SELECT mz_internal.mz_sleep(1)", &[]).unwrap();
+    client.query("SELECT mz_unsafe.mz_sleep(1)", &[]).unwrap();
     client.query("SELECT 1", &[]).unwrap();
     client.batch_execute("COMMIT").unwrap();
 

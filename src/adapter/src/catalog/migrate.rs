@@ -22,6 +22,7 @@ use mz_storage_types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
 
+// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{Catalog, CatalogState, ConnCatalog};
 
 async fn rewrite_items<F>(
@@ -55,7 +56,7 @@ pub(crate) async fn migrate(
     state: &CatalogState,
     txn: &mut Transaction<'_>,
     now: NowFn,
-    _connection_context: Option<ConnectionContext>,
+    _connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let catalog_version = txn.get_catalog_content_version();
     let catalog_version = match catalog_version {

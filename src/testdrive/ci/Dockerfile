@@ -7,17 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
-
-RUN apt-get update && apt-get -qy install --no-install-recommends \
-    ca-certificates \
-    curl \
-    dnsutils \
-    iputils-ping \
-    postgresql-client \
-    ssh \
-    wait-for-it \
-    wget
+MZFROM testdrive-base
 
 COPY testdrive /usr/local/bin/
 

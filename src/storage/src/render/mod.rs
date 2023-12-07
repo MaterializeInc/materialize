@@ -249,7 +249,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let (feedback_handle, feedback) = into_time_scope.feedback(Default::default());
 
-            let (mut outputs, source_health, token) = crate::render::sources::render_source(
+            let (mut outputs, source_health, source_tokens) = crate::render::sources::render_source(
                 into_time_scope,
                 &debug_name,
                 primary_source_id,
@@ -260,7 +260,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 &feedback,
                 storage_state,
             );
-            tokens.push(token);
+            tokens.extend(source_tokens);
 
             let mut health_configs = BTreeMap::new();
 
@@ -283,7 +283,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 tracing::info!(
                     "timely-{worker_id} rendering {export_id} with multi-worker persist_sink",
                 );
-                let (upper_stream, errors, token) = crate::render::persist_sink::render(
+                let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
                     into_time_scope,
                     export_id,
                     export.storage_metadata.clone(),
@@ -293,7 +293,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     export.output_index,
                 );
                 upper_streams.push(upper_stream);
-                tokens.push(token);
+                tokens.extend(sink_tokens);
 
                 let sink_health = errors.map(|err: Rc<anyhow::Error>| {
                     let halt_status =
@@ -338,7 +338,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             storage_state
                 .source_tokens
-                .insert(primary_source_id, Rc::new(tokens));
+                .insert(primary_source_id, tokens);
         })
     });
 }
@@ -364,14 +364,10 @@ pub fn build_export_dataflow<A: Allocate>(
                 timely::dataflow::scopes::Child<TimelyWorker<A>, _>,
                 mz_repr::Timestamp,
             > = scope;
-            let mut tokens = Vec::new();
-            let health_stream = crate::render::sinks::render_sink(
-                scope,
-                storage_state,
-                &mut tokens,
-                id,
-                &description,
-            );
+            let mut tokens = vec![];
+            let (health_stream, sink_tokens) =
+                crate::render::sinks::render_sink(scope, storage_state, id, &description);
+            tokens.extend(sink_tokens);
 
             let mut health_configs = BTreeMap::new();
             health_configs.insert(
@@ -398,10 +394,7 @@ pub fn build_export_dataflow<A: Allocate>(
             );
             tokens.push(health_token);
 
-            use crate::storage_state::SinkToken;
-            storage_state
-                .sink_tokens
-                .insert(id, SinkToken::new(Box::new(tokens)));
+            storage_state.sink_tokens.insert(id, tokens);
         })
     });
 }

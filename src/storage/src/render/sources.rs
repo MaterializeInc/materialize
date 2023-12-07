@@ -11,13 +11,13 @@
 //!
 //! See [`render_source`] for more details.
 
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use mz_ore::cast::CastLossy;
+use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_operators::persist_source;
 use mz_storage_operators::persist_source::Subtime;
@@ -28,6 +28,7 @@ use mz_storage_types::errors::{
 use mz_storage_types::parameters::StorageMaxInflightBytesConfig;
 use mz_storage_types::sources::encoding::*;
 use mz_storage_types::sources::*;
+use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
@@ -85,10 +86,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
     )>,
     Stream<G, HealthStatusMessage>,
-    Rc<dyn Any>,
+    Vec<PressOnDropButton>,
 ) {
     // Tokens that we should return from the method.
-    let mut needed_tokens: Vec<Rc<dyn Any>> = Vec::new();
+    let mut needed_tokens = Vec::new();
 
     // Note that this `render_source` attaches a single _instance_ of a source
     // to the passed `Scope`, and this instance may be disabled if the
@@ -149,9 +150,9 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let (streams, mut health, capability) = match connection {
+    let (streams, mut health, source_tokens) = match connection {
         GenericSourceConnection::Kafka(connection) => {
-            let (streams, health, cap) = source::create_raw_source(
+            let (streams, health, source_tokens) = source::create_raw_source(
                 scope,
                 resume_stream,
                 base_source_config.clone(),
@@ -163,10 +164,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 .into_iter()
                 .map(|(ok, err)| (SourceType::Delimited(ok), err))
                 .collect();
-            (streams, health, cap)
+            (streams, health, source_tokens)
         }
         GenericSourceConnection::Postgres(connection) => {
-            let (streams, health, cap) = source::create_raw_source(
+            let (streams, health, source_tokens) = source::create_raw_source(
                 scope,
                 resume_stream,
                 base_source_config.clone(),
@@ -178,10 +179,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 .into_iter()
                 .map(|(ok, err)| (SourceType::Row(ok), err))
                 .collect();
-            (streams, health, cap)
+            (streams, health, source_tokens)
         }
         GenericSourceConnection::LoadGenerator(connection) => {
-            let (streams, health, cap) = source::create_raw_source(
+            let (streams, health, source_tokens) = source::create_raw_source(
                 scope,
                 resume_stream,
                 base_source_config.clone(),
@@ -193,10 +194,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 .into_iter()
                 .map(|(ok, err)| (SourceType::Row(ok), err))
                 .collect();
-            (streams, health, cap)
+            (streams, health, source_tokens)
         }
         GenericSourceConnection::TestScript(connection) => {
-            let (streams, health, cap) = source::create_raw_source(
+            let (streams, health, source_tokens) = source::create_raw_source(
                 scope,
                 resume_stream,
                 base_source_config.clone(),
@@ -208,13 +209,11 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 .into_iter()
                 .map(|(ok, err)| (SourceType::Delimited(ok), err))
                 .collect();
-            (streams, health, cap)
+            (streams, health, source_tokens)
         }
     };
 
-    let source_token = Rc::new(capability);
-
-    needed_tokens.push(source_token);
+    needed_tokens.extend(source_tokens);
 
     let mut outputs = vec![];
     for (ok_source, err_source) in streams {
@@ -240,7 +239,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
 
         health = health.concat(&health_stream.leave());
     }
-    (outputs, health, Rc::new(needed_tokens))
+    (outputs, health, needed_tokens)
 }
 
 /// Completes the rendering of a particular source stream by applying decoding and envelope
@@ -259,13 +258,13 @@ fn render_source_stream<G>(
 ) -> (
     Collection<G, Row, Diff>,
     Collection<G, DataflowError, Diff>,
-    Vec<Rc<dyn Any>>,
+    Vec<PressOnDropButton>,
     Stream<G, HealthStatusMessage>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let mut needed_tokens: Vec<Rc<dyn Any>> = vec![];
+    let mut needed_tokens = vec![];
 
     let SourceDesc {
         encoding,
@@ -307,13 +306,13 @@ where
                 csr_connection,
                 confluent_wire_format,
             );
-            needed_tokens.push(Rc::new(token));
+            needed_tokens.push(token);
             (oks, None, empty(scope))
         } else {
             // Depending on the type of _raw_ source produced for the given source
             // connection, render the _decode_ part of the pipeline, that turns a raw data
             // stream into a `DecodeResult`.
-            let (decoded_stream, decode_health, extra_token) = match ok_source {
+            let (decoded_stream, decode_health) = match ok_source {
                 SourceType::Delimited(source) => render_decode_delimited(
                     &source,
                     key_encoding,
@@ -330,12 +329,8 @@ where
                         position_for_upsert: r.position_for_upsert,
                     }),
                     empty(scope),
-                    None,
                 ),
             };
-            if let Some(tok) = extra_token {
-                needed_tokens.push(Rc::new(tok));
-            }
 
             // render envelopes
             let (envelope_ok, envelope_err, envelope_health) = match &envelope {
@@ -355,6 +350,7 @@ where
                                     persist_clients,
                                     tx_storage_metadata,
                                     Some(as_of),
+                                    SnapshotMode::Include,
                                     Antichain::new(),
                                     None,
                                     None,
@@ -363,7 +359,7 @@ where
                                 tx_source_ok_stream.as_collection(),
                                 tx_source_err_stream.as_collection(),
                             );
-                            needed_tokens.push(tx_token);
+                            needed_tokens.extend(tx_token);
                             error_collections.push(tx_source_err);
 
                             super::debezium::render_tx(dbz_envelope, &decoded_stream, tx_source_ok)
@@ -451,6 +447,7 @@ where
                                         persist_clients,
                                         description.ingestion_metadata,
                                         Some(as_of),
+                                        SnapshotMode::Include,
                                         Antichain::new(),
                                         None,
                                         flow_control,

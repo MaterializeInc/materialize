@@ -31,6 +31,7 @@ date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 # Docker Compose run, which can leave old containers or volumes around that will
 # interfere with this build.
 ci_collapsed_heading ":docker: Purging containers and volumes from previous builds"
+sudo systemctl restart docker
 mzcompose --mz-quiet kill
 mzcompose --mz-quiet rm --force -v
 mzcompose --mz-quiet down --volumes

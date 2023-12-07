@@ -17,8 +17,10 @@ use std::sync::Arc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::fetch::LeasedBatchPart;
+use mz_persist_client::metrics::encode_ts_metric;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
@@ -27,6 +29,7 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, instrument};
 
+use crate::metrics::Metrics;
 use crate::txn_read::{DataListenNext, DataSnapshot};
 use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
@@ -141,6 +144,18 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             return false;
         };
         data_times.registered.iter().any(|x| x.contains(ts))
+    }
+
+    /// Returns the set of all data shards registered to the txns set at the
+    /// given timestamp. See [Self::registered_at].
+    pub(crate) fn all_registered_at(&self, ts: &T) -> Vec<ShardId> {
+        assert_eq!(self.only_data_id, None);
+        assert!(self.progress_exclusive >= *ts);
+        self.datas
+            .iter()
+            .filter(|(_, data_times)| data_times.registered.iter().any(|x| x.contains(ts)))
+            .map(|(data_id, _)| *data_id)
+            .collect()
     }
 
     /// Returns a token exchangeable for a snapshot of a data shard.
@@ -307,8 +322,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     pub(crate) fn filter_retractions<'a>(
         &'a self,
         expected_txns_upper: &T,
-        retractions: impl Iterator<Item = (&'a Vec<u8>, &'a ShardId)>,
-    ) -> impl Iterator<Item = (&'a Vec<u8>, &'a ShardId)> {
+        retractions: impl Iterator<Item = (&'a Vec<u8>, &'a ([u8; 8], ShardId))>,
+    ) -> impl Iterator<Item = (&'a Vec<u8>, &'a ([u8; 8], ShardId))> {
         assert_eq!(self.only_data_id, None);
         assert!(&self.progress_exclusive >= expected_txns_upper);
         retractions.filter(|(batch_raw, _)| self.batch_idx.contains_key(*batch_raw))
@@ -344,10 +359,18 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         // registering and committing to a data shard at the same
         // timestamp, this will also have to sort registrations first.
         entries.sort_by(|(_, at, _), (_, bt, _)| at.cmp(bt));
-        for (e, t, d) in entries {
+        for (e, _t, d) in entries {
             match e {
-                TxnsEntry::Register(data_id) => self.push_register(data_id, t, d),
-                TxnsEntry::Append(data_id, batch) => self.push_append(data_id, batch, t, d),
+                TxnsEntry::Register(data_id, ts) => {
+                    let ts = T::decode(ts);
+                    debug_assert!(ts <= _t);
+                    self.push_register(data_id, ts, d);
+                }
+                TxnsEntry::Append(data_id, ts, batch) => {
+                    let ts = T::decode(ts);
+                    debug_assert!(ts <= _t);
+                    self.push_append(data_id, batch, ts, d)
+                }
             }
         }
         self.progress_exclusive = progress;
@@ -355,7 +378,9 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
 
     fn push_register(&mut self, data_id: ShardId, ts: T, diff: i64) {
         self.assert_only_data_id(&data_id);
-        debug_assert!(ts >= self.progress_exclusive);
+        // Since we keep the original non-advanced timestamp around, retractions
+        // necessarily might be for times in the past, so `|| diff < 0`.
+        debug_assert!(ts >= self.progress_exclusive || diff < 0);
         if let Some(only_data_id) = self.only_data_id.as_ref() {
             if only_data_id != &data_id {
                 return;
@@ -397,7 +422,9 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
 
     fn push_append(&mut self, data_id: ShardId, batch: Vec<u8>, ts: T, diff: i64) {
         self.assert_only_data_id(&data_id);
-        debug_assert!(ts >= self.progress_exclusive);
+        // Since we keep the original non-advanced timestamp around, retractions
+        // necessarily might be for times in the past, so `|| diff < 0`.
+        debug_assert!(ts >= self.progress_exclusive || diff < 0);
         if let Some(only_data_id) = self.only_data_id.as_ref() {
             if only_data_id != &data_id {
                 return;
@@ -531,6 +558,31 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             self.since_ts, self.datas_min_write_ts
         );
         debug_assert_eq!(self.validate(), Ok(()));
+    }
+
+    pub(crate) fn update_gauges(&self, metrics: &Metrics) {
+        metrics
+            .data_shard_count
+            .set(u64::cast_from(self.datas.len()));
+        metrics
+            .batches
+            .unapplied_count
+            .set(u64::cast_from(self.unapplied_batches.len()));
+        let unapplied_batches_bytes = self
+            .unapplied_batches
+            .values()
+            .map(|(_, x, _)| x.len())
+            .sum::<usize>();
+        metrics
+            .batches
+            .unapplied_bytes
+            .set(u64::cast_from(unapplied_batches_bytes));
+        metrics
+            .batches
+            .unapplied_min_ts
+            .set(encode_ts_metric(&Antichain::from_elem(
+                self.min_unapplied_ts().clone(),
+            )));
     }
 
     fn assert_only_data_id(&self, data_id: &ShardId) {
@@ -1156,7 +1208,6 @@ mod tests {
     ///   empty CaA, but this write never existed so it hangs forever.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    #[ignore] // TODO(txn): Fix this bug in a way that is not awful.
     async fn regression_compact_latest_write() {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;

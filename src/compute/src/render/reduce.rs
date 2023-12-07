@@ -39,7 +39,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 use tracing::warn;
 
-use crate::extensions::arrange::{ArrangementSize, HeapSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
 use crate::render::context::{Arrangement, CollectionBundle, Context, SpecializedArrangement};
 use crate::render::errors::MaybeValidatingRow;
@@ -50,7 +50,7 @@ use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
     T: Timestamp + Lattice + Columnation,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
@@ -466,7 +466,15 @@ where
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        Tr: Trace + TraceReader<Key = Row, Val = V, Time = G::Timestamp, Diff = Diff> + 'static,
+        Tr: Trace
+            + for<'a> TraceReader<
+                Key<'a> = &'a Row,
+                KeyOwned = Row,
+                Val<'a> = &'a V,
+                ValOwned = V,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Item = ((Row, V), G::Timestamp, Diff)>,
         V: Columnation + Default + ExchangeData + IntoRowByTypes,
@@ -679,8 +687,14 @@ where
         S: Scope<Timestamp = G::Timestamp>,
         V: MaybeValidatingRow<(), String>,
         Tr: Trace
-            + TraceReader<Key = (Row, Row), Val = V, Time = G::Timestamp, Diff = Diff>
-            + 'static,
+            + for<'a> TraceReader<
+                Key<'a> = &'a (Row, Row),
+                KeyOwned = (Row, Row),
+                Val<'a> = &'a V,
+                ValOwned = V,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Item = (((Row, Row), V), G::Timestamp, Diff)>,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
@@ -1772,21 +1786,6 @@ impl Columnation for Accum {
     type InnerRegion = CopyRegion<Self>;
 }
 
-impl HeapSize for (Vec<Accum>, i64) {
-    #[inline]
-    fn estimate_size<C>(&self, mut callback: C)
-    where
-        C: FnMut(usize, usize, usize),
-    {
-        let size_of_accum = std::mem::size_of::<Accum>();
-        callback(
-            self.0.len() * size_of_accum,
-            self.0.capacity() * size_of_accum,
-            usize::from(self.0.capacity() > 0),
-        )
-    }
-}
-
 /// Monoids for in-place compaction of monotonic streams.
 mod monoids {
 
@@ -1811,8 +1810,6 @@ mod monoids {
     use mz_repr::{Datum, Diff, Row};
     use serde::{Deserialize, Serialize};
     use timely::container::columnation::{Columnation, Region};
-
-    use crate::extensions::arrange::HeapSize;
 
     /// A monoid containing a single-datum row.
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
@@ -1939,41 +1936,6 @@ mod monoids {
 
         fn heap_size(&self, callback: impl FnMut(usize, usize)) {
             self.inner.heap_size(callback);
-        }
-    }
-
-    impl HeapSize for Vec<ReductionMonoid> {
-        #[inline]
-        fn estimate_size<C>(&self, mut callback: C)
-        where
-            C: FnMut(usize, usize, usize),
-        {
-            // We only expect as many elements in the `Vec` as there are hierarchical aggregates
-            // in one query. Thus, we deem it safe to crawl the vector to get a good estimate of
-            // the row sizes contained in the monoids.
-            let size_of_monoid = std::mem::size_of::<ReductionMonoid>();
-            let vec_size = self.len() * size_of_monoid;
-            let vec_capacity = self.capacity() * size_of_monoid;
-            let vec_allocation = usize::from(self.capacity() > 0);
-
-            let mut row_size = 0;
-            let mut row_capacity = 0;
-            let mut row_allocations = 0;
-            for monoid in self.iter() {
-                match monoid {
-                    ReductionMonoid::Min(row) | ReductionMonoid::Max(row) => {
-                        row_size += row.heap_size();
-                        let cap = row.heap_capacity();
-                        row_capacity += cap;
-                        row_allocations += usize::from(cap > 0);
-                    }
-                };
-            }
-            callback(
-                vec_size + row_size,
-                vec_capacity + row_capacity,
-                vec_allocation + row_allocations,
-            )
         }
     }
 

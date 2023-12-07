@@ -29,7 +29,7 @@ use mz_compute_types::plan::Plan;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
-use mz_ore::task::{AbortHandleExt, AbortOnDropAbortHandle};
+use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
@@ -39,13 +39,15 @@ use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
 use mz_repr::{ColumnType, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::stats::StatsCursor;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
+use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::oneshot;
-use tracing::{error, info, span, warn, Level};
+use tracing::{debug, error, info, span, warn, Level};
 use uuid::Uuid;
 
 use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceManager};
@@ -266,7 +268,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                             }),
                     );
                 } else {
-                    warn!("Not enabling lgalloc, scratch directory not specified");
+                    debug!("Not enabling lgalloc, scratch directory not specified");
                 }
             }
             Some(false) => {
@@ -359,18 +361,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 PendingPeek::index(peek, trace_bundle)
             }
             PeekTarget::Persist { metadata, .. } => {
-                let active_worker = {
-                    // Choose the worker that does the actual peek arbitrarily but consistently.
-                    let chosen_index =
-                        usize::cast_from(peek.uuid.hashed()) % self.timely_worker.peers();
-                    chosen_index == self.timely_worker.index()
-                };
                 let metadata = metadata.clone();
                 PendingPeek::persist(
                     peek,
                     Arc::clone(&self.compute_state.persist_clients),
                     metadata,
-                    active_worker,
+                    self.timely_worker,
                 )
             }
         };
@@ -701,12 +697,20 @@ impl PendingPeek {
         })
     }
 
-    fn persist(
+    fn persist<A: Allocate>(
         peek: Peek,
         persist_clients: Arc<PersistClientCache>,
         metadata: CollectionMetadata,
-        active_worker: bool,
+        timely_worker: &mut TimelyWorker<A>,
     ) -> Self {
+        let active_worker = {
+            // Choose the worker that does the actual peek arbitrarily but consistently.
+            let chosen_index = usize::cast_from(peek.uuid.hashed()) % timely_worker.peers();
+            chosen_index == timely_worker.index()
+        };
+        let activator = timely_worker.sync_activator_for(&[]);
+        let peek_uuid = peek.uuid;
+
         let (result_tx, result_rx) = oneshot::channel();
         let timestamp = peek.timestamp;
         let mfp_plan = peek.map_filter_project.clone();
@@ -730,11 +734,22 @@ impl PendingPeek {
                 Ok(rows) => PeekResponse::Rows(rows),
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
-            let _ = result_tx.send((result, start.elapsed()));
+            match result_tx.send((result, start.elapsed())) {
+                Ok(()) => {}
+                Err((_result, elapsed)) => {
+                    debug!(duration =? elapsed, "dropping result for cancelled peek {peek_uuid}")
+                }
+            }
+            match activator.activate() {
+                Ok(()) => {}
+                Err(_) => {
+                    debug!("unable to wake timely after completed peek {peek_uuid}");
+                }
+            }
         });
         PendingPeek::Persist(PersistPeek {
             peek,
-            _abort_handle: task_handle.abort_handle().abort_on_drop(),
+            _abort_handle: task_handle.abort_on_drop(),
             result: result_rx,
             span: tracing::Span::current(),
         })
@@ -763,7 +778,7 @@ pub struct PersistPeek {
     pub(crate) peek: Peek,
     /// A background task that's responsible for producing the peek results.
     /// If we're no longer interested in the results, we abort the task.
-    _abort_handle: AbortOnDropAbortHandle,
+    _abort_handle: AbortOnDropHandle<()>,
     /// The result of the background task, eventually.
     result: oneshot::Receiver<(PeekResponse, Duration)>,
     /// The `tracing::Span` tracking this peek's operation
@@ -786,19 +801,25 @@ impl PersistPeek {
         let mut reader: ReadHandle<SourceData, (), Timestamp, Diff> = client
             .open_leased_reader(
                 metadata.data_shard,
-                Arc::new(metadata.relation_desc),
+                Arc::new(metadata.relation_desc.clone()),
                 Arc::new(UnitSchema),
                 Diagnostics::from_purpose("persist::peek"),
             )
             .await
             .map_err(|e| e.to_string())?;
 
-        let mut cursor = reader
-            .snapshot_cursor(Antichain::from_elem(as_of))
-            .await
-            .map_err(|since| {
-                format!("attempted to peek at {as_of}, but the since has advanced to {since:?}")
-            })?;
+        let metrics = client.metrics();
+
+        let mut cursor = StatsCursor::new(
+            &mut reader,
+            metrics,
+            &metadata.relation_desc,
+            Antichain::from_elem(as_of),
+        )
+        .await
+        .map_err(|since| {
+            format!("attempted to peek at {as_of}, but the since has advanced to {since:?}")
+        })?;
 
         // Re-used state for processing and building rows.
         let mut result = vec![];
@@ -810,9 +831,8 @@ impl PersistPeek {
             let Some(batch) = cursor.next().await else {
                 break;
             };
-            for ((k, v), _, d) in batch {
-                let row = k?.0.map_err(|e| e.to_string())?;
-                let () = v?;
+            for (data, _, d) in batch {
+                let row = data.map_err(|e| e.to_string())?;
                 let count: usize = d.try_into().map_err(|_| {
                     format!(
                         "Invalid data in source, saw retractions ({}) for row that does not exist",
@@ -951,9 +971,16 @@ impl IndexPeek {
         max_result_size: u32,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
-        Tr: TraceReader<Key = K, Val = V, Time = Timestamp, Diff = Diff>,
-        Tr::Key: Columnation + Data + FromRowByTypes + IntoRowByTypes,
-        Tr::Val: Columnation + Data + IntoRowByTypes,
+        Tr: for<'a> TraceReader<
+            Key<'a> = &'a K,
+            KeyOwned = K,
+            Val<'a> = &'a V,
+            ValOwned = V,
+            Time = Timestamp,
+            Diff = Diff,
+        >,
+        Tr::KeyOwned: Columnation + Data + FromRowByTypes + IntoRowByTypes,
+        Tr::ValOwned: Columnation + Data + IntoRowByTypes,
     {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();

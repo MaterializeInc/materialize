@@ -77,7 +77,7 @@ pub trait TimestampOracle<T> {
 /// A shareable version of [`TimestampOracle`] that is `Send` and `Sync`.
 ///
 /// We have this as a stop-gap solution while we still keep the legacy
-/// in-memory/backed-by-Stash TimestampOracle around. Once we remove that we can
+/// in-memory/backed-by-catalog TimestampOracle around. Once we remove that we can
 /// make [`TimestampOracle`] shareable.
 #[async_trait]
 pub trait ShareableTimestampOracle<T> {

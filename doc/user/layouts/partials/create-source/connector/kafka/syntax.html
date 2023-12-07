@@ -3,3 +3,5 @@
 **INCLUDE PARTITION** | Include a `partition` column containing the Kafka message partition. The column can be renamed with the optional **AS** *name* clause.
 **INCLUDE OFFSET** | Include an `offset` column containing the Kafka message offset. The column can be renamed with the optional **AS** *name* clause.
 **INCLUDE TIMESTAMP** | Include a `timestamp` column containing the Kafka message timestamp. The column can be renamed with the optional **AS** *name* clause. <br><br>Note that the timestamp of a Kafka message depends on how the topic and its producers are configured. See the [Confluent documentation](https://docs.confluent.io/3.0.0/streams/concepts.html?#time) for details.
+**INCLUDE HEADERS** | Include a `headers` column containing the Kafka message headers as a list of records of type `(key text, value bytea)`. The column can be renamed with the optional **AS** *name* clause.
+**INCLUDE HEADER** _key_ **AS** _name_ [**BYTES**] | Include a _name_ column containing the Kafka message header _key_ parsed as a UTF-8 string. To expose the header value as `bytea`, use the `BYTES` option.

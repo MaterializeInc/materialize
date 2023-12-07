@@ -26,10 +26,11 @@ use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHand
 use mz_persist_client::async_runtime::IsolatedRuntime;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::metrics::Metrics;
+use mz_persist_client::metrics::Metrics as PersistMetrics;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_txn::metrics::Metrics as TxnMetrics;
 use mz_persist_txn::operator::DataSubscribe;
 use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
@@ -58,6 +59,7 @@ impl Transactor {
         let txns = TxnsHandle::open(
             init_ts,
             client.clone(),
+            Arc::new(TxnMetrics::new(&MetricsRegistry::new())),
             txns_id,
             Arc::new(StringSchema),
             Arc::new(UnitSchema),
@@ -328,7 +330,7 @@ impl Service for TransactorService {
         let unreliable = UnreliableHandle::new(seed, should_happen, should_timeout);
 
         let mut config = PersistConfig::new(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
-        let metrics = Arc::new(Metrics::new(&config, &MetricsRegistry::new()));
+        let metrics = Arc::new(PersistMetrics::new(&config, &MetricsRegistry::new()));
 
         // Construct requested Blob.
         let blob = match &args.blob_uri {

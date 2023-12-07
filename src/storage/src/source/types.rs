@@ -12,16 +12,15 @@
 // https://github.com/tokio-rs/prost/issues/237
 // #![allow(missing_docs)]
 
-use std::any::Any;
 use std::convert::Infallible;
 use std::fmt::Debug;
-use std::rc::Rc;
 
 use differential_dataflow::Collection;
 use mz_repr::{Diff, Row};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
+use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -79,7 +78,7 @@ pub trait SourceRender {
         >,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
-        Rc<dyn Any>,
+        Vec<PressOnDropButton>,
     );
 }
 

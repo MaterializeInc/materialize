@@ -237,8 +237,8 @@ where
     fn get_shared(&self) -> Option<Arc<dyn ShareableTimestampOracle<T> + Send + Sync>> {
         // The in-memory TimestampOracle is not shareable:
         //
-        // - we have in-memory state that we would have to share via an Arc/Mutec
-        // - we use TimestampPersistence, which is backed by Stash, which is also problematic for sharing
+        // - we have in-memory state that we would have to share via an Arc/Mutex
+        // - we use TimestampPersistence, which is backed by catalog, which is also problematic for sharing
         None
     }
 }

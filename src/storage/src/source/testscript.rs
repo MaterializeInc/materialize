@@ -7,16 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
 use std::convert::Infallible;
-use std::rc::Rc;
 
 use differential_dataflow::{AsCollection, Collection};
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Diff, Row};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::{MzOffset, TestScriptSourceConnection};
-use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -68,7 +66,7 @@ impl SourceRender for TestScriptSourceConnection {
         >,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
-        Rc<dyn Any>,
+        Vec<PressOnDropButton>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name, scope.clone());
 
@@ -113,7 +111,7 @@ impl SourceRender for TestScriptSourceConnection {
             stream.as_collection(),
             None,
             status,
-            Rc::new(button.press_on_drop()),
+            vec![button.press_on_drop()],
         )
     }
 }

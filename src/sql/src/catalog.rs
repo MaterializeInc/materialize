@@ -32,7 +32,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, Ident, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
-use mz_storage_types::connections::Connection;
+use mz_storage_types::connections::{Connection, ConnectionContext};
 use mz_storage_types::sources::SourceDesc;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -152,6 +152,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
 
     /// Gets the mz_internal schema id.
     fn get_mz_internal_schema_id(&self) -> &SchemaId;
+
+    /// Gets the mz_unsafe schema id.
+    fn get_mz_unsafe_schema_id(&self) -> &SchemaId;
 
     /// Returns true if `schema` is an internal system schema, false otherwise
     fn is_system_schema(&self, schema: &str) -> bool;
@@ -350,17 +353,8 @@ pub struct CatalogConfig {
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
-}
-
-impl CatalogConfig {
-    /// Returns the default progress topic name for a Kafka sink for a given
-    /// connection.
-    pub fn default_kafka_sink_progress_topic(&self, connection_id: GlobalId) -> String {
-        format!(
-            "_materialize-progress-{}-{connection_id}",
-            self.environment_id
-        )
-    }
+    /// Context for source and sink connections.
+    pub connection_context: ConnectionContext,
 }
 
 /// A database in a [`SessionCatalog`].
@@ -576,8 +570,15 @@ pub trait CatalogItem {
     fn create_sql(&self) -> &str;
 
     /// Returns the IDs of the catalog items upon which this catalog item
+    /// directly references.
+    fn references(&self) -> &ResolvedIds;
+
+    /// Returns the IDs of the catalog items upon which this catalog item
     /// depends.
-    fn uses(&self) -> &ResolvedIds;
+    fn uses(&self) -> BTreeSet<GlobalId>;
+
+    /// Returns the IDs of the catalog items that directly reference this catalog item.
+    fn referenced_by(&self) -> &[GlobalId];
 
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];

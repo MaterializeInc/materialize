@@ -39,14 +39,14 @@ use crate::durable::{
 
 /// The key used within the "config" collection stores the deploy generation.
 pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
-/// The key within the "config" Collection that stores the version of the Stash.
+/// The key within the "config" Collection that stores the version of the catalog.
 pub(crate) const USER_VERSION_KEY: &str = "user_version";
 
 /// The key used within the "config" collection where we store a mirror of the
-/// `enable_persist_txn_tables` "system var" value. This is mirrored so that we
+/// `persist_txn_tables` "system var" value. This is mirrored so that we
 /// can toggle the flag with Launch Darkly, but use it in boot before Launch
 /// Darkly is available.
-pub(crate) const ENABLE_PERSIST_TXN_TABLES: &str = "enable_persist_txn_tables";
+pub(crate) const PERSIST_TXN_TABLES: &str = "persist_txn_tables";
 
 const USER_ID_ALLOC_KEY: &str = "user";
 const SYSTEM_ID_ALLOC_KEY: &str = "system";
@@ -65,6 +65,7 @@ const PG_CATALOG_SCHEMA_ID: u64 = 2;
 const PUBLIC_SCHEMA_ID: u64 = 3;
 const MZ_INTERNAL_SCHEMA_ID: u64 = 4;
 const INFORMATION_SCHEMA_ID: u64 = 5;
+pub const MZ_UNSAFE_SCHEMA_ID: u64 = 6;
 
 const DEFAULT_ALLOCATOR_ID: u64 = 1;
 
@@ -97,6 +98,7 @@ pub async fn initialize(
                 PUBLIC_SCHEMA_ID,
                 MZ_INTERNAL_SCHEMA_ID,
                 INFORMATION_SCHEMA_ID,
+                MZ_UNSAFE_SCHEMA_ID,
             ])
             .expect("known to be non-empty")
                 + 1,
@@ -366,6 +368,13 @@ pub async fn initialize(
         owner_id: MZ_SYSTEM_ROLE_ID,
         privileges: schema_privileges.clone(),
     };
+    let mz_unsafe_schema = Schema {
+        id: SchemaId::System(MZ_UNSAFE_SCHEMA_ID),
+        database_id: None,
+        name: "mz_unsafe".to_string(),
+        owner_id: MZ_SYSTEM_ROLE_ID,
+        privileges: schema_privileges.clone(),
+    };
     let public_schema = Schema {
         id: SchemaId::User(PUBLIC_SCHEMA_ID),
         database_id: Some(MATERIALIZE_DATABASE_ID),
@@ -402,6 +411,7 @@ pub async fn initialize(
         public_schema,
         mz_internal_schema,
         information_schema,
+        mz_unsafe_schema,
     ] {
         tx.insert_schema(
             schema.id,

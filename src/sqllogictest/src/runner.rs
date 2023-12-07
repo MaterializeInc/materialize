@@ -40,6 +40,7 @@ use bytes::BytesMut;
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
+use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_controller::ControllerConfig;
 use mz_environmentd::CatalogConfig;
@@ -1011,6 +1012,7 @@ impl<'a> RunnerInner<'a> {
                     secrets_reader_aws_region: None,
                     secrets_reader_aws_prefix: None,
                 },
+                connection_context,
             },
             secrets_controller,
             cloud_resource_controller: None,
@@ -1036,7 +1038,6 @@ impl<'a> RunnerInner<'a> {
             },
             default_storage_cluster_size: None,
             availability_zones: Default::default(),
-            connection_context,
             tracing_handle: config.tracing_handle.clone(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
@@ -1051,8 +1052,8 @@ impl<'a> RunnerInner<'a> {
             deploy_generation: None,
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
-            // TODO(txn): Get this flipped to true before turning anything on in prod.
-            enable_persist_txn_tables_cli: None,
+            // TODO(txn): Get this flipped on before turning anything on in prod.
+            persist_txn_tables_cli: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1134,7 +1135,7 @@ impl<'a> RunnerInner<'a> {
 
         // Dangerous functions are useful for tests so we enable it for all tests.
         self.system_client
-            .execute("ALTER SYSTEM SET enable_dangerous_functions = on", &[])
+            .execute("ALTER SYSTEM SET enable_unsafe_functions = on", &[])
             .await?;
         Ok(())
     }
@@ -1833,7 +1834,7 @@ pub async fn run_string(
     // Transactions are currently relatively slow. Since sqllogictest runs in a single connection
     // there should be no difference in having longer running transactions.
     let mut in_transaction = false;
-    writeln!(runner.config.stdout, "==> {}", source);
+    writeln!(runner.config.stdout, "--- {}", source);
 
     for record in parser.parse_records()? {
         // In maximal-verbosity mode, print the query before attempting to run
@@ -1910,7 +1911,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
     let mut buf = RewriteBuffer::new(&input);
 
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
-    writeln!(runner.config.stdout, "==> {}", filename.display());
+    writeln!(runner.config.stdout, "--- {}", filename.display());
     let mut in_transaction = false;
 
     fn append_values_output(
@@ -1932,7 +1933,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     if i != 0 {
                         buf.append("\n");
                     }
-                    buf.append(&row.join("  "));
+                    buf.append(&row.iter().map(|col| col.replace(' ', "␠")).join("  "));
                 }
                 // In standard mode, output each value on its own line,
                 // and ignore row boundaries.

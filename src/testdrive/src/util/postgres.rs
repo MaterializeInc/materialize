@@ -14,7 +14,6 @@ use anyhow::{anyhow, bail, Context};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_tls_util::make_tls;
-use tokio::task::JoinHandle;
 use tokio_postgres::config::Host;
 use tokio_postgres::{Client, Config};
 use url::Url;
@@ -53,7 +52,7 @@ pub fn config_url(config: &Config) -> Result<Url, anyhow::Error> {
 pub async fn postgres_client(
     url: &str,
     default_timeout: Duration,
-) -> Result<(Client, JoinHandle<Result<(), tokio_postgres::Error>>), anyhow::Error> {
+) -> Result<(Client, task::JoinHandle<Result<(), tokio_postgres::Error>>), anyhow::Error> {
     let (client, connection) = Retry::default()
         .max_duration(default_timeout)
         .retry_async_canceling(|_| async move {

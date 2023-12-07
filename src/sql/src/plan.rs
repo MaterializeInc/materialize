@@ -78,7 +78,7 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
-use crate::plan::with_options::OptionalInterval;
+use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
 pub use expr::{
@@ -1555,7 +1555,7 @@ pub struct PlanClusterOption {
     pub availability_zones: AlterOptionParameter<Vec<String>>,
     pub idle_arrangement_merge_effort: AlterOptionParameter<u32>,
     pub introspection_debugging: AlterOptionParameter<bool>,
-    pub introspection_interval: AlterOptionParameter<OptionalInterval>,
+    pub introspection_interval: AlterOptionParameter<OptionalDuration>,
     pub managed: AlterOptionParameter<bool>,
     pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
     pub replication_factor: AlterOptionParameter<u32>,

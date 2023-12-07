@@ -101,8 +101,9 @@ members = [
 ]
 
 exclude = [
-    # Exclude the wasm crate to avoid needless cache invalidations.
-    "src/sql-lexer-wasm",
+    # All WASM crates are split into their own workspace to avoid needles cache
+    #  invalidations for the core Mz crates.
+    "misc/wasm/*"
 ]
 
 # Use Cargo's new feature resolver, which can handle target-specific features.

@@ -408,7 +408,9 @@ class WebhookSource(DBObject):
                 "map_length(HEADERS) = map_length(HEADERS)",
             ]
             if "timestamp" in self.explicit_include_headers:
-                exprs.append("(headers->'timestamp'::text)::timestamp <= now()")
+                exprs.append(
+                    "(headers->'timestamp'::text)::timestamp + INTERVAL '10s' >= now()"
+                )
             self.check_expr = " AND ".join(
                 rng.sample(exprs, k=rng.randint(1, len(exprs)))
             )

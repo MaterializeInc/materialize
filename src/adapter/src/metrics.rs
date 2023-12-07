@@ -125,7 +125,6 @@ impl Metrics {
             append_table_duration_seconds: registry.register(metric!(
                 name: "mz_append_table_duration_seconds",
                 help: "Latency for appending to any (user or system) table.",
-                var_labels: ["is_blocking"],
                 buckets: histogram_seconds_buckets(0.128, 32.0),
             )),
             webhook_validation_reduce_failures: registry.register(metric!(

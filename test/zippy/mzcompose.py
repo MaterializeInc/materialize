@@ -20,7 +20,8 @@ from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.grafana import Grafana
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.minio import Mc, Minio
+from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.prometheus import Prometheus
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -41,6 +42,7 @@ SERVICES = [
     Postgres(),
     Cockroach(),
     Minio(setup_materialize=True),
+    Mc(),
     Balancerd(),
     # Those two are overriden below
     Materialized(),
@@ -49,6 +51,7 @@ SERVICES = [
     Grafana(),
     Prometheus(),
     SshBastionHost(),
+    Persistcli(),
 ]
 
 
@@ -134,6 +137,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     scenario_class = globals()[args.scenario]
 
     c.up("zookeeper", "kafka", "schema-registry", "ssh-bastion-host")
+    c.enable_minio_versioning()
 
     if args.observability:
         c.up("prometheus", "grafana")

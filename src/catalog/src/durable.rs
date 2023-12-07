@@ -10,8 +10,10 @@
 //! This crate is responsible for durably storing and modifying the catalog contents.
 
 use async_trait::async_trait;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use std::fmt::Debug;
 use std::num::NonZeroI64;
+use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -19,7 +21,8 @@ use mz_stash::DebugStashFactory;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
-use crate::durable::impls::persist::PersistHandle;
+pub use crate::durable::impls::persist::metrics::Metrics;
+use crate::durable::impls::persist::UnopenedPersistCatalogState;
 use crate::durable::impls::shadow::OpenableShadowCatalogState;
 use crate::durable::impls::stash::{OpenableConnection, TestOpenableConnection};
 pub use crate::durable::impls::stash::{
@@ -127,18 +130,11 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Get the deployment generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError>;
 
-    /// Get the `enabled_persist_txn_tables` config value of this instance.
-    ///
-    /// This mirrors the `enabled_persist_txn_tables` "system var" so that we
-    /// can toggle the flag with Launch Darkly, but use it in boot before Launch
-    /// Darkly is available.
-    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError>;
-
     /// Generate an unconsolidated [`Trace`] of catalog contents.
     async fn trace(&mut self) -> Result<Trace, CatalogError>;
 
     /// Politely releases all external resources that can only be released in an async context.
-    async fn expire(self);
+    async fn expire(self: Box<Self>);
 }
 
 // TODO(jkosh44) No method should take &mut self, but due to stash implementations we need it.
@@ -180,6 +176,15 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     async fn get_next_user_replica_id(&mut self) -> Result<u64, CatalogError> {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
+
+    /// Get the `persist_txn_tables` config value of this instance.
+    ///
+    /// This mirrors the `persist_txn_tables` "system var" so that we can toggle
+    /// the flag with Launch Darkly, but use it in boot before Launch Darkly is
+    /// available.
+    async fn get_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<PersistTxnTablesImpl>, CatalogError>;
 
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
@@ -276,9 +281,9 @@ pub fn test_stash_backed_catalog_state(
 pub async fn persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
-    registry: &MetricsRegistry,
-) -> PersistHandle {
-    PersistHandle::new(persist_client, organization_id, registry).await
+    metrics: Arc<Metrics>,
+) -> UnopenedPersistCatalogState {
+    UnopenedPersistCatalogState::new(persist_client, organization_id, metrics).await
 }
 
 /// Creates an openable durable catalog state implemented using persist that is meant to be used in
@@ -286,8 +291,9 @@ pub async fn persist_backed_catalog_state(
 pub async fn test_persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
-) -> PersistHandle {
-    persist_backed_catalog_state(persist_client, organization_id, &MetricsRegistry::new()).await
+) -> UnopenedPersistCatalogState {
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    persist_backed_catalog_state(persist_client, organization_id, metrics).await
 }
 
 /// Creates an openable durable catalog state implemented using both the stash and persist, that

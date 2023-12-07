@@ -53,7 +53,8 @@ ERROR_RE = re.compile(
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
-    | unrecognized\ configuration\ parameter
+    | environmentd .* unrecognized\ configuration\ parameter
+    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     )
     .* $
     """,
@@ -63,8 +64,8 @@ ERROR_RE = re.compile(
 # Panics are multiline and our log lines of multiple services are interleaved,
 # making them complex to handle in regular expressions, thus handle them
 # separately.
-PANIC_START_RE = re.compile(rb"^(?P<service>.*) \| thread '.*' panicked at ")
-SERVICES_LOG_LINE_RE = re.compile(rb"^(?P<service>.*) \| (?P<msg>.*)$")
+PANIC_START_RE = re.compile(rb"^(?P<service>[^ ]*) *\| thread '.*' panicked at ")
+SERVICES_LOG_LINE_RE = re.compile(rb"^(?P<service>[^ ]*) *\| (?P<msg>.*)$")
 
 # Expected failures, don't report them
 IGNORE_RE = re.compile(
@@ -89,6 +90,10 @@ IGNORE_RE = re.compile(
     | internal\ error:\ panic\ at\ the\ `.*`\ optimization\ stage
     # redpanda INFO logging
     | larger\ sizes\ prevent\ running\ out\ of\ memory
+    # Old versions won't support new parameters
+    | (platform-checks|legacy-upgrade|upgrade-matrix)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
+    # For platform-checks upgrade tests
+    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage\ name=enable_dangerous_functions
     )
     """,
     re.VERBOSE | re.MULTILINE,

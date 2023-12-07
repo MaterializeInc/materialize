@@ -59,7 +59,7 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 8
 
 # Now make sure it doesn't change
-> SELECT mz_internal.mz_sleep(1)
+> SELECT mz_unsafe.mz_sleep(1)
 <null>
 
 > SELECT count(*) FROM counter
@@ -74,7 +74,7 @@ contains:invalid MAX CARDINALITY: invalid unsigned numeric value: invalid digit 
 > SELECT count(*) FROM counter3
 0
 
-> SELECT mz_internal.mz_sleep(1)
+> SELECT mz_unsafe.mz_sleep(1)
 <null>
 
 > SELECT count(*) FROM counter3
@@ -82,7 +82,7 @@ contains:invalid MAX CARDINALITY: invalid unsigned numeric value: invalid digit 
 
 # Check that negative tick intervals are rejected
 ! CREATE SOURCE counter4 FROM LOAD GENERATOR COUNTER (TICK INTERVAL '-1s')
-contains: out of range integral type conversion
+contains:invalid TICK INTERVAL: cannot convert negative interval to duration
 
 # Check that out of range tick interval values are rejected
 ! CREATE SOURCE counter5 FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2147483647d')

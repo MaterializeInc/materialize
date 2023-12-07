@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-mod metrics;
+pub(crate) mod metrics;
 pub(crate) mod state_update;
 
 use std::collections::BTreeMap;
@@ -19,11 +19,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::collections::CollectionExt;
-use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
+use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{soft_assert, soft_assert_eq, soft_assert_ne};
@@ -31,8 +31,9 @@ use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_proto::{ProtoType, RustType};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Diff;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -45,7 +46,7 @@ use crate::durable::impls::persist::state_update::{
     IntoStateUpdateKindBinary, StateUpdateKindBinary, StateUpdateKindSchema,
 };
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
-use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, USER_VERSION_KEY};
+use crate::durable::initialize::{DEPLOY_GENERATION, PERSIST_TXN_TABLES, USER_VERSION_KEY};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, Config, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
@@ -69,12 +70,15 @@ enum Mode {
     Writable,
 }
 
-/// Handles and metadata needed to interact with persist.
+/// A Handle to an unopened catalog stored in persist. The unopened catalog can serve `Config` data
+/// or the current epoch. All other catalog data may be un-migrated and should not be read until the
+/// catalog has been opened. The [`UnopenedPersistCatalogState`] is responsible for opening the
+/// catalog, see [`OpenableDurableCatalogState::open`] for more details.
 ///
-/// Production users should call [`Self::expire`] before dropping a [`PersistHandle`] so that it
-/// can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
+/// Production users should call [`Self::expire`] before dropping a [`UnopenedPersistCatalogState`]
+/// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 #[derive(Debug)]
-pub struct PersistHandle {
+pub struct UnopenedPersistCatalogState {
     /// Write handle to persist.
     write_handle: WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
     /// Read handle to persist.
@@ -89,7 +93,7 @@ pub struct PersistHandle {
     metrics: Arc<Metrics>,
 }
 
-impl PersistHandle {
+impl UnopenedPersistCatalogState {
     /// Deterministically generate the a ID for the given `organization_id` and `seed`.
     fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
         let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
@@ -98,13 +102,13 @@ impl PersistHandle {
         ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
     }
 
-    /// Create a new [`PersistHandle`] to the catalog state associated with `organization_id`.
+    /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with `organization_id`.
     #[tracing::instrument(level = "debug", skip(persist_client))]
     pub(crate) async fn new(
         persist_client: PersistClient,
         organization_id: Uuid,
-        registry: &MetricsRegistry,
-    ) -> PersistHandle {
+        metrics: Arc<Metrics>,
+    ) -> UnopenedPersistCatalogState {
         const SEED: usize = 1;
         let shard_id = Self::shard_id(organization_id, SEED);
         debug!(?shard_id, "new persist backed catalog state");
@@ -117,8 +121,7 @@ impl PersistHandle {
             )
             .await
             .expect("invalid usage");
-        let metrics = Arc::new(Metrics::new(registry));
-        PersistHandle {
+        UnopenedPersistCatalogState {
             write_handle,
             read_handle,
             persist_client,
@@ -467,7 +470,7 @@ impl PersistHandle {
 }
 
 #[async_trait]
-impl OpenableDurableCatalogState for PersistHandle {
+impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn open_savepoint(
         mut self: Box<Self>,
@@ -476,6 +479,7 @@ impl OpenableDurableCatalogState for PersistHandle {
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Savepoint, boot_ts, bootstrap_args, deploy_generation)
+            .boxed()
             .await
     }
 
@@ -486,6 +490,7 @@ impl OpenableDurableCatalogState for PersistHandle {
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Readonly, boot_ts, bootstrap_args, None)
+            .boxed()
             .await
     }
 
@@ -497,6 +502,7 @@ impl OpenableDurableCatalogState for PersistHandle {
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Writable, boot_ts, bootstrap_args, deploy_generation)
+            .boxed()
             .await
     }
 
@@ -515,12 +521,6 @@ impl OpenableDurableCatalogState for PersistHandle {
         Ok(self.get_current_config(DEPLOY_GENERATION).await)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
-        let value = self.get_current_config(ENABLE_PERSIST_TXN_TABLES).await;
-        Ok(value.map(|value| value > 0))
-    }
-
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
@@ -534,7 +534,7 @@ impl OpenableDurableCatalogState for PersistHandle {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn expire(self) {
+    async fn expire(self: Box<Self>) {
         self.read_handle.expire().await;
         self.write_handle.expire().await;
     }
@@ -618,7 +618,7 @@ impl PersistCatalogState {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn sync(&mut self, target_upper: Timestamp) -> Result<(), CatalogError> {
         self.metrics.syncs.inc();
-        let counter = self.metrics.sync_latency_duration_seconds.clone();
+        let counter = self.metrics.sync_latency_seconds.clone();
         self.sync_inner(target_upper)
             .wall_time()
             .inc_by(counter)
@@ -865,6 +865,29 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
+    async fn get_persist_txn_tables(
+        &mut self,
+    ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
+        let value = self
+            .with_snapshot(|snapshot| {
+                Ok(snapshot
+                    .configs
+                    .get(&proto::ConfigKey {
+                        key: PERSIST_TXN_TABLES.to_string(),
+                    })
+                    .map(|value| value.value))
+            })
+            .await?;
+        value
+            .map(PersistTxnTablesImpl::try_from)
+            .transpose()
+            .map_err(|err| {
+                DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
+                    .into()
+            })
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         self.with_snapshot(|snapshot| Ok(snapshot.clone())).await
     }
@@ -878,7 +901,7 @@ impl DurableCatalogState for PersistCatalogState {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
-        self.metrics.transactions.inc();
+        self.metrics.transactions_started.inc();
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
     }
@@ -921,19 +944,12 @@ impl DurableCatalogState for PersistCatalogState {
 
             Ok(())
         }
-        let counter = self
-            .metrics
-            .transaction_commit_latency_duration_seconds
-            .clone();
-        let res = commit_transaction_inner(self, txn_batch)
+        self.metrics.transaction_commits.inc();
+        let counter = self.metrics.transaction_commit_latency_seconds.clone();
+        commit_transaction_inner(self, txn_batch)
             .wall_time()
             .inc_by(counter)
-            .await;
-        self.metrics.transaction_commits_initiated.inc();
-        if let Err(_) = &res {
-            self.metrics.transaction_commit_errors.inc();
-        }
-        res
+            .await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1122,7 +1138,7 @@ async fn snapshot_binary(
     metrics: &Arc<Metrics>,
 ) -> impl Iterator<Item = StateUpdate<StateUpdateKindBinary>> + DoubleEndedIterator {
     metrics.snapshots_taken.inc();
-    let counter = metrics.snapshot_latency_duration_seconds.clone();
+    let counter = metrics.snapshot_latency_seconds.clone();
     snapshot_binary_inner(read_handle, as_of)
         .wall_time()
         .inc_by(counter)
@@ -1244,7 +1260,7 @@ impl Trace {
     }
 }
 
-impl PersistHandle {
+impl UnopenedPersistCatalogState {
     /// Manually update value of `key` in collection `T` to `value`.
     #[tracing::instrument(level = "info", skip(self))]
     pub(crate) async fn debug_edit<T: Collection>(

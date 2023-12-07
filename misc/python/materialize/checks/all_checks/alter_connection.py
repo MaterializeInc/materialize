@@ -37,7 +37,7 @@ SHOW_CONNECTION_SSH_TUNNEL_OTHER = """materialize.public.ssh_tunnel_{i} "CREATE 
 WITH_SSH_SUFFIX = "USING SSH TUNNEL ssh_tunnel_{i}"
 
 
-@disabled("reenable when #23450 is fixed/understood")
+@disabled("reenable with 23613")
 class AlterConnectionSshChangeBase(Check):
     def __init__(
         self,

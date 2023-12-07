@@ -77,21 +77,9 @@ impl Coordinator {
                     tracing::Span::current().add_link(span.context().span().span_context().clone());
                     self.try_group_commit(permit).instrument(span).await
                 }
-                Message::GroupCommitApply(
-                    timestamp,
-                    responses,
-                    write_lock_guard,
-                    notifies,
-                    permit,
-                ) => {
-                    self.group_commit_apply(
-                        timestamp,
-                        responses,
-                        write_lock_guard,
-                        notifies,
-                        permit,
-                    )
-                    .await;
+                Message::GroupCommitApply(timestamp, responses, write_lock_guard, permit) => {
+                    self.group_commit_apply(timestamp, responses, write_lock_guard, permit)
+                        .await;
                 }
                 Message::AdvanceTimelines => {
                     self.advance_timelines().await;
@@ -136,6 +124,9 @@ impl Coordinator {
                 }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
+                }
+                Message::PrivateLinkVpcEndpointEvents(events) => {
+                    self.write_privatelink_status_updates(events).await;
                 }
             }
         }
@@ -327,7 +318,7 @@ impl Coordinator {
                     } else {
                         insertions
                     };
-                    self.buffer_builtin_table_updates(updates);
+                    self.builtin_table_update().background(updates);
                 }
             }
         }

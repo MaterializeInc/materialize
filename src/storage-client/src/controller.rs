@@ -23,6 +23,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
@@ -69,6 +70,10 @@ pub enum IntrospectionType {
     // Collections written by the compute controller.
     ComputeDependencies,
     ComputeReplicaHeartbeats,
+    ComputeHydrationStatus,
+
+    // Written by the Adapter for tracking AWS PrivateLink Connection Status History
+    PrivatelinkConnectionStatusHistory,
 }
 
 /// Describes how data is written to the collection.
@@ -515,6 +520,23 @@ pub trait StorageController: Debug + Send {
         type_: IntrospectionType,
         updates: Vec<(Row, Diff)>,
     );
+
+    /// Resets the txns system to a set of invariants necessary for correctness.
+    ///
+    /// Must be called on boot before create_collections or the various appends.
+    /// This is true _regardless_ of whether the persist-txn feature is on or
+    /// not. See the big comment in the impl of the method for details. Ideally,
+    /// this would have just been folded into `Controller::new`, but it needs
+    /// the timestamp and there are boot dependency issues.
+    ///
+    /// TODO: This can be removed once we've flipped to the new txns system for
+    /// good and there is no possibility of the old code running concurrently
+    /// with the new code.
+    async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
+
+    /// Returns the timestamp of the latest row for each id in the
+    /// privatelink_connection_status_history table seen on startup
+    fn get_privatelink_status_table_latest(&self) -> &Option<BTreeMap<GlobalId, DateTime<Utc>>>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.

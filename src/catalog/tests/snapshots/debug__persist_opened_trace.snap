@@ -934,7 +934,7 @@ Trace {
                         name: "schema",
                     },
                     IdAllocValue {
-                        next_id: 6,
+                        next_id: 7,
                     },
                 ),
                 "1",
@@ -1592,6 +1592,113 @@ Trace {
                     SchemaValue {
                         database_id: None,
                         name: "information_schema",
+                        owner_id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        privileges: [
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            Public(
+                                                Empty,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                2,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 768,
+                                    },
+                                ),
+                            },
+                        ],
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    SchemaKey {
+                        id: Some(
+                            SchemaId {
+                                value: Some(
+                                    System(
+                                        6,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    SchemaValue {
+                        database_id: None,
+                        name: "mz_unsafe",
                         owner_id: Some(
                             RoleId {
                                 value: Some(

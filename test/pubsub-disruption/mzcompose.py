@@ -58,10 +58,11 @@ disruptions = [
         breakage=lambda c: c.kill("toxiproxy"),
         fixage=lambda c: toxiproxy_start(c),
     ),
+    # docker compose pause has become unreliable recently
     Disruption(
-        name="pause-pubsub",
-        breakage=lambda c: c.pause("toxiproxy"),
-        fixage=lambda c: c.unpause("toxiproxy"),
+        name="sigstop-pubsub",
+        breakage=lambda c: c.kill("toxiproxy", signal="SIGSTOP"),
+        fixage=lambda c: c.kill("toxiproxy", signal="SIGCONT"),
     ),
 ]
 

@@ -34,7 +34,7 @@ class RedpandaDeployment(K8sDeployment):
         super().__init__(namespace)
         container = V1Container(
             name="redpanda",
-            image="vectorized/redpanda:v21.11.13",
+            image="vectorized/redpanda:v23.1.9",
             command=[
                 "/usr/bin/rpk",
                 "redpanda",

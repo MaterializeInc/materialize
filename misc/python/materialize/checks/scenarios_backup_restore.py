@@ -34,7 +34,6 @@ class BackupAndRestoreAfterManipulate(Scenario):
             Backup(),
             KillMz(),
             Restore(),
-            StartMz(self),
             Validate(self),
         ]
 
@@ -50,7 +49,6 @@ class BackupAndRestoreBeforeManipulate(Scenario):
             Backup(),
             KillMz(),
             Restore(),
-            StartMz(self),
             Manipulate(self, phase=2),
             Validate(self),
         ]
@@ -73,7 +71,6 @@ class BackupAndRestoreToPreviousState(Scenario):
             Manipulate(self, phase=2),  # Those updates will be lost here ..
             KillMz(),
             Restore(),
-            StartMz(self),
             Manipulate(self, phase=2),  # ... and redone here
             Validate(self),
         ]
@@ -89,21 +86,17 @@ class BackupAndRestoreMulti(Scenario):
             Backup(),
             KillMz(),
             Restore(),
-            StartMz(self),
             Manipulate(self, phase=1),
             Backup(),
             KillMz(),
             Restore(),
-            StartMz(self),
             Manipulate(self, phase=2),
             Backup(),
             KillMz(),
             Restore(),
-            StartMz(self),
             Validate(self),
             Backup(),
             KillMz(),
             Restore(),
-            StartMz(self),
             Validate(self),
         ]

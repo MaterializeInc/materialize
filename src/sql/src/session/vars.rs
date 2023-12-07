@@ -89,6 +89,7 @@ use mz_repr::strconv;
 use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_sql_parser::ident;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -691,6 +692,22 @@ const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
         "An exclusive upper bound on the number of results we may return from a Persist fast-path peek; \
         queries that may return more results will follow the normal / slow path. \
         Setting this to 0 disables the feature.",
+    internal: true,
+};
+
+pub const PERSIST_TXN_TABLES: ServerVar<PersistTxnTablesImpl> = ServerVar {
+    name: UncasedStr::new("persist_txn_tables"),
+    value: &PersistTxnTablesImpl::Off,
+    description: "\
+        Whether to use the new persist-txn tables implementation or the legacy \
+        one.
+
+        Only takes effect on restart. Any changes will also cause clusterd \
+        processes to restart.
+
+        This value is also configurable via a Launch Darkly parameter of the \
+        same name, but we keep the flag to make testing easier. If specified, \
+        the flag takes precedence over the Launch Darkly param.",
     internal: true,
 };
 
@@ -1325,6 +1342,14 @@ const OPTIMIZER_ONESHOT_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+const PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("privatelink_status_update_quota_per_minute"),
+    value: &20,
+    description: "Sets the per-minute quota for privatelink vpc status updates to be written to \
+    the storage-collection-backed system table. This value implies the total and burst quota per-minute.",
+    internal: true,
+};
+
 static DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.1.into());
 pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
     ServerVar {
@@ -1402,21 +1427,6 @@ pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<ServerVar<Numeric>> =
         internal: false,
     });
 
-pub const TRUNCATE_STATEMENT_LOG: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("truncate_statement_log"),
-    value: &true,
-    description: "Whether to garbage-collect old statement log entries on startup (Materialize).",
-    internal: true,
-};
-
-pub const STATEMENT_LOGGING_RETENTION: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("statement_logging_retention"),
-    // 30 days
-    value: &Duration::from_secs(30 * 24 * 60 * 60),
-    description: "The time to retain logged statements (Materialize).",
-    internal: true,
-};
-
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
     value: &true,
@@ -1445,6 +1455,15 @@ const KEEP_N_SINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_sink_status_history_entries"),
     value: &5,
     description: "On reboot, truncate all but the last n entries per ID in the sink_status_history collection (Materialize).",
+    internal: true
+};
+
+/// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_privatelink_status_history_entries`].
+const KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("keep_n_privatelink_status_history_entries"),
+    value: &5,
+    description: "On reboot, truncate all but the last n entries per ID in the mz_aws_privatelink_connection_status_history \
+    collection (Materialize).",
     internal: true
 };
 
@@ -1945,7 +1964,7 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_dangerous_functions,
+        name: enable_unsafe_functions,
         desc: "executing potentially dangerous functions",
         default: false,
         internal: true,
@@ -2057,25 +2076,9 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_persist_txn_tables,
-        desc: "\
-            Whether to use the new persist-txn tables implementation or the legacy \
-            one.
-
-            Only takes effect on restart. Any changes will also cause clusterd \
-            processes to restart.
-
-            This value is also configurable via a Launch Darkly parameter of the \
-            same name, but we keep the flag to make testing easier. If specified, \
-            the flag takes precedence over the Launch Darkly param.",
-        default: &false,
-        internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_aws_connection,
         desc: "CREATE CONNECTION ... TO AWS",
-        default: &true, // will set to false once we verify that nobody's using this
+        default: &false,
         internal: true,
         enable_for_item_parsing: false,
     },
@@ -2786,6 +2789,7 @@ impl SystemVars {
             .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
             .with_var(&PERSIST_FAST_PATH_LIMIT)
+            .with_var(&PERSIST_TXN_TABLES)
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
@@ -2807,6 +2811,7 @@ impl SystemVars {
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
             .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
+            .with_var(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
             .with_var(&ENABLE_MZ_JOIN_CORE)
             .with_var(&LINEAR_JOIN_YIELDING)
             .with_var(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
@@ -2842,10 +2847,9 @@ impl SystemVars {
                 &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
-            .with_var(&TRUNCATE_STATEMENT_LOG)
-            .with_var(&STATEMENT_LOGGING_RETENTION)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+            .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
             .with_var(&TIMESTAMP_ORACLE_IMPL);
@@ -3294,6 +3298,10 @@ impl SystemVars {
         *self.expect_value(&PERSIST_FAST_PATH_LIMIT)
     }
 
+    pub fn persist_txn_tables(&self) -> PersistTxnTablesImpl {
+        *self.expect_value(&PERSIST_TXN_TABLES)
+    }
+
     pub fn persist_reader_lease_duration(&self) -> Duration {
         *self.expect_value(&PERSIST_READER_LEASE_DURATION)
     }
@@ -3478,6 +3486,10 @@ impl SystemVars {
         *self.expect_value(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
     }
 
+    pub fn keep_n_privatelink_status_history_entries(&self) -> usize {
+        *self.expect_value(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
+    }
+
     /// Returns the `enable_mz_join_core` configuration parameter.
     pub fn enable_mz_join_core(&self) -> bool {
         *self.expect_value(&ENABLE_MZ_JOIN_CORE)
@@ -3589,6 +3601,11 @@ impl SystemVars {
         *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
     }
 
+    /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.
+    pub fn privatelink_status_update_quota_per_minute(&self) -> u32 {
+        *self.expect_value(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
+    }
+
     /// Returns the `statement_logging_max_sample_rate` configuration parameter.
     pub fn statement_logging_max_sample_rate(&self) -> Numeric {
         *self.expect_value(&STATEMENT_LOGGING_MAX_SAMPLE_RATE)
@@ -3597,16 +3614,6 @@ impl SystemVars {
     /// Returns the `statement_logging_default_sample_rate` configuration parameter.
     pub fn statement_logging_default_sample_rate(&self) -> Numeric {
         *self.expect_value(&STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE)
-    }
-
-    /// Returns the `truncate_statement_log` configuration parameter.
-    pub fn truncate_statement_log(&self) -> bool {
-        *self.expect_value(&TRUNCATE_STATEMENT_LOG)
-    }
-
-    /// Returns the `statement_logging_retention` configuration parameter.
-    pub fn statement_logging_retention(&self) -> Duration {
-        *self.expect_value(&STATEMENT_LOGGING_RETENTION)
     }
 
     /// Returns the `optimizer_stats_timeout` configuration parameter.
@@ -5456,6 +5463,30 @@ impl Value for TimestampOracleImpl {
 
     fn format(&self) -> String {
         self.as_str().into()
+    }
+}
+
+impl Value for PersistTxnTablesImpl {
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let s = UncasedStr::new(s);
+
+        PersistTxnTablesImpl::from_str(s.as_str()).map_err(|_| VarError::ConstrainedParameter {
+            parameter: (&PERSIST_TXN_TABLES).into(),
+            values: input.to_vec(),
+            valid_values: Some(vec!["off", "eager", "lazy"]),
+        })
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
     }
 }
 

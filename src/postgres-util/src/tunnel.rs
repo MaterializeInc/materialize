@@ -23,44 +23,6 @@ use tracing::{info, warn};
 
 use crate::PostgresError;
 
-pub async fn drop_replication_slots(
-    ssh_tunnel_manager: &SshTunnelManager,
-    config: Config,
-    slots: &[&str],
-) -> Result<(), PostgresError> {
-    let client = config
-        .connect("postgres_drop_replication_slots", ssh_tunnel_manager)
-        .await?;
-    let replication_client = config.connect_replication(ssh_tunnel_manager).await?;
-    for slot in slots {
-        let rows = client
-            .query(
-                "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
-                &[&slot],
-            )
-            .await?;
-        match rows.len() {
-            0 => {
-                // DROP_REPLICATION_SLOT will error if the slot does not exist
-                // todo@jldlaughlin: don't let invalid Postgres sources ship!
-                continue;
-            }
-            1 => {
-                replication_client
-                    .simple_query(&format!("DROP_REPLICATION_SLOT {} WAIT", slot))
-                    .await?;
-            }
-            _ => {
-                return Err(PostgresError::Generic(anyhow::anyhow!(
-                    "multiple pg_replication_slots entries for slot {}",
-                    &slot
-                )))
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Configures an optional tunnel for use when connecting to a PostgreSQL
 /// database.
 #[derive(Debug, PartialEq, Clone)]
@@ -91,7 +53,9 @@ pub const DEFAULT_KEEPALIVE_RETRIES: u32 = 5;
 // + DEFAULT_KEEPALIVE_RETRIES * DEFAULT_KEEPALIVE_INTERVAL
 pub const DEFAULT_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Configurable timeouts that apply only when using [`Config::connect_replication`].
+/// Configurable timeouts for Postgres connections.
+///
+/// Currently only apply to non-ssh/privatelink connections.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TcpTimeoutConfig {
     pub connect_timeout: Option<Duration>,

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::read::{Cursor, ReadHandle, Since};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, ShardId};
@@ -161,7 +161,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
         data_read
-            .snapshot_cursor(Antichain::from_elem(self.as_of.clone()))
+            .snapshot_cursor(Antichain::from_elem(self.as_of.clone()), |_| true)
             .await
     }
 

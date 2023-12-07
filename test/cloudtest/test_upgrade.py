@@ -14,6 +14,7 @@ import pytest
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.all_checks import *  # noqa: F401 F403
+from materialize.checks.all_checks.kafka_protocols import KafkaProtocols
 from materialize.checks.all_checks.ssh import SshKafka, SshPg
 from materialize.checks.checks import Check
 from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
@@ -23,18 +24,16 @@ from materialize.cloudtest.app.materialize_application import MaterializeApplica
 from materialize.cloudtest.util.wait import wait
 from materialize.mz_version import MzVersion
 from materialize.util import all_subclasses
-from materialize.version_list import VersionsFromDocs
+from materialize.version_list import get_latest_published_version
 
 LOGGER = logging.getLogger(__name__)
-
-LAST_RELEASED_VERSION = VersionsFromDocs().minor_versions()[-1]
 
 
 class CloudtestUpgrade(Scenario):
     """A Platform Checks scenario that performs an upgrade in cloudtest/K8s"""
 
     def base_version(self) -> MzVersion:
-        return LAST_RELEASED_VERSION
+        return get_latest_published_version()
 
     def actions(self) -> list[Action]:
         return [
@@ -49,12 +48,14 @@ class CloudtestUpgrade(Scenario):
 @pytest.mark.long
 def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
+    last_released_version = get_latest_published_version()
+
     LOGGER.info(
-        f"Testing upgrade from base version {LAST_RELEASED_VERSION} to current version"
+        f"Testing upgrade from base version {last_released_version} to current version"
     )
 
     mz = MaterializeApplication(
-        tag=str(LAST_RELEASED_VERSION),
+        tag=str(last_released_version),
         aws_region=aws_region,
         log_filter=log_filter,
         release_mode=(not dev),
@@ -65,8 +66,9 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
         label="cluster.environmentd.materialize.cloud/cluster-id=u1",
     )
 
-    executor = CloudtestExecutor(application=mz, version=LAST_RELEASED_VERSION)
-    # No SSH bastion host in cloudtest (yet)
-    checks = list(all_subclasses(Check) - {SshPg, SshKafka})
+    executor = CloudtestExecutor(application=mz, version=last_released_version)
+    # SshPg, SshKafka: No SSH bastion host
+    # KafkaProtocols: No shared secrets directory
+    checks = list(all_subclasses(Check) - {SshPg, SshKafka, KafkaProtocols})
     scenario = CloudtestUpgrade(checks=checks, executor=executor)
     scenario.run()

@@ -25,18 +25,21 @@ SELECT * FROM t_data
 WHERE f1 ILIKE '%bCd%'
 ORDER BY f1;
 ----
+ABCDEF
 AbCdEf
+aBcDeF
+abcdef
 
 query T multiline
 EXPLAIN SELECT * FROM t_data
 WHERE f1 ILIKE '%bCd%';
 ----
 Explained Query:
-  Filter "%bCd%" ~~(#0)
-    Get materialize.public.t_data
+  Filter ilike["%bCd%"](#0)
+    ReadStorage materialize.public.t_data
 
 Source materialize.public.t_data
-  filter=("%bCd%" ~~(#0))
+  filter=(ilike["%bCd%"](#0))
 
 EOF
 

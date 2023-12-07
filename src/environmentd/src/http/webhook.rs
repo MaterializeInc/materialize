@@ -32,6 +32,8 @@ pub async fn handle_webhook(
     headers: http::HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    // Record the time we receive the request, for use if validation checks the current timestamp.
+    let received_at = client.now();
     let conn_id = client.new_conn_id().context("allocate connection id")?;
 
     // Collect headers into a map, while converting them into strings.
@@ -55,7 +57,7 @@ pub async fn handle_webhook(
         header_tys,
         validator,
     } = client
-        .append_webhook(database, schema, name, conn_id)
+        .append_webhook(database, schema, name, conn_id, received_at)
         .await?;
 
     // If this source requires validation, then validate!

@@ -34,7 +34,9 @@ class DataValue(LeafExpression):
         characteristics: set[ExpressionCharacteristics],
         is_postgres_compatible: bool = True,
     ):
-        column_name = f"{data_type.identifier.lower()}_{value_identifier.lower()}"
+        column_name = (
+            f"{data_type.internal_identifier.lower()}_{value_identifier.lower()}"
+        )
         super().__init__(
             column_name,
             data_type,

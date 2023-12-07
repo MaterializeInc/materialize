@@ -29,7 +29,7 @@ use timely::dataflow::operators::OkErr;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::{Refines, Timestamp};
 
-use crate::extensions::arrange::{HeapSize, MzArrange};
+use crate::extensions::arrange::MzArrange;
 use crate::render::context::{
     ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
     SpecializedArrangementImport,
@@ -82,9 +82,25 @@ impl LinearJoinSpec {
     where
         G: Scope,
         G::Timestamp: Lattice,
-        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-        L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
+        Tr1: for<'a> TraceReader<
+                Key<'a> = &'a K,
+                KeyOwned = K,
+                Val<'a> = &'a V1,
+                ValOwned = V1,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + Clone
+            + 'static,
+        Tr2: for<'a> TraceReader<
+                Key<'a> = &'a K,
+                KeyOwned = K,
+                Val<'a> = &'a V2,
+                ValOwned = V2,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + Clone
+            + 'static,
+        L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
         I: IntoIterator,
         I::Item: Data,
         K: Data,
@@ -140,7 +156,7 @@ where
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation + HeapSize,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
     T: Timestamp + Lattice + Columnation,
 {
     pub(crate) fn render_join(
@@ -410,8 +426,24 @@ where
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+        Tr1: for<'a> TraceReader<
+                Key<'a> = &'a K,
+                KeyOwned = K,
+                Val<'a> = &'a V1,
+                ValOwned = V1,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + Clone
+            + 'static,
+        Tr2: for<'a> TraceReader<
+                Key<'a> = &'a K,
+                KeyOwned = K,
+                Val<'a> = &'a V2,
+                ValOwned = V2,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + Clone
+            + 'static,
         K: Data + IntoRowByTypes,
         V1: Data + IntoRowByTypes,
         V2: Data + IntoRowByTypes,

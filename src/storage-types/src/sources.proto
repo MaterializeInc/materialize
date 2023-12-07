@@ -150,14 +150,12 @@ message ProtoKafkaMetadataColumn {
 }
 
 message ProtoKafkaSourceConnection {
-    reserved 6, 7, 8, 9, 10;
+    reserved 5, 6, 7, 8, 9, 10, 12;
     mz_storage_types.connections.ProtoKafkaConnection connection = 1;
     mz_repr.global_id.ProtoGlobalId connection_id = 13;
     string topic = 2;
     map<int32, int64> start_offsets = 3;
     optional string group_id_prefix = 4;
-    optional mz_proto.ProtoU128 environment_id = 5;
-    optional string environment_name = 12;
     repeated ProtoKafkaMetadataColumn metadata_columns = 11;
     map<string, mz_storage_types.connections.ProtoStringOrSecret> connection_options = 14;
 }

@@ -159,6 +159,9 @@ class OutputConsistencyTest:
         output_printer.print_info(sql_executors.get_database_infos())
         output_printer.print_empty_line()
 
+        output_printer.print_info(input_data.get_stats())
+        output_printer.print_empty_line()
+
         if not self.shall_run(sql_executors):
             output_printer.print_info("Not running the test, criteria are not met.")
             return ConsistencyTestSummary()

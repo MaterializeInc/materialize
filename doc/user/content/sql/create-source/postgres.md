@@ -119,7 +119,7 @@ For PostgreSQL 13+, it is recommended that you set a reasonable value for [`max_
 
 ##### PostgreSQL schemas
 
-`CREATE SOURCE` will attempt to create each upstream table in the **current** schema. This may lead to naming collisions if, for example, you are replicating `schema1.table_1` and `schema2.table_1`. Use the `FOR TABLES` clause to provide aliases for each upstream table, in such cases, or to specify an alternative destination schema in Materialize.
+`CREATE SOURCE` will attempt to create each upstream table in the same schema as the source. This may lead to naming collisions if, for example, you are replicating `schema1.table_1` and `schema2.table_1`. Use the `FOR TABLES` clause to provide aliases for each upstream table, in such cases, or to specify an alternative destination schema in Materialize.
 
 ```sql
 CREATE SOURCE mz_source

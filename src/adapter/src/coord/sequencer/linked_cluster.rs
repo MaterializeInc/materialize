@@ -9,19 +9,18 @@
 
 //! Coordinator functionality to sequence linked-cluster-related plans
 
+use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_catalog::LINKED_CLUSTER_REPLICA_NAME;
-use std::time::Duration;
-
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaAllocation, ReplicaConfig, ReplicaLogging};
-use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
+use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::SourceSinkClusterConfig;
 
-use crate::catalog::{self, ClusterConfig, ClusterVariant};
+use crate::catalog::{self};
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
 use crate::session::Session;
@@ -97,9 +96,7 @@ impl Coordinator {
         let logging = {
             ReplicaLogging {
                 log_logging: false,
-                interval: Some(Duration::from_micros(
-                    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS.into(),
-                )),
+                interval: Some(DEFAULT_REPLICA_LOGGING_INTERVAL),
             }
         };
         ops.push(catalog::Op::CreateClusterReplica {

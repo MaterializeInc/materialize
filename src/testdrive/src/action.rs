@@ -297,7 +297,7 @@ impl State {
 
         Ok(())
     }
-    /// Makes of copy of the stash's catalog and runs a function on its
+    /// Makes of copy of the durable catalog and runs a function on its
     /// state. Returns `None` if there's no catalog information in the State.
     pub async fn with_catalog_copy<F, T>(&self, f: F) -> Result<Option<T>, anyhow::Error>
     where
@@ -406,7 +406,7 @@ impl State {
 
         // Dangerous functions are useful for tests so we enable it for all tests.
         inner_client
-            .batch_execute("ALTER SYSTEM SET enable_dangerous_functions = on")
+            .batch_execute("ALTER SYSTEM SET enable_unsafe_functions = on")
             .await
             .context("enabling dangerous functions")?;
 

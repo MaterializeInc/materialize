@@ -1736,7 +1736,7 @@ async fn test_auth_deduplication() {
         roles,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
-        Some(2),
+        Some(Duration::from_secs(2)),
     )
     .unwrap();
 

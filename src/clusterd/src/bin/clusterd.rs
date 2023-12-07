@@ -105,6 +105,7 @@ use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use once_cell::sync::Lazy;
 use tracing::info;
 
@@ -158,15 +159,20 @@ struct Args {
     ///
     /// This flag is only used to force clusterd restarts when the value in
     /// environmentd is changed.
-    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", action = clap::ArgAction::Set, default_value="false")]
-    enable_persist_txn_tables: bool,
+    #[clap(
+        long,
+        env = "PERSIST_TXN_TABLES",
+        default_value = "off",
+        parse(try_from_str)
+    )]
+    persist_txn_tables: PersistTxnTablesImpl,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
     #[clap(long, env = "AWS_EXTERNAL_ID", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
-    aws_external_id: Option<AwsExternalIdPrefix>,
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
 
     // === Process orchestrator options. ===
     /// Where to write a PID lock file.
@@ -184,6 +190,11 @@ struct Args {
     tracing: TracingCliArgs,
 
     // === Other options. ===
+    /// An opaque identifier for the environment in which this process is
+    /// running.
+    #[clap(long, env = "ENVIRONMENT_ID")]
+    environment_id: String,
+
     /// A scratch directory that can be used for ephemeral storage.
     #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
     scratch_directory: Option<PathBuf>,
@@ -319,8 +330,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         },
         SYSTEM_TIME.clone(),
         ConnectionContext::from_cli_args(
+            args.environment_id,
             &args.tracing.startup_log_filter,
-            args.aws_external_id,
+            args.aws_external_id_prefix,
             secrets_reader,
             None,
         ),

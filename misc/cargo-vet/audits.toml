@@ -2,12 +2,12 @@
 # cargo-vet audits file
 
 [criteria.maintained-and-necessary]
-description = '''
+description = """
 Certification of this crate means the reviewer has confirmed the crate is:
 - actively maintained
 - necessary and useful to Materialize
 - well-documented
-'''
+"""
 implies = "safe-to-deploy"
 
 [[audits.array-concat]]
@@ -23,7 +23,32 @@ version = "0.26.0"
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:fca940b40e7827a9a639f99af45806100ef14954"
+version = "0.12.0@git:1bb6dc6d54a5e1f56f2e489cd8471b766d8caed5"
+
+[[audits.futures-timer]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "3.0.2"
+
+[[audits.governor]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.6.0"
+
+[[audits.nonzero_ext]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.3.0"
+
+[[audits.quanta]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.11.1"
+
+[[audits.raw-cpuid]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "10.7.0"
 
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"

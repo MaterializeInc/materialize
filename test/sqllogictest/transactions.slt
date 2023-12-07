@@ -662,7 +662,7 @@ SELECT * FROM t AS OF AT LEAST 1683131452106;
 
 # Give t a chance to advance.
 statement ok
-SELECT mz_internal.mz_sleep(2)
+SELECT mz_unsafe.mz_sleep(2)
 
 query T
 SELECT * FROM t AS OF AT LEAST 1683131452106;
@@ -674,7 +674,7 @@ SELECT * FROM t;
 
 # Give t a chance to advance.
 statement ok
-SELECT mz_internal.mz_sleep(2)
+SELECT mz_unsafe.mz_sleep(2)
 
 query T
 SELECT * FROM t AS OF AT LEAST 1683131452106;
@@ -990,8 +990,8 @@ CREATE SCHEMA green;
 query TT
 SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
 ----
-blue  u6
-green  u7
+blue  u7
+green  u8
 public  u3
 
 statement ok
@@ -1006,8 +1006,8 @@ COMMIT;
 query TT
 SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
 ----
-blue  u7
-green  u6
+blue  u8
+green  u7
 public  u3
 
 statement ok
@@ -1025,8 +1025,8 @@ ROLLBACK;
 query TT
 SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
 ----
-blue  u7
-green  u6
+blue  u8
+green  u7
 public  u3
 
 statement ok
@@ -1051,8 +1051,8 @@ ROLLBACK;
 query TT
 SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
 ----
-blue  u7
-green  u6
+blue  u8
+green  u7
 public  u3
 
 statement ok
@@ -1079,8 +1079,8 @@ COMMIT;
 query TT
 SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
 ----
-green  u6
-orange  u7
+green  u7
+orange  u8
 public  u3
 
 statement ok
@@ -1095,8 +1095,8 @@ COMMIT;
 query TT
 SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
 ----
-green  u6
-orange  u7
+green  u7
+orange  u8
 public  u3
 
 statement ok
@@ -1116,8 +1116,8 @@ COMMIT;
 query TT
 SELECT name, id FROM mz_schemas WHERE id LIKE 'u%';
 ----
-green  u6
-orange  u7
+green  u7
+orange  u8
 public  u3
 
 statement ok

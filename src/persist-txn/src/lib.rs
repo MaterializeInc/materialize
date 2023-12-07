@@ -178,18 +178,22 @@
 //! # Usage
 //!
 //! ```
+//! # use std::sync::Arc;
+//! # use mz_ore::metrics::MetricsRegistry;
 //! # use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+//! # use mz_persist_txn::metrics::Metrics;
 //! # use mz_persist_txn::operator::DataSubscribe;
 //! # use mz_persist_txn::txns::TxnsHandle;
 //! # use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 //! #
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! # let client = PersistClient::new_for_tests().await;
+//! # let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 //! # mz_ore::test::init_logging();
 //! // Open a txn shard, initializing it if necessary.
 //! let txns_id = ShardId::new();
 //! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
-//!     0u64, client.clone(), txns_id, StringSchema.into(), UnitSchema.into()
+//!     0u64, client.clone(), metrics, txns_id, StringSchema.into(), UnitSchema.into()
 //! ).await;
 //!
 //! // Register data shards to the txn set.
@@ -284,6 +288,7 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, error, instrument};
 
+pub mod metrics;
 pub mod operator;
 pub mod txn_cache;
 pub mod txn_read;
@@ -294,16 +299,20 @@ pub mod txns;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TxnsEntry {
     /// A data shard register operation.
-    Register(ShardId),
+    ///
+    /// The `[u8; 8]` is a Codec64 encoded timestamp.
+    Register(ShardId, [u8; 8]),
     /// A batch written to a data shard in a txn.
-    Append(ShardId, Vec<u8>),
+    ///
+    /// The `[u8; 8]` is a Codec64 encoded timestamp.
+    Append(ShardId, [u8; 8], Vec<u8>),
 }
 
 impl TxnsEntry {
     fn data_id(&self) -> &ShardId {
         match self {
-            TxnsEntry::Register(data_id) => data_id,
-            TxnsEntry::Append(data_id, _) => data_id,
+            TxnsEntry::Register(data_id, _) => data_id,
+            TxnsEntry::Append(data_id, _, _) => data_id,
         }
     }
 }
@@ -351,15 +360,22 @@ impl TxnsCodec for TxnsCodecDefault {
     }
     fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
         match e {
-            TxnsEntry::Register(data_id) => (data_id, Vec::new()),
-            TxnsEntry::Append(data_id, batch) => (data_id, batch),
+            TxnsEntry::Register(data_id, ts) => (data_id, ts.to_vec()),
+            TxnsEntry::Append(data_id, ts, batch) => {
+                // Put the ts at the end to let decode truncate it off.
+                (data_id, batch.into_iter().chain(ts).collect())
+            }
         }
     }
-    fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry {
+    fn decode(key: Self::Key, mut val: Self::Val) -> TxnsEntry {
+        let mut ts = [0u8; 8];
+        let ts_idx = val.len().checked_sub(8).expect("ts encoded at end of val");
+        ts.copy_from_slice(&val[ts_idx..]);
+        val.truncate(ts_idx);
         if val.is_empty() {
-            TxnsEntry::Register(key)
+            TxnsEntry::Register(key, ts)
         } else {
-            TxnsEntry::Append(key, val)
+            TxnsEntry::Append(key, ts, val)
         }
     }
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {

@@ -28,7 +28,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_cluster_client.client.rs"));
 /// must be totally ordered, and any value (for a given replica) must
 /// be greater than any that were generated before (for that replica).
 /// This is the reason for having two
-/// components (one from the stash that increases on every environmentd restart,
+/// components (one from the catalog storage that increases on every environmentd restart,
 /// another in-memory and local to the current incarnation of environmentd)
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct ClusterStartupEpoch {

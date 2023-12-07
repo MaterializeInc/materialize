@@ -45,8 +45,9 @@ REFERENCE_RE = re.compile(
     | @pytest.mark.skip
     # Used in output-consistency framework
     | YesIgnore
+    | tracked\ with
     # Used in proto files
-    //\ buf\ breaking:\ ignore
+    | //\ buf\ breaking:\ ignore
     )
     """,
     re.VERBOSE | re.IGNORECASE,
@@ -60,6 +61,8 @@ IGNORE_RE = re.compile(
     | \(\#1\)\ IS\ NULL
     # test/sqllogictest/cockroach/*.slt
     | cockroach\#
+    # ci/test/lint-buf/README.md
+    | Ignore\ because\ of\ #99999
     )
     """,
     re.VERBOSE | re.IGNORECASE,

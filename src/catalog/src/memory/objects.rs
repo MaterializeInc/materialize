@@ -26,7 +26,7 @@ use mz_controller::clusters::{
     ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::role_id::RoleId;
@@ -316,6 +316,8 @@ pub struct ClusterReplicaProcessStatus {
 pub struct CatalogEntry {
     pub item: CatalogItem,
     #[serde(skip)]
+    pub referenced_by: Vec<GlobalId>,
+    #[serde(skip)]
     pub used_by: Vec<GlobalId>,
     pub id: GlobalId,
     #[serde(skip)]
@@ -355,7 +357,7 @@ impl From<CatalogEntry> for durable::Item {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Table {
-    pub create_sql: String,
+    pub create_sql: Option<String>,
     pub desc: RelationDesc,
     #[serde(skip)]
     pub defaults: Vec<Expr<Aug>>,
@@ -438,7 +440,7 @@ impl DataSourceDesc {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
-    pub create_sql: String,
+    pub create_sql: Option<String>,
     // TODO: Unskip: currently blocked on some inner BTreeMap<X, _> problems.
     #[serde(skip)]
     pub data_source: DataSourceDesc,
@@ -467,7 +469,7 @@ impl Source {
         is_retained_metrics_object: bool,
     ) -> Source {
         Source {
-            create_sql: plan.source.create_sql,
+            create_sql: Some(plan.source.create_sql),
             data_source: match plan.source.data_source {
                 mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => DataSourceDesc::ingestion(
                     id,
@@ -691,7 +693,7 @@ pub struct Index {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
-    pub create_sql: String,
+    pub create_sql: Option<String>,
     #[serde(skip)]
     pub details: CatalogTypeDetails<IdReference>,
     pub desc: Option<RelationDesc>,
@@ -804,7 +806,7 @@ impl CatalogItem {
 
     /// Collects the identifiers of the objects that were encountered when
     /// resolving names in the item's DDL statement.
-    pub fn uses(&self) -> &ResolvedIds {
+    pub fn references(&self) -> &ResolvedIds {
         static EMPTY: Lazy<ResolvedIds> = Lazy::new(|| ResolvedIds(BTreeSet::new()));
         match self {
             CatalogItem::Func(_) => &*EMPTY,
@@ -819,6 +821,31 @@ impl CatalogItem {
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
         }
+    }
+
+    /// Collects the identifiers of the objects used by this [`CatalogItem`].
+    ///
+    /// Like [`CatalogItem::references()`] but also includes objects that are not directly
+    /// referenced. For example this will include any catalog objects used to implement functions
+    /// and casts in the item.
+    pub fn uses(&self) -> BTreeSet<GlobalId> {
+        let mut uses = self.references().0.clone();
+        match self {
+            // TODO(jkosh44) This isn't really correct for functions. They may use other objects in
+            // their implementation. However, currently there's no way to get that information.
+            CatalogItem::Func(_) => {}
+            CatalogItem::Index(_) => {}
+            CatalogItem::Sink(_) => {}
+            CatalogItem::Source(_) => {}
+            CatalogItem::Log(_) => {}
+            CatalogItem::Table(_) => {}
+            CatalogItem::Type(_) => {}
+            CatalogItem::View(view) => uses.extend(view.raw_expr.depends_on()),
+            CatalogItem::MaterializedView(mview) => uses.extend(mview.raw_expr.depends_on()),
+            CatalogItem::Secret(_) => {}
+            CatalogItem::Connection(_) => {}
+        }
+        uses
     }
 
     /// Returns the connection ID that this item belongs to, if this item is
@@ -870,13 +897,13 @@ impl CatalogItem {
         match self {
             CatalogItem::Table(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
+                i.create_sql = i.create_sql.map(do_rewrite).transpose()?;
                 Ok(CatalogItem::Table(i))
             }
             CatalogItem::Log(i) => Ok(CatalogItem::Log(i.clone())),
             CatalogItem::Source(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
+                i.create_sql = i.create_sql.map(do_rewrite).transpose()?;
                 Ok(CatalogItem::Source(i))
             }
             CatalogItem::Sink(i) => {
@@ -911,7 +938,7 @@ impl CatalogItem {
             }
             CatalogItem::Type(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
+                i.create_sql = i.create_sql.map(do_rewrite).transpose()?;
                 Ok(CatalogItem::Type(i))
             }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
@@ -943,13 +970,13 @@ impl CatalogItem {
         match self {
             CatalogItem::Table(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
+                i.create_sql = i.create_sql.map(do_rewrite).transpose()?;
                 Ok(CatalogItem::Table(i))
             }
             CatalogItem::Log(i) => Ok(CatalogItem::Log(i.clone())),
             CatalogItem::Source(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
+                i.create_sql = i.create_sql.map(do_rewrite).transpose()?;
                 Ok(CatalogItem::Source(i))
             }
             CatalogItem::Sink(i) => {
@@ -1099,20 +1126,32 @@ impl CatalogItem {
 
     pub fn to_serialized(&self) -> String {
         match self {
-            CatalogItem::Table(table) => table.create_sql.clone(),
+            CatalogItem::Table(table) => table
+                .create_sql
+                .as_ref()
+                .expect("builtin tables cannot be serialized")
+                .clone(),
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => {
                 assert!(
                     !matches!(source.data_source, DataSourceDesc::Introspection(_)),
                     "cannot serialize introspection/builtin sources",
                 );
-                source.create_sql.clone()
+                source
+                    .create_sql
+                    .as_ref()
+                    .expect("builtin sources cannot be serialized")
+                    .clone()
             }
             CatalogItem::View(view) => view.create_sql.clone(),
             CatalogItem::MaterializedView(mview) => mview.create_sql.clone(),
             CatalogItem::Index(index) => index.create_sql.clone(),
             CatalogItem::Sink(sink) => sink.create_sql.clone(),
-            CatalogItem::Type(typ) => typ.create_sql.clone(),
+            CatalogItem::Type(typ) => typ
+                .create_sql
+                .as_ref()
+                .expect("builtin types cannot be serialized")
+                .clone(),
             CatalogItem::Secret(secret) => secret.create_sql.clone(),
             CatalogItem::Connection(connection) => connection.create_sql.clone(),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
@@ -1121,20 +1160,24 @@ impl CatalogItem {
 
     pub fn into_serialized(self) -> String {
         match self {
-            CatalogItem::Table(table) => table.create_sql,
+            CatalogItem::Table(table) => table
+                .create_sql
+                .expect("builtin tables cannot be serialized"),
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => {
                 assert!(
                     !matches!(source.data_source, DataSourceDesc::Introspection(_)),
                     "cannot serialize introspection/builtin sources",
                 );
-                source.create_sql
+                source
+                    .create_sql
+                    .expect("builtin sources cannot be serialized")
             }
             CatalogItem::View(view) => view.create_sql,
             CatalogItem::MaterializedView(mview) => mview.create_sql,
             CatalogItem::Index(index) => index.create_sql,
             CatalogItem::Sink(sink) => sink.create_sql,
-            CatalogItem::Type(typ) => typ.create_sql,
+            CatalogItem::Type(typ) => typ.create_sql.expect("builtin types cannot be serialized"),
             CatalogItem::Secret(secret) => secret.create_sql,
             CatalogItem::Connection(connection) => connection.create_sql,
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
@@ -1317,6 +1360,11 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::MaterializedView(_))
     }
 
+    /// Reports whether this catalog entry is a view.
+    pub fn is_view(&self) -> bool {
+        matches!(self.item(), CatalogItem::View(_))
+    }
+
     /// Reports whether this catalog entry is a secret.
     pub fn is_secret(&self) -> bool {
         matches!(self.item(), CatalogItem::Secret(_))
@@ -1339,7 +1387,16 @@ impl CatalogEntry {
 
     /// Collects the identifiers of the objects that were encountered when
     /// resolving names in the item's DDL statement.
-    pub fn uses(&self) -> &ResolvedIds {
+    pub fn references(&self) -> &ResolvedIds {
+        self.item.references()
+    }
+
+    /// Collects the identifiers of the objects used by this [`CatalogEntry`].
+    ///
+    /// Like [`CatalogEntry::references()`] but also includes objects that are not directly
+    /// referenced. For example this will include any catalog objects used to implement functions
+    /// and casts in the item.
+    pub fn uses(&self) -> BTreeSet<GlobalId> {
         self.item.uses()
     }
 
@@ -1361,6 +1418,11 @@ impl CatalogEntry {
     /// Returns the fully qualified name of this catalog entry.
     pub fn name(&self) -> &QualifiedItemName {
         &self.name
+    }
+
+    /// Returns the identifiers of the dataflows that are directly referenced by this dataflow.
+    pub fn referenced_by(&self) -> &[GlobalId] {
+        &self.referenced_by
     }
 
     /// Returns the identifiers of the dataflows that depend upon this dataflow.
@@ -1917,13 +1979,19 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn create_sql(&self) -> &str {
         match self.item() {
-            CatalogItem::Table(Table { create_sql, .. }) => create_sql,
-            CatalogItem::Source(Source { create_sql, .. }) => create_sql,
+            CatalogItem::Table(Table { create_sql, .. }) => {
+                create_sql.as_deref().unwrap_or("<builtin>")
+            }
+            CatalogItem::Source(Source { create_sql, .. }) => {
+                create_sql.as_deref().unwrap_or("<builtin>")
+            }
             CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
             CatalogItem::View(View { create_sql, .. }) => create_sql,
             CatalogItem::MaterializedView(MaterializedView { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
-            CatalogItem::Type(Type { create_sql, .. }) => create_sql,
+            CatalogItem::Type(Type { create_sql, .. }) => {
+                create_sql.as_deref().unwrap_or("<builtin>")
+            }
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
@@ -1959,8 +2027,16 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn uses(&self) -> &ResolvedIds {
+    fn references(&self) -> &ResolvedIds {
+        self.references()
+    }
+
+    fn uses(&self) -> BTreeSet<GlobalId> {
         self.uses()
+    }
+
+    fn referenced_by(&self) -> &[GlobalId] {
+        self.referenced_by()
     }
 
     fn used_by(&self) -> &[GlobalId] {

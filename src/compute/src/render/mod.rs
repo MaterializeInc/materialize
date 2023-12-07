@@ -100,6 +100,7 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -108,11 +109,12 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
-use differential_dataflow::{AsCollection, Collection, ExchangeData, Hashable};
+use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashable};
 use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, Id};
+use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Diff, GlobalId};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
@@ -129,11 +131,11 @@ use timely::order::Product;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker as TimelyWorker;
-use timely::{Data, PartialOrder};
+use timely::PartialOrder;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{ArrangementSize, HeapSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
@@ -214,6 +216,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         Arc::clone(&compute_state.persist_clients),
                         source.storage_metadata.clone(),
                         dataflow.as_of.clone(),
+                        SnapshotMode::Include,
                         dataflow.until.clone(),
                         mfp.as_mut(),
                         compute_state.dataflow_max_inflight_bytes,
@@ -247,6 +250,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
 
                     // Associate returned tokens with the source identifier.
+                    let token: Rc<dyn Any> = Rc::new(token);
                     tokens.insert(*source_id, token);
                 });
             }
@@ -429,7 +433,7 @@ where
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: RenderTimestamp + HeapSize,
+    G::Timestamp: RenderTimestamp,
 {
     pub(crate) fn build_object(&mut self, object: BuildDesc<Plan>) {
         // First, transform the relation expression into a render plan.
@@ -601,10 +605,19 @@ where
         name: &str,
     ) -> Arranged<G, TraceAgent<Tr2>>
     where
-        Tr: TraceReader<Key = K, Val = V, Time = T, Diff = Diff>,
-        Tr::Key: Columnation + ExchangeData + Hashable,
-        Tr::Val: Columnation + ExchangeData,
-        Tr2: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, Diff = Diff> + 'static,
+        Tr: for<'a> TraceReader<
+            Key<'a> = &'a K,
+            KeyOwned = K,
+            Val<'a> = &'a V,
+            ValOwned = V,
+            Time = T,
+            Diff = Diff,
+        >,
+        Tr::KeyOwned: Columnation + ExchangeData + Hashable,
+        Tr::ValOwned: Columnation + ExchangeData,
+        Tr2: Trace
+            + for<'a> TraceReader<Key<'a> = &'a K, Val<'a> = &'a V, Time = G::Timestamp, Diff = Diff>
+            + 'static,
         Tr2::Batch: Batch,
         Tr2::Batcher: Batcher<Item = ((K, V), G::Timestamp, Diff)>,
         Arranged<G, TraceAgent<Tr2>>: ArrangementSize,
@@ -740,7 +753,7 @@ where
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: RenderTimestamp + HeapSize,
+    G::Timestamp: RenderTimestamp,
 {
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///

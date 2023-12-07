@@ -22,6 +22,36 @@ SERVICES = [
 ]
 
 
+def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -> None:
+    with c.override(Postgres(extra_command=["-c", "max_replication_slots=2"])):
+        c.up("materialized", "postgres")
+        c.run("testdrive", "override/replication-slots.td")
+
+
+def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
+    for wal_level in ["replica", "minimal"]:
+        with c.override(
+            Postgres(
+                extra_command=[
+                    "-c",
+                    "max_wal_senders=0",
+                    "-c",
+                    f"wal_level={wal_level}",
+                ]
+            )
+        ):
+            c.up("materialized", "postgres")
+            c.run("testdrive", "override/insufficient-wal-level.td")
+
+
+def workflow_replication_disabled(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    with c.override(Postgres(extra_command=["-c", "max_wal_senders=0"])):
+        c.up("materialized", "postgres")
+        c.run("testdrive", "override/replication-disabled.td")
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "filter",

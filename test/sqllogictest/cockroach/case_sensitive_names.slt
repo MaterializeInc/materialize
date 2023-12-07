@@ -197,7 +197,7 @@ DROP TABLE "B"
 # Case sensitivity of column names.
 
 statement ok
-CREATE TABLE foo(X INT, "Y" INT)
+CREATE TABLE foo(X INT, "Y" INT, "created_AT" timestamp)
 
 query III colnames
 SELECT x, X, "Y" FROM foo
@@ -209,6 +209,12 @@ SELECT "X" FROM foo
 
 statement error column "y" does not exist\nHINT: The similarly named column "Y" does exist.
 SELECT Y FROM foo
+
+simple
+SELECT creaetd_at FROM foo
+----
+db error: ERROR: column "creaetd_at" does not exist
+HINT: The similarly named column "created_AT" does exist. Make sure to surround case sensitive names in double quotes.
 
 # The following should not be ambiguous.
 query II colnames

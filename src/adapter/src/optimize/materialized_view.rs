@@ -178,7 +178,7 @@ impl LocalMirPlan {
 }
 
 /// This is needed only because the pipeline in the bootstrap code starts from an
-/// [`OptimizedMirRelationExpr`] attached to a [`crate::catalog::CatalogItem`].
+/// [`OptimizedMirRelationExpr`] attached to a [`mz_catalog::memory::objects::CatalogItem`].
 impl Optimize<OptimizedMirRelationExpr> for Optimizer {
     type To = GlobalMirPlan;
 

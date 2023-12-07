@@ -21,7 +21,7 @@ use differential_dataflow::trace::Description;
 use futures_util::TryFutureExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::task::spawn;
+use mz_ore::task::{spawn, JoinHandle};
 use mz_persist::location::Blob;
 use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::{Codec, Codec64};
@@ -29,7 +29,6 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot, TryAcquireError};
-use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;

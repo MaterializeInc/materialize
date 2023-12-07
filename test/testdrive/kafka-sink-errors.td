@@ -47,13 +47,6 @@ contains:invalid REPLICATION FACTOR: cannot use value as number
   ENVELOPE DEBEZIUM
 contains:REPLICATION FACTOR for sink topics must be a positive integer or -1 for broker default
 
-! CREATE SINK invalid_acks FROM v1
-  INTO KAFKA CONNECTION kafka_conn (ACKS = foo, TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-contains:KAFKA sink validation: admin client errored
-detail:Invalid value for configuration property "request.required.acks" acks foo
-
 # Ensure that a sink whose topic fails to create does not result in an
 # orphaned linked cluster. See #17061.
 > SELECT count(*) FROM mz_clusters WHERE name = 'materialize_public_invalid_acks'

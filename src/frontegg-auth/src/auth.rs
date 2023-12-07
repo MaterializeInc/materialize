@@ -433,7 +433,7 @@ fn continuously_refresh(
                 Err(err) => {
                     tracing::warn!(?id, ?err, "Token expired!");
                     drop(refresh_tx);
-                    return;
+                    break;
                 }
                 Ok(claims) => claims,
             };
@@ -502,7 +502,7 @@ fn continuously_refresh(
 
                     // Dropping the channel will close it.
                     drop(refresh_tx);
-                    return;
+                    break;
                 }
             };
 

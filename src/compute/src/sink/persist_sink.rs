@@ -21,6 +21,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -95,6 +96,7 @@ where
         Arc::clone(&compute_state.persist_clients),
         target.clone(),
         source_as_of,
+        SnapshotMode::Include,
         Antichain::new(), // we want all updates
         None,             // no MFP
         None,             // no flow control

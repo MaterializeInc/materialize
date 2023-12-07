@@ -23,7 +23,6 @@
 #![allow(missing_docs)]
 #![allow(clippy::needless_borrow)]
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -59,6 +58,7 @@ use mz_storage_types::sources::{MzOffset, SourceConnection, SourceExport, Source
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+    PressOnDropButton,
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
 use mz_timely_util::operator::StreamExt as _;
@@ -179,7 +179,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
     )>,
     Stream<G, HealthStatusMessage>,
-    Option<Rc<dyn Any>>,
+    Vec<PressOnDropButton>,
 )
 where
     C: SourceConnection + SourceRender + Clone + 'static,
@@ -191,6 +191,8 @@ where
         as_of = %config.as_of.pretty(),
         "timely-{worker_id} building source pipeline",
     );
+
+    let mut tokens = vec![];
 
     let reclock_follower = ReclockFollower::new(config.as_of.clone());
 
@@ -206,10 +208,10 @@ where
 
     let timestamp_desc = source_connection.timestamp_desc();
 
-    let (health, token) = {
+    let (health, source_tokens) = {
         let config = config.clone();
         scope.parent.scoped("SourceTimeDomain", move |scope| {
-            let (source, source_upper, health_stream, token) = source_render_operator(
+            let (source, source_upper, health_stream, source_tokens) = source_render_operator(
                 scope,
                 config.clone(),
                 source_connection,
@@ -223,18 +225,18 @@ where
             source.inner.capture_into(UnboundedTokioCapture(source_tx));
             source_upper.capture_into(UnboundedTokioCapture(source_upper_tx));
 
-            (health_stream.leave(), token)
+            (health_stream.leave(), source_tokens)
         })
     };
+    tokens.extend(source_tokens);
 
     let (remap_stream, remap_token) =
         remap_operator(scope, config.clone(), source_upper_rx, timestamp_desc);
+    tokens.push(remap_token);
 
     let streams = reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
 
-    let token = Rc::new((token, remap_token));
-
-    (streams, health, Some(token))
+    (streams, health, tokens)
 }
 
 /// Renders the source dataflow fragment from the given [SourceConnection]. This returns a
@@ -260,7 +262,7 @@ fn source_render_operator<G, C>(
     >,
     Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
-    Rc<dyn Any>,
+    Vec<PressOnDropButton>,
 )
 where
     G: Scope<Timestamp = C::Time>,
@@ -275,7 +277,7 @@ where
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
-    let (data, progress, health, token) = source_connection.render(
+    let (data, progress, health, tokens) = source_connection.render(
         scope,
         config,
         connection_context,
@@ -349,7 +351,7 @@ where
         data.as_collection(),
         progress.unwrap_or(derived_progress),
         health.concat(&derived_health),
-        token,
+        tokens,
     )
 }
 
@@ -412,7 +414,7 @@ fn remap_operator<G, FromTime>(
     config: RawSourceCreationConfig,
     mut source_upper_rx: UnboundedReceiver<Event<FromTime, Infallible>>,
     remap_relation_desc: RelationDesc,
-) -> (Collection<G, FromTime, Diff>, Rc<dyn Any>)
+) -> (Collection<G, FromTime, Diff>, PressOnDropButton)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
@@ -544,10 +546,7 @@ where
         }
     });
 
-    (
-        remap_stream.as_collection(),
-        Rc::new(button.press_on_drop()),
-    )
+    (remap_stream.as_collection(), button.press_on_drop())
 }
 
 /// Receives un-timestamped batches from the source reader and updates to the

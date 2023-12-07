@@ -196,7 +196,7 @@ impl ComputeMetrics {
         let binding = SharedRow::get();
         self.shared_row_heap_capacity_bytes
             .with_label_values(&[&worker])
-            .set(u64::cast_from(binding.borrow().heap_capacity()));
+            .set(u64::cast_from(binding.borrow().byte_capacity()));
     }
 }
 

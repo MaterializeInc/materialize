@@ -22,6 +22,7 @@ use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
 use mz_ore::error::ErrorExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
+use mz_postgres_util::replication::WalLevel;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -177,7 +178,7 @@ pub(crate) fn add_materialize_comments(
     if catalog.system_vars().enable_sink_doc_on_option() {
         let from_id = stmt.from.item_id();
         let from = catalog.get_item(from_id);
-        let object_ids = from.uses().0.iter().map(|id| *id).chain_one(from.id());
+        let object_ids = from.references().0.clone().into_iter().chain_one(from.id());
 
         // add comments to the avro doc comments
         if let Some(Format::Avro(AvroSchema::Csr {
@@ -575,6 +576,35 @@ async fn purify_create_source(
                 .config(&*connection_context.secrets_reader)
                 .await?;
 
+            let wal_level =
+                mz_postgres_util::get_wal_level(&connection_context.ssh_tunnel_manager, &config)
+                    .await?;
+
+            if wal_level < WalLevel::Logical {
+                Err(PgSourcePurificationError::InsufficientWalLevel { wal_level })?;
+            }
+
+            let max_wal_senders = mz_postgres_util::get_max_wal_senders(
+                &connection_context.ssh_tunnel_manager,
+                &config,
+            )
+            .await?;
+
+            if max_wal_senders < 1 {
+                Err(PgSourcePurificationError::ReplicationDisabled)?;
+            }
+
+            let available_replication_slots = mz_postgres_util::available_replication_slots(
+                &connection_context.ssh_tunnel_manager,
+                &config,
+            )
+            .await?;
+
+            // We need 1 replication slot for the snapshots and 1 for the continuing replication
+            if available_replication_slots < 2 {
+                Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 2 })?;
+            }
+
             let publication_tables = mz_postgres_util::publication_info(
                 &connection_context.ssh_tunnel_manager,
                 &config,
@@ -645,8 +675,7 @@ async fn purify_create_source(
                             Ident::new(&table.namespace)?,
                             Ident::new(&table.name)?,
                         ]);
-                        let subsource_name = Ident::new(&table.name)?;
-                        let subsource_name = UnresolvedItemName::unqualified(subsource_name);
+                        let subsource_name = subsource_name_gen(source_name, &table.name)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
@@ -957,6 +986,17 @@ async fn purify_alter_source(
     let config = pg_connection
         .config(&*connection_context.secrets_reader)
         .await?;
+
+    let available_replication_slots = mz_postgres_util::available_replication_slots(
+        &connection_context.ssh_tunnel_manager,
+        &config,
+    )
+    .await?;
+
+    // We need 1 additional replication slot for the snapshots
+    if available_replication_slots < 1 {
+        Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
+    }
 
     let mut publication_tables = mz_postgres_util::publication_info(
         &connection_context.ssh_tunnel_manager,

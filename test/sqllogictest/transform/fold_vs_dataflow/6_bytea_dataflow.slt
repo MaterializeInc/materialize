@@ -35,6 +35,6 @@ FROM t_using_dataflow_rendering;
 Explained Query:
   Project (#1, #2)
     Map (text_to_bytea(#0), digest(#1, "sha512"))
-      Get materialize.public.t_using_dataflow_rendering
+      ReadStorage materialize.public.t_using_dataflow_rendering
 
 EOF
