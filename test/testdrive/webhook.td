@@ -11,6 +11,8 @@
 
 > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
+> CREATE CLUSTER webhook_compute REPLICAS (r1 (SIZE '1'));
+
 > CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT;
 
@@ -318,6 +320,42 @@ this_will_work
 > SELECT body FROM webhook_with_time_based_rejection
 this_will_work
 
+# Unnest batch requests.
+
+> CREATE SOURCE webhook_for_batch_events IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT JSON
+
+$ webhook-append name=webhook_for_batch_events
+[
+  { "event_id": 1 },
+  { "event_id": 2 },
+  { "event_id": 3 },
+  { "event_id": 4 }
+]
+
+> CREATE MATERIALIZED VIEW webhook_for_batch_events_flattened (body)
+  IN CLUSTER webhook_compute
+  AS (
+    SELECT jsonb_array_elements(body) as body FROM webhook_for_batch_events
+  );
+
+> SELECT body FROM webhook_for_batch_events_flattened
+"{\"event_id\":1}"
+"{\"event_id\":2}"
+"{\"event_id\":3}"
+"{\"event_id\":4}"
+
+$ webhook-append name=webhook_for_batch_events
+[
+  { "event_id": 5 },
+  { "event_id": 6 },
+  { "event_id": 7 },
+  { "event_id": 8 }
+]
+
+> SELECT COUNT(*) FROM webhook_for_batch_events_flattened
+8
+
 # Dropping a webhook source should drop the underlying persist shards.
 
 $ set-from-sql var=webhook-source-id
@@ -333,3 +371,5 @@ SELECT id FROM mz_sources WHERE name = 'webhook_bytes';
 
 # Cleanup.
 > DROP CLUSTER webhook_cluster CASCADE;
+
+> DROP CLUSTER webhook_compute CASCADE;
