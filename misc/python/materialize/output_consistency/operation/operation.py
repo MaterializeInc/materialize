@@ -63,6 +63,7 @@ class DbOperationOrFunction:
         self.is_enabled = is_enabled
         self.is_pg_compatible = is_pg_compatible
         self.since_mz_version = since_mz_version
+        self.added_characteristics: set[ExpressionCharacteristics] = set()
 
     def to_pattern(self, args_count: int) -> str:
         raise NotImplementedError
@@ -80,8 +81,7 @@ class DbOperationOrFunction:
     def derive_characteristics(
         self, args: list[Expression]
     ) -> set[ExpressionCharacteristics]:
-        # a non-trivial implementation will be helpful for nested expressions
-        return set()
+        return self.added_characteristics
 
     def __str__(self) -> str:
         raise NotImplementedError

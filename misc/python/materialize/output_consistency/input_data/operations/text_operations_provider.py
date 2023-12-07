@@ -224,9 +224,11 @@ class LpadFunction(DbFunction):
     ) -> set[ExpressionCharacteristics]:
         length_arg = args[1]
         if isinstance(length_arg, EnumConstant) and length_arg.value == "0":
-            return {ExpressionCharacteristics.TEXT_EMPTY}
+            return {
+                ExpressionCharacteristics.TEXT_EMPTY
+            } | super().derive_characteristics(args)
 
-        return set()
+        return super().derive_characteristics(args)
 
 
 TEXT_OPERATION_TYPES.append(LpadFunction())
