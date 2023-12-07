@@ -324,29 +324,35 @@ where
     G::Timestamp: crate::render::RenderTimestamp,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
+    use crate::typedefs::{RowKeySpine, RowSpine};
+    use differential_dataflow::operators::arrange::TraceAgent;
     match trace {
-        SpecializedArrangement::RowUnit(inner) => build_halfjoin(
-            updates,
-            inner,
-            None,
-            Some(vec![]),
-            prev_key,
-            prev_thinning,
-            comparison,
-            closure,
-            shutdown_token,
-        ),
-        SpecializedArrangement::RowRow(inner) => build_halfjoin(
-            updates,
-            inner,
-            None,
-            None,
-            prev_key,
-            prev_thinning,
-            comparison,
-            closure,
-            shutdown_token,
-        ),
+        SpecializedArrangement::RowUnit(inner) => {
+            build_halfjoin::<_, TraceAgent<RowKeySpine<Row, _, _>>, _>(
+                updates,
+                inner,
+                None,
+                Some(vec![]),
+                prev_key,
+                prev_thinning,
+                comparison,
+                closure,
+                shutdown_token,
+            )
+        }
+        SpecializedArrangement::RowRow(inner) => {
+            build_halfjoin::<_, TraceAgent<RowSpine<Row, Row, _, _>>, _>(
+                updates,
+                inner,
+                None,
+                None,
+                prev_key,
+                prev_thinning,
+                comparison,
+                closure,
+                shutdown_token,
+            )
+        }
     }
 }
 
@@ -369,8 +375,15 @@ where
     G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
+    use crate::typedefs::{TraceKeyHandle, TraceRowHandle};
+    use differential_dataflow::trace::wrappers::enter::TraceEnter;
+    use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
     match trace {
-        SpecializedArrangementImport::RowUnit(inner) => build_halfjoin(
+        SpecializedArrangementImport::RowUnit(inner) => build_halfjoin::<
+            _,
+            TraceEnter<TraceFrontier<TraceKeyHandle<Row, T, Diff>>, G::Timestamp>,
+            _,
+        >(
             updates,
             inner,
             None,
@@ -381,7 +394,11 @@ where
             closure,
             shutdown_token,
         ),
-        SpecializedArrangementImport::RowRow(inner) => build_halfjoin(
+        SpecializedArrangementImport::RowRow(inner) => build_halfjoin::<
+            _,
+            TraceEnter<TraceFrontier<TraceRowHandle<Row, Row, T, Diff>>, G::Timestamp>,
+            _,
+        >(
             updates,
             inner,
             None,
@@ -405,7 +422,7 @@ where
 /// the time of the update. This operator may manipulate `time` as part of this pair, but will not manipulate
 /// the time of the update. This is crucial for correctness, as the total order on times of updates is used
 /// to ensure that any two updates are matched at most once.
-fn build_halfjoin<G, Tr, CF, K, V>(
+fn build_halfjoin<G, Tr, CF>(
     updates: Collection<G, (Row, G::Timestamp), Diff>,
     trace: Arranged<G, Tr>,
     trace_key_types: Option<Vec<ColumnType>>,
@@ -422,24 +439,16 @@ fn build_halfjoin<G, Tr, CF, K, V>(
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
-    Tr: for<'a> TraceReader<
-            Time = G::Timestamp,
-            Key<'a> = &'a K,
-            KeyOwned = K,
-            Val<'a> = &'a V,
-            ValOwned = V,
-            Diff = Diff,
-        > + Clone
-        + 'static,
-    K: ExchangeData + FromRowByTypes + Hashable + IntoRowByTypes,
-    V: ExchangeData + IntoRowByTypes,
+    Tr: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+    Tr::KeyOwned: ExchangeData + Hashable + Default + FromRowByTypes + IntoRowByTypes,
+    for<'a> Tr::Val<'a>: IntoRowByTypes,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     let updates_key_types = trace_key_types.clone();
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
-        let mut key_buf = K::default();
+        let mut key_buf = Tr::KeyOwned::default();
         move |(row, time)| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
@@ -560,17 +569,28 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
 {
+    use crate::typedefs::{RowKeySpine, RowSpine};
+    use differential_dataflow::operators::arrange::TraceAgent;
     match trace {
-        SpecializedArrangement::RowUnit(inner) => build_update_stream(
-            inner,
-            None,
-            Some(vec![]),
-            as_of,
-            source_relation,
-            initial_closure,
-        ),
+        SpecializedArrangement::RowUnit(inner) => {
+            build_update_stream::<_, TraceAgent<RowKeySpine<Row, _, _>>>(
+                inner,
+                None,
+                Some(vec![]),
+                as_of,
+                source_relation,
+                initial_closure,
+            )
+        }
         SpecializedArrangement::RowRow(inner) => {
-            build_update_stream(inner, None, None, as_of, source_relation, initial_closure)
+            build_update_stream::<_, TraceAgent<RowSpine<Row, Row, _, _>>>(
+                inner,
+                None,
+                None,
+                as_of,
+                source_relation,
+                initial_closure,
+            )
         }
     }
 }
@@ -587,8 +607,14 @@ where
     T: Timestamp + Lattice + Columnation,
     G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
 {
+    use crate::typedefs::{TraceKeyHandle, TraceRowHandle};
+    use differential_dataflow::trace::wrappers::enter::TraceEnter;
+    use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
     match trace {
-        SpecializedArrangementImport::RowUnit(inner) => build_update_stream(
+        SpecializedArrangementImport::RowUnit(inner) => build_update_stream::<
+            _,
+            TraceEnter<TraceFrontier<TraceKeyHandle<Row, T, Diff>>, G::Timestamp>,
+        >(
             inner,
             None,
             Some(vec![]),
@@ -597,7 +623,10 @@ where
             initial_closure,
         ),
         SpecializedArrangementImport::RowRow(inner) => {
-            build_update_stream(inner, None, None, as_of, source_relation, initial_closure)
+            build_update_stream::<
+                _,
+                TraceEnter<TraceFrontier<TraceRowHandle<Row, Row, T, Diff>>, G::Timestamp>,
+            >(inner, None, None, as_of, source_relation, initial_closure)
         }
     }
 }
@@ -607,7 +636,7 @@ where
 /// At start-up time only the delta path for the first relation sees updates, since any updates fed to the
 /// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
 /// updates happening at the same time on different relations.
-fn build_update_stream<G, Tr, K, V>(
+fn build_update_stream<G, Tr>(
     trace: Arranged<G, Tr>,
     trace_key_types: Option<Vec<ColumnType>>,
     trace_val_types: Option<Vec<ColumnType>>,
@@ -618,11 +647,11 @@ fn build_update_stream<G, Tr, K, V>(
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
-    Tr: for<'a> TraceReader<Time = G::Timestamp, Key<'a> = &'a K, Val<'a> = &'a V, Diff = Diff>
-        + Clone
-        + 'static,
-    K: Columnation + ExchangeData + FromRowByTypes + Hashable + IntoRowByTypes,
-    V: Columnation + ExchangeData + IntoRowByTypes,
+    Tr: for<'a> TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+    for<'a> Tr::Key<'a>: IntoRowByTypes,
+    for<'a> Tr::Val<'a>: IntoRowByTypes,
+    // K: Columnation + ExchangeData + FromRowByTypes + Hashable + IntoRowByTypes,
+    // V: Columnation + ExchangeData + IntoRowByTypes,
 {
     let mut inner_as_of = Antichain::new();
     for event_time in as_of.elements().iter() {
