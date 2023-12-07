@@ -295,6 +295,9 @@ impl ProjectionLifting {
                         for key in order_key.iter_mut() {
                             key.column = outputs[key.column];
                         }
+                        if let Some(limit) = limit.as_mut() {
+                            limit.permute(outputs);
+                        }
                         *relation = inner
                             .take_dangerous()
                             .top_k(

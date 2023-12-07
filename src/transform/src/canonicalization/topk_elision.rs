@@ -49,7 +49,8 @@ impl TopKElision {
             expected_group_size: _,
         } = relation
         {
-            if limit.is_none() && *offset == 0 {
+            // The limit is not set if it either `None` or literal `Null`.
+            if limit.as_ref().map_or(true, |l| l.is_literal_null()) && *offset == 0 {
                 *relation = input.take_dangerous();
             } else if limit.as_ref().and_then(|l| l.as_literal_int64()) == Some(0) {
                 relation.take_safely();

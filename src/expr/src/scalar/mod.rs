@@ -582,13 +582,17 @@ impl MirScalarExpr {
 
     pub fn support(&self) -> BTreeSet<usize> {
         let mut support = BTreeSet::new();
+        self.support_into(&mut support);
+        support
+    }
+
+    pub fn support_into(&self, support: &mut BTreeSet<usize>) {
         #[allow(deprecated)]
         self.visit_post_nolimit(&mut |e| {
             if let MirScalarExpr::Column(i) = e {
                 support.insert(*i);
             }
         });
-        support
     }
 
     pub fn take(&mut self) -> Self {

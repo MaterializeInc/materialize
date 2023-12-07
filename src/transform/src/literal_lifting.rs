@@ -666,7 +666,7 @@ impl LiteralLifting {
                     input,
                     group_key,
                     order_key,
-                    limit: _,
+                    limit,
                     offset: _,
                     monotonic: _,
                     expected_group_size: _,
@@ -679,6 +679,16 @@ impl LiteralLifting {
                         let input_arity = input.arity();
                         group_key.retain(|c| *c < input_arity);
                         order_key.retain(|o| o.column < input_arity);
+                        // Inline literals into the limit expression.
+                        if let Some(limit) = limit {
+                            limit.visit_mut_post(&mut |e| {
+                                if let MirScalarExpr::Column(c) = e {
+                                    if *c >= input_arity {
+                                        *e = literals[*c - input_arity].clone();
+                                    }
+                                }
+                            })?;
+                        }
                     }
                     Ok(literals)
                 }

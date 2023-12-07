@@ -44,6 +44,16 @@ DefSource name=t3
 Source defined as t3
 
 
+# Inline literals in TopK::limit
+apply pipeline=literal_lifting
+TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=(#2 + 2) offset=1
+  Map (1)
+    Get t0
+----
+Map (1)
+  TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=(1 + 2) offset=1
+    Get t0
+
 # Lift literals from constant collections.
 # A suffix of common literals is lifted as a map.
 # Everything else is rewritten as a Map + Project.

@@ -195,7 +195,7 @@ impl ProjectionPushdown {
                 // Each equivalence class imposes internal demand for columns.
                 for equivalence in equivalences.iter() {
                     for expr in equivalence.iter() {
-                        columns_to_pushdown.extend(expr.support());
+                        expr.support_into(&mut columns_to_pushdown);
                     }
                 }
 
@@ -223,7 +223,7 @@ impl ProjectionPushdown {
                 let mut columns_to_pushdown =
                     desired_projection.iter().cloned().collect::<BTreeSet<_>>();
                 for expr in exprs.iter() {
-                    columns_to_pushdown.extend(expr.support());
+                    expr.support_into(&mut columns_to_pushdown);
                 }
                 columns_to_pushdown.retain(|c| *c < inner_arity);
 
@@ -242,7 +242,7 @@ impl ProjectionPushdown {
                 let mut columns_to_pushdown =
                     desired_projection.iter().cloned().collect::<BTreeSet<_>>();
                 for predicate in predicates.iter() {
-                    columns_to_pushdown.extend(predicate.support());
+                    predicate.support_into(&mut columns_to_pushdown);
                 }
                 reverse_permute(predicates.iter_mut(), columns_to_pushdown.iter());
                 let columns_to_pushdown = columns_to_pushdown.into_iter().collect::<Vec<_>>();
@@ -274,7 +274,7 @@ impl ProjectionPushdown {
                     desired_projection.iter().cloned().collect::<BTreeSet<_>>();
                 for (i, scalar) in scalars.iter().enumerate().rev() {
                     if actual_projection.contains(&(i + arity)) {
-                        actual_projection.extend(scalar.support());
+                        scalar.support_into(&mut actual_projection);
                     }
                 }
                 *scalars = (0..scalars.len())
@@ -309,7 +309,9 @@ impl ProjectionPushdown {
                 // Group keys determine aggregation granularity and are
                 // each crucial in determining aggregates and even the
                 // multiplicities of other keys.
-                columns_to_pushdown.extend(group_key.iter().flat_map(|e| e.support()));
+                for k in group_key.iter() {
+                    k.support_into(&mut columns_to_pushdown)
+                }
 
                 for index in (0..aggregates.len()).rev() {
                     if !desired_projection.contains(&(group_key.len() + index)) {
@@ -317,14 +319,17 @@ impl ProjectionPushdown {
                     } else {
                         // No obvious requirements on aggregate columns.
                         // A "non-empty" requirement, I guess?
-                        columns_to_pushdown.extend(aggregates[index].expr.support())
+                        aggregates[index]
+                            .expr
+                            .support_into(&mut columns_to_pushdown)
                     }
                 }
 
                 reverse_permute(
-                    group_key
-                        .iter_mut()
-                        .chain(aggregates.iter_mut().map(|a| &mut a.expr)),
+                    itertools::chain!(
+                        group_key.iter_mut(),
+                        aggregates.iter_mut().map(|a| &mut a.expr)
+                    ),
                     columns_to_pushdown.iter(),
                 );
 
@@ -342,14 +347,22 @@ impl ProjectionPushdown {
                 input,
                 group_key,
                 order_key,
+                limit,
                 ..
             } => {
-                // Group and order keys must be retained, as they define
-                // which rows are retained.
+                // Group and order keys and limit support must be retained, as
+                // they define which rows are retained.
                 let mut columns_to_pushdown =
                     desired_projection.iter().cloned().collect::<BTreeSet<_>>();
                 columns_to_pushdown.extend(group_key.iter().cloned());
                 columns_to_pushdown.extend(order_key.iter().map(|o| o.column));
+                if let Some(limit) = limit.as_ref() {
+                    // Strictly speaking not needed because the
+                    // `limit` support should be a subset of the
+                    // `group_key` support, but we don't want to
+                    // take this for granted here.
+                    limit.support_into(&mut columns_to_pushdown);
+                }
                 // If the `TopK` does not have any new column demand, just push
                 // down the desired projection. Otherwise, push down the sorted
                 // column demand.
@@ -359,11 +372,13 @@ impl ProjectionPushdown {
                     columns_to_pushdown.into_iter().collect::<Vec<_>>()
                 };
                 reverse_permute_columns(
-                    group_key
-                        .iter_mut()
-                        .chain(order_key.iter_mut().map(|o| &mut o.column)),
+                    itertools::chain!(
+                        group_key.iter_mut(),
+                        order_key.iter_mut().map(|o| &mut o.column),
+                    ),
                     columns_to_pushdown.iter(),
                 );
+                reverse_permute(limit.iter_mut(), columns_to_pushdown.iter());
                 self.action(input, &columns_to_pushdown, gets)?;
                 columns_to_pushdown
             }

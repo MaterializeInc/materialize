@@ -160,6 +160,18 @@ With
       Get t0
 
 
+# Apply knowledge to TopK limit
+# Cases: TopK.
+apply pipeline=column_knowledge
+TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=(#1 + 2) offset=1
+  Filter (#1 = 5)
+    Get t0
+----
+TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=7 offset=1
+  Filter (#1 = 5)
+    Get t0
+
+
 ## Outer join patterns
 ## -------------------
 
