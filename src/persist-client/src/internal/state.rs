@@ -933,6 +933,42 @@ where
         debug_assert!(self.is_tombstone());
         Continue(())
     }
+
+    pub fn shrink_tombstone(&mut self) -> ControlFlow<NoOpStateTransition<()>, ()> {
+        let mut to_replace = None;
+        let mut batch_count = 0;
+        self.trace.map_batches(|b| {
+            batch_count += 1;
+            if !b.parts.is_empty() && to_replace.is_none() {
+                to_replace = Some(b.desc.clone());
+            }
+        });
+        if let Some(desc) = to_replace {
+            let fake_merge = FueledMergeRes {
+                output: HollowBatch {
+                    desc,
+                    parts: vec![],
+                    len: 0,
+                    runs: vec![],
+                },
+            };
+            let result = self.trace.apply_merge_res(&fake_merge);
+            assert!(
+                result.matched(),
+                "merge with a matching desc should always match"
+            );
+            Continue(())
+        } else if batch_count > 1 {
+            let mut new_trace = Trace::default();
+            new_trace.downgrade_since(&Antichain::new());
+            let merge_reqs = new_trace.push_batch(Self::tombstone_batch());
+            assert_eq!(merge_reqs, Vec::new());
+            self.trace = new_trace;
+            Continue(())
+        } else {
+            Break(NoOpStateTransition(()))
+        }
+    }
 }
 
 // TODO: Document invariants.

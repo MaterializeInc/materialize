@@ -644,9 +644,10 @@ where
         self.applier.is_tombstone()
     }
 
-    pub async fn become_tombstone(&mut self) -> Result<RoutineMaintenance, InvalidUsage<T>> {
-        self.applier.check_since_upper_both_empty()?;
-
+    async fn do_tombstone(
+        &mut self,
+        mut do_fn: impl FnMut(&mut StateCollections<T>) -> ControlFlow<NoOpStateTransition<()>, ()>,
+    ) -> Result<(bool, RoutineMaintenance), InvalidUsage<T>> {
         let metrics = Arc::clone(&self.applier.metrics);
         let mut retry = self
             .applier
@@ -657,12 +658,13 @@ where
         loop {
             let res = self
                 .applier
-                .apply_unbatched_cmd(&metrics.cmds.become_tombstone, |_, _, state| {
-                    state.become_tombstone()
-                })
+                .apply_unbatched_cmd(&metrics.cmds.become_tombstone, |_, _, state| do_fn(state))
                 .await;
             let err = match res {
-                Ok((_seqno, _res, maintenance)) => return Ok(maintenance),
+                Ok((_seqno, Ok(()), maintenance)) => return Ok((true, maintenance)),
+                Ok((_seqno, Err(NoOpStateTransition(())), maintenance)) => {
+                    return Ok((false, maintenance))
+                }
                 Err(err) => err,
             };
             if retry.attempt() >= INFO_MIN_ATTEMPTS {
@@ -680,6 +682,23 @@ where
             }
             retry = retry.sleep().await;
         }
+    }
+
+    pub async fn become_tombstone(&mut self) -> Result<RoutineMaintenance, InvalidUsage<T>> {
+        self.applier.check_since_upper_both_empty()?;
+
+        let (_, mut maintenance) = self.do_tombstone(|state| state.become_tombstone()).await?;
+
+        loop {
+            let (shrank, more_maintenance) =
+                self.do_tombstone(|state| state.shrink_tombstone()).await?;
+            maintenance.merge(more_maintenance);
+            if !shrank {
+                break;
+            }
+        }
+
+        Ok(maintenance)
     }
 
     pub async fn snapshot(
