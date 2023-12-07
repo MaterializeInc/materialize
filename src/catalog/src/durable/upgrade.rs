@@ -284,7 +284,7 @@ pub(crate) mod persist {
         ///
         /// Returns the new version and upper.
         async fn run_upgrade(
-            _unopened_catalog_state: &mut UnopenedPersistCatalogState,
+            unopened_catalog_state: &mut UnopenedPersistCatalogState,
             upper: Timestamp,
             version: u64,
         ) -> Result<(u64, Timestamp), CatalogError> {
@@ -299,10 +299,22 @@ pub(crate) mod persist {
                 ..=TOO_OLD_VERSION => Err(incompatible),
 
                 42 => {
-                    run_versioned_upgrade(persist_handle, upper, version, v42_to_v43::upgrade).await
+                    run_versioned_upgrade(
+                        unopened_catalog_state,
+                        upper,
+                        version,
+                        v42_to_v43::upgrade,
+                    )
+                    .await
                 }
                 43 => {
-                    run_versioned_upgrade(persist_handle, upper, version, v43_to_v44::upgrade).await
+                    run_versioned_upgrade(
+                        unopened_catalog_state,
+                        upper,
+                        version,
+                        v43_to_v44::upgrade,
+                    )
+                    .await
                 }
 
                 // Up-to-date, no migration needed!
@@ -319,15 +331,15 @@ pub(crate) mod persist {
     ///
     /// Returns the new version and upper.
     async fn run_versioned_upgrade<V1: IntoStateUpdateKindBinary, V2: IntoStateUpdateKindBinary>(
-        persist_handle: &mut PersistHandle,
+        unopened_catalog_state: &mut UnopenedPersistCatalogState,
         upper: Timestamp,
         current_version: u64,
         migration_logic: impl FnOnce(Vec<V1>) -> Vec<MigrationAction<V1, V2>>,
     ) -> Result<(u64, Timestamp), CatalogError> {
         // 1. Get a snapshot of the current catalog, using the V1 to deserialize the
         // contents.
-        let as_of = persist_handle.as_of(upper);
-        let snapshot = persist_handle.snapshot_binary(as_of).await;
+        let as_of = unopened_catalog_state.as_of(upper);
+        let snapshot = unopened_catalog_state.snapshot_binary(as_of).await;
         let snapshot: Vec<_> = snapshot
             .into_iter()
             .map(|update| {
@@ -360,7 +372,7 @@ pub(crate) mod persist {
 
         // 4. Compare and append migration into persist shard.
         let next_upper = upper.step_forward();
-        persist_handle
+        unopened_catalog_state
             .compare_and_append(updates, upper, next_upper)
             .await?;
 
