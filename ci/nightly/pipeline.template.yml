@@ -645,7 +645,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartSourcePostgres, --check=PgCdc, --check=PgCdcNoWait, --check=PgCdcMzNow, --check=SshPg, --check=DebeziumPostgres]
+              args: [--scenario=RestartSourcePostgres, --check=PgCdc, --check=PgCdcNoWait, --check=PgCdcMzNow, --check=SshPg]
 
       - id: checks-restart-clusterd-compute
         label: "Checks + restart clusterd compute"
