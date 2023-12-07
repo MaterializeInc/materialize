@@ -81,6 +81,7 @@
 
 pub mod decode;
 pub mod internal_control;
+pub mod metrics;
 pub mod render;
 pub mod server;
 pub mod sink;
@@ -90,5 +91,4 @@ pub mod storage_state;
 
 pub(crate) mod healthcheck;
 
-pub use decode::metrics::DecodeMetrics;
 pub use server::{serve, Config, Server};

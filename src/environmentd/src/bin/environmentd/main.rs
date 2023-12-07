@@ -127,6 +127,7 @@ use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
@@ -427,8 +428,8 @@ pub struct Args {
     /// This value is also configurable via a Launch Darkly parameter of the
     /// same name, but we keep the flag to make testing easier. If specified,
     /// the flag takes precedence over the Launch Darkly param.
-    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", action = clap::ArgAction::Set)]
-    enable_persist_txn_tables: Option<bool>,
+    #[clap(long, env = "PERSIST_TXN_TABLES", parse(try_from_str))]
+    persist_txn_tables: Option<PersistTxnTablesImpl>,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -454,11 +455,6 @@ pub struct Args {
         value_name = "<CLOUD>-<REGION>-<ORG-ID>-<ORDINAL>"
     )]
     environment_id: EnvironmentId,
-    /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
-    ///
-    /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
-    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// Availability zones in which storage and compute resources may be
     /// deployed.
     #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
@@ -553,10 +549,20 @@ pub struct Args {
     )]
     config_sync_loop_interval: Option<Duration>,
 
-    /// The 12-digit AWS account id, which is used to generate an AWS Principal.
+    // === AWS options. ===
+    /// The AWS account ID, which will be used to generate ARNs for
+    /// Materialize-controlled AWS resources.
     #[clap(long, env = "AWS_ACCOUNT_ID")]
     aws_account_id: Option<String>,
-
+    /// The ARN for a Materialize-controlled role to assume before assuming
+    /// a customer's requested role for an AWS connection.
+    #[clap(long, env = "AWS_CONNECTION_ROLE_ARN")]
+    aws_connection_role_arn: Option<String>,
+    /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
+    ///
+    /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
+    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// The list of supported AWS PrivateLink availability zone ids.
     /// Must be zone IDs, of format e.g. "use-az1".
     #[clap(
@@ -566,7 +572,6 @@ pub struct Args {
         use_delimiter = true
     )]
     aws_privatelink_availability_zones: Option<Vec<String>>,
-
     /// The list of tags to be set on AWS Secrets Manager secrets created by the
     /// AwsSecretsController.
     #[clap(
@@ -883,6 +888,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
 
     let persist_clients = Arc::new(persist_clients);
+    let connection_context = ConnectionContext::from_cli_args(
+        args.environment_id.to_string(),
+        &args.tracing.startup_log_filter,
+        args.aws_external_id_prefix,
+        secrets_reader,
+        cloud_resource_reader,
+    );
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
@@ -899,6 +911,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
         metrics_registry: metrics_registry.clone(),
         persist_pubsub_url: args.persist_pubsub_url,
+        connection_context,
         // When serialized to args in the controller, only the relevant flags will be passed
         // through, so we just set all of them
         secrets_args: SecretsReaderCliArgs {
@@ -944,7 +957,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             CatalogKind::Stash => CatalogConfig::Stash {
                 url: args.adapter_stash_url.expect("required for stash catalog"),
             },
-            CatalogKind::Persist => CatalogConfig::Persist { persist_clients },
+            CatalogKind::Persist => CatalogConfig::Persist {
+                persist_clients,
+                metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
+            },
             CatalogKind::Shadow => CatalogConfig::Shadow {
                 url: args.adapter_stash_url.expect("required for shadow catalog"),
                 persist_clients,
@@ -975,12 +991,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
                 availability_zones: args.availability_zone,
-                connection_context: ConnectionContext::from_cli_args(
-                    &args.tracing.startup_log_filter,
-                    args.aws_external_id_prefix,
-                    secrets_reader,
-                    cloud_resource_reader,
-                ),
                 tracing_handle,
                 storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
                 storage_usage_retention_period: args.storage_usage_retention_period,
@@ -999,7 +1009,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 deploy_generation: args.deploy_generation,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
-                enable_persist_txn_tables_cli: args.enable_persist_txn_tables,
+                persist_txn_tables_cli: args.persist_txn_tables,
             })
             .await
     })?;

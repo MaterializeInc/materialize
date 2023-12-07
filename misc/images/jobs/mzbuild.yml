@@ -13,5 +13,6 @@ pre-image:
     bin:
       - persistcli
       - mz-stash-debug
+      - mz-catalog-debug
     strip: false
 publish: true

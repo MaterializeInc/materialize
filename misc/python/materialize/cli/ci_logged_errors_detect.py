@@ -28,8 +28,7 @@ CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
 ERROR_RE = re.compile(
     rb"""
     ^ .*
-    ( panicked\ at.*:\n
-    | segfault\ at
+    ( segfault\ at
     | trap\ invalid\ opcode
     | general\ protection
     | has\ overflowed\ its\ stack
@@ -54,13 +53,19 @@ ERROR_RE = re.compile(
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
-    | unrecognized\ configuration\ parameter
-    | Coordinator\ is\ stuck
+    | environmentd .* unrecognized\ configuration\ parameter
+    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     )
     .* $
     """,
     re.VERBOSE | re.MULTILINE,
 )
+
+# Panics are multiline and our log lines of multiple services are interleaved,
+# making them complex to handle in regular expressions, thus handle them
+# separately.
+PANIC_START_RE = re.compile(rb"^(?P<service>[^ ]*) *\| thread '.*' panicked at ")
+SERVICES_LOG_LINE_RE = re.compile(rb"^(?P<service>[^ ]*) *\| (?P<msg>.*)$")
 
 # Expected failures, don't report them
 IGNORE_RE = re.compile(
@@ -85,6 +90,10 @@ IGNORE_RE = re.compile(
     | internal\ error:\ panic\ at\ the\ `.*`\ optimization\ stage
     # redpanda INFO logging
     | larger\ sizes\ prevent\ running\ out\ of\ memory
+    # Old versions won't support new parameters
+    | (platform-checks|legacy-upgrade|upgrade-matrix)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
+    # For platform-checks upgrade tests
+    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage\ name=enable_dangerous_functions
     )
     """,
     re.VERBOSE | re.MULTILINE,
@@ -260,6 +269,31 @@ def get_error_logs(log_files: list[str]) -> list[ErrorLog]:
                 ):
                     continue
                 error_logs.append(ErrorLog(match.group(0), log_file))
+            open_panics = {}
+            for line in iter(data.readline, b""):
+                line = line.rstrip(b"\n")
+                if match := PANIC_START_RE.match(line):
+                    service = match.group("service")
+                    assert (
+                        service not in open_panics
+                    ), f"Two panics of same service {service} interleaving: {line}"
+                    open_panics[service] = line
+                elif open_panics:
+                    if match := SERVICES_LOG_LINE_RE.match(line):
+                        # Handling every services.log line here, filter to
+                        # handle only the ones which are currently in a panic
+                        # handler:
+                        if panic_start := open_panics.get(match.group("service")):
+                            del open_panics[match.group("service")]
+                            if IGNORE_RE.search(match.group(0)):
+                                continue
+                            error_logs.append(
+                                ErrorLog(
+                                    panic_start + b" " + match.group("msg"), log_file
+                                )
+                            )
+            assert not open_panics, f"Panic log never finished: {open_panics}"
+
     # TODO: Only report multiple errors once?
     return error_logs
 

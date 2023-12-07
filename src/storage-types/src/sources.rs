@@ -45,13 +45,12 @@ use timely::dataflow::operators::to_stream::Event;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
-use uuid::Uuid;
 
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::connections::StringOrSecret;
+use crate::connections::{ConnectionContext, StringOrSecret};
 use crate::controller::{CollectionMetadata, StorageError};
 use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
@@ -1397,7 +1396,6 @@ pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     // Map from partition -> starting offset
     pub start_offsets: BTreeMap<i32, i64>,
     pub group_id_prefix: Option<String>,
-    pub environment_id: String,
     pub metadata_columns: Vec<(String, KafkaMetadataKind)>,
     /// Additional options that need to be set on the connection whenever it's
     /// inlined.
@@ -1414,7 +1412,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
             topic,
             start_offsets,
             group_id_prefix,
-            environment_id,
             metadata_columns,
             connection_options,
         } = self;
@@ -1428,7 +1425,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
             topic,
             start_offsets,
             group_id_prefix,
-            environment_id,
             metadata_columns,
             connection_options: BTreeMap::default(),
         }
@@ -1450,13 +1446,13 @@ pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
 impl<C: ConnectionAccess> KafkaSourceConnection<C> {
     /// Returns the id for the consumer group the configured source will use.
     ///
-    /// This has a weird API because `KafkaSourceConnection`'s are created
-    /// _before_ id allocation, so we can't store the id in the object itself.
-    pub fn group_id(&self, source_id: GlobalId) -> String {
+    /// The caller is responsible for providing the source ID as it is not known
+    /// to `KafkaSourceConnection`.
+    pub fn group_id(&self, connection_context: &ConnectionContext, source_id: GlobalId) -> String {
         format!(
             "{}materialize-{}-{}-{}",
             self.group_id_prefix.clone().unwrap_or_else(String::new),
-            self.environment_id,
+            connection_context.environment_id,
             self.connection_id,
             source_id,
         )
@@ -1539,7 +1535,6 @@ impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
             topic,
             start_offsets,
             group_id_prefix,
-            environment_id,
             metadata_columns,
             connection_options,
         } = self;
@@ -1549,7 +1544,6 @@ impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
             (topic == &other.topic, "topic"),
             (start_offsets == &other.start_offsets, "start_offsets"),
             (group_id_prefix == &other.group_id_prefix, "group_id_prefix"),
-            (environment_id == &other.environment_id, "environment_id"),
             (
                 metadata_columns == &other.metadata_columns,
                 "metadata_columns",
@@ -1590,7 +1584,6 @@ where
             any::<String>(),
             proptest::collection::btree_map(any::<i32>(), any::<i64>(), 1..4),
             any::<Option<String>>(),
-            any::<String>(),
             proptest::collection::vec(any::<(String, KafkaMetadataKind)>(), 0..4),
             proptest::collection::btree_map(any::<String>(), any::<StringOrSecret>(), 0..4),
         )
@@ -1601,7 +1594,6 @@ where
                     topic,
                     start_offsets,
                     group_id_prefix,
-                    environment_id,
                     metadata_columns,
                     connection_options,
                 )| KafkaSourceConnection {
@@ -1610,7 +1602,6 @@ where
                     topic,
                     start_offsets,
                     group_id_prefix,
-                    environment_id,
                     metadata_columns,
                     connection_options,
                 },
@@ -1627,8 +1618,6 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
             topic: self.topic.clone(),
             start_offsets: self.start_offsets.clone(),
             group_id_prefix: self.group_id_prefix.clone(),
-            environment_id: None,
-            environment_name: Some(self.environment_id.into_proto()),
             metadata_columns: self
                 .metadata_columns
                 .iter()
@@ -1662,14 +1651,6 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
             topic: proto.topic,
             start_offsets: proto.start_offsets,
             group_id_prefix: proto.group_id_prefix,
-            environment_id: match (proto.environment_id, proto.environment_name) {
-                (_, Some(name)) => name,
-                (u128, _) => {
-                    let uuid: Uuid =
-                        u128.into_rust_if_some("ProtoKafkaSourceConnection::environment_id")?;
-                    uuid.to_string()
-                }
-            },
             metadata_columns,
             connection_options: proto
                 .connection_options
@@ -2732,7 +2713,7 @@ impl RustType<ProtoTestScriptSourceConnection> for TestScriptSourceConnection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Arbitrary, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct SourceData(pub Result<Row, DataflowError>);
 
@@ -2941,6 +2922,7 @@ impl Schema<SourceData> for RelationDesc {
 mod tests {
     use mz_repr::is_no_stats_type;
     use proptest::prelude::*;
+    use proptest::strategy::ValueTree;
 
     use crate::errors::EnvelopeError;
 
@@ -2992,5 +2974,56 @@ mod tests {
             // The proptest! macro interferes with rustfmt.
             scalar_type_columnar_roundtrip(scalar_type)
         });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn source_proto_serialization_stability() {
+        let min_protos = 10;
+        let base64_config = base64::Config::new(base64::CharacterSet::Standard, true);
+        let encoded = include_str!("snapshots/source-datas.txt");
+
+        // Decode the pre-generated source datas
+        let mut decoded: Vec<SourceData> = encoded
+            .lines()
+            .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
+            .map(|b| SourceData::decode(&b).expect("valid proto"))
+            .collect();
+
+        // If there are fewer than the minimum examples, generate some new ones arbitrarily
+        while decoded.len() < min_protos {
+            let mut runner = proptest::test_runner::TestRunner::deterministic();
+            let arbitrary_data: SourceData = SourceData::arbitrary()
+                .new_tree(&mut runner)
+                .expect("source data")
+                .current();
+            decoded.push(arbitrary_data);
+        }
+
+        // Reencode and compare the strings
+        let mut reencoded = String::new();
+        let mut buf = vec![];
+        for s in decoded {
+            buf.clear();
+            s.encode(&mut buf);
+            base64::encode_config_buf(buf.as_slice(), base64_config, &mut reencoded);
+            reencoded.push('\n');
+        }
+
+        // Optimizations in Persist, particularly consolidation on read,
+        // depend on a stable serialization for the serialized data.
+        // For example, reordering proto fields could cause us
+        // to generate a different (equivalent) serialization for a record,
+        // and the two versions would not consolidate out.
+        // This can impact correctness!
+        //
+        // If you need to change how SourceDatas are encoded, that's still fine...
+        // but we'll also need to increase
+        // the MINIMUM_CONSOLIDATED_VERSION as part of the same release.
+        assert_eq!(
+            encoded,
+            reencoded.as_str(),
+            "SourceData serde should be stable"
+        )
     }
 }

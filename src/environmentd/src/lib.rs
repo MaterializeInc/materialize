@@ -91,6 +91,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use futures::FutureExt;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
@@ -110,7 +111,7 @@ use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
-use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
@@ -147,12 +148,6 @@ pub struct Config {
     /// Frontegg JWT authentication configuration.
     pub frontegg: Option<FronteggAuthentication>,
 
-    // === Connection options. ===
-    /// Configuration for source and sink connections created by the storage
-    /// layer. This can include configuration for external
-    /// sources.
-    pub connection_context: ConnectionContext,
-
     // === Controller options. ===
     /// Storage and compute controller configuration.
     pub controller: ControllerConfig,
@@ -164,8 +159,8 @@ pub struct Config {
     /// one.
     ///
     /// If specified, this overrides the value stored in Launch Darkly (and
-    /// mirrored to the catalog stash's "config" collection).
-    pub enable_persist_txn_tables_cli: Option<bool>,
+    /// mirrored to the catalog storage's "config" collection).
+    pub persist_txn_tables_cli: Option<PersistTxnTablesImpl>,
 
     // === Adapter options. ===
     /// Catalog configuration.
@@ -199,7 +194,8 @@ pub struct Config {
     pub segment_api_key: Option<String>,
     /// IP Addresses which will be used for egress.
     pub egress_ips: Vec<Ipv4Addr>,
-    /// 12-digit AWS account id, which will be used to generate an AWS Principal.
+    /// The AWS account ID, which will be used to generate ARNs for
+    /// Materialize-controlled AWS resources.
     pub aws_account_id: Option<String>,
     /// Supported AWS PrivateLink availability zone ids.
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
@@ -261,6 +257,8 @@ pub enum CatalogConfig {
     Persist {
         /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
         persist_clients: Arc<PersistClientCache>,
+        /// Persist catalog metrics.
+        metrics: Arc<mz_catalog::durable::Metrics>,
     },
     /// The catalog contents are stored in both persist and the stash and their contents are
     /// compared. This is mostly used for testing purposes.
@@ -404,17 +402,19 @@ impl Listeners {
                 &config.controller,
                 &config.environment_id,
             )
+            .boxed()
             .await?;
 
             if !openable_adapter_storage.is_initialized().await? {
-                tracing::info!("Stash doesn't exist so there's no current deploy generation. We won't wait to be leader");
+                tracing::info!("Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader");
+                openable_adapter_storage.expire().await;
                 break 'leader_promotion;
             }
-            // TODO: once all stashes have a deploy_generation, don't need to handle the Option
-            let stash_generation = openable_adapter_storage.get_deployment_generation().await?;
-            tracing::info!("Found stash generation {stash_generation:?}");
-            if stash_generation < Some(deploy_generation) {
-                tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
+            // TODO: once all catalogs have a deploy_generation, don't need to handle the Option
+            let catalog_generation = openable_adapter_storage.get_deployment_generation().await?;
+            tracing::info!("Found catalog generation {catalog_generation:?}");
+            if catalog_generation < Some(deploy_generation) {
+                tracing::info!("Catalog generation {catalog_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
                 match openable_adapter_storage
                     .open_savepoint(
                         boot_ts.clone(),
@@ -431,7 +431,7 @@ impl Listeners {
                     Ok(adapter_storage) => Box::new(adapter_storage).expire().await,
                     Err(e) => {
                         return Err(
-                            anyhow!(e).context("Stash upgrade would have failed with this error")
+                            anyhow!(e).context("Catalog upgrade would have failed with this error")
                         )
                     }
                 }
@@ -448,26 +448,22 @@ impl Listeners {
                         "internal http server closed its end of promote_leader"
                     ));
                 }
-            } else if stash_generation == Some(deploy_generation) {
-                tracing::info!("Server requested generation {deploy_generation} which is equal to stash's generation");
+            } else if catalog_generation == Some(deploy_generation) {
+                tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
+                openable_adapter_storage.expire().await;
             } else {
-                mz_ore::halt!("Server started with requested generation {deploy_generation} but stash was already at {stash_generation:?}. Deploy generations must increase monotonically");
+                openable_adapter_storage.expire().await;
+                mz_ore::halt!("Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically");
             }
         }
 
-        let mut openable_adapter_storage = catalog_opener(
+        let openable_adapter_storage = catalog_opener(
             &config.catalog_config,
             &config.controller,
             &config.environment_id,
         )
+        .boxed()
         .await?;
-        // Get the value from Launch Darkly as of the last time this environment
-        // was running. (Ideally it would be the current value, but that's
-        // harder: we don't want to block startup on it if LD is down and it
-        // would also require quite a bit of abstraction breakage.)
-        let enable_persist_txn_tables_stash_ld = openable_adapter_storage
-            .get_enable_persist_txn_tables()
-            .await?;
         let mut adapter_storage = openable_adapter_storage
             .open(
                 boot_ts,
@@ -480,6 +476,11 @@ impl Listeners {
                 config.deploy_generation,
             )
             .await?;
+        // Get the value from Launch Darkly as of the last time this environment
+        // was running. (Ideally it would be the current value, but that's
+        // harder: we don't want to block startup on it if LD is down and it
+        // would also require quite a bit of abstraction breakage.)
+        let persist_txn_tables_stash_ld = adapter_storage.get_persist_txn_tables().await?;
 
         // Load the adapter catalog from disk.
         if !config
@@ -502,22 +503,19 @@ impl Listeners {
         );
 
         // Initialize controller.
-        let mut enable_persist_txn_tables = enable_persist_txn_tables_stash_ld.unwrap_or(false);
-        if let Some(value) = config.enable_persist_txn_tables_cli {
-            enable_persist_txn_tables = value;
+        let mut persist_txn_tables =
+            persist_txn_tables_stash_ld.unwrap_or(PersistTxnTablesImpl::Off);
+        if let Some(value) = config.persist_txn_tables_cli {
+            persist_txn_tables = value;
         }
         info!(
-            "enable_persist_txn_tables value of {} computed from stash {:?} and flag {:?}",
-            enable_persist_txn_tables,
-            enable_persist_txn_tables_stash_ld,
-            config.enable_persist_txn_tables_cli,
+            "persist_txn_tables value of {} computed from catalog {:?} and flag {:?}",
+            persist_txn_tables, persist_txn_tables_stash_ld, config.persist_txn_tables_cli,
         );
-        let controller = mz_controller::Controller::new(
-            config.controller,
-            envd_epoch,
-            enable_persist_txn_tables,
-        )
-        .await;
+        let controller =
+            mz_controller::Controller::new(config.controller, envd_epoch, persist_txn_tables)
+                .boxed()
+                .await;
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
@@ -553,7 +551,6 @@ impl Listeners {
             builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
             availability_zones: config.availability_zones,
             system_parameter_defaults: config.system_parameter_defaults,
-            connection_context: config.connection_context,
             storage_usage_client,
             storage_usage_collection_interval: config.storage_usage_collection_interval,
             storage_usage_retention_period: config.storage_usage_retention_period,
@@ -724,7 +721,10 @@ async fn catalog_opener(
                 },
             ))
         }
-        CatalogConfig::Persist { persist_clients } => {
+        CatalogConfig::Persist {
+            persist_clients,
+            metrics,
+        } => {
             info!("Using persist backed catalog");
             let persist_client = persist_clients
                 .open(controller_config.persist_location.clone())
@@ -734,6 +734,7 @@ async fn catalog_opener(
                 mz_catalog::durable::persist_backed_catalog_state(
                     persist_client,
                     environment_id.organization_id(),
+                    Arc::clone(metrics),
                 )
                 .await,
             )

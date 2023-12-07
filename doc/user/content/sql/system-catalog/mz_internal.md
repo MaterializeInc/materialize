@@ -247,6 +247,19 @@ SQL objects that don't exist in the compute layer (such as views) are omitted.
 | `object_id`     | [`text`] | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions).                                                           |
 | `dependency_id` | [`text`] | The ID of a compute dependency. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
 
+### `mz_compute_hydration_status`
+
+The `mz_compute_hydration_status` table describes the per-replica hydration status of each compute object (index, materialized view, or subscription).
+
+A compute object is hydrated on a given replica when it has fully processed the initial snapshot of data available in its inputs.
+
+<!-- RELATION_SPEC mz_internal.mz_compute_hydration_status -->
+| Field        | Type        | Meaning                                                                                                                                                                                                                                  |
+| -----------  | ----------- | --------                                                                                                                                                                                                                                 |
+| `object_id`  | [`text`]    | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions). |
+| `replica_id` | [`text`]    | The ID of a cluster replica.                                                                                                                                                                                                             |
+| `hydrated`   | [`boolean`] | Whether the compute object is hydrated on the replica.                                                                                                                                                                                   |
+
 ### `mz_frontiers`
 
 The `mz_frontiers` table describes the frontiers of each source, sink, table,
@@ -731,6 +744,20 @@ messages and additional metadata helpful for debugging.
 | `error`        | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
 
+
+### `mz_aws_privatelink_connection_status_history`
+
+The `mz_aws_privatelink_connection_status_history` table contains a row describing
+the historical status for each AWS PrivateLink connection in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_aws_privatelink_connection_status_history -->
+| Field             | Type                       | Meaning                                                    |
+|-------------------|----------------------------|------------------------------------------------------------|
+| `occurred_at`     | `timestamp with time zone` | Wall-clock timestamp of the status change.       |
+| `connection_id`   | `text`                     | The unique identifier of the AWS PrivateLink connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_connections).   |
+| `status`          | `text`                     | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.                        |
+
+
 <!--
 ### `mz_statement_execution_history`
 
@@ -803,11 +830,11 @@ Per-worker relations expose the same data as their global counterparts, but have
 The `mz_active_peeks` view describes all read queries ("peeks") that are pending in the [dataflow] layer.
 
 <!-- RELATION_SPEC mz_internal.mz_active_peeks -->
-| Field       | Type               | Meaning                                                                                                           |
-| ----------- | ------------------ | --------                                                                                                          |
-| `id`        | [`uuid`]           | The ID of the peek request.                                                                                       |
-| `index_id`  | [`text`]           | The ID of the index the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes). |
-| `time`      | [`mz_timestamp`]   | The timestamp the peek has requested.                                                                             |
+| Field       | Type               | Meaning                                                                                                                                              |
+| ----------- | ------------------ |------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `id`        | [`uuid`]           | The ID of the peek request.                                                                                                                          |
+| `index_id`  | [`text`]           | The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
+| `time`      | [`mz_timestamp`]   | The timestamp the peek has requested.                                                                                                                |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_active_peeks_per_worker -->
 

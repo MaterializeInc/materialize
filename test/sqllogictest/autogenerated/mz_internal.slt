@@ -143,6 +143,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  dependency_id  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_hydration_status' ORDER BY position
+----
+1  object_id  text
+2  replica_id  text
+3  hydrated  boolean
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
 ----
 1  object_id  text
@@ -413,6 +420,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  details  jsonb
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_status_history' ORDER BY position
+----
+1  occurred_at  timestamp␠with␠time␠zone
+2  connection_id  text
+3  status  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_subscriptions' ORDER BY position
 ----
 1  id  text
@@ -639,6 +653,7 @@ mz_arrangement_sharing_per_worker
 mz_arrangement_sharing_raw
 mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
+mz_aws_privatelink_connection_status_history
 mz_cluster_links
 mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
@@ -659,6 +674,7 @@ mz_compute_exports
 mz_compute_exports_per_worker
 mz_compute_frontiers
 mz_compute_frontiers_per_worker
+mz_compute_hydration_status
 mz_compute_import_frontiers
 mz_compute_import_frontiers_per_worker
 mz_compute_operator_durations_histogram

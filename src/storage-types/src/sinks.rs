@@ -9,7 +9,7 @@
 
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
-use std::collections::BTreeMap;
+use std::borrow::Cow;
 use std::fmt::Debug;
 
 use mz_ore::cast::CastFrom;
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
-use crate::connections::StringOrSecret;
+use crate::connections::ConnectionContext;
 use crate::controller::{CollectionMetadata, StorageError};
 
 use crate::connections::inline::{
@@ -334,7 +334,7 @@ impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
 
         let kind = proto
             .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaConsistencyConfig::kind"))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoStorageSinkConnection::kind"))?;
 
         Ok(match kind {
             KafkaV2(proto) => Self::Kafka(proto.into_rust()?),
@@ -397,33 +397,25 @@ impl RustType<proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec> for Ve
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum KafkaConsistencyConfig {
-    Progress { topic: String },
+pub enum KafkaSinkCompressionType {
+    None,
+    Gzip,
+    Snappy,
+    Lz4,
+    Zstd,
 }
 
-impl RustType<ProtoKafkaConsistencyConfig> for KafkaConsistencyConfig {
-    fn into_proto(&self) -> ProtoKafkaConsistencyConfig {
-        use proto_kafka_consistency_config::Kind::*;
-        use proto_kafka_consistency_config::ProtoKafkaConsistencyConfigProgress;
-
-        ProtoKafkaConsistencyConfig {
-            kind: Some(match self {
-                Self::Progress { topic } => Progress(ProtoKafkaConsistencyConfigProgress {
-                    topic: topic.clone(),
-                }),
-            }),
+impl KafkaSinkCompressionType {
+    /// Format the compression type as expected by `compression.type` librdkafka
+    /// setting.
+    pub fn to_librdkafka_option(&self) -> &'static str {
+        match self {
+            KafkaSinkCompressionType::None => "none",
+            KafkaSinkCompressionType::Gzip => "gzip",
+            KafkaSinkCompressionType::Snappy => "snappy",
+            KafkaSinkCompressionType::Lz4 => "lz4",
+            KafkaSinkCompressionType::Zstd => "zstd",
         }
-    }
-    fn from_proto(proto: ProtoKafkaConsistencyConfig) -> Result<Self, TryFromProtoError> {
-        use proto_kafka_consistency_config::Kind::*;
-
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaConsistencyConfig::kind"))?;
-
-        Ok(match kind {
-            Progress(proto) => Self::Progress { topic: proto.topic },
-        })
     }
 }
 
@@ -438,14 +430,19 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
     pub topic: String,
-    pub consistency_config: KafkaConsistencyConfig,
     pub partition_count: i32,
     pub replication_factor: i32,
     pub fuel: usize,
     pub retention: KafkaSinkConnectionRetention,
-    /// Additional options that need to be set on the connection whenever it's
-    /// inlined.
-    pub connection_options: BTreeMap<String, StringOrSecret>,
+    pub compression_type: KafkaSinkCompressionType,
+}
+
+impl KafkaSinkConnection {
+    /// Returns the name of the progress topic to use for the sink.
+    pub fn progress_topic(&self, connection_context: &ConnectionContext) -> Cow<str> {
+        self.connection
+            .progress_topic(connection_context, self.connection_id)
+    }
 }
 
 impl<C: ConnectionAccess> KafkaSinkConnection<C> {
@@ -470,12 +467,11 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             key_desc_and_indices,
             value_desc,
             topic,
-            consistency_config,
             partition_count,
             replication_factor,
             fuel,
             retention,
-            connection_options,
+            compression_type,
         } = self;
 
         let compatibility_checks = [
@@ -491,10 +487,6 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             ),
             (value_desc == &other.value_desc, "value_desc"),
             (topic == &other.topic, "topic"),
-            (
-                consistency_config == &other.consistency_config,
-                "consistency_config",
-            ),
             (partition_count == &other.partition_count, "partition_count"),
             (
                 replication_factor == &other.replication_factor,
@@ -503,8 +495,8 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             (fuel == &other.fuel, "fuel"),
             (retention == &other.retention, "retention"),
             (
-                connection_options == &other.connection_options,
-                "connection_options",
+                compression_type == &other.compression_type,
+                "compression_type",
             ),
         ];
         for (compatible, field) in compatibility_checks {
@@ -535,37 +527,32 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             value_desc,
             topic,
-            consistency_config,
             partition_count,
             replication_factor,
             fuel,
             retention,
-            connection_options,
+            compression_type,
         } = self;
-
-        let mut connection = r.resolve_connection(connection).unwrap_kafka();
-        connection.options.extend(connection_options);
-
         KafkaSinkConnection {
             connection_id,
-            connection,
+            connection: r.resolve_connection(connection).unwrap_kafka(),
             format: format.into_inline_connection(r),
             relation_key_indices,
             key_desc_and_indices,
             value_desc,
             topic,
-            consistency_config,
             partition_count,
             replication_factor,
             fuel,
             retention,
-            connection_options: BTreeMap::default(),
+            compression_type,
         }
     }
 }
 
 impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
     fn into_proto(&self) -> ProtoKafkaSinkConnectionV2 {
+        use crate::sinks::proto_kafka_sink_connection_v2::CompressionType;
         ProtoKafkaSinkConnectionV2 {
             connection_id: Some(self.connection_id.into_proto()),
             connection: Some(self.connection.into_proto()),
@@ -574,20 +561,22 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             relation_key_indices: self.relation_key_indices.into_proto(),
             value_desc: Some(self.value_desc.into_proto()),
             topic: self.topic.clone(),
-            consistency_config: Some(self.consistency_config.into_proto()),
             partition_count: self.partition_count,
             replication_factor: self.replication_factor,
             fuel: u64::cast_from(self.fuel),
             retention: Some(self.retention.into_proto()),
-            connection_options: self
-                .connection_options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.into_proto()))
-                .collect(),
+            compression_type: Some(match self.compression_type {
+                KafkaSinkCompressionType::None => CompressionType::None(()),
+                KafkaSinkCompressionType::Gzip => CompressionType::Gzip(()),
+                KafkaSinkCompressionType::Snappy => CompressionType::Snappy(()),
+                KafkaSinkCompressionType::Lz4 => CompressionType::Lz4(()),
+                KafkaSinkCompressionType::Zstd => CompressionType::Zstd(()),
+            }),
         }
     }
 
     fn from_proto(proto: ProtoKafkaSinkConnectionV2) -> Result<Self, TryFromProtoError> {
+        use crate::sinks::proto_kafka_sink_connection_v2::CompressionType;
         Ok(KafkaSinkConnection {
             connection_id: proto
                 .connection_id
@@ -604,20 +593,24 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 .value_desc
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::value_desc")?,
             topic: proto.topic,
-            consistency_config: proto
-                .consistency_config
-                .into_rust_if_some("ProtoKafkaSinkConnectionV2::consistency_config")?,
             partition_count: proto.partition_count,
             replication_factor: proto.replication_factor,
             fuel: proto.fuel.into_rust()?,
             retention: proto
                 .retention
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::retention")?,
-            connection_options: proto
-                .connection_options
-                .into_iter()
-                .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
-                .collect::<Result<_, _>>()?,
+            compression_type: match proto.compression_type {
+                Some(CompressionType::None(())) => KafkaSinkCompressionType::None,
+                Some(CompressionType::Gzip(())) => KafkaSinkCompressionType::Gzip,
+                Some(CompressionType::Snappy(())) => KafkaSinkCompressionType::Snappy,
+                Some(CompressionType::Lz4(())) => KafkaSinkCompressionType::Lz4,
+                Some(CompressionType::Zstd(())) => KafkaSinkCompressionType::Zstd,
+                None => {
+                    return Err(TryFromProtoError::missing_field(
+                        "ProtoKafkaSinkConnectionV2::compression_type",
+                    ))
+                }
+            },
         })
     }
 }

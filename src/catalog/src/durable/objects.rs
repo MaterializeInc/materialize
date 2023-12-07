@@ -722,22 +722,40 @@ impl Snapshot {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.databases.is_empty()
-            && self.schemas.is_empty()
-            && self.roles.is_empty()
-            && self.items.is_empty()
-            && self.comments.is_empty()
-            && self.clusters.is_empty()
-            && self.cluster_replicas.is_empty()
-            && self.introspection_sources.is_empty()
-            && self.id_allocator.is_empty()
-            && self.configs.is_empty()
-            && self.settings.is_empty()
-            && self.timestamps.is_empty()
-            && self.system_object_mappings.is_empty()
-            && self.system_configurations.is_empty()
-            && self.default_privileges.is_empty()
-            && self.system_privileges.is_empty()
+        let Snapshot {
+            databases,
+            schemas,
+            roles,
+            items,
+            comments,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_object_mappings,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+        } = self;
+        databases.is_empty()
+            && schemas.is_empty()
+            && roles.is_empty()
+            && items.is_empty()
+            && comments.is_empty()
+            && clusters.is_empty()
+            && cluster_replicas.is_empty()
+            && introspection_sources.is_empty()
+            && id_allocator.is_empty()
+            && configs.is_empty()
+            && settings.is_empty()
+            && timestamps.is_empty()
+            && system_object_mappings.is_empty()
+            && system_configurations.is_empty()
+            && default_privileges.is_empty()
+            && system_privileges.is_empty()
     }
 }
 

@@ -16,11 +16,10 @@ dag: true
 
 env:
   CI_BUILDER_SCCACHE: 1
-  # TODO(def-): Reenable when we upgrade to Rust >= 1.72
   # Note: In .cargo/config we set the default build jobs to -1 so on developer machines we keep
   # a single core open when compiling. But we want to use all of CI's resources, hence setting the
   # build jobs to "default" which will use all cores.
-  # CARGO_BUILD_JOBS: "default"
+  CARGO_BUILD_JOBS: "default"
 
 steps:
   - group: Builds
@@ -198,7 +197,7 @@ steps:
           queue: builder-linux-x86_64
 
       - id: miri-test
-        label: Miri test (fast) %n
+        label: Miri test (fast) %N
         inputs: [src]
         parallelism: 2
         timeout_in_minutes: 30
@@ -213,7 +212,7 @@ steps:
         coverage: skip
 
   - id: testdrive
-    label: Testdrive %n
+    label: Testdrive %N
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/testdrive]
@@ -228,21 +227,8 @@ steps:
     agents:
       queue: linux-x86_64
 
-  - id: upsert-compaction-disabled
-    label: Upsert (compaction disabled)
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/upsert]
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: upsert
-          args: [--compaction-disabled]
-    agents:
-      queue: linux-x86_64
-
   - id: cluster-tests
-    label: Cluster tests %n
+    label: Cluster tests %N
     depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
@@ -255,10 +241,10 @@ steps:
       queue: linux-x86_64
 
   - id: sqllogictest-fast
-    label: Fast SQL logic tests %n
+    label: Fast SQL logic tests %N
     depends_on: build-x86_64
     timeout_in_minutes: 30
-    parallelism: 5
+    parallelism: 6
     inputs: [test/sqllogictest]
     artifact_paths: junit_*.xml
     plugins:
@@ -275,18 +261,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
-    agents:
-      queue: linux-x86_64
-
-  - id: legacy-upgrade
-    label: Legacy upgrade tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 60
-    artifact_paths: junit_*.xml
-    inputs: [doc/user/content/releases]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: legacy-upgrade
     agents:
       queue: linux-x86_64
 
@@ -349,6 +323,7 @@ steps:
 
       - id: pg-cdc-resumption
         label: Postgres CDC resumption tests
+        parallelism: 2
         depends_on: build-x86_64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc-resumption]
@@ -425,10 +400,11 @@ steps:
     key: platform-checks
     steps:
       - id: checks-restart-environmentd-clusterd-storage
-        label: "Checks + restart of environmentd & storage clusterd"
+        label: "Checks + restart of environmentd & storage clusterd (%N)"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
+        parallelism: 3
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -437,24 +413,12 @@ steps:
               composition: platform-checks
               args: [--scenario=RestartEnvironmentdClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-drop-create-default-replica
-        label: "Checks + DROP/CREATE replica"
-        depends_on: build-x86_64
-        inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 45
-        artifact_paths: junit_*.xml
-        agents:
-          queue: builder-linux-x86_64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
-
       - id: checks-no-restart-no-upgrade
         label: "Checks without restart or upgrade"
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
+        parallelism: 2
         artifact_paths: junit_*.xml
         agents:
           queue: builder-linux-x86_64
@@ -463,49 +427,10 @@ steps:
               composition: platform-checks
               args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-restart-clusterd-compute
-        label: "Checks + restart clusterd compute"
-        depends_on: build-x86_64
-        inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 45
-        artifact_paths: junit_*.xml
-        agents:
-          queue: builder-linux-x86_64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-kill-clusterd-storage
-        label: "Checks + kill storage clusterd"
-        depends_on: build-x86_64
-        inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 45
-        artifact_paths: junit_*.xml
-        agents:
-          queue: builder-linux-x86_64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=KillClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-restart-source-postgres
-        label: "Checks + restart source Postgres"
-        depends_on: build-x86_64
-        inputs: [misc/python/materialize/checks]
-        timeout_in_minutes: 45
-        artifact_paths: junit_*.xml
-        agents:
-          queue: builder-linux-x86_64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=RestartSourcePostgres, --check=PgCdc, --check=PgCdcNoWait, --check=PgCdcMzNow, --check=SshPg, --check=DebeziumPostgres]
-
   - id: cloudtest
-    label: Cloudtest %n
+    label: Cloudtest %N
     depends_on: build-x86_64
-    parallelism: 5
+    parallelism: 6
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     inputs:
@@ -621,20 +546,6 @@ steps:
     agents:
       queue: linux-x86_64
 
-  - id: persist-maelstrom
-    label: Maelstrom coverage of persist
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    inputs: [test/persist]
-    artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: persist
-          args: [--consensus=mem, --blob=mem]
-    agents:
-      queue: linux-x86_64
-    coverage: skip # Randomized, shouldn't count for coverage
-
   - id: storage-usage
     label: "Storage Usage Table Test"
     artifact_paths: junit_*.xml
@@ -657,69 +568,6 @@ steps:
           composition: tracing
     agents:
       queue: linux-x86_64
-
-  - group: "Language tests"
-    key: language-tests
-    steps:
-      - id: lang-csharp
-        label: ":csharp: tests"
-        depends_on: build-x86_64
-        timeout_in_minutes: 10
-        inputs: [test/lang/csharp]
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: csharp
-        agents:
-          queue: linux-x86_64
-
-      - id: lang-js
-        label: ":js: tests"
-        depends_on: build-x86_64
-        timeout_in_minutes: 10
-        inputs: [test/lang/js]
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: js
-        agents:
-          queue: linux-x86_64
-
-      - id: lang-java
-        label: ":java: tests"
-        depends_on: build-x86_64
-        timeout_in_minutes: 10
-        inputs: [test/lang/java]
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: java
-        agents:
-          queue: linux-x86_64
-
-      - id: lang-python
-        label: ":python: tests"
-        depends_on: build-x86_64
-        timeout_in_minutes: 10
-        inputs: [test/lang/python]
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: python
-        agents:
-          queue: linux-x86_64
-
-      - id: lang-ruby
-        label: ":ruby: tests"
-        depends_on: build-x86_64
-        timeout_in_minutes: 10
-        inputs: [test/lang/ruby]
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: ruby
-        agents:
-          queue: linux-x86_64
 
   - id: deploy-website
     label: Deploy website

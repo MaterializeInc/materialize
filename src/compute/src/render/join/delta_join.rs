@@ -422,7 +422,15 @@ fn build_halfjoin<G, Tr, CF, K, V>(
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
-    Tr: TraceReader<Time = G::Timestamp, Key = K, Val = V, R = Diff> + Clone + 'static,
+    Tr: for<'a> TraceReader<
+            Time = G::Timestamp,
+            Key<'a> = &'a K,
+            KeyOwned = K,
+            Val<'a> = &'a V,
+            ValOwned = V,
+            Diff = Diff,
+        > + Clone
+        + 'static,
     K: ExchangeData + FromRowByTypes + Hashable + IntoRowByTypes,
     V: ExchangeData + IntoRowByTypes,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
@@ -610,7 +618,9 @@ fn build_update_stream<G, Tr, K, V>(
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
-    Tr: TraceReader<Time = G::Timestamp, Key = K, Val = V, R = Diff> + Clone + 'static,
+    Tr: for<'a> TraceReader<Time = G::Timestamp, Key<'a> = &'a K, Val<'a> = &'a V, Diff = Diff>
+        + Clone
+        + 'static,
     K: Columnation + ExchangeData + FromRowByTypes + Hashable + IntoRowByTypes,
     V: Columnation + ExchangeData + IntoRowByTypes,
 {

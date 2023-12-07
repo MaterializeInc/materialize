@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_plain::{derive_display_from_serialize, derive_fromstr_from_deserialize};
 
 use crate::durable;
-use crate::durable::impls::persist::{PersistHandle, StateUpdateKind};
+use crate::durable::impls::persist::{StateUpdateKind, UnopenedPersistCatalogState};
 use crate::durable::objects::serialization::proto;
 use crate::durable::{
     CatalogError, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
@@ -359,7 +359,7 @@ impl Trace {
 
 pub enum DebugCatalogState {
     Stash(Stash),
-    Persist(PersistHandle),
+    Persist(UnopenedPersistCatalogState),
 }
 
 impl DebugCatalogState {

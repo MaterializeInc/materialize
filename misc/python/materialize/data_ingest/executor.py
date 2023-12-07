@@ -37,6 +37,7 @@ class Executor:
     fields: list[Field]
     database: str
     schema: str
+    cluster: str | None
 
     def __init__(
         self,
@@ -44,12 +45,14 @@ class Executor:
         fields: list[Field] = [],
         database: str = "",
         schema: str = "public",
+        cluster: str | None = None,
     ) -> None:
         self.num_transactions = 0
         self.ports = ports
         self.fields = fields
         self.database = database
         self.schema = schema
+        self.cluster = cluster
         self.reconnect()
 
     def reconnect(self) -> None:
@@ -131,8 +134,9 @@ class KafkaExecutor(Executor):
         fields: list[Field],
         database: str,
         schema: str = "public",
+        cluster: str | None = None,
     ):
-        super().__init__(ports, fields, database, schema)
+        super().__init__(ports, fields, database, schema, cluster)
 
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
@@ -215,6 +219,7 @@ class KafkaExecutor(Executor):
             self.execute(
                 cur,
                 f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
+                    {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
                     FROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC '{self.topic}')
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn
@@ -281,8 +286,9 @@ class PgExecutor(Executor):
         fields: list[Field],
         database: str,
         schema: str = "public",
+        cluster: str | None = None,
     ):
-        super().__init__(ports, fields, database, schema)
+        super().__init__(ports, fields, database, schema, cluster)
         self.table = f"table{num}"
         self.source = f"postgres_source{num}"
         self.num = num
@@ -331,6 +337,7 @@ class PgExecutor(Executor):
             self.execute(
                 cur,
                 f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
+                    {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
                     FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION 'postgres_source')
                     FOR TABLES ({identifier(self.table)} AS {identifier(self.table)})""",
             )
@@ -402,8 +409,9 @@ class KafkaRoundtripExecutor(Executor):
         fields: list[Field],
         database: str,
         schema: str = "public",
+        cluster: str | None = None,
     ):
-        super().__init__(ports, fields, database, schema)
+        super().__init__(ports, fields, database, schema, cluster)
         self.table_original = f"table_rt_source{num}"
         self.table = f"table_rt{num}"
         self.topic = f"data-ingest-rt-{num}"
@@ -438,6 +446,7 @@ class KafkaRoundtripExecutor(Executor):
             self.execute_with_retry_on_error(
                 cur,
                 f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
+                    {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
                     FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

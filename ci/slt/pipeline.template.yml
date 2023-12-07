@@ -18,7 +18,7 @@ steps:
   - wait: ~
 
   - id: sqllogictest
-    label: ":bulb: SQL logic tests %n"
+    label: ":bulb: SQL logic tests %N"
     timeout_in_minutes: 180
     parallelism: 10
     artifact_paths: junit_*.xml
@@ -30,7 +30,7 @@ steps:
           run: sqllogictest
 
   - id: sqllogictest-1-replica
-    label: ":bulb: SQL logic tests 1 replica %n"
+    label: ":bulb: SQL logic tests 1 replica %N"
     timeout_in_minutes: 180
     parallelism: 10
     artifact_paths: junit_*.xml

@@ -21,9 +21,9 @@
 parse-statement
 SELECT 1, 2, FROM a
 ----
-error: expected expression, but found reserved keyword
+error: invalid trailing comma in SELECT list
 SELECT 1, 2, FROM a
-             ^
+           ^
 
 parse-statement
 UPDATE t WHERE 1
@@ -91,7 +91,7 @@ SELECT 1 WHERE 1 < ANY SELECT 2
 parse-statement
 SELECT 1 WHERE 1 < NONE (SELECT 2)
 ----
-error: expected expression, but found reserved keyword
+error: expected expression, but found reserved keyword: SELECT
 SELECT 1 WHERE 1 < NONE (SELECT 2)
                          ^
 

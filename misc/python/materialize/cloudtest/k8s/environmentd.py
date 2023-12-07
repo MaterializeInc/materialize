@@ -229,7 +229,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self._meets_minimum_version("0.63.0-dev"):
             args += ["--secrets-controller=kubernetes"]
 
-        if self._meets_minimum_version("0.78.0-dev"):
+        if self._meets_minimum_version("0.79.0-dev"):
             args += [
                 f"--timestamp-oracle-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=tsoracle"
             ]

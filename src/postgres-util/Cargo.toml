@@ -34,7 +34,8 @@ tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
-default = ["workspace-hack", "schemas", "tunnel"]
+default = ["workspace-hack", "replication", "schemas", "tunnel"]
+replication = ["tunnel"]
 schemas = ["prost", "serde", "proptest", "mz-proto", "tunnel"]
 tunnel = [
     "mz-cloud-resources",

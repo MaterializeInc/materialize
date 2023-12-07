@@ -14,7 +14,10 @@ import time
 import uuid
 from textwrap import dedent
 
-from materialize import docker
+from materialize.version_list import (
+    get_latest_published_version,
+    resolve_ancestor_image_tag,
+)
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
@@ -56,7 +59,6 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
-from materialize.version_list import VersionsFromDocs
 
 #
 # Global feature benchmark thresholds and termination conditions
@@ -132,17 +134,13 @@ def run_one_scenario(
         )
 
         if tag == "common-ancestor":
-            tag = docker.resolve_ancestor_image_tag()
+            tag = resolve_ancestor_image_tag()
 
         entrypoint_host = "balancerd" if balancerd else "materialized"
 
         c.up("testdrive", persistent=True)
 
         additional_system_parameter_defaults = {}
-
-        # TODO(def-,aljoscha) Switch this to "postgres" before #22029 is enabled in production
-        # Also verify that there is no regression when the "other" side uses catalog ts oracle and "this" uses postgres ts oracle
-        additional_system_parameter_defaults["timestamp_oracle"] = "catalog"
 
         if params is not None:
             for param in params.split(";"):
@@ -274,7 +272,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--other-tag",
         metavar="TAG",
         type=str,
-        default=os.getenv("OTHER_TAG", str(VersionsFromDocs().all_versions()[-1])),
+        default=os.getenv("OTHER_TAG", str(get_latest_published_version())),
         help="'Other' Materialize container tag to benchmark. If not provided, the last released Mz version will be used.",
     )
 

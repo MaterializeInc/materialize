@@ -75,7 +75,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-//! Debug utility for stashes.
+//! Debug utility for Catalog storage.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -111,9 +111,11 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
+use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::StashFactory;
+use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use url::Url;
@@ -160,34 +162,34 @@ enum CatalogKind {
 
 #[derive(Debug, clap::Subcommand)]
 enum Action {
-    /// Dumps the stash contents to stdout in a human readable format.
+    /// Dumps the catalog contents to stdout in a human readable format.
     /// Includes JSON for each key and value that can be hand edited and
     /// then passed to the `edit` or `delete` commands.
     Dump {
         /// Write output to specified path. Default stdout.
         target: Option<PathBuf>,
     },
-    /// Edits a single item in a collection in the stash.
+    /// Edits a single item in a collection in the catalog.
     Edit {
-        /// The name of the stash collection to edit.
+        /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to edit.
         key: serde_json::Value,
         /// The new JSON-encoded value for the item.
         value: serde_json::Value,
     },
-    /// Deletes a single item in a collection in the stash
+    /// Deletes a single item in a collection in the catalog
     Delete {
-        /// The name of the stash collection to edit.
+        /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to delete.
         key: serde_json::Value,
     },
-    /// Checks if the specified stash could be upgraded from its state to the
+    /// Checks if the specified catalog could be upgraded from its state to the
     /// adapter catalog at the version of this binary. Prints a success message
     /// or error message. Exits with 0 if the upgrade would succeed, otherwise
     /// non-zero. Can be used on a running environmentd. Operates without
-    /// interfering with it or committing any data to that stash.
+    /// interfering with it or committing any data to that catalog.
     UpgradeCheck {
         /// Map of cluster name to resource specification. Check the README for latest values.
         cluster_replica_sizes: Option<String>,
@@ -242,7 +244,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             };
             let persist_client = persist_clients.open(persist_location).await?;
             let organization_id = args.organization_id.expect("required for persist");
-            Box::new(persist_backed_catalog_state(persist_client, organization_id).await)
+            let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
+            Box::new(persist_backed_catalog_state(persist_client, organization_id, metrics).await)
         }
     };
 
@@ -458,7 +461,9 @@ async fn upgrade_check(
             aws_privatelink_availability_zones: None,
             system_parameter_sync_config: None,
             http_host_name: None,
-            connection_context: None,
+            connection_context: ConnectionContext::for_tests(Arc::new(
+                InMemorySecretsController::new(),
+            )),
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
         },
         &mut storage,

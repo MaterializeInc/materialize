@@ -66,8 +66,8 @@ impl RoutineMaintenance {
     /// Performs any routine maintenance necessary. Returns when all background
     /// tasks have completed and the maintenance is done.
     ///
-    /// Used for testing maintenance-related state transitions deterministically
-    #[cfg(test)]
+    /// Generally, clients should prefer `start_performing` since it's typically not critical
+    /// that maintenance is performed by any particular deadline.
     pub(crate) async fn perform<K, V, T, D>(
         self,
         machine: &Machine<K, V, T, D>,

@@ -10,17 +10,15 @@
 use std::rc::Rc;
 
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Trace, TraceReader};
+use differential_dataflow::trace::implementations::OffsetList;
+use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
-use mz_ore::num::Overflowing;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, ScopeParent};
-use timely::order::Product;
 use timely::progress::Timestamp;
 
 use crate::logging::compute::ComputeEvent;
@@ -50,14 +48,25 @@ where
         Self::Key: ExchangeData + Hashable,
         Self::Val: ExchangeData,
         Self::R: ExchangeData,
-        Tr: Trace
-            + TraceReader<
-                Key = Self::Key,
-                Val = Self::Val,
-                Time = <Self::Scope as ScopeParent>::Timestamp,
-                R = Self::R,
-            > + 'static,
+        Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+        >,
+        Tr::Builder: Builder<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+            Output = Tr::Batch,
+        >,
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
 
     /// Arranges a stream of `(Key, Val)` updates by `Key` into a trace of type `Tr`. Partitions
@@ -76,14 +85,25 @@ where
                 Self::R,
             ),
         >,
-        Tr: Trace
-            + TraceReader<
-                Key = Self::Key,
-                Val = Self::Val,
-                Time = <Self::Scope as ScopeParent>::Timestamp,
-                R = Self::R,
-            > + 'static,
+        Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+        >,
+        Tr::Builder: Builder<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+            Output = Tr::Batch,
+        >,
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
 }
 
@@ -105,8 +125,11 @@ where
         K: ExchangeData + Hashable,
         V: ExchangeData,
         R: ExchangeData,
-        Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((K, V), G::Timestamp, R), Time = G::Timestamp>,
+        Tr::Builder:
+            Builder<Item = ((K, V), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
@@ -117,8 +140,25 @@ where
     fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K, V), G::Timestamp, R)>,
-        Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+        >,
+        Tr::Builder: Builder<
+            Item = (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+            Output = Tr::Batch,
+        >,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
@@ -154,8 +194,11 @@ where
     where
         K: ExchangeData + Hashable,
         R: ExchangeData,
-        Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp>,
+        Tr::Builder:
+            Builder<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0.map(|d| (d, ())).mz_arrange(name)
@@ -164,126 +207,14 @@ where
     fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K, ()), G::Timestamp, R)>,
-        Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
         Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp>,
+        Tr::Builder:
+            Builder<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0.map(|d| (d, ())).mz_arrange_core(pact, name)
-    }
-}
-
-/// A type that can reflect on its size, capacity, and allocations,
-/// and inform a caller of those through a callback.
-pub trait HeapSize {
-    /// Estimates the heap size, capacity, and allocations of `self` and
-    /// informs these three quantities, respectively, by calling `callback`.
-    /// The estimates consider only heap allocations made by `self`, and
-    /// not the size of `Self` proper.
-    fn estimate_size<C>(&self, callback: C)
-    where
-        C: FnMut(usize, usize, usize);
-}
-
-impl<T: Copy> HeapSize for Vec<Overflowing<T>> {
-    /// Estimates the size of a vector in memory considering that the element type is
-    /// an `Overflowing` value without nested structure.
-    #[inline]
-    fn estimate_size<C>(&self, mut callback: C)
-    where
-        C: FnMut(usize, usize, usize),
-    {
-        let size_of_t = std::mem::size_of::<T>();
-        callback(
-            self.len() * size_of_t,
-            self.capacity() * size_of_t,
-            usize::from(self.capacity() > 0),
-        )
-    }
-}
-
-impl HeapSize for mz_repr::Timestamp {
-    #[inline]
-    fn estimate_size<C>(&self, _callback: C)
-    where
-        C: FnMut(usize, usize, usize),
-    {
-        // Nothing to do here, since there are no heap allocations made by `self`.
-    }
-}
-
-impl HeapSize for PointStamp<u64> {
-    #[inline]
-    fn estimate_size<C>(&self, mut callback: C)
-    where
-        C: FnMut(usize, usize, usize),
-    {
-        let ps_coord_size = std::mem::size_of::<u64>();
-        callback(
-            self.vector.len() * ps_coord_size,
-            self.vector.capacity() * ps_coord_size,
-            usize::from(self.vector.capacity() > 0),
-        )
-    }
-}
-
-impl<TOuter: HeapSize, TInner: HeapSize> HeapSize for Product<TOuter, TInner> {
-    #[inline]
-    fn estimate_size<C>(&self, mut callback: C)
-    where
-        C: FnMut(usize, usize, usize),
-    {
-        self.outer.estimate_size(&mut callback);
-        self.inner.estimate_size(&mut callback);
-    }
-}
-
-impl HeapSize for i64 {
-    #[inline]
-    fn estimate_size<C>(&self, _callback: C)
-    where
-        C: FnMut(usize, usize, usize),
-    {
-        // Nothing to do here, since there are no heap allocations made by `self`.
-    }
-}
-
-impl<T: HeapSize, R: HeapSize> HeapSize for Vec<(T, R)> {
-    #[inline]
-    fn estimate_size<C>(&self, mut callback: C)
-    where
-        C: FnMut(usize, usize, usize),
-    {
-        // To provide for cheap estimation, we sample one element from the vector
-        // and estimate the total vector size from this element's size. The trade-off
-        // between precision and overhead here should be acceptable under the assumption
-        // that most elements be uniformly sized.
-        // TODO(vmarcos): Evaluate if it is worth sampling more rows or even crawling entire
-        // vectors to obtain size estimates.
-        if !self.is_empty() {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback_inner = |siz, cap, alc| {
-                size += siz;
-                capacity += cap;
-                allocations += alc;
-            };
-
-            // We heuristically sample the last element. This is because in a lexicographically
-            // sorted representation, this element will tend to be largest (and most recent).
-            let (time, diff) = self
-                .last()
-                .expect("a non-empty vector must have a last element");
-            time.estimate_size(&mut callback_inner);
-            diff.estimate_size(&mut callback_inner);
-
-            // We also account for the size of the tuples in the `Vec`, since
-            // these are also heap-allocated from `self`.
-            let size_of_tuple = std::mem::size_of::<(T, R)>();
-            callback(
-                self.len() * (size_of_tuple + size),
-                self.len() * (size_of_tuple + capacity),
-                self.len() * allocations + 1,
-            )
-        };
     }
 }
 
@@ -291,6 +222,21 @@ impl<T: HeapSize, R: HeapSize> HeapSize for Vec<(T, R)> {
 pub trait ArrangementSize {
     /// Install a logger to track the heap size of the target.
     fn log_arrangement_size(self) -> Self;
+}
+
+/// Helper to compute the size of an [`OffsetList`] in memory.
+#[inline]
+fn offset_list_size(data: &OffsetList, mut callback: impl FnMut(usize, usize)) {
+    // Private `vec_size` because we should only use it where data isn't region-allocated.
+    // `T: Copy` makes sure the implementation is correct even if types change!
+    #[inline(always)]
+    fn vec_size<T: Copy>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
+        let size_of_t = std::mem::size_of::<T>();
+        callback(data.len() * size_of_t, data.len() * size_of_t);
+    }
+
+    vec_size(&data.smol, &mut callback);
+    vec_size(&data.chonk, callback);
 }
 
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
@@ -379,30 +325,25 @@ where
     G::Timestamp: Lattice + Ord + Columnation,
     K: Data + Columnation,
     V: Data + Columnation,
-    T: Lattice + Timestamp + HeapSize,
+    T: Lattice + Timestamp,
     R: Semigroup + Columnation,
-    Vec<(T, R)>: HeapSize,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
-            let (mut heap_size, mut heap_capacity, mut heap_allocations) = (0, 0, 0);
-            let mut heap_callback = |siz, cap, alc| {
-                heap_size += siz;
-                heap_capacity += cap;
-                heap_allocations += alc;
+            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+            let mut callback = |siz, cap| {
+                size += siz;
+                capacity += cap;
+                allocations += usize::from(cap > 0);
             };
-
             trace.map_batches(|batch| {
-                batch.storage.keys_offs.estimate_size(&mut heap_callback);
-                batch.storage.vals_offs.estimate_size(&mut heap_callback);
-
-                let mut region_callback = |siz, cap| heap_callback(siz, cap, usize::from(cap > 0));
-                batch.storage.keys.heap_size(&mut region_callback);
-                batch.storage.vals.heap_size(&mut region_callback);
-                batch.storage.updates.heap_size(&mut region_callback);
+                batch.storage.keys.heap_size(&mut callback);
+                offset_list_size(&batch.storage.keys_offs, &mut callback);
+                batch.storage.vals.heap_size(&mut callback);
+                offset_list_size(&batch.storage.vals_offs, &mut callback);
+                batch.storage.updates.heap_size(&mut callback);
             });
-
-            (heap_size, heap_capacity, heap_allocations)
+            (size, capacity, allocations)
         })
     }
 }
@@ -412,27 +353,23 @@ where
     G: Scope<Timestamp = T>,
     G::Timestamp: Lattice + Ord,
     K: Data + Columnation,
-    T: Lattice + Timestamp + Columnation + HeapSize,
+    T: Lattice + Timestamp + Columnation,
     R: Semigroup + Columnation,
-    Vec<(T, R)>: HeapSize,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
-            let (mut heap_size, mut heap_capacity, mut heap_allocations) = (0, 0, 0);
-            let mut heap_callback = |siz, cap, alc| {
-                heap_size += siz;
-                heap_capacity += cap;
-                heap_allocations += alc;
+            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+            let mut callback = |siz, cap| {
+                size += siz;
+                capacity += cap;
+                allocations += usize::from(cap > 0);
             };
-
             trace.map_batches(|batch| {
-                batch.layer.offs.estimate_size(&mut heap_callback);
-                batch.layer.vals.vals.estimate_size(&mut heap_callback);
-
-                let mut region_callback = |siz, cap| heap_callback(siz, cap, usize::from(cap > 0));
-                batch.layer.keys.heap_size(&mut region_callback);
+                batch.storage.keys.heap_size(&mut callback);
+                offset_list_size(&batch.storage.keys_offs, &mut callback);
+                batch.storage.updates.heap_size(&mut callback);
             });
-            (heap_size, heap_capacity, heap_allocations)
+            (size, capacity, allocations)
         })
     }
 }

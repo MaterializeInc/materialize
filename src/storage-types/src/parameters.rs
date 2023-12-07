@@ -32,6 +32,7 @@ pub struct StorageParameters {
     pub pg_source_snapshot_statement_timeout: Duration,
     pub keep_n_source_status_history_entries: usize,
     pub keep_n_sink_status_history_entries: usize,
+    pub keep_n_privatelink_status_history_entries: usize,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
     pub upsert_rocksdb_tuning_config: mz_rocksdb_types::RocksDBTuningParameters,
     /// Whether or not to allow shard finalization to occur. Note that this will
@@ -50,11 +51,6 @@ pub struct StorageParameters {
     pub delay_sources_past_rehydration: bool,
     /// Configuration ratio to shrink upsert buffers by.
     pub shrink_upsert_unused_buffers_by_ratio: usize,
-    /// Whether to garbage-collect old statement log entries on startup.
-    pub truncate_statement_log: bool,
-    /// How long entries in the statement log should be retained, in seconds.
-    /// Ignored if `truncate_statement_log` is false.
-    pub statement_logging_retention_time_seconds: u64,
     /// Whether or not to record errors by namespace in the `details`
     /// column of the status history tables.
     pub record_namespaced_errors: bool,
@@ -70,6 +66,7 @@ impl Default for StorageParameters {
             pg_source_snapshot_statement_timeout: Default::default(),
             keep_n_source_status_history_entries: Default::default(),
             keep_n_sink_status_history_entries: Default::default(),
+            keep_n_privatelink_status_history_entries: Default::default(),
             upsert_rocksdb_tuning_config: Default::default(),
             finalize_shards: Default::default(),
             tracing: Default::default(),
@@ -78,8 +75,6 @@ impl Default for StorageParameters {
             grpc_client: Default::default(),
             delay_sources_past_rehydration: Default::default(),
             shrink_upsert_unused_buffers_by_ratio: Default::default(),
-            truncate_statement_log: Default::default(),
-            statement_logging_retention_time_seconds: Default::default(),
             record_namespaced_errors: true,
         }
     }
@@ -159,6 +154,7 @@ impl StorageParameters {
             pg_source_snapshot_statement_timeout,
             keep_n_source_status_history_entries,
             keep_n_sink_status_history_entries,
+            keep_n_privatelink_status_history_entries,
             upsert_rocksdb_tuning_config,
             finalize_shards,
             tracing,
@@ -167,8 +163,6 @@ impl StorageParameters {
             grpc_client,
             delay_sources_past_rehydration,
             shrink_upsert_unused_buffers_by_ratio,
-            statement_logging_retention_time_seconds,
-            truncate_statement_log,
             record_namespaced_errors,
         }: StorageParameters,
     ) {
@@ -177,6 +171,7 @@ impl StorageParameters {
         self.pg_source_snapshot_statement_timeout = pg_source_snapshot_statement_timeout;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
+        self.keep_n_privatelink_status_history_entries = keep_n_privatelink_status_history_entries;
         self.upsert_rocksdb_tuning_config = upsert_rocksdb_tuning_config;
         self.finalize_shards = finalize_shards;
         self.tracing.update(tracing);
@@ -187,8 +182,6 @@ impl StorageParameters {
         self.grpc_client.update(grpc_client);
         self.delay_sources_past_rehydration = delay_sources_past_rehydration;
         self.shrink_upsert_unused_buffers_by_ratio = shrink_upsert_unused_buffers_by_ratio;
-        self.statement_logging_retention_time_seconds = statement_logging_retention_time_seconds;
-        self.truncate_statement_log = truncate_statement_log;
         self.record_namespaced_errors = record_namespaced_errors;
     }
 }
@@ -207,6 +200,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             keep_n_sink_status_history_entries: u64::cast_from(
                 self.keep_n_sink_status_history_entries,
             ),
+            keep_n_privatelink_status_history_entries: u64::cast_from(
+                self.keep_n_privatelink_status_history_entries,
+            ),
             upsert_rocksdb_tuning_config: Some(self.upsert_rocksdb_tuning_config.into_proto()),
             finalize_shards: self.finalize_shards,
             tracing: Some(self.tracing.into_proto()),
@@ -219,8 +215,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             shrink_upsert_unused_buffers_by_ratio: u64::cast_from(
                 self.shrink_upsert_unused_buffers_by_ratio,
             ),
-            truncate_statement_log: self.truncate_statement_log,
-            statement_logging_retention_time_seconds: self.statement_logging_retention_time_seconds,
             record_namespaced_errors: self.record_namespaced_errors,
         }
     }
@@ -244,6 +238,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             keep_n_sink_status_history_entries: usize::cast_from(
                 proto.keep_n_sink_status_history_entries,
             ),
+            keep_n_privatelink_status_history_entries: usize::cast_from(
+                proto.keep_n_privatelink_status_history_entries,
+            ),
             upsert_rocksdb_tuning_config: proto
                 .upsert_rocksdb_tuning_config
                 .into_rust_if_some("ProtoStorageParameters::upsert_rocksdb_tuning_config")?,
@@ -266,9 +263,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             shrink_upsert_unused_buffers_by_ratio: usize::cast_from(
                 proto.shrink_upsert_unused_buffers_by_ratio,
             ),
-            truncate_statement_log: proto.truncate_statement_log,
-            statement_logging_retention_time_seconds: proto
-                .statement_logging_retention_time_seconds,
             record_namespaced_errors: proto.record_namespaced_errors,
         })
     }

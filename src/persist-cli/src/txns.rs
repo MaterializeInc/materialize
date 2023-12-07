@@ -19,6 +19,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
+use mz_persist_txn::metrics::Metrics;
 use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use tracing::{info_span, Instrument};
@@ -66,6 +67,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut txns = TxnsHandle::<_, _, _, _>::open(
         init_ts,
         persist.clone(),
+        Arc::new(Metrics::new(&metrics_registry)),
         ShardId::new(),
         Arc::new(StringSchema),
         Arc::new(UnitSchema),

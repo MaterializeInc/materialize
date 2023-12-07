@@ -616,12 +616,12 @@ Sleeps for `N` seconds
 
 Sleeps a random interval between 0 and N seconds
 
-#### `> select mz_internal.mz_sleep(N)`
+#### `> select mz_unsafe.mz_sleep(N)`
 
 Instructs Mz to sleep for the specified number of seconds. `mz_sleep()` returns `<null>`, so the test needs to be coded accordingly:
 
 ```
-> SELECT mz_internal.mz_sleep(1)
+> SELECT mz_unsafe.mz_sleep(1)
 <null>
 ```
 

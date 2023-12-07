@@ -465,11 +465,18 @@ disruptions: list[Disruption] = [
         # Re-creating the topic does not restart the source
         # fixage=lambda c,seed: redpanda_topics(c, "create", seed),
     ),
+    # docker compose pause has become unreliable recently
+    # KafkaDisruption(
+    #     name="pause-redpanda",
+    #     breakage=lambda c, _: c.pause("redpanda"),
+    #     expected_error="OperationTimedOut|BrokerTransportFailure|transaction",
+    #     fixage=lambda c, _: c.unpause("redpanda"),
+    # ),
     KafkaDisruption(
-        name="pause-redpanda",
-        breakage=lambda c, _: c.pause("redpanda"),
+        name="sigstop-redpanda",
+        breakage=lambda c, _: c.kill("redpanda", signal="SIGSTOP"),
         expected_error="OperationTimedOut|BrokerTransportFailure|transaction",
-        fixage=lambda c, _: c.unpause("redpanda"),
+        fixage=lambda c, _: c.kill("redpanda", signal="SIGCONT"),
     ),
     KafkaDisruption(
         name="kill-redpanda",

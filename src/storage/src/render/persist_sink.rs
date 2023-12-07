@@ -87,7 +87,6 @@
 //!
 // TODO(guswynn): merge at least the `append_batches` operator`
 
-use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -110,7 +109,9 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
@@ -119,7 +120,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::trace;
 
-use crate::source::types::SourcePersistSinkMetrics;
+use crate::metrics::source::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
 /// Metrics about batches.
@@ -314,7 +315,11 @@ pub(crate) fn render<G>(
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     output_index: usize,
-) -> (Stream<G, ()>, Stream<G, Rc<anyhow::Error>>, Rc<dyn Any>)
+) -> (
+    Stream<G, ()>,
+    Stream<G, Rc<anyhow::Error>>,
+    Vec<PressOnDropButton>,
+)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
@@ -358,7 +363,7 @@ where
     (
         upper_stream,
         append_errors,
-        Rc::new((mint_token, write_token, append_token)),
+        vec![mint_token, write_token, append_token],
     )
 }
 
@@ -380,7 +385,7 @@ fn mint_batch_descriptions<G>(
 ) -> (
     Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     Stream<G, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
-    Rc<dyn Any>,
+    PressOnDropButton,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -536,8 +541,11 @@ where
         }
     });
 
-    let token = Rc::new(shutdown_button.press_on_drop());
-    (output_stream, data_output_stream, token)
+    (
+        output_stream,
+        data_output_stream,
+        shutdown_button.press_on_drop(),
+    )
 }
 
 /// Writes `desired_collection` to persist, but only for updates
@@ -559,7 +567,7 @@ fn write_batches<G>(
     storage_state: &StorageState,
 ) -> (
     Stream<G, HollowBatchAndMetadata<SourceData, (), mz_repr::Timestamp, Diff>>,
-    Rc<dyn Any>,
+    PressOnDropButton,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -884,8 +892,7 @@ where
         output_stream.inspect(|d| trace!("batch: {:?}", d));
     }
 
-    let token = Rc::new(shutdown_button.press_on_drop());
-    (output_stream, token)
+    (output_stream, shutdown_button.press_on_drop())
 }
 
 /// Fuses written batches together and appends them to persist using one
@@ -908,7 +915,11 @@ fn append_batches<G>(
     storage_state: &StorageState,
     output_index: usize,
     metrics: SourcePersistSinkMetrics,
-) -> (Stream<G, ()>, Stream<G, Rc<anyhow::Error>>, Rc<dyn Any>)
+) -> (
+    Stream<G, ()>,
+    Stream<G, Rc<anyhow::Error>>,
+    PressOnDropButton,
+)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
@@ -1257,9 +1268,5 @@ where
         }
     }));
 
-    (
-        upper_stream,
-        errors,
-        Rc::new(shutdown_button.press_on_drop()),
-    )
+    (upper_stream, errors, shutdown_button.press_on_drop())
 }

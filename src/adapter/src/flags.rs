@@ -84,7 +84,9 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         },
         pg_source_snapshot_statement_timeout: config.pg_source_snapshot_statement_timeout(),
         keep_n_source_status_history_entries: config.keep_n_source_status_history_entries(),
-        keep_n_sink_status_history_entries: config.keep_n_source_status_history_entries(),
+        keep_n_sink_status_history_entries: config.keep_n_sink_status_history_entries(),
+        keep_n_privatelink_status_history_entries: config
+            .keep_n_privatelink_status_history_entries(),
         upsert_rocksdb_tuning_config: {
             match mz_rocksdb_types::RocksDBTuningParameters::from_parameters(
                 config.upsert_rocksdb_compaction_style(),
@@ -156,8 +158,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         delay_sources_past_rehydration: config.storage_dataflow_delay_sources_past_rehydration(),
         shrink_upsert_unused_buffers_by_ratio: config
             .storage_shrink_upsert_unused_buffers_by_ratio(),
-        truncate_statement_log: config.truncate_statement_log(),
-        statement_logging_retention_time_seconds: config.statement_logging_retention().as_secs(),
         record_namespaced_errors: config.storage_record_source_sink_namespaced_errors(),
     }
 }

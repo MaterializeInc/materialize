@@ -713,7 +713,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                                         None
                                     }
                                 } else {
-                                    tracing::error!(
+                                    // `fetch_service_metrics` gets the `disk_limit` from the
+                                    // `service_infos`, which can be _more_ up-to-date than the
+                                    // actual replica when it is altered, so we warn instead of
+                                    // error. This is the same as the warning above about not
+                                    // finding the containers above, which could occur when the
+                                    // `scale` is being altered.
+                                    tracing::warn!(
                                         "disk capacity {} is larger than the disk limit {} ?",
                                         disk_capacity,
                                         disk_limit.0
@@ -972,12 +978,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         };
 
         let pod_annotations = btreemap! {
-            // Prevent the cluster-autoscaler from evicting these pods in attempts to scale down
+            // Prevent the cluster-autoscaler (or karpenter) from evicting these pods in attempts to scale down
             // and terminate nodes.
             // This will cost us more money, but should give us better uptime.
             // This does not prevent all evictions by Kubernetes, only the ones initiated by the
-            // cluster-autoscaler. Notably, eviction of pods for resource overuse is still enabled.
+            // cluster-autoscaler (or karpenter). Notably, eviction of pods for resource overuse is still enabled.
             "cluster-autoscaler.kubernetes.io/safe-to-evict".to_owned() => "false".to_string(),
+            "karpenter.sh/do-not-evict".to_owned() => "true".to_string(),
+
+            // It's called do-not-disrupt in newer versions of karpenter, so adding for forward/backward compatibility
+            "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
         };
 
         let mut node_selector: BTreeMap<String, String> = self

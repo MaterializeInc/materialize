@@ -23,6 +23,7 @@ use mz_catalog::builtin::{
     Builtin, DataSensitivity, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
     BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
+use mz_catalog::durable::initialize::MZ_UNSAFE_SCHEMA_ID;
 use mz_catalog::durable::objects::{
     IntrospectionSourceIndex, SystemObjectDescription, SystemObjectMapping,
     SystemObjectUniqueIdentifier,
@@ -33,7 +34,7 @@ use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
     Role, Schema, Source, Table, Type,
 };
-use mz_catalog::{CREATE_SQL_TODO, SYSTEM_CONN_ID};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
@@ -43,7 +44,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::to_datetime;
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::adt::mz_acl_item::PrivilegeMap;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::namespaces::MZ_UNSAFE_SCHEMA;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
@@ -55,7 +57,7 @@ use mz_sql::names::{
     ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds,
     SchemaId, SchemaSpecifier,
 };
-use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_sql::session::vars::{
     OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
 };
@@ -65,6 +67,7 @@ use mz_sql_parser::ast::Expr;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_types::sources::Timeline;
 
+// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::config::StateConfig;
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
@@ -142,7 +145,6 @@ impl CatalogItemRebuilder {
             Self::SystemSource(entry.item().clone())
         } else {
             let create_sql = entry.create_sql().to_string();
-            assert_ne!(create_sql.to_lowercase(), CREATE_SQL_TODO.to_lowercase());
             let mut create_stmt = mz_sql::parse::parse(&create_sql)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
@@ -237,6 +239,7 @@ impl Catalog {
                     build_info: config.build_info,
                     timestamp_interval: Duration::from_secs(1),
                     now: config.now.clone(),
+                    connection_context: config.connection_context,
                 },
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
@@ -308,6 +311,32 @@ impl Catalog {
                 state.database_by_name.insert(name.clone(), id.clone());
             }
 
+            // TODO(jkosh44) Remove after next release.
+            let contains_unsafe_schema = txn
+                .get_schemas()
+                .filter_map(|schema| match schema.id {
+                    SchemaId::User(_) => None,
+                    SchemaId::System(id) => Some(id),
+                })
+                .any(|id| id == MZ_UNSAFE_SCHEMA_ID);
+            if !contains_unsafe_schema {
+                let schema_privileges = vec![
+                    rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema),
+                    MzAclItem {
+                        grantee: MZ_SUPPORT_ROLE_ID,
+                        grantor: MZ_SYSTEM_ROLE_ID,
+                        acl_mode: AclMode::USAGE,
+                    },
+                    rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID),
+                ];
+                let schema_id = SchemaId::System(MZ_UNSAFE_SCHEMA_ID);
+                txn.insert_system_schema(
+                    schema_id,
+                    MZ_UNSAFE_SCHEMA,
+                    MZ_SYSTEM_ROLE_ID,
+                    schema_privileges.clone(),
+                )?;
+            }
             let schemas = txn.get_schemas();
             for mz_catalog::durable::Schema {
                 id,
@@ -524,7 +553,7 @@ impl Catalog {
                                 oid,
                                 name.clone(),
                                 CatalogItem::Table(Table {
-                                    create_sql: CREATE_SQL_TODO.to_string(),
+                                    create_sql: None,
                                     desc: table.desc.clone(),
                                     defaults: vec![Expr::null(); table.desc.arity()],
                                     conn_id: None,
@@ -545,7 +574,7 @@ impl Catalog {
                             let item = state
                             .parse_item(
                                 id,
-                                view.sql.into(),
+                                view.create_sql(),
                                 None,
                                 false,
                                 None
@@ -633,7 +662,7 @@ impl Catalog {
                                 oid,
                                 name.clone(),
                                 CatalogItem::Source(Source {
-                                    create_sql: CREATE_SQL_TODO.to_string(),
+                                    create_sql: None,
                                     data_source: DataSourceDesc::Introspection(introspection_type),
                                     desc: coll.desc.clone(),
                                     timeline: Timeline::EpochMilliseconds,
@@ -817,7 +846,7 @@ impl Catalog {
                 .unwrap_or_else(|| "new".to_string());
 
             if !config.skip_migrations {
-                migrate::migrate(&state, &mut txn, config.now, config.connection_context)
+                migrate::migrate(&state, &mut txn, config.now, &state.config.connection_context)
                     .await
                     .map_err(|e| {
                         Error::new(ErrorKind::FailedMigration {
@@ -898,6 +927,7 @@ impl Catalog {
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
+            let secrets_reader = &catalog.state.config.connection_context.secrets_reader;
 
             // Load public keys for SSH connections from the secrets store to the catalog
             for (id, entry) in catalog.state.entry_by_id.iter_mut() {
@@ -905,7 +935,7 @@ impl Catalog {
                     if let mz_storage_types::connections::Connection::Ssh(ref mut ssh) =
                         connection.connection
                     {
-                        let secret = config.secrets_reader.read(*id).await?;
+                        let secret = secrets_reader.read(*id).await?;
                         let keyset = SshKeyPairSet::from_bytes(&secret)?;
                         let public_key_pair = keyset.public_keys();
                         ssh.public_keys = Some(public_key_pair);
@@ -1087,7 +1117,7 @@ impl Catalog {
             match state.set_system_configuration_default(name, VarInput::Flat(value)) {
                 Ok(_) => (),
                 Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
-                    warn!(%name, "cannot load unknown system parameter from stash");
+                    warn!(%name, "cannot load unknown system parameter from catalog storage");
                 }
                 Err(e) => return Err(e),
             };
@@ -1096,7 +1126,7 @@ impl Catalog {
             match state.insert_system_configuration(&name, VarInput::Flat(&value)) {
                 Ok(_) => (),
                 Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
-                    warn!(%name, "cannot load unknown system parameter from stash");
+                    warn!(%name, "cannot load unknown system parameter from catalog storage");
                 }
                 Err(e) => return Err(e),
             };
@@ -1251,7 +1281,7 @@ impl Catalog {
                     item: typ.name.to_owned(),
                 },
                 CatalogItem::Type(Type {
-                    create_sql: format!("CREATE TYPE {}", typ.name),
+                    create_sql: None,
                     details: typ.details.clone(),
                     desc,
                     resolved_ids: ResolvedIds(BTreeSet::new()),
@@ -1901,7 +1931,7 @@ mod builtin_migration_tests {
         ) -> (String, ItemNamespace, CatalogItem) {
             let item = match self.item {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
-                    create_sql: "TODO".to_string(),
+                    create_sql: Some("CREATE TABLE t ()".to_string()),
                     desc: RelationDesc::empty()
                         .with_column("a", ScalarType::Int32.nullable(true))
                         .with_key(vec![0]),

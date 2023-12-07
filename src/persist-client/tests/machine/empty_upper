@@ -122,27 +122,51 @@ v12 ok
 v12 ok
 v12 ok
 
+# Explicit finalization should fail when the shard isn't fully advanced.
+is-finalized
+----
+v12 false
+
+finalize
+----
+error: finalized without fully advancing since Antichain { elements: [2] } and upper Antichain { elements: [] }
+
+is-finalized
+----
+v12 false
+
 # Now downgrade_since to empty antichain, closing the shard to reads as well.
-# Everything still works (for idempotence), but this replaces the shard with a
-# "tombstone" which (after the final maintenance bits run) never gets another
-# SeqNo, keeps only that SeqNo in consensus (this one is still TODO, we still
-# keep the last few atm), and stores no batch data in blob.
 downgrade-since since=() reader_id=r22222222-2222-2222-2222-222222222222
 ----
 v13 []
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=() reader_id=c22222222-2222-2222-2222-222222222222
 ----
-v15 0 []
+v14 0 []
 
 shard-desc
 ----
 since=[] upper=[]
 
+# Explicitly finalize the shard. This can be an expensive operation, so we only
+# perform it on demand.
+is-finalized
+----
+v14 false
+
+finalize
+----
+v15 ok
+
+is-finalized
+----
+v15 true
+
 # Run maintenance a few times to make sure it converges (because maintenance
 # like GC can result in followup maintenance)
 perform-maintenance
 ----
+v15 ok
 v15 ok
 v16 ok
 

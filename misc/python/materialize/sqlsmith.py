@@ -105,7 +105,7 @@ known_errors = [
     "coalesce types interval and integer cannot be matched",  # TODO: Implicit cast from timestamp to date in (date - timestamp)
     "requested length too large",
     "number of columns must be a positive integer literal",
-    "regex_extract requires a string literal as its first argument",
+    "regexp_extract requires a string literal as its first argument",
     "regex parse error",
     "out of valid range",
     '" does not exist',  # role does not exist

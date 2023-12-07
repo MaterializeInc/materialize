@@ -129,8 +129,14 @@ class ValidateView(Action):
     def requires(cls) -> set[type[Capability]]:
         return {BalancerdIsRunning, MzIsRunning, StoragedRunning, ViewExists}
 
-    def __init__(self, capabilities: Capabilities) -> None:
-        self.view = random.choice(capabilities.get(ViewExists))
+    def __init__(
+        self, capabilities: Capabilities, view: ViewExists | None = None
+    ) -> None:
+        if view is None:
+            self.view = random.choice(capabilities.get(ViewExists))
+        else:
+            self.view = view
+
         # Trigger the PeekPersist optimization
         self.select_limit = random.choice(["", "LIMIT 1"])
         super().__init__(capabilities)

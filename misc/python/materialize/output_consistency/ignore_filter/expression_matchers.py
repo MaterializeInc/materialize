@@ -10,6 +10,7 @@
 from collections.abc import Callable
 from functools import partial
 
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
@@ -99,3 +100,9 @@ def is_function_invoked_only_with_non_nested_parameters(
         True,
     )
     return not at_least_one_invocation_with_nested_args
+
+
+def involves_data_type_category(
+    expression: Expression, data_type_category: DataTypeCategory
+) -> bool:
+    return expression.resolve_return_type_category() == data_type_category

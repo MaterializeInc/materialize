@@ -22,7 +22,7 @@ from materialize.output_consistency.operation.return_type_spec import ReturnType
 class NumberDataType(DataType):
     def __init__(
         self,
-        identifier: str,
+        internal_identifier: str,
         type_name: str,
         is_signed: bool,
         is_decimal: bool,
@@ -34,7 +34,7 @@ class NumberDataType(DataType):
         is_pg_compatible: bool = True,
     ):
         super().__init__(
-            identifier,
+            internal_identifier,
             type_name,
             DataTypeCategory.NUMERIC,
             is_pg_compatible=is_pg_compatible,

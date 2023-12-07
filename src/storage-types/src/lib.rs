@@ -86,6 +86,7 @@ pub mod parameters;
 pub mod shim;
 pub mod sinks;
 pub mod sources;
+pub mod stats;
 
 /// Explicitly states the contract between storage and higher levels of
 /// Materialize w/r/t which facets of objects managed by storage (e.g. sources,

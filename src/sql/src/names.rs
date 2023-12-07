@@ -1291,20 +1291,23 @@ impl<'a> NameResolver<'a> {
                     }
                 };
 
-                // Check if unqualified name refers to a CTE.
-                if raw_name.database.is_none() && raw_name.schema.is_none() {
-                    let norm_name = normalize::ident(Ident::new_unchecked(&raw_name.item));
-                    if let Some(id) = self.ctes.get(&norm_name) {
-                        return ResolvedItemName::Cte {
-                            id: *id,
-                            name: norm_name,
-                        };
-                    }
-                }
-
                 let r = if consider_function {
                     self.catalog.resolve_function(&raw_name)
                 } else {
+                    // Check if unqualified name refers to a CTE.
+                    //
+                    // Note that this is done in non-function contexts as CTEs
+                    // are treated as relations.
+                    if raw_name.database.is_none() && raw_name.schema.is_none() {
+                        let norm_name = normalize::ident(Ident::new_unchecked(&raw_name.item));
+                        if let Some(id) = self.ctes.get(&norm_name) {
+                            return ResolvedItemName::Cte {
+                                id: *id,
+                                name: norm_name,
+                            };
+                        }
+                    }
+
                     self.catalog.resolve_item(&raw_name)
                 };
 

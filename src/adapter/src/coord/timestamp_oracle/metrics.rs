@@ -12,9 +12,9 @@
 use std::time::{Duration, Instant};
 
 use mz_ore::metric;
+use mz_ore::metrics::raw::{CounterVec, IntCounterVec};
 use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
 use mz_postgres_client::metrics::PostgresClientMetrics;
-use prometheus::{CounterVec, IntCounterVec};
 
 use crate::coord::timestamp_oracle::retry::RetryStream;
 
@@ -28,6 +28,11 @@ pub struct Metrics {
     /// Metrics for
     /// [`TimestampOracle`](crate::coord::timestamp_oracle::TimestampOracle).
     pub oracle: OracleMetrics,
+
+    /// Metrics recording how many operations we batch into one oracle call, for
+    /// those operations that _do_ support batching, and only when using the
+    /// `BatchingTimestampOracle` wrapper.
+    pub batching: BatchingMetrics,
 
     /// Metrics for each retry loop.
     pub retries: RetriesMetrics,
@@ -49,6 +54,7 @@ impl Metrics {
 
         Metrics {
             oracle: vecs.oracle_metrics(),
+            batching: vecs.batching_metrics(),
             retries: vecs.retries_metrics(),
             postgres_client: PostgresClientMetrics::new(registry, "mz_ts_oracle"),
             _vecs: vecs,
@@ -67,6 +73,9 @@ struct MetricsVecs {
     retry_finished: IntCounterVec,
     retry_retries: IntCounterVec,
     retry_sleep_seconds: CounterVec,
+
+    batched_op_count: IntCounterVec,
+    batches_count: IntCounterVec,
 }
 
 impl MetricsVecs {
@@ -113,6 +122,18 @@ impl MetricsVecs {
                 help: "time spent in retry loop backoff",
                 var_labels: ["op"],
             )),
+
+            batched_op_count: registry.register(metric!(
+                name: "mz_ts_oracle_batched_op_count",
+                help: "count of batched operations",
+                var_labels: ["op"],
+            )),
+
+            batches_count: registry.register(metric!(
+                name: "mz_ts_oracle_batches_count",
+                help: "count of batches of operations",
+                var_labels: ["op"],
+            )),
         }
     }
 
@@ -131,6 +152,19 @@ impl MetricsVecs {
             succeeded: self.external_op_succeeded.with_label_values(&[op]),
             failed: self.external_op_failed.with_label_values(&[op]),
             seconds: self.external_op_seconds.with_label_values(&[op]),
+        }
+    }
+
+    fn batching_metrics(&self) -> BatchingMetrics {
+        BatchingMetrics {
+            read_ts: self.batched_op_metrics("read_ts"),
+        }
+    }
+
+    fn batched_op_metrics(&self, op: &str) -> BatchedOpMetrics {
+        BatchedOpMetrics {
+            ops_count: self.batched_op_count.with_label_values(&[op]),
+            batches_count: self.batches_count.with_label_values(&[op]),
         }
     }
 
@@ -191,6 +225,17 @@ pub struct OracleMetrics {
     pub peek_write_ts: ExternalOpMetrics,
     pub read_ts: ExternalOpMetrics,
     pub apply_write: ExternalOpMetrics,
+}
+
+#[derive(Debug)]
+pub struct BatchedOpMetrics {
+    pub ops_count: IntCounter,
+    pub batches_count: IntCounter,
+}
+
+#[derive(Debug)]
+pub struct BatchingMetrics {
+    pub read_ts: BatchedOpMetrics,
 }
 
 #[derive(Debug)]

@@ -50,6 +50,9 @@ use mz_sql::names::{
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::memory::objects::{
+    CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type, View,
+};
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, AlterOptionParameter, ExplainSinkSchemaPlan,
     Explainee, Index, IndexOption, MaterializedView, MutationKind, Params, Plan,
@@ -82,10 +85,7 @@ use tracing::instrument::WithSubscriber;
 use tracing::{event, warn, Level, Span};
 use tracing_core::callsite::rebuild_interest_cache;
 
-use crate::catalog::{
-    self, Catalog, CatalogItem, Cluster, ConnCatalog, Connection, DataSourceDesc,
-    UpdatePrivilegeVariant,
-};
+use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{
@@ -100,9 +100,9 @@ use crate::coord::timestamp_selection::{
 };
 use crate::coord::{
     peek, AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady,
-    ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
-    PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
-    RealTimeRecencyContext, TargetCluster,
+    ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
+    PeekStageRealTimeRecency, PeekStageTimestamp, PeekStageValidate, PendingRead, PendingReadTxn,
+    PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
@@ -137,7 +137,7 @@ struct DropOps {
 // A bundle of values returned from create_source_inner
 struct CreateSourceInner {
     ops: Vec<catalog::Op>,
-    sources: Vec<(GlobalId, catalog::Source)>,
+    sources: Vec<(GlobalId, Source)>,
     if_not_exists_ids: BTreeMap<GlobalId, QualifiedItemName>,
 }
 
@@ -209,8 +209,7 @@ impl Coordinator {
                 }
             }
 
-            let source =
-                catalog::Source::new(source_id, plan, cluster_id, resolved_ids, None, false);
+            let source = Source::new(source_id, plan, cluster_id, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,
@@ -240,19 +239,19 @@ impl Coordinator {
             if_not_exists_ids,
         } = self.create_source_inner(session, plans).await?;
 
-        match self.catalog_transact(Some(session), ops).await {
-            Ok(()) => {
+        let transact_result = self
+            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 let mut source_ids = Vec::with_capacity(sources.len());
                 for (source_id, source) in sources {
                     let source_status_collection_id =
-                        Some(self.catalog().resolve_builtin_storage_collection(
+                        Some(coord.catalog().resolve_builtin_storage_collection(
                             &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
                     let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion(ingestion) => {
                             let ingestion =
-                                ingestion.into_inline_connection(self.catalog().state());
+                                ingestion.into_inline_connection(coord.catalog().state());
 
                             (
                                 DataSource::Ingestion(ingestion),
@@ -267,7 +266,7 @@ impl Coordinator {
                         DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) =
-                                self.catalog().state().try_get_webhook_url(&source_id)
+                                coord.catalog().state().try_get_webhook_url(&source_id)
                             {
                                 session.add_notice(AdapterNotice::WebhookSourceCreated { url })
                             }
@@ -279,9 +278,10 @@ impl Coordinator {
                         }
                     };
 
-                    self.maybe_create_linked_cluster(source_id).await;
+                    coord.maybe_create_linked_cluster(source_id).await;
 
-                    self.controller
+                    coord
+                        .controller
                         .storage
                         .create_collections(
                             None,
@@ -301,16 +301,20 @@ impl Coordinator {
                     source_ids.push(source_id);
                 }
 
-                self.initialize_storage_read_policies(
-                    source_ids,
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                coord
+                    .initialize_storage_read_policies(
+                        source_ids,
+                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                    )
+                    .await;
+            })
+            .await;
 
-                Ok(ExecuteResponse::CreatedSource)
-            }
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
+        match transact_result {
+            Ok(()) => Ok(ExecuteResponse::CreatedSource),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
             })) if if_not_exists_ids.contains_key(&id) => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: if_not_exists_ids[&id].item.clone(),
@@ -358,7 +362,7 @@ impl Coordinator {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             let transient_revision = self.catalog().transient_revision();
             let conn_id = ctx.session().conn_id().clone();
-            let connection_context = self.connection_context.clone();
+            let connection_context = self.connection_context().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
 
@@ -432,26 +436,39 @@ impl Coordinator {
             owner_id: *session.current_role_id(),
         }];
 
-        match self.catalog_transact(Some(session), ops).await {
-            Ok(_) => {
+        let transact_result = self
+            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 match plan.connection.connection {
                     mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
                         let spec = VpcEndpointConfig {
                             aws_service_name: privatelink.service_name.to_owned(),
                             availability_zone_ids: privatelink.availability_zones.to_owned(),
                         };
-                        self.cloud_resource_controller
-                            .as_ref()
-                            .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
+                        let cloud_resource_controller =
+                            match coord.cloud_resource_controller.as_ref().cloned() {
+                                Some(controller) => controller,
+                                None => {
+                                    tracing::warn!("AWS PrivateLink connections unsupported");
+                                    return;
+                                }
+                            };
+                        if let Err(err) = cloud_resource_controller
                             .ensure_vpc_endpoint(connection_gid, spec)
-                            .await?;
+                            .await
+                        {
+                            tracing::warn!(?err, "failed to ensure vpc endpoint!");
+                        }
                     }
                     _ => {}
                 }
-                Ok(ExecuteResponse::CreatedConnection)
-            }
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            })
+            .await;
+
+        match transact_result {
+            Ok(_) => Ok(ExecuteResponse::CreatedConnection),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection),
             Err(err) => Err(err),
         }
@@ -473,8 +490,9 @@ impl Coordinator {
         }];
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::DatabaseAlreadyExists { name: plan.name });
                 Ok(ExecuteResponse::CreatedDatabase)
@@ -498,8 +516,9 @@ impl Coordinator {
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::SchemaAlreadyExists {
                     name: plan.schema_name,
@@ -546,8 +565,8 @@ impl Coordinator {
             None
         };
         let table_id = self.catalog_mut().allocate_user_id().await?;
-        let table = catalog::Table {
-            create_sql: table.create_sql,
+        let table = Table {
+            create_sql: Some(table.create_sql),
             desc: table.desc,
             defaults: table.defaults,
             conn_id: conn_id.cloned(),
@@ -563,30 +582,33 @@ impl Coordinator {
             item: CatalogItem::Table(table.clone()),
             owner_id: *ctx.session().current_role_id(),
         }];
-        match self.catalog_transact(Some(ctx.session()), ops).await {
-            Ok(()) => {
+
+        let catalog_result = self
+            .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
                 // Determine the initial validity for the table.
-                let register_ts = self.get_local_write_ts().await.timestamp;
+                let register_ts = coord.get_local_write_ts().await.timestamp;
                 if let Some(id) = ctx.extra().contents() {
-                    self.set_statement_execution_timestamp(id, register_ts);
+                    coord.set_statement_execution_timestamp(id, register_ts);
                 }
 
                 let collection_desc = CollectionDescription::from_desc(
                     table.desc.clone(),
                     DataSourceOther::TableWrites,
                 );
-                self.controller
+                coord
+                    .controller
                     .storage
                     .create_collections(Some(register_ts), vec![(table_id, collection_desc)])
                     .await
                     .unwrap_or_terminate("cannot fail to create collections");
-                self.apply_local_write(register_ts).await;
+                coord.apply_local_write(register_ts).await;
 
-                self.initialize_storage_read_policies(
-                    vec![table_id],
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                coord
+                    .initialize_storage_read_policies(
+                        vec![table_id],
+                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                    )
+                    .await;
 
                 // Advance the new table to a timestamp higher than the current
                 // read timestamp so that the table is immediately readable.
@@ -600,9 +622,10 @@ impl Coordinator {
                 // allocate ranges of timestamps. This whole advancement and
                 // group_commit can be removed once we've finished the migration
                 // to the persist-txn tables.
-                let initial_read_ts = self.get_local_write_ts().await;
+                let initial_read_ts = coord.get_local_write_ts().await;
                 let appends = vec![(table_id, Vec::new())];
-                self.controller
+                coord
+                    .controller
                     .storage
                     .append_table(
                         initial_read_ts.timestamp,
@@ -613,16 +636,19 @@ impl Coordinator {
                     .await
                     .expect("One-shot dropped while waiting synchronously")
                     .unwrap_or_terminate("cannot fail to append");
-                self.apply_local_write(initial_read_ts.timestamp).await;
+                coord.apply_local_write(initial_read_ts.timestamp).await;
 
                 // Kick off a group commit so the new rest of the tables catch up to the new oracle read
                 // ts.
-                self.trigger_group_commit();
+                coord.trigger_group_commit();
+            })
+            .await;
 
-                Ok(ExecuteResponse::CreatedTable)
-            }
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+        match catalog_result {
+            Ok(()) => Ok(ExecuteResponse::CreatedTable),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session_mut()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -651,7 +677,7 @@ impl Coordinator {
 
         let id = self.catalog_mut().allocate_user_id().await?;
         let oid = self.catalog_mut().allocate_oid()?;
-        let secret = catalog::Secret {
+        let secret = Secret {
             create_sql: secret.create_sql,
         };
 
@@ -667,8 +693,9 @@ impl Coordinator {
 
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret),
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -720,7 +747,7 @@ impl Coordinator {
             ctx
         );
 
-        let catalog_sink = catalog::Sink {
+        let catalog_sink = Sink {
             create_sql: sink.create_sql,
             from: sink.from,
             connection: sink.connection,
@@ -741,6 +768,8 @@ impl Coordinator {
         let from = self.catalog().get_entry(&catalog_sink.from);
         let from_name = from.name().item.clone();
         let from_type = from.item().typ().to_string();
+
+        // TODO(parkmycar): Move this to a catalog_transact_with_side_effects model.
         let result = self
             .catalog_transact_with(Some(ctx.session().conn_id()), ops, move |txn| {
                 // Validate that the from collection is in fact a persist collection we can export.
@@ -757,10 +786,11 @@ impl Coordinator {
             })
             .await;
 
-        match result {
-            Ok(()) => {}
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+        let builtin_table_notify = match result {
+            Ok(((), table_updates)) => table_updates,
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -774,13 +804,18 @@ impl Coordinator {
                 ctx.retire(Err(e));
                 return;
             }
-        }
+        };
 
         self.maybe_create_linked_cluster(id).await;
 
         self.create_storage_export(id, &catalog_sink)
             .await
             .unwrap_or_terminate("cannot fail to create exports");
+
+        // Block on the builtin table updates completing.
+        //
+        // Note: these are run in a separate task, so they're run concurrently to everything else.
+        builtin_table_notify.await;
 
         ctx.retire(Ok(ExecuteResponse::CreatedSink))
     }
@@ -834,8 +869,9 @@ impl Coordinator {
         let ops = self.generate_view_ops(session, &plan, resolved_ids).await?;
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedView),
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: plan.name.item,
@@ -888,7 +924,7 @@ impl Coordinator {
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
         let optimized_expr = optimizer.optimize(raw_expr.clone())?;
 
-        let view = catalog::View {
+        let view = View {
             create_sql: view.create_sql.clone(),
             raw_expr,
             desc: RelationDesc::new(optimized_expr.typ(), view.column_names.clone()),
@@ -996,7 +1032,7 @@ impl Coordinator {
             id,
             oid: self.catalog_mut().allocate_oid()?,
             name: name.clone(),
-            item: CatalogItem::MaterializedView(catalog::MaterializedView {
+            item: CatalogItem::MaterializedView(mz_catalog::memory::objects::MaterializedView {
                 create_sql,
                 raw_expr,
                 optimized_expr: local_mir_plan.expr(),
@@ -1008,32 +1044,33 @@ impl Coordinator {
             owner_id: *session.current_role_id(),
         });
 
-        match self
-            .catalog_transact_conn(Some(session.conn_id()), ops)
-            .await
-        {
-            Ok(_) => {
+        let transact_result = self
+            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 // Save plan structures.
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_optimized_plan(id, global_mir_plan.df_desc().clone());
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_physical_plan(id, global_lir_plan.df_desc().clone());
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
 
                 // Emit notices.
-                self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
+                coord.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
                 let output_desc = global_lir_plan.desc().clone();
                 let mut df_desc = global_lir_plan.unapply().0;
 
                 // Timestamp selection
                 let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
-                let since = self.least_valid_read(&id_bundle);
+                let since = coord.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since.clone());
 
                 // Announce the creation of the materialized view source.
-                self.controller
+                coord
+                    .controller
                     .storage
                     .create_collections(
                         None,
@@ -1050,18 +1087,22 @@ impl Coordinator {
                     .await
                     .unwrap_or_terminate("cannot fail to append");
 
-                self.initialize_storage_read_policies(
-                    vec![id],
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                coord
+                    .initialize_storage_read_policies(
+                        vec![id],
+                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                    )
+                    .await;
 
-                self.ship_dataflow(df_desc, cluster_id).await;
+                coord.ship_dataflow(df_desc, cluster_id).await;
+            })
+            .await;
 
-                Ok(ExecuteResponse::CreatedMaterializedView)
-            }
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+        match transact_result {
+            Ok(_) => Ok(ExecuteResponse::CreatedMaterializedView),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -1116,7 +1157,7 @@ impl Coordinator {
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
 
-        let index = catalog::Index {
+        let index = mz_catalog::memory::objects::Index {
             create_sql,
             keys,
             on,
@@ -1138,36 +1179,41 @@ impl Coordinator {
             item: CatalogItem::Index(index),
             owner_id,
         };
-        match self
-            .catalog_transact_conn(Some(session.conn_id()), vec![op])
-            .await
-        {
-            Ok(_) => {
+
+        let transact_result = self
+            .catalog_transact_with_side_effects(Some(session), vec![op], |coord| async {
                 // Save plan structures.
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_optimized_plan(id, global_mir_plan.df_desc().clone());
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_physical_plan(id, global_lir_plan.df_desc().clone());
-                self.catalog_mut()
+                coord
+                    .catalog_mut()
                     .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
 
                 // Emit notices.
-                self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
+                coord.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
                 let mut df_desc = global_lir_plan.unapply().0;
 
                 // Timestamp selection
                 let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
-                let since = self.least_valid_read(&id_bundle);
+                let since = coord.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since);
 
-                self.ship_dataflow(df_desc, cluster_id).await;
+                coord.ship_dataflow(df_desc, cluster_id).await;
 
-                self.set_index_options(id, options).expect("index enabled");
-                Ok(ExecuteResponse::CreatedIndex)
-            }
-            Err(AdapterError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                coord.set_index_options(id, options).expect("index enabled");
+            })
+            .await;
+
+        match transact_result {
+            Ok(_) => Ok(ExecuteResponse::CreatedIndex),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
@@ -1186,8 +1232,8 @@ impl Coordinator {
         plan: plan::CreateTypePlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let typ = catalog::Type {
-            create_sql: plan.typ.create_sql,
+        let typ = Type {
+            create_sql: Some(plan.typ.create_sql),
             desc: plan.typ.inner.desc(&self.catalog().for_session(session))?,
             details: CatalogTypeDetails {
                 array_id: None,
@@ -2052,10 +2098,10 @@ impl Coordinator {
                         for WriteOp { id, .. } in &mut writes.iter() {
                             // Re-verify this id exists.
                             let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
-                                AdapterError::Catalog(catalog::Error {
-                                    kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
-                                        id.to_string(),
-                                    )),
+                                AdapterError::Catalog(mz_catalog::memory::error::Error {
+                                    kind: mz_catalog::memory::error::ErrorKind::Sql(
+                                        CatalogError::UnknownItem(id.to_string()),
+                                    ),
                                 })
                             })?;
                         }
@@ -2154,16 +2200,23 @@ impl Coordinator {
                 PeekStage::Validate(stage) => {
                     let next =
                         return_if_err!(self.peek_stage_validate(ctx.session_mut(), stage), ctx);
-                    (ctx, PeekStage::Optimize(next))
+
+                    (ctx, PeekStage::Timestamp(next))
+                }
+                PeekStage::Timestamp(stage) => {
+                    self.peek_stage_timestamp(ctx, stage).await;
+                    return;
                 }
                 PeekStage::Optimize(stage) => {
                     self.peek_stage_optimize(ctx, stage).await;
                     return;
                 }
-                PeekStage::Timestamp(stage) => match self.peek_stage_timestamp(ctx, stage) {
-                    Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
-                    None => return,
-                },
+                PeekStage::RealTimeRecency(stage) => {
+                    match self.peek_stage_real_time_recency(ctx, stage) {
+                        Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
+                        None => return,
+                    }
+                }
                 PeekStage::Finish(stage) => {
                     let res = self.peek_stage_finish(&mut ctx, stage).await;
                     ctx.retire(res);
@@ -2181,7 +2234,7 @@ impl Coordinator {
             plan,
             target_cluster,
         }: PeekStageValidate,
-    ) -> Result<PeekStageOptimize, AdapterError> {
+    ) -> Result<PeekStageTimestamp, AdapterError> {
         let plan::SelectPlan {
             source,
             when,
@@ -2257,7 +2310,7 @@ impl Coordinator {
             role_metadata: session.role_metadata().clone(),
         };
 
-        Ok(PeekStageOptimize {
+        Ok(PeekStageTimestamp {
             validity,
             source,
             copy_to,
@@ -2268,6 +2321,80 @@ impl Coordinator {
             in_immediate_multi_stmt_txn,
             optimizer,
         })
+    }
+
+    /// Determine a linearized read timestamp (from a `TimestampOracle`), if
+    /// needed.
+    async fn peek_stage_timestamp(
+        &mut self,
+        ctx: ExecuteContext,
+        PeekStageTimestamp {
+            validity,
+            source,
+            copy_to,
+            source_ids,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+            optimizer,
+        }: PeekStageTimestamp,
+    ) {
+        let isolation_level = ctx.session.vars().transaction_isolation().clone();
+        let linearized_timeline =
+            Coordinator::get_linearized_timeline(&isolation_level, &when, &timeline_context);
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+
+        let build_optimize_stage = move |oracle_read_ts: Option<Timestamp>| -> PeekStageOptimize {
+            PeekStageOptimize {
+                validity,
+                source,
+                copy_to,
+                source_ids,
+                when,
+                target_replica,
+                timeline_context,
+                oracle_read_ts,
+                in_immediate_multi_stmt_txn,
+                optimizer,
+            }
+        };
+
+        match linearized_timeline {
+            Some(timeline) => {
+                let shared_oracle = self.get_shared_timestamp_oracle(&timeline);
+
+                if let Some(shared_oracle) = shared_oracle {
+                    // We can do it in an async task, because we can ship off
+                    // the timetamp oracle.
+                    mz_ore::task::spawn(|| "linearized timestamp task", async move {
+                        let oracle_read_ts = shared_oracle.read_ts().await;
+                        let stage = build_optimize_stage(Some(oracle_read_ts));
+
+                        let stage = PeekStage::Optimize(stage);
+                        // Ignore errors if the coordinator has shut down.
+                        let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+                    });
+                } else {
+                    // Timestamp oracle can't be shipped to an async task, we
+                    // have to do it here.
+                    let oracle = self.get_timestamp_oracle(&timeline);
+                    let oracle_read_ts = oracle.read_ts().await;
+                    let stage = build_optimize_stage(Some(oracle_read_ts));
+
+                    let stage = PeekStage::Optimize(stage);
+                    // Ignore errors if the coordinator has shut down.
+                    let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+                }
+            }
+            None => {
+                let stage = build_optimize_stage(None);
+                let stage = PeekStage::Optimize(stage);
+                // Ignore errors if the coordinator has shut down.
+                let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
+            }
+        }
     }
 
     async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
@@ -2292,6 +2419,7 @@ impl Coordinator {
                     &stage.when,
                     stage.optimizer.cluster_id(),
                     &stage.timeline_context,
+                    stage.oracle_read_ts.clone(),
                     None,
                 )
                 .await
@@ -2313,7 +2441,7 @@ impl Coordinator {
             || "optimize peek",
             move || match Self::optimize_peek(ctx.session(), stats, id_bundle, stage) {
                 Ok(stage) => {
-                    let stage = PeekStage::Timestamp(stage);
+                    let stage = PeekStage::RealTimeRecency(stage);
                     // Ignore errors if the coordinator has shut down.
                     let _ = internal_cmd_tx.send(Message::PeekStageReady { ctx, stage });
                 }
@@ -2334,15 +2462,16 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             in_immediate_multi_stmt_txn,
             mut optimizer,
         }: PeekStageOptimize,
-    ) -> Result<PeekStageTimestamp, AdapterError> {
+    ) -> Result<PeekStageRealTimeRecency, AdapterError> {
         let local_mir_plan = optimizer.optimize(source)?;
         let local_mir_plan = local_mir_plan.resolve(session, stats);
         let global_mir_plan = optimizer.optimize(local_mir_plan)?;
 
-        Ok(PeekStageTimestamp {
+        Ok(PeekStageRealTimeRecency {
             validity,
             copy_to,
             source_ids,
@@ -2350,6 +2479,7 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             in_immediate_multi_stmt_txn,
             optimizer,
             global_mir_plan,
@@ -2357,10 +2487,10 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn peek_stage_timestamp(
+    fn peek_stage_real_time_recency(
         &mut self,
         ctx: ExecuteContext,
-        PeekStageTimestamp {
+        PeekStageRealTimeRecency {
             validity,
             copy_to,
             source_ids,
@@ -2368,10 +2498,11 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             in_immediate_multi_stmt_txn,
             optimizer,
             global_mir_plan,
-        }: PeekStageTimestamp,
+        }: PeekStageRealTimeRecency,
     ) -> Option<(ExecuteContext, PeekStageFinish)> {
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {
@@ -2385,6 +2516,7 @@ impl Coordinator {
                         when,
                         target_replica,
                         timeline_context,
+                        oracle_read_ts: oracle_read_ts.clone(),
                         source_ids,
                         in_immediate_multi_stmt_txn,
                         optimizer,
@@ -2414,6 +2546,7 @@ impl Coordinator {
                     when,
                     target_replica,
                     timeline_context,
+                    oracle_read_ts,
                     source_ids,
                     real_time_recency_ts: None,
                     optimizer,
@@ -2434,6 +2567,7 @@ impl Coordinator {
             when,
             target_replica,
             timeline_context,
+            oracle_read_ts,
             source_ids,
             real_time_recency_ts,
             mut optimizer,
@@ -2449,6 +2583,7 @@ impl Coordinator {
                 ctx.session_mut(),
                 &when,
                 timeline_context,
+                oracle_read_ts,
                 source_ids,
                 &id_bundle,
                 real_time_recency_ts,
@@ -2511,6 +2646,7 @@ impl Coordinator {
         when: &QueryWhen,
         cluster_id: ClusterId,
         timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         source_bundle: &CollectionIdBundle,
         source_ids: &BTreeSet<GlobalId>,
         real_time_recency_ts: Option<Timestamp>,
@@ -2525,7 +2661,7 @@ impl Coordinator {
                 // Use the transaction's timestamp if it exists and this isn't an AS OF query.
                 Some(
                     determination @ TimestampDetermination {
-                        timestamp_context: TimestampContext::TimelineTimestamp(_, _),
+                        timestamp_context: TimestampContext::TimelineTimestamp { .. },
                         ..
                     },
                 ) if in_immediate_multi_stmt_txn => (determination, None),
@@ -2551,6 +2687,7 @@ impl Coordinator {
                             when,
                             cluster_id,
                             &timeline_context,
+                            oracle_read_ts,
                             real_time_recency_ts,
                         )
                         .await?;
@@ -2630,6 +2767,7 @@ impl Coordinator {
         session: &mut Session,
         when: &QueryWhen,
         timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
         id_bundle: &CollectionIdBundle,
         real_time_recency_ts: Option<Timestamp>,
@@ -2643,6 +2781,7 @@ impl Coordinator {
                 when,
                 optimizer.cluster_id(),
                 timeline_context,
+                oracle_read_ts,
                 id_bundle,
                 &source_ids,
                 real_time_recency_ts,
@@ -2801,6 +2940,7 @@ impl Coordinator {
         // MIR ⇒ MIR optimization (global)
         let global_mir_plan = optimizer.optimize(from)?;
         // Timestamp selection
+        let oracle_read_ts = self.oracle_read_ts(&ctx.session, &timeline, &when).await;
         let as_of = self
             .determine_timestamp(
                 ctx.session(),
@@ -2808,6 +2948,7 @@ impl Coordinator {
                 &when,
                 cluster_id,
                 &timeline,
+                oracle_read_ts,
                 None,
             )
             .await?
@@ -2856,11 +2997,17 @@ impl Coordinator {
             output,
         };
         active_subscribe.initialize();
-        self.add_active_subscribe(sink_id, active_subscribe).await;
 
+        // Add metadata for the new SUBSCRIBE.
+        let write_notify_fut = self.add_active_subscribe(sink_id, active_subscribe).await;
+
+        // Ship the underlying dataflow.
         let (df_desc, _df_meta) = global_lir_plan.unapply();
+        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
 
-        self.ship_dataflow(df_desc, cluster_id).await;
+        // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
+        // requests to external services, which can take time, so we run them concurrently.
+        let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
 
         if let Some(target) = target_replica {
             self.controller
@@ -3340,12 +3487,18 @@ impl Coordinator {
                 .sufficient_collections(&source_ids);
 
             // Acquire a timestamp (necessary for loading statistics).
+            let when = QueryWhen::Immediately;
+            let oracle_read_ts = self
+                .oracle_read_ts(session, &timeline_context, &when)
+                .with_subscriber(root_dispatch.clone())
+                .await;
             let timestamp_ctx = self
                 .sequence_peek_timestamp(
                     session,
-                    &QueryWhen::Immediately,
+                    &when,
                     target_cluster_id,
                     timeline_context,
+                    oracle_read_ts,
                     &id_bundle,
                     &source_ids,
                     None, // no real-time recency
@@ -3835,12 +3988,16 @@ impl Coordinator {
         let source_ids = source.depends_on();
         let timeline_context = self.validate_timeline_context(source_ids.clone())?;
 
+        let when = QueryWhen::Immediately;
+        let oracle_read_ts = self.oracle_read_ts(session, &timeline_context, &when).await;
+
         let determination = self
             .sequence_peek_timestamp(
                 session,
-                &QueryWhen::Immediately,
+                &when,
                 cluster_id,
                 timeline_context,
+                oracle_read_ts,
                 &id_bundle,
                 &source_ids,
                 real_time_recency_ts,
@@ -3899,11 +4056,13 @@ impl Coordinator {
                         .expect("desc called on table")
                         .arity(),
                     None => {
-                        ctx.retire(Err(AdapterError::Catalog(catalog::Error {
-                            kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
-                                plan.id.to_string(),
-                            )),
-                        })));
+                        ctx.retire(Err(AdapterError::Catalog(
+                            mz_catalog::memory::error::Error {
+                                kind: mz_catalog::memory::error::ErrorKind::Sql(
+                                    CatalogError::UnknownItem(plan.id.to_string()),
+                                ),
+                            },
+                        )));
                         return;
                     }
                 };
@@ -3970,9 +4129,13 @@ impl Coordinator {
                 .expect("desc called on table")
                 .into_owned(),
             None => {
-                ctx.retire(Err(AdapterError::Catalog(catalog::Error {
-                    kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),
-                })));
+                ctx.retire(Err(AdapterError::Catalog(
+                    mz_catalog::memory::error::Error {
+                        kind: mz_catalog::memory::error::ErrorKind::Sql(CatalogError::UnknownItem(
+                            id.to_string(),
+                        )),
+                    },
+                )));
                 return;
             }
         };
@@ -3995,10 +4158,9 @@ impl Coordinator {
                             && (
                                 // empty `uses` indicates either system func or
                                 // view created from constants
-                                entry.uses().0.is_empty()
+                                entry.uses().is_empty()
                                     || entry
                                         .uses()
-                                        .0
                                         .iter()
                                         .all(|id| validate_read_dependencies(catalog, id))
                             )
@@ -4221,13 +4383,17 @@ impl Coordinator {
             // Note: It's only OK for the write to have a greater timestamp than the read
             // because the write lock prevents any other writes from happening in between
             // the read and write.
-            if let Some(TimestampContext::TimelineTimestamp(timeline, read_ts)) = timestamp_context
+            if let Some(TimestampContext::TimelineTimestamp {
+                timeline,
+                chosen_ts: chosen_read_ts,
+                oracle_ts: _,
+            }) = timestamp_context
             {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 let result = strict_serializable_reads_tx.send(PendingReadTxn {
                     txn: PendingRead::ReadThenWrite {
                         tx,
-                        timestamp: (read_ts, timeline),
+                        timestamp: (chosen_read_ts, timeline),
                     },
                     created: Instant::now(),
                     num_requeues: 0,
@@ -4559,7 +4725,7 @@ impl Coordinator {
         let cur_entry = self.catalog().get_entry(&id);
         let cur_conn = cur_entry.connection().expect("known to be connection");
 
-        let inner = || -> Result<catalog::Connection, AdapterError> {
+        let inner = || -> Result<Connection, AdapterError> {
             // Parse statement.
             let create_conn_stmt = match mz_sql::parse::parse(&cur_conn.create_sql)
                 .expect("invalid create sql persisted to catalog")
@@ -4624,7 +4790,7 @@ impl Coordinator {
             let (_, new_deps) = mz_sql::names::resolve(&catalog, create_conn_stmt)
                 .map_err(|e| AdapterError::internal("ALTER CONNECTION", e))?;
 
-            Ok(catalog::Connection {
+            Ok(Connection {
                 create_sql: plan.connection.create_sql,
                 connection: plan.connection.connection,
                 resolved_ids: new_deps,
@@ -4647,7 +4813,7 @@ impl Coordinator {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             let transient_revision = self.catalog().transient_revision();
             let conn_id = ctx.session().conn_id().clone();
-            let connection_context = self.connection_context.clone();
+            let connection_context = self.connection_context().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
 
@@ -4694,7 +4860,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         id: GlobalId,
-        mut connection: catalog::Connection,
+        mut connection: Connection,
     ) -> Result<ExecuteResponse, AdapterError> {
         match &mut connection.connection {
             mz_storage_types::connections::Connection::Ssh(ref mut ssh) => {
@@ -5005,7 +5171,7 @@ impl Coordinator {
                     ))?;
                 }
 
-                let source = catalog::Source::new(
+                let source = Source::new(
                     id,
                     plan,
                     // Use the same cluster ID.
@@ -5212,7 +5378,7 @@ impl Coordinator {
                 // Asserting that we've done the right thing with dependencies
                 // here requires mocking out objects in the catalog, which is a
                 // large task for an operation we have to cover in tests anyway.
-                let source = catalog::Source::new(
+                let source = Source::new(
                     id,
                     plan,
                     // Use the same cluster ID.

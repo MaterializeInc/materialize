@@ -15,11 +15,20 @@ from materialize.output_consistency.input_data.operations.aggregate_operations_p
 from materialize.output_consistency.input_data.operations.boolean_operations_provider import (
     BOOLEAN_OPERATION_TYPES,
 )
+from materialize.output_consistency.input_data.operations.bytea_operations_provider import (
+    BYTEA_OPERATION_TYPES,
+)
+from materialize.output_consistency.input_data.operations.crypto_operations_provider import (
+    CRYPTO_OPERATION_TYPES,
+)
 from materialize.output_consistency.input_data.operations.date_time_operations_provider import (
     DATE_TIME_OPERATION_TYPES,
 )
 from materialize.output_consistency.input_data.operations.generic_operations_provider import (
     GENERIC_OPERATION_TYPES,
+)
+from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
+    JSONB_OPERATION_TYPES,
 )
 from materialize.output_consistency.input_data.operations.number_operations_provider import (
     NUMERIC_OPERATION_TYPES,
@@ -41,5 +50,8 @@ ALL_OPERATION_TYPES: list[DbOperationOrFunction] = list(
         TRIGONOMETRIC_OPERATION_TYPES,
         DATE_TIME_OPERATION_TYPES,
         TEXT_OPERATION_TYPES,
+        BYTEA_OPERATION_TYPES,
+        CRYPTO_OPERATION_TYPES,
+        JSONB_OPERATION_TYPES,
     )
 )

@@ -11,11 +11,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -26,11 +28,11 @@ use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_sql::session::vars::TimestampOracleImpl;
 use mz_storage_types::sources::Timeline;
 use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, Instrument};
 
-use crate::catalog::CatalogItem;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
+use crate::coord::timestamp_oracle::batching_oracle::BatchingTimestampOracle;
 use crate::coord::timestamp_oracle::catalog_oracle::{
     CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
     TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
@@ -38,7 +40,7 @@ use crate::coord::timestamp_oracle::catalog_oracle::{
 use crate::coord::timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
-use crate::coord::timestamp_oracle::{self, TimestampOracle};
+use crate::coord::timestamp_oracle::{self, ShareableTimestampOracle, TimestampOracle};
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
 use crate::AdapterError;
@@ -118,10 +120,28 @@ impl Coordinator {
             .as_ref()
     }
 
+    pub(crate) fn get_shared_timestamp_oracle(
+        &self,
+        timeline: &Timeline,
+    ) -> Option<Arc<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
+        self.global_timelines
+            .get(timeline)
+            .expect("all timelines have a timestamp oracle")
+            .oracle
+            .get_shared()
+    }
+
     /// Returns a reference to the timestamp oracle used for reads and writes
     /// from/to a local input.
     fn get_local_timestamp_oracle(&self) -> &dyn TimestampOracle<Timestamp> {
         self.get_timestamp_oracle(&Timeline::EpochMilliseconds)
+    }
+
+    /// Returns a [`ShareableTimestampOracle`] used for reads and writes from/to a local input.
+    fn get_local_shared_timestamp_oracle(
+        &self,
+    ) -> Option<Arc<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
+        self.get_shared_timestamp_oracle(&Timeline::EpochMilliseconds)
     }
 
     /// Assign a timestamp for a read from a local input. Reads following writes
@@ -169,6 +189,34 @@ impl Coordinator {
             .oracle
             .apply_write(timestamp)
             .await;
+    }
+
+    /// Marks a write at `timestamp` as completed, using a [`ShareableTimestampOracle`].
+    ///
+    /// TODO(parkmycar): [`ShareableTimestampOracle`] is a new concept and not always available.
+    /// When we move entirely to the shareable model, this method and
+    /// [`Coordinator::apply_local_write`] should get merged.
+    pub(crate) fn apply_local_write_shareable(
+        &mut self,
+        timestamp: Timestamp,
+    ) -> Option<impl Future<Output = ()> + Send + 'static> {
+        let now = self.now().into();
+
+        if timestamp > timestamp_oracle::catalog_oracle::upper_bound(&now) {
+            error!(
+                "Setting local read timestamp to {timestamp}, which is more than \
+                {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than now, {now}",
+                *TIMESTAMP_PERSIST_INTERVAL
+            );
+        }
+
+        self.get_local_shared_timestamp_oracle()
+            .map(|oracle| async move {
+                oracle
+                    .apply_write(timestamp)
+                    .instrument(tracing::debug_span!("apply_local_write_static", ?timestamp))
+                    .await
+            })
     }
 
     /// Ensures that a global timeline state exists for `timeline`.
@@ -244,6 +292,16 @@ impl Coordinator {
                         )
                         .await,
                     );
+
+                    let shared_oracle = oracle
+                        .get_shared()
+                        .expect("postgres timestamp oracle is shareable");
+
+                    let batching_oracle =
+                        BatchingTimestampOracle::new(Arc::clone(metrics), shared_oracle);
+
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> =
+                        Box::new(batching_oracle);
 
                     oracle
                 }
@@ -602,6 +660,10 @@ impl Coordinator {
             (
                 &ResolvedDatabaseSpecifier::Ambient,
                 &SchemaSpecifier::Id(self.catalog().get_information_schema_id().clone()),
+            ),
+            (
+                &ResolvedDatabaseSpecifier::Ambient,
+                &SchemaSpecifier::Id(self.catalog().get_mz_unsafe_schema_id().clone()),
             ),
         ];
 

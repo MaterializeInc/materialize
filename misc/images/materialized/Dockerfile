@@ -7,25 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM cockroachdb/cockroach:v23.1.11 AS crdb
-
-MZFROM ubuntu-base
-
-RUN apt-get update \
-    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
-        ca-certificates \
-        curl \
-        postgresql-client-14 \
-        tini \
-        ssh \
-    && groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize \
-    && mkdir /mzdata \
-    && mkdir /cockroach-data \
-    && mkdir /scratch \
-    && chown materialize /mzdata /cockroach-data /scratch
-
-COPY --from=crdb /cockroach/cockroach /usr/local/bin/cockroach
+MZFROM materialized-base
 
 COPY clusterd environmentd entrypoint.sh /usr/local/bin/
 

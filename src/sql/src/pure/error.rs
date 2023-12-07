@@ -59,6 +59,14 @@ pub enum PgSourcePurificationError {
     NotPgConnection(FullItemName),
     #[error("POSTGRES CONNECTION must specify PUBLICATION")]
     ConnectionMissingPublication,
+    #[error("PostgreSQL server has insufficient number of replication slots available")]
+    InsufficientReplicationSlotsAvailable { count: usize },
+    #[error("server must have wal_level >= logical, but has {wal_level}")]
+    InsufficientWalLevel {
+        wal_level: mz_postgres_util::replication::WalLevel,
+    },
+    #[error("replication disabled on server")]
+    ReplicationDisabled,
 }
 
 impl PgSourcePurificationError {
@@ -110,6 +118,11 @@ impl PgSourcePurificationError {
                     "\n"
                 )
             )),
+            Self::InsufficientReplicationSlotsAvailable { count } => Some(format!(
+                "executing this statement requires {} replication slot{}",
+                count,
+                if *count == 1 { "" } else { "s" }
+            )),
             _ => None,
         }
     }
@@ -133,6 +146,10 @@ impl PgSourcePurificationError {
                 as text."
                     .into(),
             ),
+            Self::InsufficientReplicationSlotsAvailable { .. } => Some(
+                "you might be able to wait for other sources to finish snapshotting and try again".into()
+            ),
+            Self::ReplicationDisabled => Some("set max_wal_senders to a value > 0".into()),
             _ => None,
         }
     }

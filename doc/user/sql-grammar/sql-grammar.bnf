@@ -143,7 +143,8 @@ create_source_kafka ::=
   '(' 'TOPIC' topic ( ( ',' connection_option )? ) ')'
   ('KEY FORMAT' format_spec 'VALUE FORMAT' format_spec | 'FORMAT' format_spec)
   ('INCLUDE'
-    ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? )*
+         ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? | 'HEADER' key 'AS' name ('BYTES')? )
+    (',' ( ('KEY' | 'PARTITION' | 'OFFSET' | 'TIMESTAMP' | 'HEADERS' ) ('AS' name)? | 'HEADER' key 'AS' name ('BYTES')? ) )*
   )?
   ('ENVELOPE' ('NONE' | 'DEBEZIUM' | 'UPSERT'))?
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?

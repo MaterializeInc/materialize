@@ -7,12 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::convert::AsRef;
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -29,6 +27,7 @@ use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_types::sources::UpsertEnvelope;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+    PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -40,12 +39,12 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
+use crate::metrics::upsert::UpsertMetrics;
 use crate::render::sources::OutputIndex;
 use crate::render::upsert::types::{
     upsert_bincode_opts, AutoSpillBackend, InMemoryHashMap, RocksDBParams, UpsertState,
     UpsertStateBackend,
 };
-use crate::source::types::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 
 mod rocksdb;
@@ -187,7 +186,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     upsert_envelope: UpsertEnvelope,
     resume_upper: Antichain<G::Timestamp>,
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
-    previous_token: Option<Rc<dyn Any>>,
+    previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::RawSourceCreationConfig,
     instance_context: &StorageInstanceContext,
     dataflow_paramters: &crate::internal_control::DataflowParameters,
@@ -195,13 +194,12 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
-    Rc<dyn Any>,
+    PressOnDropButton,
 )
 where
     G::Timestamp: TotalOrder,
 {
-    let upsert_metrics = UpsertMetrics::new(
-        &source_config.base_metrics,
+    let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,
         source_config.worker_id,
         backpressure_metrics,
@@ -363,7 +361,7 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     mut key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
-    previous_token: Option<Rc<dyn Any>>,
+    previous_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::RawSourceCreationConfig,
     state: F,
@@ -371,7 +369,7 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
-    Rc<dyn Any>,
+    PressOnDropButton,
 )
 where
     G::Timestamp: TotalOrder,
@@ -721,7 +719,7 @@ where
             Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
         }),
         health_stream,
-        Rc::new(shutdown_button.press_on_drop()),
+        shutdown_button.press_on_drop(),
     )
 }
 

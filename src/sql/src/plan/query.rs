@@ -70,7 +70,9 @@ use uuid::Uuid;
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
-use crate::names::{Aug, FullItemName, PartialItemName, ResolvedDataType, ResolvedItemName};
+use crate::names::{
+    Aug, FullItemName, PartialItemName, ResolvedDataType, ResolvedItemName, SchemaSpecifier,
+};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
@@ -1428,30 +1430,62 @@ pub fn plan_ctes(
 
             // Plan all CTEs and validate the proposed types.
             for cte in ctes.iter() {
-                let cte_name = normalize::ident(cte.name.clone());
                 let (val, _scope) = plan_nested_query(qcx, &cte.query)?;
+
+                let proposed_typ = qcx.ctes[&cte.id].desc.typ();
+
+                if proposed_typ.column_types.iter().any(|c| !c.nullable) {
+                    // Once WMR CTEs support NOT NULL constraints, check that
+                    // nullability of derived column types are compatible.
+                    sql_bail!("[internal error]: WMR CTEs do not support NOT NULL constraints on proposed column types");
+                }
+
+                if !proposed_typ.keys.is_empty() {
+                    // Once WMR CTEs support keys, check that keys exactly
+                    // overlap.
+                    sql_bail!("[internal error]: WMR CTEs do not support keys");
+                }
+
                 // Validate that the derived and proposed types are the same.
-                let typ = qcx.relation_type(&val);
-                // TODO: Use implicit casts to convert among types rather than error.
-                if !typ.subtypes(qcx.ctes[&cte.id].desc.typ()) {
-                    let declared_typ = qcx.ctes[&cte.id]
-                        .desc
-                        .typ()
+                let derived_typ = qcx.relation_type(&val);
+
+                let type_err = |proposed_typ: &RelationType, derived_typ: RelationType| {
+                    let cte_name = normalize::ident(cte.name.clone());
+                    let proposed_typ = proposed_typ
                         .column_types
                         .iter()
                         .map(|ty| qcx.humanize_scalar_type(&ty.scalar_type))
                         .collect::<Vec<_>>();
-                    let inferred_typ = typ
+                    let inferred_typ = derived_typ
                         .column_types
                         .iter()
                         .map(|ty| qcx.humanize_scalar_type(&ty.scalar_type))
                         .collect::<Vec<_>>();
                     Err(PlanError::RecursiveTypeMismatch(
                         cte_name,
-                        declared_typ,
+                        proposed_typ,
                         inferred_typ,
-                    ))?;
+                    ))
+                };
+
+                if derived_typ.column_types.len() != proposed_typ.column_types.len() {
+                    return type_err(proposed_typ, derived_typ);
                 }
+
+                // Cast dervied types to proposed types or error.
+                let val = match cast_relation(
+                    qcx,
+                    // Choose `CastContext::Assignment`` because the user has
+                    // been explicit about the types they expect. Choosing
+                    // `CastContext::Implicit` is not "strong" enough to impose
+                    // typmods from proposed types onto values.
+                    CastContext::Assignment,
+                    val,
+                    proposed_typ.column_types.iter().map(|c| &c.scalar_type),
+                ) {
+                    Ok(val) => val,
+                    Err(_) => return type_err(proposed_typ, derived_typ),
+                };
 
                 result.push((cte.id, val, shadowed_descs.remove(&cte.id)));
             }
@@ -3099,13 +3133,9 @@ fn invent_column_name(
                 };
 
                 if schema
-                    == ecx
-                        .qcx
-                        .scx
-                        .catalog
-                        .resolve_schema(None, mz_repr::namespaces::MZ_INTERNAL_SCHEMA)
-                        .expect("mz_internal schema must exist")
-                        .id()
+                    == &SchemaSpecifier::from(*ecx.qcx.scx.catalog.get_mz_internal_schema_id())
+                    || schema
+                        == &SchemaSpecifier::from(*ecx.qcx.scx.catalog.get_mz_unsafe_schema_id())
                 {
                     None
                 } else {

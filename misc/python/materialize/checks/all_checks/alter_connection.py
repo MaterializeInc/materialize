@@ -13,7 +13,7 @@ from random import Random
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.checks import Check, disabled, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
@@ -37,6 +37,7 @@ SHOW_CONNECTION_SSH_TUNNEL_OTHER = """materialize.public.ssh_tunnel_{i} "CREATE 
 WITH_SSH_SUFFIX = "USING SSH TUNNEL ssh_tunnel_{i}"
 
 
+@disabled("reenable with 23613")
 class AlterConnectionSshChangeBase(Check):
     def __init__(
         self,

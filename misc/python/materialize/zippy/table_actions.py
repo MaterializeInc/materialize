@@ -91,8 +91,14 @@ class ValidateTable(Action):
     def requires(cls) -> set[type[Capability]]:
         return {BalancerdIsRunning, MzIsRunning, TableExists}
 
-    def __init__(self, capabilities: Capabilities) -> None:
-        self.table = random.choice(capabilities.get(TableExists))
+    def __init__(
+        self, capabilities: Capabilities, table: TableExists | None = None
+    ) -> None:
+        if table is not None:
+            self.table = table
+        else:
+            self.table = random.choice(capabilities.get(TableExists))
+
         self.select_limit = random.choices([True, False], weights=[0.2, 0.8], k=1)[0]
         super().__init__(capabilities)
 

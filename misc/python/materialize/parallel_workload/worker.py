@@ -16,13 +16,14 @@ import pg8000
 
 from materialize.data_ingest.query_error import QueryError
 from materialize.mzcompose.composition import Composition
-from materialize.parallel_workload.action import Action, ReconnectAction
+from materialize.parallel_workload.action import Action, ActionList, ReconnectAction
 from materialize.parallel_workload.database import Database
 from materialize.parallel_workload.executor import Executor
 
 
 class Worker:
     rng: random.Random
+    action_list: ActionList | None
     actions: list[Action]
     weights: list[float]
     end_time: float
@@ -42,8 +43,10 @@ class Worker:
         autocommit: bool,
         system: bool,
         composition: Composition | None,
+        action_list: ActionList | None = None,
     ):
         self.rng = rng
+        self.action_list = action_list
         self.actions = actions
         self.weights = weights
         self.end_time = end_time

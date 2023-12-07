@@ -1052,9 +1052,6 @@ mod tests {
 
     use super::*;
 
-    // TODO: datadriven golden tests for various interesting Datums and Rows to
-    // catch any changes in the encoding.
-
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn roundtrip() {

@@ -290,15 +290,12 @@ async fn test_conn_startup() {
     // A welcome notice should be sent.
     {
         let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
-        let client = server
+        let _client = server
             .connect()
             .options("") // Override the test harness's default of `--welcome_message=off`.
             .notice_callback(move |notice| notice_tx.send(notice).unwrap())
             .await
             .unwrap();
-        // Issuing a query is required to see the notice due to delayed startup.
-        // TODO: remove this when we remove delayed startup.
-        client.query_one("SELECT 1", &[]).await.unwrap();
         match notice_rx.recv().await {
             Some(n) => {
                 assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
@@ -578,7 +575,7 @@ fn test_pgtest_mz() {
         &[
             "enable_raise_statement",
             "enable_unmanaged_cluster_replicas",
-            "enable_dangerous_functions",
+            "enable_unsafe_functions",
         ],
     );
 }

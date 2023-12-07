@@ -18,6 +18,8 @@
 
 use ::serde::Deserialize;
 use mz_ore::collections::HashMap;
+use mz_sql_lexer::keywords::Keyword;
+use mz_sql_lexer::lexer::{self, Token};
 use mz_sql_parser::ast::{statement_kind_label_value, Raw, Statement};
 use mz_sql_parser::parser::parse_statements;
 use regex::Regex;
@@ -31,7 +33,7 @@ use tower_lsp::{Client, LanguageServer};
 
 use crate::{PKG_NAME, PKG_VERSION};
 
-/// Default formatting width to use in the [Backend::formatting] implementation.
+/// Default formatting width to use in the [LanguageServer::formatting] implementation.
 pub const DEFAULT_FORMATTING_WIDTH: usize = 100;
 
 /// This is a re-implemention of [mz_sql_parser::parser::StatementParseResult]
@@ -63,6 +65,18 @@ pub struct ExecuteCommandParseResponse {
     pub statements: Vec<ExecuteCommandParseStatement>,
 }
 
+/// Represents the completion items that will
+/// be returned to the client when requested.
+#[derive(Debug)]
+pub struct Completions {
+    /// Contains the completion items
+    /// after a SELECT token.
+    pub select: Vec<CompletionItem>,
+    /// Contains the completion items for
+    /// after a FROM token.
+    pub from: Vec<CompletionItem>,
+}
+
 /// The [Backend] struct implements the [LanguageServer] trait, and thus must provide implementations for its methods.
 /// Most imporant methods includes:
 /// - `initialize`: sets up the server.
@@ -91,8 +105,87 @@ pub struct Backend {
     /// prior to save the file.
     pub parse_results: Mutex<HashMap<Url, ParseResult>>,
 
+    /// Contains the latest content for each file.
+    pub content: Mutex<HashMap<Url, Rope>>,
+
     /// Formatting width to use in mz- prettier
     pub formatting_width: Mutex<usize>,
+
+    /// Schema available in the client
+    /// used for completion suggestions.
+    pub schema: Mutex<Option<Schema>>,
+
+    /// Completion suggestion to return
+    /// to the client when requested.
+    pub completions: Mutex<Completions>,
+}
+
+/// Represents a column from an [ObjectType
+#[derive(Debug, Clone, Deserialize)]
+pub struct SchemaObjectColumn {
+    /// Represents the column's name.
+    pub name: String,
+    /// Represents the column's type.
+    #[serde(rename = "type")]
+    pub typ: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Represents each possible object type admissible by the LSP.
+pub enum ObjectType {
+    /// Represents a materialized view.
+    MaterializedView,
+    /// Represents a view.
+    View,
+    /// Represents a source.
+    Source,
+    /// Represents a table.
+    Table,
+    /// Represents a sink.
+    Sink,
+}
+
+impl std::fmt::Display for ObjectType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ObjectType::MaterializedView => write!(f, "Materialized View"),
+            ObjectType::View => write!(f, "View"),
+            ObjectType::Source => write!(f, "Source"),
+            ObjectType::Table => write!(f, "Table"),
+            ObjectType::Sink => write!(f, "Sink"),
+        }
+    }
+}
+
+/// Represents a Materialize object present in the schema,
+/// and its columns.
+///
+/// E.g. a table, view, source, etc.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SchemaObject {
+    /// Represents the object type.
+    #[serde(rename = "type")]
+    pub typ: ObjectType,
+    /// Represents the object name.
+    pub name: String,
+    /// Contains all the columns available in the object.
+    pub columns: Vec<SchemaObjectColumn>,
+}
+
+/// Represents the current schema, database and all
+/// its objects the client is using.
+///
+/// This is later used to return completion items to the client.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Schema {
+    /// Represents the schema name.
+    pub schema: String,
+    /// Represents the database name.
+    pub database: String,
+    /// Contains all the user objects (tables, views, sources, etc.)
+    /// available in the current database/schema.
+    pub objects: Vec<SchemaObject>,
 }
 
 /// Contains customizable options send by the client.
@@ -100,28 +193,30 @@ pub struct Backend {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeOptions {
     /// Represents the width used to format text using [mz_sql_pretty].
-    formatting_width: Option<usize>,
+    pub formatting_width: Option<usize>,
+    /// Represents the current schema available in the client.
+    pub schema: Option<Schema>,
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        // Load the formatting width option sent by the client.
+        // Load the formatting width and schema option sent by the client.
         if let Some(value_options) = params.initialization_options {
             match serde_json::from_value(value_options) {
                 Ok(options) => {
-                    self.client
-                        .log_message(
-                            MessageType::INFO,
-                            format!("Initialization options: {:?}", options),
-                        )
-                        .await;
-
                     let options: InitializeOptions = options;
                     if let Some(formatting_width) = options.formatting_width {
-                        let mut mutex_changer = self.formatting_width.lock().await;
-                        *mutex_changer = formatting_width;
+                        let mut formatting_width_guard = self.formatting_width.lock().await;
+                        *formatting_width_guard = formatting_width;
                     }
+
+                    if let Some(schema) = options.schema {
+                        let mut schema_guard = self.schema.lock().await;
+                        *schema_guard = Some(schema.clone());
+                        let mut completions = self.completions.lock().await;
+                        *completions = self.build_completion_items(schema);
+                    };
                 }
                 Err(err) => {
                     self.client
@@ -150,6 +245,13 @@ impl LanguageServer for Backend {
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: None,
                     },
+                }),
+                completion_provider: Some(CompletionOptions {
+                    resolve_provider: Some(false),
+                    trigger_characters: Some(vec![".".to_string()]),
+                    work_done_progress_options: Default::default(),
+                    all_commit_characters: None,
+                    completion_item: None,
                 }),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
@@ -225,6 +327,32 @@ impl LanguageServer for Backend {
                     return Err(build_error("Missing command args."));
                 }
             }
+            "optionsUpdate" => {
+                let json_args = command_params.arguments.get(0);
+
+                if let Some(json_args) = json_args {
+                    let args = serde_json::from_value::<InitializeOptions>(json_args.clone())
+                        .map_err(|_| {
+                            build_error("Error deserializing parse args as InitializeOptions.")
+                        })?;
+
+                    if let Some(formatting_width) = args.formatting_width {
+                        let mut formatting_width_guard = self.formatting_width.lock().await;
+                        *formatting_width_guard = formatting_width;
+                    }
+
+                    if let Some(schema) = args.schema {
+                        let mut schema_guard = self.schema.lock().await;
+                        *schema_guard = Some(schema.clone());
+                        let mut completions = self.completions.lock().await;
+                        *completions = self.build_completion_items(schema);
+                    }
+
+                    return Ok(None);
+                } else {
+                    return Err(build_error("Missing command args."));
+                }
+            }
             _ => {
                 return Err(build_error("Unknown command."));
             }
@@ -269,15 +397,6 @@ impl LanguageServer for Backend {
             .await;
     }
 
-    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let _uri = params.text_document_position.text_document.uri;
-        let _position = params.text_document_position.position;
-
-        // TODO: Re enable when position is correct.
-        // Ok(completions.map(CompletionResponse::Array))
-        Ok(None)
-    }
-
     async fn code_lens(&self, _params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
         let _lenses: Vec<CodeLens> = vec![CodeLens {
             range: Range {
@@ -295,6 +414,62 @@ impl LanguageServer for Backend {
         // TODO: Re enable when position is correct.
         // Ok(Some(lenses))
         Ok(None)
+    }
+
+    /// Completion implementation.
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let content = self.content.lock().await;
+        let content = content.get(&uri);
+
+        if let Some(content) = content {
+            // Get the lex token.
+            let lex_results = lexer::lex(&content.to_string())
+                .map_err(|_| build_error("Error getting lex tokens."))?;
+            let offset = position_to_offset(position, content)
+                .ok_or(build_error("Error getting completion offset."))?;
+
+            let last_keyword = lex_results
+                .iter()
+                .filter_map(|x| {
+                    if x.offset < offset {
+                        match x.kind {
+                            Token::Keyword(k) => match k {
+                                Keyword::Select => Some(k),
+                                Keyword::From => Some(k),
+                                _ => None,
+                            },
+                            // Skip the rest for now.
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .last();
+
+            if let Some(keyword) = last_keyword {
+                return match keyword {
+                    Keyword::Select => {
+                        let completions = self.completions.lock().await;
+                        let select_completions = completions.select.clone();
+                        Ok(Some(CompletionResponse::Array(select_completions)))
+                    }
+                    Keyword::From => {
+                        let completions = self.completions.lock().await;
+                        let from_completions = completions.from.clone();
+                        Ok(Some(CompletionResponse::Array(from_completions)))
+                    }
+                    _ => Ok(None),
+                };
+            } else {
+                return Ok(None);
+            }
+        } else {
+            return Ok(None);
+        }
     }
 
     /// Formats the code using [mz_sql_pretty].
@@ -341,13 +516,17 @@ impl Backend {
             .await;
         let rope = ropey::Rope::from_str(&params.text);
 
+        let mut content = self.content.lock().await;
         let mut parse_results = self.parse_results.lock().await;
+
         // Parse the text
         let parse_result = mz_sql_parser::parser::parse_statements(&params.text);
 
         match parse_result {
             // The parser will return Ok when everything is well written.
             Ok(results) => {
+                content.insert(params.uri.clone(), rope.clone());
+
                 // Clear the diagnostics in case there were issues before.
                 self.client
                     .publish_diagnostics(params.uri.clone(), vec![], Some(params.version))
@@ -373,6 +552,9 @@ impl Backend {
                     // Do not send any new diagnostics
                     return;
                 }
+
+                // Only insert content if it is not Jinja code.
+                content.insert(params.uri.clone(), rope.clone());
 
                 let diagnostics = Diagnostic::new_simple(range, err_parsing.error.message);
 
@@ -408,9 +590,94 @@ impl Backend {
     fn is_jinja(&self, s: &str, code: String) -> bool {
         s == "unexpected character in input: {" && self.contains_jinja_code(&code)
     }
+
+    /// Builds the completion items for the following statements:
+    ///
+    /// * SELECT
+    /// * FROM
+    ///
+    /// Use this function to build the completion items once,
+    /// and avoid having to rebuild on every [LanguageServer::completion] call.
+    fn build_completion_items(&self, schema: Schema) -> Completions {
+        // Build SELECT completion items:
+        let mut select_completions = Vec::new();
+        let mut from_completions = Vec::new();
+
+        schema.objects.iter().for_each(|object| {
+            // Columns
+            object.columns.iter().for_each(|column| {
+                select_completions.push(CompletionItem {
+                    label: column.name.to_string(),
+                    label_details: Some(CompletionItemLabelDetails {
+                        detail: Some(column.typ.to_string()),
+                        description: None,
+                    }),
+                    kind: Some(CompletionItemKind::FIELD),
+                    detail: Some(
+                        format!(
+                            "From {}.{}.{} ({:?})",
+                            schema.database, schema.schema, object.name, object.typ
+                        )
+                        .to_string(),
+                    ),
+                    documentation: None,
+                    deprecated: Some(false),
+                    ..Default::default()
+                });
+            });
+
+            // Objects
+            from_completions.push(CompletionItem {
+                label: object.name.to_string(),
+                label_details: Some(CompletionItemLabelDetails {
+                    detail: Some(object.typ.to_string()),
+                    description: None,
+                }),
+                kind: match object.typ {
+                    ObjectType::View => Some(CompletionItemKind::ENUM_MEMBER),
+                    ObjectType::MaterializedView => Some(CompletionItemKind::ENUM),
+                    ObjectType::Source => Some(CompletionItemKind::CLASS),
+                    ObjectType::Sink => Some(CompletionItemKind::CLASS),
+                    ObjectType::Table => Some(CompletionItemKind::CONSTANT),
+                },
+                detail: Some(
+                    format!(
+                        "Represents {}.{}.{} ({:?})",
+                        schema.database, schema.schema, object.name, object.typ
+                    )
+                    .to_string(),
+                ),
+                documentation: None,
+                deprecated: Some(false),
+                ..Default::default()
+            });
+        });
+
+        Completions {
+            from: from_completions,
+            select: select_completions,
+        }
+    }
 }
 
-/// This functions is a helper function that converts an offset in the file to a (line, column).
+/// This function converts a (line, column) position in the text to an offset in the file.
+///
+/// It is the inverse of the `offset_to_position` function.
+fn position_to_offset(position: Position, rope: &Rope) -> Option<usize> {
+    // Convert line and column from u32 back to usize
+    let line: usize = position.line.try_into().ok()?;
+    let column: usize = position.character.try_into().ok()?;
+
+    // Get the offset of the first character of the line
+    let first_char_of_line_offset = rope.try_line_to_char(line).ok()?;
+
+    // Calculate the offset by adding the column number to the first character of the line's offset
+    let offset = first_char_of_line_offset + column;
+
+    Some(offset)
+}
+
+/// This function is a helper function that converts an offset in the file to a (line, column).
 ///
 /// It is useful when translating an ofsset returned by [mz_sql_parser::parser::parse_statements]
 /// to an (x,y) position in the text to represent the error in the correct token.

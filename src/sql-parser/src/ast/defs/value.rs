@@ -67,11 +67,11 @@ impl AstDisplay for Value {
             // the value as part of our telemetry. Check the data management policy to be sure!
             match self {
                 Value::Number(_) | Value::String(_) | Value::HexString(_) => {
-                    f.write_str("<REDACTED>");
+                    f.write_str("'<REDACTED>'");
                     return;
                 }
                 Value::Interval(_) => {
-                    f.write_str("INTERVAL <REDACTED>");
+                    f.write_str("INTERVAL '<REDACTED>'");
                     return;
                 }
                 Value::Boolean(_) | Value::Null => {

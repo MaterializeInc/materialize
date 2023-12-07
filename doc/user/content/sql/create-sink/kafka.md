@@ -369,6 +369,7 @@ Operation type  | Resource type    | Resource name
 Read, Write     | Topic            | Consult `mz_kafka_connections.sink_progress_topic` for the sink's connection
 Write           | Topic            | The specified `TOPIC` option
 Write           | Transactional ID | `mz-producer-{SINK ID}-*`
+Read            | Group            | `materialize-bootstrap-sink-{SINK ID}`
 
 When using [automatic topic creation](#automatic-topic-creation), Materialize
 additionally requires access to the following operations:
@@ -596,11 +597,11 @@ To provision a specific amount of CPU and memory to a sink on creation, use the 
 
 ```sql
 CREATE SINK avro_sink
-  IN CLUSTER my_io_cluster
   FROM <source, table or mview>
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  ENVELOPE DEBEZIUM;
+  ENVELOPE DEBEZIUM
+  WITH (SIZE = '3xsmall');
 ```
 
 To resize the sink after creation:

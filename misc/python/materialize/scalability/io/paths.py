@@ -35,6 +35,10 @@ def regressions_csv() -> Path:
     return RESULTS_DIR / "regressions.csv"
 
 
+def significant_improvements_csv() -> Path:
+    return RESULTS_DIR / "improvements.csv"
+
+
 def results_csv(endpoint_name: str) -> Path:
     return RESULTS_DIR / Path(endpoint_name) / "results.csv"
 

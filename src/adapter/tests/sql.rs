@@ -89,8 +89,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use mz_adapter::catalog::{Catalog, CatalogItem, Op, Table};
+use mz_adapter::catalog::{Catalog, Op};
 use mz_adapter::session::{Session, DEFAULT_DATABASE_NAME};
+use mz_catalog::memory::objects::{CatalogItem, Table};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
@@ -158,7 +159,10 @@ async fn datadriven() {
                                             item: test_case.input.trim_end().to_string(),
                                         },
                                         item: CatalogItem::Table(Table {
-                                            create_sql: "TODO".to_string(),
+                                            create_sql: Some(format!(
+                                                "CREATE TABLE {} ()",
+                                                test_case.input.trim_end()
+                                            )),
                                             desc: RelationDesc::empty(),
                                             defaults: vec![Expr::null(); 0],
                                             conn_id: None,

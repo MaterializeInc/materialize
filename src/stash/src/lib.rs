@@ -389,12 +389,14 @@ where
     /// Sets the given key value pairs, if not already set. If a new key appears
     /// multiple times in `entries`, its value will be from the first occurrence
     /// in `entries`.
+    ///
+    /// Returns the new state of the collection after this operation.
     #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
     pub async fn insert_without_overwrite<I>(
         &self,
         stash: &mut Stash,
         entries: I,
-    ) -> Result<(), StashError>
+    ) -> Result<BTreeMap<K, V>, StashError>
     where
         I: IntoIterator<Item = (K, V)>,
         // TODO: Figure out if it's possible to remove the 'static bounds.
@@ -431,7 +433,7 @@ where
                         }
                     }
                     tx.append(vec![batch]).await?;
-                    Ok(())
+                    Ok(prev)
                 })
             })
             .await

@@ -100,6 +100,18 @@ steps:
           composition: zippy
           args: [--scenario=DebeziumPostgres, --actions=1000000]
 
+  - id: zippy-backup-and-restore-large
+    label: "Large-scale backup+restore"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=BackupAndRestoreLarge, --actions=1000000]
+
+
   - id: zippy-kafka-parallel-insert
     label: "Longer Zippy Kafka Parallel Insert"
     timeout_in_minutes: 2880

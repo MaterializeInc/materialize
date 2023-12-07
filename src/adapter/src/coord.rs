@@ -83,8 +83,8 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
-use mz_catalog::memory::objects::CatalogEntry;
-use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
+use mz_catalog::memory::objects::{CatalogEntry, CatalogItem, Connection, DataSourceDesc, Source};
+use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
@@ -94,16 +94,16 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::stack;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
-use mz_secrets::SecretsController;
+use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
@@ -127,8 +127,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::catalog::{
-    self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, Connection, DataSourceDesc, Source,
+    self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
+    ClusterReplicaSizeMap,
 };
 use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -172,6 +172,7 @@ mod ddl;
 mod indexes;
 mod introspection;
 mod message_handler;
+mod privatelink_status;
 mod read_policy;
 mod sequencer;
 mod sql;
@@ -194,13 +195,6 @@ pub enum Message<T = mz_repr::Timestamp> {
         Vec<CompletedClientTransmitter>,
         /// Optional lock if the group commit contained writes to user tables.
         Option<OwnedMutexGuard<()>>,
-        /// Operations waiting on this group commit to finish.
-        ///
-        /// Note: this differs from the [`CompletedClientTransmitter`]s above because those are
-        /// used to send a response to a request, which indicates the Coordinator has finished all
-        /// of it's work, but these represent auxiliary work that still needs to be done, e.g.
-        /// waiting for a write to Persist to complete.
-        Vec<oneshot::Sender<()>>,
         /// Permit which limits how many group commits we run at once.
         Option<GroupCommitPermit>,
     ),
@@ -234,6 +228,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         stage: PeekStage,
     },
     DrainStatementLog,
+    PrivateLinkVpcEndpointEvents(BTreeMap<GlobalId, VpcEndpointEvent>),
 }
 
 impl Message {
@@ -274,6 +269,7 @@ impl Message {
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
+            Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
         }
     }
 }
@@ -324,6 +320,7 @@ pub enum RealTimeRecencyContext {
         when: QueryWhen,
         target_replica: Option<ReplicaId>,
         timeline_context: TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
         in_immediate_multi_stmt_txn: bool,
         optimizer: optimize::peek::Optimizer,
@@ -343,8 +340,9 @@ impl RealTimeRecencyContext {
 #[derive(Debug)]
 pub enum PeekStage {
     Validate(PeekStageValidate),
-    Optimize(PeekStageOptimize),
     Timestamp(PeekStageTimestamp),
+    Optimize(PeekStageOptimize),
+    RealTimeRecency(PeekStageRealTimeRecency),
     Finish(PeekStageFinish),
 }
 
@@ -352,8 +350,9 @@ impl PeekStage {
     fn validity(&mut self) -> Option<&mut PlanValidity> {
         match self {
             PeekStage::Validate(_) => None,
-            PeekStage::Optimize(PeekStageOptimize { validity, .. })
-            | PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
+            PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
+            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
+            | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
         }
     }
@@ -366,7 +365,7 @@ pub struct PeekStageValidate {
 }
 
 #[derive(Debug)]
-pub struct PeekStageOptimize {
+pub struct PeekStageTimestamp {
     validity: PlanValidity,
     source: MirRelationExpr,
     copy_to: Option<CopyFormat>,
@@ -379,7 +378,21 @@ pub struct PeekStageOptimize {
 }
 
 #[derive(Debug)]
-pub struct PeekStageTimestamp {
+pub struct PeekStageOptimize {
+    validity: PlanValidity,
+    source: MirRelationExpr,
+    copy_to: Option<CopyFormat>,
+    source_ids: BTreeSet<GlobalId>,
+    when: QueryWhen,
+    target_replica: Option<ReplicaId>,
+    timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
+    in_immediate_multi_stmt_txn: bool,
+    optimizer: optimize::peek::Optimizer,
+}
+
+#[derive(Debug)]
+pub struct PeekStageRealTimeRecency {
     validity: PlanValidity,
     copy_to: Option<CopyFormat>,
     source_ids: BTreeSet<GlobalId>,
@@ -387,6 +400,7 @@ pub struct PeekStageTimestamp {
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
@@ -400,6 +414,7 @@ pub struct PeekStageFinish {
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
     source_ids: BTreeSet<GlobalId>,
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
@@ -511,7 +526,6 @@ pub struct Config {
     pub default_storage_cluster_size: Option<String>,
     pub builtin_cluster_replica_size: String,
     pub system_parameter_defaults: BTreeMap<String, String>,
-    pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
     pub storage_usage_retention_period: Option<Duration>,
@@ -682,7 +696,12 @@ impl PendingRead {
             PendingRead::ReadThenWrite {
                 timestamp: (timestamp, timeline),
                 ..
-            } => TimestampContext::TimelineTimestamp(timeline.clone(), timestamp.clone()),
+            } => TimestampContext::TimelineTimestamp {
+                timeline: timeline.clone(),
+                chosen_ts: timestamp.clone(),
+                oracle_ts: None, // For writes, we always pick the oracle
+                                 // timestamp!
+            },
         }
     }
 
@@ -768,20 +787,10 @@ impl Drop for ExecuteContextExtra {
     fn drop(&mut self) {
         let Self { statement_uuid } = &*self;
         if let Some(statement_uuid) = statement_uuid {
-            // TODO [btv] -- We know this is happening in prod now,
-            // seemingly only related to SUBSCRIBEs from the console.
-            //
-            // This is `error` for now until I get around to debugging
-            // the root cause, as it's not a severe enough issue to be
-            // worth breaking staging.
-            //
-            // Once all known causes of this are resolved, bump this
-            // back to a soft_assert.
-            //
             // Note: the impact when this error hits
             // is that the statement will never be marked
             // as finished in the statement log.
-            tracing::error!("execute context for statement {statement_uuid:?} dropped without being properly retired.");
+            soft_panic_or_log!("execute context for statement {statement_uuid:?} dropped without being properly retired.");
         }
     }
 }
@@ -996,9 +1005,6 @@ pub struct Coordinator {
     /// (ie: VpcEndpoint objects)
     cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
 
-    /// Extra context to pass through to connection creation.
-    connection_context: ConnectionContext,
-
     /// Metadata about replicas that doesn't need to be persisted.
     /// Intended for inclusion in system tables.
     ///
@@ -1120,7 +1126,7 @@ impl Coordinator {
         // express the entries' dependency graph.
         let mut entries_awaiting_dependencies: BTreeMap<
             GlobalId,
-            Vec<(catalog::CatalogEntry, Vec<GlobalId>)>,
+            Vec<(CatalogEntry, Vec<GlobalId>)>,
         > = BTreeMap::new();
 
         let mut loaded_items = BTreeSet::new();
@@ -1134,8 +1140,7 @@ impl Coordinator {
         //
         // This can likely be removed in the next version of Materialize
         // (v0.46).
-        let mut entries_awaiting_dependent: BTreeMap<GlobalId, Vec<catalog::CatalogEntry>> =
-            BTreeMap::new();
+        let mut entries_awaiting_dependent: BTreeMap<GlobalId, Vec<CatalogEntry>> = BTreeMap::new();
         let mut awaited_dependent_seen = BTreeSet::new();
 
         let mut unsorted_entries: VecDeque<_> = self
@@ -1143,7 +1148,7 @@ impl Coordinator {
             .entries()
             .cloned()
             .map(|entry| {
-                let remaining_deps = entry.uses().0.iter().copied().collect::<Vec<_>>();
+                let remaining_deps = entry.uses().into_iter().collect::<Vec<_>>();
                 (entry, remaining_deps)
             })
             .collect();
@@ -1451,37 +1456,57 @@ impl Coordinator {
         }
 
         debug!("coordinator init: sending builtin table updates");
-        self.send_builtin_table_updates_blocking(builtin_table_updates)
+        let builtin_updates_fut = self
+            .builtin_table_update()
+            .execute(builtin_table_updates)
             .await;
+
+        // Destructure Self so we can do some concurrent work.
+        let Self {
+            controller,
+            secrets_controller,
+            catalog,
+            ..
+        } = self;
 
         // Signal to the storage controller that it is now free to reconcile its
         // state with what it has learned from the adapter.
-        self.controller.storage.reconcile_state().await;
+        let storage_reconcile_fut = controller.storage.reconcile_state();
 
         // Cleanup orphaned secrets. Errors during list() or delete() do not
         // need to prevent bootstrap from succeeding; we will retry next
         // startup.
-        match self.secrets_controller.list().await {
-            Ok(controller_secrets) => {
-                // Fetch all IDs from the catalog to future-proof against other
-                // things using secrets. Today, SECRET and CONNECTION objects use
-                // secrets_controller.ensure, but more things could in the future
-                // that would be easy to miss adding here.
-                let catalog_ids: BTreeSet<GlobalId> =
-                    self.catalog().entries().map(|entry| entry.id()).collect();
-                let controller_secrets: BTreeSet<GlobalId> =
-                    controller_secrets.into_iter().collect();
-                let orphaned = controller_secrets.difference(&catalog_ids);
-                for id in orphaned {
-                    info!("coordinator init: deleting orphaned secret {id}");
-                    fail_point!("orphan_secrets");
-                    if let Err(e) = self.secrets_controller.delete(*id).await {
-                        warn!("Dropping orphaned secret has encountered an error: {}", e);
+        let secrets_cleanup_fut = async move {
+            match secrets_controller.list().await {
+                Ok(controller_secrets) => {
+                    // Fetch all IDs from the catalog to future-proof against other
+                    // things using secrets. Today, SECRET and CONNECTION objects use
+                    // secrets_controller.ensure, but more things could in the future
+                    // that would be easy to miss adding here.
+                    let catalog_ids: BTreeSet<GlobalId> =
+                        catalog.entries().map(|entry| entry.id()).collect();
+                    let controller_secrets: BTreeSet<GlobalId> =
+                        controller_secrets.into_iter().collect();
+                    let orphaned = controller_secrets.difference(&catalog_ids);
+                    for id in orphaned {
+                        info!("coordinator init: deleting orphaned secret {id}");
+                        fail_point!("orphan_secrets");
+                        if let Err(e) = secrets_controller.delete(*id).await {
+                            warn!("Dropping orphaned secret has encountered an error: {}", e);
+                        }
                     }
                 }
+                Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
             }
-            Err(e) => warn!("Failed to list secrets during orphan cleanup: {:?}", e),
-        }
+        };
+
+        // Run all of our final steps concurrently.
+        futures::future::join_all([
+            storage_reconcile_fut,
+            builtin_updates_fut,
+            Box::pin(secrets_cleanup_fut),
+        ])
+        .await;
 
         info!("coordinator init: bootstrap complete");
         Ok(())
@@ -1497,6 +1522,19 @@ impl Coordinator {
     /// allows subsequent bootstrap logic to fetch metadata (such as frontiers) of arbitrary
     /// storage collections, without needing to worry about dependency order.
     async fn bootstrap_storage_collections(&mut self) {
+        // Reset the txns and table shards to a known set of invariants.
+        //
+        // TODO: This can be removed once we've flipped to the new txns system
+        // for good and there is no possibility of the old code running
+        // concurrently with the new code.
+        let init_ts = self.get_local_write_ts().await.timestamp;
+        self.controller
+            .storage
+            .init_txns(init_ts)
+            .await
+            .unwrap_or_terminate("init_txns");
+        self.apply_local_write(init_ts).await;
+
         let catalog = self.catalog();
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
@@ -1830,22 +1868,35 @@ impl Coordinator {
         // need to provide output starting from their `since`s, so these serve as upper bounds for
         // our `as_of`.
         let mut max_as_of = Antichain::new();
-        for mv_id in dependent_matviews {
-            let since = self.storage_implied_capability(mv_id);
-            let upper = self.storage_write_frontier(mv_id);
+        for mv_id in &dependent_matviews {
+            let since = self.storage_implied_capability(*mv_id);
+            let upper = self.storage_write_frontier(*mv_id);
             max_as_of.meet_assign(&since.join(upper));
         }
 
-        assert!(
-            PartialOrder::less_equal(&min_as_of, &max_as_of),
-            "error bootrapping index `as_of`: min_as_of {:?} greater than max_as_of {:?}",
-            min_as_of.elements(),
-            max_as_of.elements(),
-        );
+        let as_of = if PartialOrder::less_equal(&min_as_of, &max_as_of) {
+            min_as_of.join(&max_compaction_frontier).meet(&max_as_of)
+        } else {
+            // This should not happen. If we get here that means we _will_ skip times in some of
+            // the dependent materialized views, which is a correctness bug. However, skipping
+            // times in materialized views is probably preferable to panicking and thus making the
+            // entire environment unavailable. So we chose to handle this case gracefully and only
+            // log an error, unless soft-asserts are enabled, and continue with the `min_as_of` to
+            // make the dependent materialized views skip as few times as possible.
 
-        let mut as_of = min_as_of.clone();
-        as_of.join_assign(&max_compaction_frontier);
-        as_of.meet_assign(&max_as_of);
+            mz_ore::soft_panic_or_log!(
+                "error bootstrapping index `as_of`: \
+                 `min_as_of` {:?} greater than `max_as_of` {:?} \
+                 (import_ids={}, export_ids={}, dependent_matviews={:?})",
+                min_as_of.elements(),
+                max_as_of.elements(),
+                dataflow.display_import_ids(),
+                dataflow.display_export_ids(),
+                dependent_matviews,
+            );
+
+            min_as_of.clone()
+        };
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
@@ -1979,6 +2030,7 @@ impl Coordinator {
             });
 
             self.schedule_storage_usage_collection().await;
+            self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
@@ -1993,8 +2045,8 @@ impl Coordinator {
                 // cancellation safe and add a comment explaining why. You can refer here for more
                 // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
                 let msg = select! {
-                    // Order matters here. We want to process internal commands
-                    // before processing external commands.
+                    // Order matters here. Some correctness properties rely on us processing
+                    // internal commands before processing external commands.
                     biased;
 
                     // `recv()` on `UnboundedReceiver` is cancel-safe:
@@ -2132,6 +2184,16 @@ impl Coordinator {
         Arc::make_mut(&mut self.catalog)
     }
 
+    /// Obtain a reference to the coordinator's connection context.
+    fn connection_context(&self) -> &ConnectionContext {
+        self.controller.connection_context()
+    }
+
+    /// Obtain a reference to the coordinator's secret reader.
+    fn secrets_reader(&self) -> &dyn SecretsReader {
+        &*self.connection_context().secrets_reader
+    }
+
     /// Publishes a notice message to all sessions.
     pub(crate) fn broadcast_notice(&mut self, notice: AdapterNotice) {
         for meta in self.active_conns.values() {
@@ -2184,7 +2246,6 @@ pub fn serve(
         builtin_cluster_replica_size,
         system_parameter_defaults,
         availability_zones,
-        connection_context,
         storage_usage_client,
         storage_usage_collection_interval,
         storage_usage_retention_period,
@@ -2215,7 +2276,10 @@ pub fn serve(
 
         let aws_principal_context = match (
             aws_account_id,
-            connection_context.aws_external_id_prefix.clone(),
+            dataflow_client
+                .connection_context()
+                .aws_external_id_prefix
+                .clone(),
         ) {
             (Some(aws_account_id), Some(aws_external_id_prefix)) => Some(AwsPrincipalContext {
                 aws_account_id,
@@ -2232,7 +2296,6 @@ pub fn serve(
             Catalog::open(catalog::Config {
                 storage,
                 metrics_registry: &metrics_registry,
-                secrets_reader: secrets_controller.reader(),
                 storage_usage_retention_period,
                 state: catalog::StateConfig {
                     unsafe_mode,
@@ -2250,7 +2313,7 @@ pub fn serve(
                     aws_principal_context,
                     aws_privatelink_availability_zones,
                     system_parameter_sync_config,
-                    connection_context: Some(connection_context.clone()),
+                    connection_context: dataflow_client.connection_context().clone(),
                     active_connection_count,
                     http_host_name,
                 },
@@ -2339,7 +2402,6 @@ pub fn serve(
                     secrets_controller,
                     caching_secrets_reader,
                     cloud_resource_controller,
-                    connection_context,
                     transient_replica_metadata: BTreeMap::new(),
                     storage_usage_client,
                     storage_usage_collection_interval,

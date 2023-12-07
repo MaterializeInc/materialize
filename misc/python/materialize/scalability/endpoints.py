@@ -105,12 +105,6 @@ class MaterializeLocal(MaterializeNonRemote):
         return f"MaterializeLocal ({self.host()})"
 
 
-# TODO(def-,aljoscha) Switch this to "postgres" before #22029 is enabled in
-# production Also verify that there is no regression when the "other" side uses
-# catalog ts oracle and "this" uses postgres ts oracle
-ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {"timestamp_oracle": "catalog"}
-
-
 class MaterializeContainer(MaterializeNonRemote):
     def __init__(
         self,
@@ -142,10 +136,7 @@ class MaterializeContainer(MaterializeNonRemote):
 
         if self.image is not None and self.alternative_image is not None:
             if not self.composition.try_pull_service_image(
-                Materialized(
-                    image=self.image,
-                    additional_system_parameter_defaults=ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
-                )
+                Materialized(image=self.image)
             ):
                 # explicitly specified image cannot be found and alternative exists
                 print(
@@ -160,11 +151,7 @@ class MaterializeContainer(MaterializeNonRemote):
 
     def up_internal(self) -> None:
         with self.composition.override(
-            Materialized(
-                image=self.image,
-                sanity_restart=False,
-                additional_system_parameter_defaults=ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
-            )
+            Materialized(image=self.image, sanity_restart=False)
         ):
             self.composition.up("materialized")
             self._port = self.composition.default_port("materialized")

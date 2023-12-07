@@ -28,6 +28,7 @@ mz-stash-types = { path = "../stash-types" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-tls-util = { path = "../tls-util" }
+once_cell = { version = "1.16.0" }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive"] }

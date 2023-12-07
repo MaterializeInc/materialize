@@ -21,6 +21,10 @@ class Postgres(Service):
         mzbuild: str = "postgres",
         image: str | None = None,
         port: int = 5432,
+        extra_command: list[str] = [],
+        environment: list[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
+        volumes: list[str] = [],
+    ) -> None:
         command: list[str] = [
             "postgres",
             "-c",
@@ -31,10 +35,7 @@ class Postgres(Service):
             "max_replication_slots=100",
             "-c",
             "max_connections=5000",
-        ],
-        environment: list[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
-        volumes: list[str] = [],
-    ) -> None:
+        ] + extra_command
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
         config.update(
             {

@@ -32,6 +32,8 @@ pub async fn handle_webhook(
     headers: http::HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    // Record the time we receive the request, for use if validation checks the current timestamp.
+    let received_at = client.now();
     let conn_id = client.new_conn_id().context("allocate connection id")?;
 
     // Collect headers into a map, while converting them into strings.
@@ -55,7 +57,7 @@ pub async fn handle_webhook(
         header_tys,
         validator,
     } = client
-        .append_webhook(database, schema, name, conn_id)
+        .append_webhook(database, schema, name, conn_id, received_at)
         .await?;
 
     // If this source requires validation, then validate!
@@ -185,6 +187,8 @@ pub enum WebhookError {
     ValidationFailed,
     #[error("error occurred while running validation")]
     ValidationError,
+    #[error("service unavailable")]
+    Unavailable,
     #[error("internal storage failure! {0:?}")]
     InternalStorageError(StorageError),
     #[error("internal adapter failure! {0:?}")]
@@ -200,6 +204,7 @@ impl From<StorageError> for WebhookError {
             StorageError::IdentifierMissing(id) | StorageError::IdentifierInvalid(id) => {
                 WebhookError::NotFound(id.to_string())
             }
+            StorageError::ShuttingDown(_) => WebhookError::Unavailable,
             e => WebhookError::InternalStorageError(e),
         }
     }
@@ -249,6 +254,9 @@ impl IntoResponse for WebhookError {
             }
             e @ WebhookError::InvalidHeaders(_) => {
                 (StatusCode::UNAUTHORIZED, e.to_string()).into_response()
+            }
+            e @ WebhookError::Unavailable => {
+                (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
             }
             e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {
                 (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response()

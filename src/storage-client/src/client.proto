@@ -12,6 +12,7 @@
 syntax = "proto3";
 
 import "proto/src/proto.proto";
+import "proto/src/chrono.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "cluster-client/src/client.proto";
@@ -111,6 +112,19 @@ message ProtoStorageResponse {
         repeated ProtoSinkStatisticsUpdate sink_updates = 2;
     }
 
+    message ProtoStatusUpdate {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        string status = 2;
+        mz_proto.chrono.ProtoNaiveDateTime timestamp = 3;
+        optional string error = 4;
+        repeated string hints = 5;
+        map<string, string> namespaced_errors = 6;
+    }
+
+    message ProtoStatusUpdates {
+        repeated ProtoStatusUpdate updates = 1;
+    }
+
     message ProtoDroppedIds {
         repeated mz_repr.global_id.ProtoGlobalId ids = 1;
     }
@@ -119,5 +133,6 @@ message ProtoStorageResponse {
         ProtoFrontierUppersKind frontier_uppers = 1;
         ProtoDroppedIds dropped_ids = 2;
         ProtoStatisticsUpdates stats = 3;
+        ProtoStatusUpdates status_updates = 4;
     }
 }

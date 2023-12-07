@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 import time
 
 from materialize.mzcompose.composition import Composition
@@ -30,14 +31,8 @@ def workflow_default(c: Composition) -> None:
 
     # TODO: most of these should likely be converted to cluster tests
 
-    for scenario in [pg_out_of_disk_space]:
-        with (c.override(Postgres(volumes=["pgdata_512Mb:/var/lib/postgresql/data"]))):
-            print(f"--- Running scenario {scenario.__name__} with limited disk")
-            initialize(c)
-            scenario(c)
-            end(c)
-
-    for scenario in [
+    scenarios = [
+        pg_out_of_disk_space,
         disconnect_pg_during_snapshot,
         disconnect_pg_during_replication,
         restart_pg_during_snapshot,
@@ -46,11 +41,30 @@ def workflow_default(c: Composition) -> None:
         restart_mz_during_replication,
         fix_pg_schema_while_mz_restarts,
         verify_no_snapshot_reingestion,
-    ]:
-        print(f"--- Running scenario {scenario.__name__}")
-        initialize(c)
-        scenario(c)
-        end(c)
+    ]
+
+    parallel_job_index = int(os.environ.get("BUILDKITE_PARALLEL_JOB", 0))
+    parallel_job_count = int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
+
+    if parallel_job_count > 1:
+        scenarios = scenarios[parallel_job_index::parallel_job_count]
+        print(f"Selected scenarios in job with index {parallel_job_index}")
+
+    print(f"Scenarios: {[s.__name__ for s in scenarios]}")
+
+    for scenario in scenarios:
+        overrides = (
+            [Postgres(volumes=["pgdata_512Mb:/var/lib/postgresql/data"])]
+            if scenario == pg_out_of_disk_space
+            else []
+        )
+        with c.override(*overrides):
+            print(
+                f"--- Running scenario {scenario.__name__} with overrides: {overrides}"
+            )
+            initialize(c)
+            scenario(c)
+            end(c)
 
 
 def initialize(c: Composition) -> None:

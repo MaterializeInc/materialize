@@ -44,6 +44,7 @@ from pg8000 import Connection, Cursor
 from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
+from materialize.mzcompose.services.minio import MINIO_BLOB_URI
 from materialize.ui import UIError
 
 
@@ -163,6 +164,10 @@ class Composition:
         if munge_services:
             self.dependencies = self._munge_services(self.compose["services"].items())
 
+        # Emit the munged configuration to a temporary file so that we can later
+        # pass it to Docker Compose.
+        self._write_compose()
+
     def _munge_services(
         self, services: list[tuple[str, dict]]
     ) -> mzbuild.DependencySet:
@@ -229,6 +234,12 @@ class Composition:
 
         return deps
 
+    def _write_compose(self) -> None:
+        new_file = TemporaryFile(mode="w")
+        os.set_inheritable(new_file.fileno(), True)
+        yaml.dump(self.compose, new_file)
+        self.file = new_file
+
     def invoke(
         self,
         *args: str,
@@ -263,12 +274,8 @@ class Composition:
             ("--project-name", self.project_name) if self.project_name else ()
         )
 
-        # Emit the munged configuration to a temporary file so that we can later
-        # pass it to Docker Compose.
-        file = TemporaryFile(mode="w")
-        os.set_inheritable(file.fileno(), True)
-        yaml.dump(self.compose, file)
-        file.flush()
+        # Make sure file doesn't get changed/deleted while we use it
+        file = self.file
 
         ret = None
         for retry in range(1, max_tries + 1):
@@ -393,6 +400,8 @@ class Composition:
         # config for an `mzbuild` config.
         deps.acquire()
 
+        self._write_compose()
+
         # Ensure image freshness
         self.pull_if_variable([service.name for service in services])
 
@@ -421,6 +430,7 @@ class Composition:
 
             # Restore the old composition.
             self.compose = old_compose
+            self._write_compose()
 
     @contextmanager
     def test_case(self, name: str) -> Iterator[None]:
@@ -687,6 +697,7 @@ class Composition:
             for service in self.compose["services"].values():
                 service["entrypoint"] = ["sleep", "infinity"]
                 service["command"] = []
+            self._write_compose()
 
         self.invoke(
             "up",
@@ -698,6 +709,7 @@ class Composition:
 
         if persistent:
             self.compose = old_compose  # type: ignore
+            self._write_compose()
 
     def validate_sources_sinks_clusters(self) -> str | None:
         """Validate that all sources, sinks & clusters are in a good state"""
@@ -778,6 +790,12 @@ class Composition:
                 "Sanity Restart skipped because Mz not in services or `sanity_restart` label not set"
             )
 
+    def capture_logs(self) -> None:
+        # Capture logs into services.log since they will be lost otherwise
+        # after dowing a composition.
+        with open(MZ_ROOT / "services.log", "a") as f:
+            self.invoke("logs", "--no-color", capture=f)
+
     def down(
         self,
         destroy_volumes: bool = True,
@@ -796,12 +814,7 @@ class Composition:
         """
         if sanity_restart_mz:
             self.sanity_restart_mz()
-
-        # Capture logs into services.log since they will be lost otherwise
-        # after dowing a composition.
-        with open(MZ_ROOT / "services.log", "a") as f:
-            self.invoke("logs", "--no-color", capture=f)
-
+        self.capture_logs()
         self.invoke(
             "down",
             *(["--volumes"] if destroy_volumes else []),
@@ -863,6 +876,7 @@ class Composition:
                 service. Note that this does not destroy any named volumes
                 attached to the service.
         """
+        self.capture_logs()
         self.invoke(
             "rm",
             "--force",
@@ -968,3 +982,63 @@ class Composition:
             self.exec(service, *args_with_source, stdin=input)
         else:
             self.run(service, *args_with_source, stdin=input)
+
+    def enable_minio_versioning(self) -> None:
+        self.up("minio")
+        self.up("mc", persistent=True)
+        self.exec(
+            "mc",
+            "mc",
+            "alias",
+            "set",
+            "persist",
+            "http://minio:9000/",
+            "minioadmin",
+            "minioadmin",
+        )
+
+        self.exec("mc", "mc", "version", "enable", "persist/persist")
+
+    def backup_crdb(self) -> None:
+        self.up("mc", persistent=True)
+        self.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
+        self.exec(
+            "cockroach",
+            "cockroach",
+            "sql",
+            "--insecure",
+            "-e",
+            """
+                CREATE EXTERNAL CONNECTION backup_bucket
+                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
+                BACKUP INTO 'external://backup_bucket';
+                DROP EXTERNAL CONNECTION backup_bucket;
+            """,
+        )
+
+    def restore_mz(self) -> None:
+        self.kill("materialized")
+        self.exec(
+            "cockroach",
+            "cockroach",
+            "sql",
+            "--insecure",
+            "-e",
+            """
+                DROP DATABASE defaultdb;
+                CREATE EXTERNAL CONNECTION backup_bucket
+                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
+                RESTORE DATABASE defaultdb
+                FROM LATEST IN 'external://backup_bucket';
+                DROP EXTERNAL CONNECTION backup_bucket;
+            """,
+        )
+        self.run(
+            "persistcli",
+            "admin",
+            "--commit",
+            "restore-blob",
+            f"--blob-uri={MINIO_BLOB_URI}",
+            "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
+        )
+        self.up("materialized")

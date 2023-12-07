@@ -84,7 +84,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use mz_lsp_server::backend::{Backend, DEFAULT_FORMATTING_WIDTH};
+use mz_lsp_server::backend::{Backend, Completions, DEFAULT_FORMATTING_WIDTH};
 use mz_ore::collections::HashMap;
 use tokio::sync::Mutex;
 use tower_lsp::{LspService, Server};
@@ -97,6 +97,12 @@ async fn main() {
         client,
         parse_results: Mutex::new(HashMap::new()),
         formatting_width: DEFAULT_FORMATTING_WIDTH.into(),
+        schema: Mutex::new(None),
+        content: Mutex::new(HashMap::new()),
+        completions: Mutex::new(Completions {
+            select: Vec::new(),
+            from: Vec::new(),
+        }),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }

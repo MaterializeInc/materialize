@@ -77,15 +77,16 @@
 
 //! Shared types for the `mz-compute*` crates
 
+use std::time::Duration;
+
 pub mod dataflows;
 pub mod explain;
 pub mod plan;
 pub mod sinks;
 pub mod sources;
 
-/// The default logging interval for `ComputeReplicaLogging`, in number
-/// of microseconds.
-pub const DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS: u32 = 1_000_000;
+/// The default logging interval for `ComputeReplicaLogging`.
+pub const DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Identifier of a compute instance.
 pub type ComputeInstanceId = mz_storage_types::instances::StorageInstanceId;

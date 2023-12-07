@@ -69,7 +69,6 @@
 //! [1]: https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION
 //! [2]: https://www.postgresql.org/message-id/CAFPTHDZS9O9WG02EfayBd6oONzK%2BqfUxS6AbVLJ7W%2BKECza2gg%40mail.gmail.com
 
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::pin::pin;
@@ -87,6 +86,7 @@ use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use tokio_postgres::error::SqlState;
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::Client;
@@ -102,11 +102,14 @@ use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 
+use crate::metrics::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
-use crate::source::postgres::{metrics::PgSourceMetrics, DefiniteError, TransientError};
+use crate::source::postgres::{DefiniteError, TransientError};
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
@@ -147,7 +150,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
     Stream<G, Rc<TransientError>>,
-    Rc<dyn Any>,
+    PressOnDropButton,
 ) {
     let op_name = format!("ReplicationReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
@@ -157,7 +160,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let (mut data_output, data_stream) = builder.new_output();
     let (_upper_output, upper_stream) = builder.new_output();
 
-    let metrics = PgSourceMetrics::new(&config.base_metrics, config.id);
+    let metrics = config.metrics.get_postgres_metrics(config.id);
     metrics.tables.set(u64::cast_from(table_info.len()));
 
     let reader_table_info = table_info.clone();
@@ -241,18 +244,32 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 return Ok(());
             }
 
-            let slot = &connection.publication_details.slot;
-            let mut stream = pin!(raw_stream(
+            let stream_result = raw_stream(
                 &config,
-                &context.ssh_tunnel_manager,
-                &connection_config,
+                replication_client,
                 client,
-                slot,
+                &connection.publication_details.slot,
                 &connection.publication,
                 *data_cap_set[0].time(),
                 committed_uppers.as_mut()
             )
-            .peekable());
+            .await?;
+
+            let stream = match stream_result {
+                Ok(stream) => stream,
+                Err(err) => {
+                    // If the replication stream cannot be obtained in a definite way there is
+                    // nothing else to do. These errors are not retractable.
+                    for &oid in table_info.keys() {
+                        // We pick `u64::MAX` as the LSN which will (in practice) never conflict
+                        // any previously revealed portions of the TVC.
+                        let update = ((oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
+                        data_output.give(&data_cap_set[0], update).await;
+                    }
+                    return Ok(());
+                }
+            };
+            let mut stream = pin!(stream.peekable());
 
             let mut errored = HashSet::new();
             let mut container = Vec::new();
@@ -348,7 +365,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         replication_updates,
         upper_stream,
         errors,
-        Rc::new(button.press_on_drop()),
+        button.press_on_drop(),
     )
 }
 
@@ -356,36 +373,44 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 /// keepalive messages with the provided `uppers` stream.
 ///
 /// The returned stream will contain all transactions that whose commit LSN is beyond `resume_lsn`.
-fn raw_stream<'a>(
+async fn raw_stream<'a>(
     config: &'a RawSourceCreationConfig,
-    ssh_tunnel_manager: &'a SshTunnelManager,
-    connection_config: &'a mz_postgres_util::Config,
+    replication_client: Client,
     metadata_client: Client,
     slot: &'a str,
     publication: &'a str,
     resume_lsn: MzOffset,
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
-) -> impl AsyncStream<Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>> + 'a
-{
-    async_stream::try_stream!({
+) -> Result<
+    Result<
+        impl AsyncStream<
+                Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>,
+            > + 'a,
+        DefiniteError,
+    >,
+    TransientError,
+> {
+    // Postgres will return all transactions that commit *at or after* after the provided LSN,
+    // following the timely upper semantics.
+    let lsn = PgLsn::from(resume_lsn.offset);
+    let query = format!(
+        r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" '{}')"#,
+        Ident::new_unchecked(slot).to_ast_string(),
+        lsn,
+        publication,
+    );
+    let copy_stream = match replication_client.copy_both_simple(&query).await {
+        Ok(copy_stream) => copy_stream,
+        Err(err) if err.code() == Some(&SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE) => {
+            return Ok(Err(DefiniteError::InvalidReplicationSlot));
+        }
+        Err(err) => return Err(err.into()),
+    };
+
+    let stream = async_stream::try_stream!({
         let mut uppers = pin!(uppers);
         let mut last_committed_upper = resume_lsn;
 
-        let replication_client = connection_config
-            .connect_replication(ssh_tunnel_manager)
-            .await?;
-        super::ensure_replication_slot(&replication_client, slot).await?;
-
-        // Postgres will return all transactions that commit *at or after* after the provided LSN,
-        // following the timely upper semantics.
-        let lsn = PgLsn::from(resume_lsn.offset);
-        let query = format!(
-            r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" '{}')"#,
-            Ident::new_unchecked(slot.clone()).to_ast_string(),
-            lsn,
-            publication,
-        );
-        let copy_stream = replication_client.copy_both_simple(&query).await?;
         let mut stream = pin!(LogicalReplicationStream::new(copy_stream));
 
         // According to the documentation [1] we must check that the slot LSN matches our
@@ -437,7 +462,8 @@ fn raw_stream<'a>(
                 last_feedback = Instant::now();
             }
         }
-    })
+    });
+    Ok(Ok(stream))
 }
 
 /// Extracts a single transaction from the replication stream delimited by a BEGIN and COMMIT

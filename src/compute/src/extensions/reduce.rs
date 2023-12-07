@@ -17,7 +17,7 @@ use differential_dataflow::difference::{Abelian, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::trace::{Batch, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::Data;
 use timely::dataflow::Scope;
 
@@ -32,11 +32,15 @@ where
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
     fn mz_reduce_abelian<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
     where
-        T2: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
-        T2::Val: Data,
-        T2::R: Abelian,
+        T2: Trace
+            + for<'a> TraceReader<Key<'a> = &'a K, KeyOwned = K, Time = G::Timestamp>
+            + 'static,
+        T2::ValOwned: Data,
+        T2::Diff: Abelian,
         T2::Batch: Batch,
-        L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
+        T2::Builder:
+            Builder<Output = T2::Batch, Item = ((T2::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+        L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::ValOwned, T2::Diff)>) + 'static,
         Arranged<G, TraceAgent<T2>>: ArrangementSize,
     {
         // Allow access to `reduce_abelian` since we're within Mz's wrapper.
@@ -53,7 +57,14 @@ where
     K: Data,
     V: Data,
     R: Semigroup,
-    T1: TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + Clone + 'static,
+    T1: for<'a> TraceReader<
+            Key<'a> = &'a K,
+            KeyOwned = K,
+            Val<'a> = &'a V,
+            Time = G::Timestamp,
+            Diff = R,
+        > + Clone
+        + 'static,
 {
 }
 
@@ -76,16 +87,24 @@ where
         logic2: L2,
     ) -> (Arranged<G, TraceAgent<T1>>, Arranged<G, TraceAgent<T2>>)
     where
-        T1: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
-        T1::Val: Data,
-        T1::R: Abelian,
+        T1: Trace
+            + for<'a> TraceReader<Key<'a> = &'a K, KeyOwned = K, Time = G::Timestamp>
+            + 'static,
+        T1::ValOwned: Data,
+        T1::Diff: Abelian,
         T1::Batch: Batch,
-        L1: FnMut(&K, &[(&V, R)], &mut Vec<(T1::Val, T1::R)>) + 'static,
-        T2: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
-        T2::Val: Data,
-        T2::R: Abelian,
+        T1::Builder:
+            Builder<Output = T1::Batch, Item = ((T1::KeyOwned, T1::ValOwned), T1::Time, T1::Diff)>,
+        L1: FnMut(&K, &[(&V, R)], &mut Vec<(T1::ValOwned, T1::Diff)>) + 'static,
+        T2: Trace
+            + for<'a> TraceReader<Key<'a> = &'a K, KeyOwned = K, Time = G::Timestamp>
+            + 'static,
+        T2::ValOwned: Data,
+        T2::Diff: Abelian,
         T2::Batch: Batch,
-        L2: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
+        T2::Builder:
+            Builder<Output = T2::Batch, Item = ((T2::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+        L2: FnMut(&K, &[(&V, R)], &mut Vec<(T2::ValOwned, T2::Diff)>) + 'static,
         Arranged<G, TraceAgent<T1>>: ArrangementSize,
         Arranged<G, TraceAgent<T2>>: ArrangementSize;
 }
@@ -93,7 +112,14 @@ where
 impl<G: Scope, K: Data, V: Data, Tr, R: Semigroup> ReduceExt<G, K, V, R> for Arranged<G, Tr>
 where
     G::Timestamp: Lattice + Ord,
-    Tr: TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + Clone + 'static,
+    Tr: for<'a> TraceReader<
+            Key<'a> = &'a K,
+            KeyOwned = K,
+            Val<'a> = &'a V,
+            Time = G::Timestamp,
+            Diff = R,
+        > + Clone
+        + 'static,
 {
     fn reduce_pair<L1, T1, L2, T2>(
         &self,
@@ -103,16 +129,24 @@ where
         logic2: L2,
     ) -> (Arranged<G, TraceAgent<T1>>, Arranged<G, TraceAgent<T2>>)
     where
-        T1: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
-        T1::Val: Data,
-        T1::R: Abelian,
+        T1: Trace
+            + for<'a> TraceReader<Key<'a> = &'a K, KeyOwned = K, Time = G::Timestamp>
+            + 'static,
+        T1::ValOwned: Data,
+        T1::Diff: Abelian,
         T1::Batch: Batch,
-        L1: FnMut(&K, &[(&V, R)], &mut Vec<(T1::Val, T1::R)>) + 'static,
-        T2: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
-        T2::Val: Data,
-        T2::R: Abelian,
+        T1::Builder:
+            Builder<Output = T1::Batch, Item = ((T1::KeyOwned, T1::ValOwned), T1::Time, T1::Diff)>,
+        L1: FnMut(&K, &[(&V, R)], &mut Vec<(T1::ValOwned, T1::Diff)>) + 'static,
+        T2: Trace
+            + for<'a> TraceReader<Key<'a> = &'a K, KeyOwned = K, Time = G::Timestamp>
+            + 'static,
+        T2::ValOwned: Data,
+        T2::Diff: Abelian,
         T2::Batch: Batch,
-        L2: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
+        T2::Builder:
+            Builder<Output = T2::Batch, Item = ((T2::KeyOwned, T2::ValOwned), T2::Time, T2::Diff)>,
+        L2: FnMut(&K, &[(&V, R)], &mut Vec<(T2::ValOwned, T2::Diff)>) + 'static,
         Arranged<G, TraceAgent<T1>>: ArrangementSize,
         Arranged<G, TraceAgent<T2>>: ArrangementSize,
     {

@@ -130,10 +130,13 @@ where
 
         // Determine the required antichains to support live peeks;
         let mut live_peek_frontiers = std::collections::BTreeMap::new();
-        for Peek { id, timestamp, .. } in live_peeks.values() {
+        for Peek {
+            target, timestamp, ..
+        } in live_peeks.values()
+        {
             // Introduce `time` as a constraint on the `as_of` frontier of `id`.
             live_peek_frontiers
-                .entry(id)
+                .entry(target.id())
                 .or_insert_with(Antichain::new)
                 .insert(timestamp.clone());
         }

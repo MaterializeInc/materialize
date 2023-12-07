@@ -12,11 +12,14 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
+use mz_secrets::InMemorySecretsController;
+use mz_storage_types::connections::ConnectionContext;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -43,7 +46,8 @@ use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
 use mz_ore::soft_assert;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
-    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
+    PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
@@ -72,6 +76,7 @@ use mz_storage_types::connections::inline::{
 };
 use mz_transform::Optimizer;
 
+// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog};
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize};
@@ -161,6 +166,9 @@ impl CatalogState {
                 build_info: &DUMMY_BUILD_INFO,
                 timestamp_interval: Default::default(),
                 now: NOW_ZERO.clone(),
+                connection_context: ConnectionContext::for_tests(Arc::new(
+                    InMemorySecretsController::new(),
+                )),
             },
             oid_counter: Default::default(),
             cluster_replica_sizes: Default::default(),
@@ -267,7 +275,8 @@ impl CatalogState {
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Connection(_)) => {
-                for id in &item.uses().0 {
+                // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
+                for id in &item.references().0 {
                     self.introspection_dependencies_inner(*id, out);
                 }
             }
@@ -483,7 +492,7 @@ impl CatalogState {
         }
 
         let unstable_dependencies: Vec<_> = item
-            .uses()
+            .references()
             .0
             .iter()
             .filter(|id| !self.is_stable(**id))
@@ -581,6 +590,7 @@ impl CatalogState {
             INFORMATION_SCHEMA,
             MZ_CATALOG_SCHEMA,
             MZ_INTERNAL_SCHEMA,
+            MZ_UNSAFE_SCHEMA,
         ] {
             let schema_id = &self.ambient_schemas_by_name[*system_schema];
             let schema = &self.ambient_schemas_by_id[schema_id];
@@ -813,7 +823,7 @@ impl CatalogState {
             mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
-                create_sql: table.create_sql,
+                create_sql: Some(table.create_sql),
                 desc: table.desc,
                 defaults: table.defaults,
                 conn_id: None,
@@ -827,7 +837,7 @@ impl CatalogState {
                 cluster_config,
                 ..
             }) => CatalogItem::Source(Source {
-                create_sql: source.create_sql,
+                create_sql: Some(source.create_sql),
                 data_source: match source.data_source {
                     mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
                         DataSourceDesc::ingestion(
@@ -939,7 +949,7 @@ impl CatalogState {
                 },
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
-                create_sql: typ.create_sql,
+                create_sql: Some(typ.create_sql),
                 desc: typ.inner.desc(&session_catalog)?,
                 details: CatalogTypeDetails {
                     array_id: None,
@@ -1031,11 +1041,22 @@ impl CatalogState {
             id,
             oid,
             used_by: Vec::new(),
+            referenced_by: Vec::new(),
             owner_id,
             privileges,
         };
-        for u in &entry.uses().0 {
+        for u in &entry.references().0 {
             match self.entry_by_id.get_mut(u) {
+                Some(metadata) => metadata.referenced_by.push(entry.id()),
+                None => panic!(
+                    "Catalog: missing dependent catalog item {} while installing {}",
+                    &u,
+                    self.resolve_full_name(entry.name(), entry.conn_id())
+                ),
+            }
+        }
+        for u in entry.uses() {
+            match self.entry_by_id.get_mut(&u) {
                 Some(metadata) => metadata.used_by.push(entry.id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
@@ -1077,8 +1098,13 @@ impl CatalogState {
             self.resolve_full_name(metadata.name(), metadata.conn_id()),
             id
         );
-        for u in &metadata.uses().0 {
+        for u in &metadata.references().0 {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
+                dep_metadata.referenced_by.retain(|u| *u != metadata.id())
+            }
+        }
+        for u in metadata.uses() {
+            if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.id())
             }
         }
@@ -1514,11 +1540,16 @@ impl CatalogState {
         &self.ambient_schemas_by_name[MZ_INTERNAL_SCHEMA]
     }
 
+    pub fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
+        &self.ambient_schemas_by_name[MZ_UNSAFE_SCHEMA]
+    }
+
     pub fn is_system_schema(&self, schema: &str) -> bool {
         schema == MZ_CATALOG_SCHEMA
             || schema == PG_CATALOG_SCHEMA
             || schema == INFORMATION_SCHEMA
             || schema == MZ_INTERNAL_SCHEMA
+            || schema == MZ_UNSAFE_SCHEMA
     }
 
     pub fn is_system_schema_id(&self, id: &SchemaId) -> bool {
@@ -1526,6 +1557,7 @@ impl CatalogState {
             || id == self.get_pg_catalog_schema_id()
             || id == self.get_information_schema_id()
             || id == self.get_mz_internal_schema_id()
+            || id == self.get_mz_unsafe_schema_id()
     }
 
     pub fn is_system_schema_specifier(&self, spec: &SchemaSpecifier) -> bool {

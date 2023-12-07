@@ -33,6 +33,7 @@ Indexes:
 public
 information_schema
 mz_catalog
+mz_unsafe
 mz_internal
 pg_catalog
 > SHOW SCHEMAS
@@ -41,6 +42,7 @@ name
 information_schema
 public
 mz_catalog
+mz_unsafe
 mz_internal
 pg_catalog
 $ psql-execute command=\dn
@@ -49,6 +51,7 @@ $ psql-execute command=\dn
 -------------+-----------
  mz_catalog  | mz_system
  mz_internal | mz_system
+ mz_unsafe   | mz_system
  public      | mz_system
 
 
@@ -65,6 +68,7 @@ $ psql-execute command="\dn mz_*"
 -------------+-----------
  mz_catalog  | mz_system
  mz_internal | mz_system
+ mz_unsafe   | mz_system
 
 # What objects do we have by default?
 > SHOW OBJECTS
@@ -81,6 +85,7 @@ s
 information_schema
 mz_catalog
 mz_internal
+mz_unsafe
 pg_catalog
 
 
@@ -169,6 +174,7 @@ public
 information_schema
 mz_catalog
 mz_internal
+mz_unsafe
 pg_catalog
 
 # New schemas in the database should appear in the output of SHOW SCHEMAS FROM.
@@ -181,6 +187,7 @@ s
 information_schema
 mz_catalog
 mz_internal
+mz_unsafe
 pg_catalog
 
 # SHOW SCHEMAS should filter its output based on the provided LIKE or WHERE
@@ -208,6 +215,7 @@ s
 information_schema
 mz_catalog
 mz_internal
+mz_unsafe
 pg_catalog
 > CREATE VIEW v2 AS SELECT 2
 > SHOW VIEWS
@@ -524,6 +532,7 @@ mz_arrangement_sharing_raw                   log   <null>   <null>
 mz_arrangement_heap_size_raw                 log   <null>   <null>
 mz_arrangement_heap_capacity_raw             log   <null>   <null>
 mz_arrangement_heap_allocations_raw          log   <null>   <null>
+mz_aws_privatelink_connection_status_history source <null>  <null>
 mz_cluster_replica_frontiers                 source <null>  <null>
 mz_cluster_replica_heartbeats                source <null>  <null>
 mz_compute_delays_histogram_raw              log   <null>   <null>
@@ -531,6 +540,7 @@ mz_compute_dependencies                      source <null>  <null>
 mz_compute_error_counts_raw                  log   <null>   <null>
 mz_compute_exports_per_worker                log   <null>   <null>
 mz_compute_frontiers_per_worker              log   <null>   <null>
+mz_compute_hydration_status                  source <null>  <null>
 mz_compute_import_frontiers_per_worker       log   <null>   <null>
 mz_compute_operator_durations_histogram_raw  log   <null>   <null>
 mz_dataflow_addresses_per_worker             log   <null>   <null>

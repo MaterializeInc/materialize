@@ -75,6 +75,10 @@ class SourceErrors(Check):
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DROP PUBLICATION IF EXISTS source_errors_publicationA;
                 INSERT INTO source_errors_table VALUES (3);
+
+                # We sleep for a bit here to allow status updates to propagate to the storage controller
+                # in scenarios where environmentd is killed
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
                 """,
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres

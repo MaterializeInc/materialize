@@ -22,19 +22,10 @@ audit-as-crates-io = true
 [policy.eventsource-client]
 audit-as-crates-io = true
 
-[policy.kube-client]
-audit-as-crates-io = true
-
-[policy.kube-core]
-audit-as-crates-io = true
-
 [policy.launchdarkly-server-sdk]
 audit-as-crates-io = true
 
 [policy.librocksdb-sys]
-audit-as-crates-io = true
-
-[policy.mysql_async]
 audit-as-crates-io = true
 
 [policy.mz-avro]

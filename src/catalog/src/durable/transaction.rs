@@ -12,6 +12,7 @@ use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
+use mz_ore::soft_assert;
 use mz_proto::RustType;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
@@ -23,12 +24,13 @@ use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::TableTransaction;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::builtin::BuiltinLog;
-use crate::durable::initialize::ENABLE_PERSIST_TXN_TABLES;
+use crate::durable::initialize::PERSIST_TXN_TABLES;
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
@@ -71,8 +73,8 @@ pub struct Transaction<'a> {
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
-    // Don't make this a table transaction so that it's not read into the stash
-    // memory cache.
+    // Don't make this a table transaction so that it's not read into the
+    // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
     storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
     connection_timeout: Option<Duration>,
@@ -181,6 +183,18 @@ impl<'a> Transaction<'a> {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::DatabaseAlreadyExists(database_name.to_owned()).into()),
         }
+    }
+
+    pub fn insert_system_schema(
+        &mut self,
+        id: SchemaId,
+        schema_name: &str,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+    ) -> Result<SchemaId, CatalogError> {
+        soft_assert!(id.is_system(), "ID {id:?} is not system variant");
+        self.insert_schema(id, None, schema_name.to_string(), owner_id, privileges)?;
+        Ok(id)
     }
 
     pub fn insert_user_schema(
@@ -648,7 +662,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of items in the stash.
+    /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
     pub fn remove_item(&mut self, id: GlobalId) -> Result<(), CatalogError> {
         let prev = self.items.set(ItemKey { gid: id }, None)?;
@@ -680,7 +694,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of items in the stash.
+    /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
     pub fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), CatalogError> {
         let n = self.items.update(|k, v| {
@@ -735,7 +749,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of items in the stash.
+    /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
     pub fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), CatalogError> {
@@ -785,7 +799,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of clusters in the stash.
+    /// Runtime is linear with respect to the total number of clusters in the catalog.
     /// DO NOT call this function in a loop.
     pub fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), CatalogError> {
         let n = self.clusters.update(|k, _v| {
@@ -808,7 +822,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `replica_id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of cluster replicas in the stash.
+    /// Runtime is linear with respect to the total number of cluster replicas in the catalog.
     /// DO NOT call this function in a loop.
     pub fn update_cluster_replica(
         &mut self,
@@ -835,7 +849,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of databases in the stash.
+    /// Runtime is linear with respect to the total number of databases in the catalog.
     /// DO NOT call this function in a loop.
     pub fn update_database(
         &mut self,
@@ -862,7 +876,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Returns an error if `schema_id` is not found.
     ///
-    /// Runtime is linear with respect to the total number of schemas in the stash.
+    /// Runtime is linear with respect to the total number of schemas in the catalog.
     /// DO NOT call this function in a loop.
     pub fn update_schema(
         &mut self,
@@ -1032,14 +1046,16 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    /// Updates the catalog stash `enable_persist_txn_tables` "config" value to
-    /// match the `enable_persist_txn_tables` "system var" value.
+    /// Updates the catalog `persist_txn_tables` "config" value to
+    /// match the `persist_txn_tables` "system var" value.
     ///
     /// These are mirrored so that we can toggle the flag with Launch Darkly,
     /// but use it in boot before Launch Darkly is available.
-    pub fn set_enable_persist_txn_tables(&mut self, value: bool) -> Result<(), CatalogError> {
-        let value = if value { 1 } else { 0 };
-        self.set_config(ENABLE_PERSIST_TXN_TABLES.into(), value)?;
+    pub fn set_persist_txn_tables(
+        &mut self,
+        value: PersistTxnTablesImpl,
+    ) -> Result<(), CatalogError> {
+        self.set_config(PERSIST_TXN_TABLES.into(), u64::from(value))?;
         Ok(())
     }
 
@@ -1243,7 +1259,7 @@ impl<'a> Transaction<'a> {
         (txn_batch, self.durable_catalog)
     }
 
-    /// Commits the storage transaction to the stash. Any error returned indicates the stash may be
+    /// Commits the storage transaction to durable storage. Any error returned indicates the catalog may be
     /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
     /// must be fatal to the calling process. We do not panic/halt inside this function itself so
     /// that errors can bubble up during initialization.

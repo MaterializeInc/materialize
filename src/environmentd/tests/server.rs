@@ -107,7 +107,7 @@ use mz_ore::{assert_contains, task::RuntimeExt};
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql_parser::ast::display::AstDisplay;
-use postgres::SimpleQueryMessage;
+
 use postgres_array::Array;
 use rand::RngCore;
 use reqwest::blocking::Client;
@@ -694,70 +694,6 @@ async fn test_statement_logging_unsampled_metrics() {
         .get_value();
     let metric_value = usize::cast_from(u64::try_cast_from(metric_value).unwrap());
     assert_eq!(expected_total, metric_value);
-}
-
-#[mz_ore::test]
-// NOTE: Unfortunately, this test requires sleeping
-// for over a minute. I tried to get it to work by manipulating
-// a `NowFn`, but storage and persist seem to get confused by that.
-fn test_statement_logging_persistence() {
-    let data_dir = tempfile::tempdir().unwrap();
-
-    let harness = test_util::TestHarness::default()
-        .data_directory(data_dir.path())
-        .with_system_parameter_default(
-            "statement_logging_retention".to_string(),
-            "30s".to_string(),
-        );
-    let (server, mut client) = setup_statement_logging_core(1.0, 1.0, harness.clone());
-
-    // Issue one statement, then wait long enough for it to surely not be retained on reboot,
-    // then issue another statement. After reboot, check that only the second statement remains.
-    client.simple_query("SELECT 1").unwrap();
-    std::thread::sleep(Duration::from_secs(60));
-    client.simple_query("SELECT 2").unwrap();
-    std::thread::sleep(Duration::from_secs(10));
-
-    std::mem::drop(client);
-    std::mem::drop(server);
-
-    let server = harness.start_blocking();
-    let mut client = server.connect_internal(postgres::NoTls).unwrap();
-    // Check that we only retained the second query.
-    let result = client
-        .simple_query(
-            "SELECT sql
-FROM
-    mz_internal.mz_statement_execution_history AS mseh,
-    mz_internal.mz_prepared_statement_history AS mpsh,
-    mz_internal.mz_session_history AS msh
-WHERE
-    mseh.prepared_statement_id = mpsh.id
-        AND
-    mpsh.session_id = msh.id",
-        )
-        .unwrap();
-    // one for row, one for "CommandComplete"
-    assert_eq!(result.len(), 2, "the log should have exactly one statement");
-    let SimpleQueryMessage::Row(row) = result.into_iter().next().unwrap() else {
-        panic!("`SELECT` must return a result set");
-    };
-    let sql = row.get(0).expect("`sql` must be present");
-    assert_eq!(sql, "SELECT 2");
-    // Since we only retained the second query, we should also have garbage-collected
-    // the prepared statement and session history entries for the first statement. Verify that here.
-    for tbl in [
-        "mz_internal.mz_statement_execution_history",
-        "mz_internal.mz_prepared_statement_history",
-        "mz_internal.mz_session_history",
-    ] {
-        let result: i64 = client
-            .query_one(&format!("SELECT count(*) FROM {tbl}"), &[])
-            .unwrap()
-            .get(0);
-
-        assert_eq!(result, 1);
-    }
 }
 
 // Test that sources and sinks require an explicit `SIZE` parameter outside of
@@ -1779,6 +1715,37 @@ fn test_ws_passes_options() {
 }
 
 #[mz_ore::test]
+// Test that statement logging
+// doesn't cause a crash with subscribes over web sockets,
+// which was previously happening (in staging) due to us
+// dropping the `ExecuteContext` on the floor in that case.
+fn test_ws_subscribe_no_crash() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "statement_logging_max_sample_rate".to_string(),
+            "1.0".to_string(),
+        )
+        .with_system_parameter_default(
+            "statement_logging_default_sample_rate".to_string(),
+            "1.0".to_string(),
+        )
+        .start_blocking();
+
+    // Create our WebSocket.
+    let ws_url = server.ws_addr();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    test_util::auth_with_ws(&mut ws, Default::default()).unwrap();
+
+    let query = "SUBSCRIBE (SELECT 1)";
+    let json = format!("{{\"query\":\"{query}\"}}");
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
+
+    // Give the server time to crash, if it's going to.
+    std::thread::sleep(Duration::from_secs(1))
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_notifies_for_bad_options() {
     let server = test_util::TestHarness::default().start_blocking();
@@ -2249,7 +2216,7 @@ fn test_leader_promotion() {
         .unsafe_mode()
         .data_directory(tmpdir.path());
     {
-        // start with a stash with no deploy generation to match current production
+        // start with a catalog with no deploy generation to match current production
         let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client.simple_query("SELECT 1").unwrap();
@@ -2764,7 +2731,7 @@ fn test_cancel_read_then_write() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
-    server.enable_feature_flags(&["enable_dangerous_functions"]);
+    server.enable_feature_flags(&["enable_unsafe_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
@@ -2787,7 +2754,7 @@ fn test_cancel_read_then_write() {
 
             let handle1 = thread::spawn(move || {
                 let err =  client1
-                    .batch_execute("insert into foo select a, case when mz_internal.mz_sleep(ts) > 0 then 0 end as ts from foo")
+                    .batch_execute("insert into foo select a, case when mz_unsafe.mz_sleep(ts) > 0 then 0 end as ts from foo")
                     .unwrap_err();
                 assert_contains!(
                     err.to_string(),
@@ -3049,7 +3016,7 @@ fn webhook_concurrency_limit() {
     let server = test_util::TestHarness::default().start_blocking();
 
     // Note: we need enable_unstable_dependencies to use mz_sleep.
-    server.enable_feature_flags(&["enable_unstable_dependencies", "enable_dangerous_functions"]);
+    server.enable_feature_flags(&["enable_unstable_dependencies", "enable_unsafe_functions"]);
 
     // Reduce the webhook concurrency limit;
     let mut mz_client = server
@@ -3076,7 +3043,7 @@ fn webhook_concurrency_limit() {
         .execute(
             "CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK \
              BODY FORMAT TEXT \
-             CHECK ( WITH(BODY) body IS NOT NULL AND mz_internal.mz_sleep(5) IS NULL )",
+             CHECK ( WITH(BODY) body IS NOT NULL AND mz_unsafe.mz_sleep(5) IS NULL )",
             &[],
         )
         .expect("failed to create source");

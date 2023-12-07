@@ -21,7 +21,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
 use mz_ore::now::EpochMillis;
-use mz_ore::task::RuntimeExt;
+use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
@@ -29,7 +29,6 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tokio::task::JoinHandle;
 use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
@@ -46,6 +45,7 @@ use crate::internal::watch::StateWatch;
 use crate::iter::Consolidator;
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
+pub use crate::internal::encoding::LazyPartStats;
 pub use crate::internal::state::Since;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -198,11 +198,7 @@ where
     pub fn return_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
         self.listen.handle.process_returned_leased_part(leased_part)
     }
-
-    /// Returns a [`SubscriptionLeaseReturner`] tied to this [`Subscribe`].
-    pub(crate) fn lease_returner(&self) -> &SubscriptionLeaseReturner {
-        self.listen.handle.lease_returner()
-    }
+}
 
     /// Politely expires this subscribe, releasing its lease.
     ///
@@ -593,7 +589,12 @@ where
                 metrics,
             },
             unexpired_state: Some(UnexpiredReadHandleState {
-                heartbeat_tasks: machine.start_reader_heartbeat_tasks(reader_id, gc).await,
+                _heartbeat_tasks: machine
+                    .start_reader_heartbeat_tasks(reader_id, gc)
+                    .await
+                    .into_iter()
+                    .map(JoinHandle::abort_on_drop)
+                    .collect(),
             }),
         }
     }
@@ -943,15 +944,7 @@ where
 /// State for a read handle that has not been explicitly expired.
 #[derive(Debug)]
 pub(crate) struct UnexpiredReadHandleState {
-    pub(crate) heartbeat_tasks: Vec<JoinHandle<()>>,
-}
-
-impl Drop for UnexpiredReadHandleState {
-    fn drop(&mut self) {
-        for heartbeat_task in &self.heartbeat_tasks {
-            heartbeat_task.abort();
-        }
-    }
+    pub(crate) _heartbeat_tasks: Vec<AbortOnDropHandle<()>>,
 }
 
 /// An incremental cursor through a particular shard, returned from [ReadHandle::snapshot_cursor].
@@ -1068,7 +1061,7 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
-        let mut cursor = self.snapshot_cursor(as_of).await?;
+        let mut cursor = self.snapshot_cursor(as_of, |_| true).await?;
         let mut contents = Vec::new();
         while let Some(iter) = cursor.next().await {
             contents.extend(iter);
@@ -1099,6 +1092,7 @@ where
     pub async fn snapshot_cursor(
         &mut self,
         as_of: Antichain<T>,
+        should_fetch_part: impl for<'a> Fn(&'a Option<LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
@@ -1121,6 +1115,7 @@ where
                     .map(|part| {
                         self.lease_batch_part(batch.desc.clone(), part.clone(), metadata.clone())
                     })
+                    .filter(|p| should_fetch_part(&p.stats))
                     .collect();
                 consolidator.enqueue_leased_run(
                     &self.blob,

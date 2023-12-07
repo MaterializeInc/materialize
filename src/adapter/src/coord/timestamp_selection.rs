@@ -39,7 +39,20 @@ use crate::AdapterError;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TimestampContext<T> {
     /// Read is executed in a specific timeline with a specific timestamp.
-    TimelineTimestamp(Timeline, T),
+    TimelineTimestamp {
+        timeline: Timeline,
+        /// The timestamp that was chosen for a read. This can differ from the
+        /// `oracle_ts` when collections are not readable at the (linearized)
+        /// timestamp for the oracle. In those cases (when the chosen timestamp
+        /// is further ahead than the oracle timestamp) we have to delay
+        /// returning peek results until the timestamp oracle is also
+        /// sufficiently advanced.
+        chosen_ts: T,
+        /// The timestamp that would have been chosen for the read by the
+        /// (linearized) timestamp oracle). In most cases this will be picked as
+        /// the `chosen_ts`.
+        oracle_ts: Option<T>,
+    },
     /// Read is execute without a timeline or timestamp.
     NoTimestamp,
 }
@@ -47,7 +60,8 @@ pub enum TimestampContext<T> {
 impl<T: TimestampManipulation> TimestampContext<T> {
     /// Creates a `TimestampContext` from a timestamp and `TimelineContext`.
     pub fn from_timeline_context(
-        ts: T,
+        chosen_ts: T,
+        oracle_ts: Option<T>,
         transaction_timeline: Option<Timeline>,
         timeline_context: &TimelineContext,
     ) -> TimestampContext<T> {
@@ -56,14 +70,19 @@ impl<T: TimestampManipulation> TimestampContext<T> {
                 if let Some(transaction_timeline) = transaction_timeline {
                     assert_eq!(timeline, &transaction_timeline);
                 }
-                Self::TimelineTimestamp(timeline.clone(), ts)
+                Self::TimelineTimestamp {
+                    timeline: timeline.clone(),
+                    chosen_ts,
+                    oracle_ts,
+                }
             }
             TimelineContext::TimestampDependent => {
                 // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
-                Self::TimelineTimestamp(
-                    transaction_timeline.unwrap_or(Timeline::EpochMilliseconds),
-                    ts,
-                )
+                Self::TimelineTimestamp {
+                    timeline: transaction_timeline.unwrap_or(Timeline::EpochMilliseconds),
+                    chosen_ts,
+                    oracle_ts,
+                }
             }
             TimelineContext::TimestampIndependent => Self::NoTimestamp,
         }
@@ -72,7 +91,7 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     /// The timeline belonging to this context, if one exists.
     pub fn timeline(&self) -> Option<&Timeline> {
         match self {
-            Self::TimelineTimestamp(timeline, _) => Some(timeline),
+            Self::TimelineTimestamp { timeline, .. } => Some(timeline),
             Self::NoTimestamp => None,
         }
     }
@@ -80,7 +99,7 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     /// The timestamp belonging to this context, if one exists.
     pub fn timestamp(&self) -> Option<&T> {
         match self {
-            Self::TimelineTimestamp(_, ts) => Some(ts),
+            Self::TimelineTimestamp { chosen_ts, .. } => Some(chosen_ts),
             Self::NoTimestamp => None,
         }
     }
@@ -88,7 +107,7 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     /// The timestamp belonging to this context, or a sensible default if one does not exists.
     pub fn timestamp_or_default(&self) -> T {
         match self {
-            Self::TimelineTimestamp(_, ts) => ts.clone(),
+            Self::TimelineTimestamp { chosen_ts, .. } => chosen_ts.clone(),
             // Anything without a timestamp is given the maximum possible timestamp to indicate
             // that they have been closed up until the end of time. This allows us to SUBSCRIBE to
             // static views.
@@ -109,11 +128,6 @@ impl<T: TimestampManipulation> TimestampContext<T> {
 
 #[async_trait(?Send)]
 impl TimestampProvider for Coordinator {
-    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp> {
-        let timestamp_oracle = self.get_timestamp_oracle(timeline);
-        Some(timestamp_oracle.read_ts().await)
-    }
-
     /// Reports a collection's current read frontier.
     fn compute_read_frontier<'a>(
         &'a self,
@@ -206,7 +220,44 @@ pub trait TimestampProvider {
     fn storage_implied_capability<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
     fn storage_write_frontier<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
 
-    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp>;
+    fn get_timeline(timeline_context: &TimelineContext) -> Option<Timeline> {
+        let timeline = match timeline_context {
+            TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
+            // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
+            TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
+            TimelineContext::TimestampIndependent => None,
+        };
+
+        timeline
+    }
+
+    /// Returns a `Timeline` whose timestamp oracle we have to use to get a
+    /// linearized read timestamp, _iff_ linearization is needed.
+    fn get_linearized_timeline(
+        isolation_level: &IsolationLevel,
+        when: &QueryWhen,
+        timeline_context: &TimelineContext,
+    ) -> Option<Timeline> {
+        let timeline = Self::get_timeline(timeline_context);
+
+        // In order to use a timestamp oracle, we must be in the context of some timeline. In that
+        // context we would use the timestamp oracle in the following scenarios:
+        // - The isolation level is Strict Serializable and the `when` allows us to use the
+        //   the timestamp oracle (ex: queries with no AS OF).
+        // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
+        let linearized_timeline = match &timeline {
+            Some(timeline)
+                if when.must_advance_to_timeline_ts()
+                    || (when.can_advance_to_timeline_ts()
+                        && isolation_level == &IsolationLevel::StrictSerializable) =>
+            {
+                Some(timeline.clone())
+            }
+            _ => None,
+        };
+
+        linearized_timeline
+    }
 
     /// Determines the timestamp for a query.
     ///
@@ -223,6 +274,7 @@ pub trait TimestampProvider {
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
         timeline_context: &TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
         isolation_level: &IsolationLevel,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
@@ -242,28 +294,25 @@ pub trait TimestampProvider {
         let upper = self.least_valid_write(id_bundle);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
-        let timeline = match timeline_context {
-            TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
-            // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
-            TimelineContext::TimestampDependent => Some(Timeline::EpochMilliseconds),
-            TimelineContext::TimestampIndependent => None,
-        };
-
-        // In order to use a timestamp oracle, we must be in the context of some timeline. In that
-        // context we would use the timestamp oracle in the following scenarios:
-        // - The isolation level is Strict Serializable and the `when` allows us to use the
-        //   the timestamp oracle (ex: queries with no AS OF).
-        // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
-        let oracle_read_ts = match &timeline {
-            Some(timeline)
-                if when.must_advance_to_timeline_ts()
-                    || (when.can_advance_to_timeline_ts()
-                        && isolation_level == &IsolationLevel::StrictSerializable) =>
-            {
-                self.oracle_read_ts(timeline).await
-            }
-            _ => None,
-        };
+        let timeline = Self::get_timeline(timeline_context);
+        let linearized_timeline =
+            Self::get_linearized_timeline(isolation_level, when, timeline_context);
+        // TODO: We currently split out getting the oracle timestamp because
+        // it's a potentially expensive call, but a call that can be done in an
+        // async task. TimestampProvider is not Send (nor Sync), so we cannot do
+        // the call to `determine_timestamp_for` (including the oracle call) on
+        // an async task. If/when TimestampProvider can become Send, we can fold
+        // the call to the TimestampOracle back into this function.
+        //
+        // We assert here that the logic that determines the oracle timestamp
+        // matches our expectations.
+        if linearized_timeline.is_some() {
+            assert!(
+                oracle_read_ts.is_some(),
+                "should get a timestamp from the oracle for linearized timeline {:?} but didn't",
+                timeline
+            );
+        }
 
         // Initialize candidate to the minimum correct time.
         let mut candidate = Timestamp::minimum();
@@ -331,8 +380,12 @@ pub trait TimestampProvider {
             ));
         };
 
-        let timestamp_context =
-            TimestampContext::from_timeline_context(timestamp, timeline, timeline_context);
+        let timestamp_context = TimestampContext::from_timeline_context(
+            timestamp,
+            oracle_read_ts,
+            timeline,
+            timeline_context,
+        );
 
         Ok(TimestampDetermination {
             timestamp_context,
@@ -424,6 +477,26 @@ pub trait TimestampProvider {
 }
 
 impl Coordinator {
+    pub(crate) async fn oracle_read_ts(
+        &self,
+        session: &Session,
+        timeline_ctx: &TimelineContext,
+        when: &QueryWhen,
+    ) -> Option<Timestamp> {
+        let isolation_level = session.vars().transaction_isolation().clone();
+        let linearized_timeline =
+            Coordinator::get_linearized_timeline(&isolation_level, when, timeline_ctx);
+        let oracle_read_ts = match linearized_timeline {
+            Some(timeline) => {
+                let timestamp_oracle = self.get_timestamp_oracle(&timeline);
+                Some(timestamp_oracle.read_ts().await)
+            }
+            None => None,
+        };
+
+        oracle_read_ts
+    }
+
     /// Determines the timestamp for a query.
     pub(crate) async fn determine_timestamp(
         &self,
@@ -432,6 +505,7 @@ impl Coordinator {
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
         timeline_context: &TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
         let isolation_level = session.vars().transaction_isolation();
@@ -443,6 +517,7 @@ impl Coordinator {
                 when,
                 compute_instance,
                 timeline_context,
+                oracle_read_ts,
                 real_time_recency_ts,
                 isolation_level,
             )
@@ -471,6 +546,7 @@ impl Coordinator {
                         when,
                         compute_instance,
                         timeline_context,
+                        oracle_read_ts,
                         real_time_recency_ts,
                         &IsolationLevel::Serializable,
                     )
@@ -566,7 +642,9 @@ pub struct TimestampDetermination<T> {
 impl<T: TimestampManipulation> TimestampDetermination<T> {
     pub fn respond_immediately(&self) -> bool {
         match &self.timestamp_context {
-            TimestampContext::TimelineTimestamp(_, timestamp) => !self.upper.less_equal(timestamp),
+            TimestampContext::TimelineTimestamp { chosen_ts, .. } => {
+                !self.upper.less_equal(chosen_ts)
+            }
             TimestampContext::NoTimestamp => true,
         }
     }

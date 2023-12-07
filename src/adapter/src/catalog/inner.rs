@@ -20,6 +20,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Ident, RawClusterName, Statement};
 use mz_storage_types::sources::IngestionDescription;
 
+// DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{
     catalog_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogEntry, CatalogItem,
     CatalogState, DataSourceDesc, Index, MaterializedView, Sink, Source,
@@ -112,7 +113,7 @@ impl Catalog {
             (Statement::CreateSource(_), CatalogItem::Source(old_source)) => {
                 match old_source.data_source {
                     DataSourceDesc::Ingestion(ingestion) => CatalogItem::Source(Source {
-                        create_sql,
+                        create_sql: Some(create_sql),
                         data_source: DataSourceDesc::Ingestion(IngestionDescription {
                             instance_id: cluster.id,
                             ..ingestion

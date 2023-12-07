@@ -13,10 +13,15 @@ use pretty::{Doc, RcDoc};
 
 use crate::TAB;
 
+pub(crate) fn intersperse_line_nest<'a, I>(v: I) -> RcDoc<'a>
+where
+    I: IntoIterator<Item = RcDoc<'a, ()>>,
+{
+    RcDoc::intersperse(v, Doc::line()).nest(TAB).group()
+}
+
 pub(crate) fn nest<'a>(title: RcDoc<'a>, v: RcDoc<'a>) -> RcDoc<'a> {
-    RcDoc::intersperse([title, v], Doc::line())
-        .nest(TAB)
-        .group()
+    intersperse_line_nest([title, v])
 }
 
 pub(crate) fn nest_title<S>(title: S, v: RcDoc) -> RcDoc
