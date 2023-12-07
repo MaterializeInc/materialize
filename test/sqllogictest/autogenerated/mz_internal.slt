@@ -143,6 +143,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  dependency_id  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_hydration_status' ORDER BY position
+----
+1  object_id  text
+2  replica_id  text
+3  hydrated  boolean
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
 ----
 1  object_id  text
@@ -667,6 +674,7 @@ mz_compute_exports
 mz_compute_exports_per_worker
 mz_compute_frontiers
 mz_compute_frontiers_per_worker
+mz_compute_hydration_status
 mz_compute_import_frontiers
 mz_compute_import_frontiers_per_worker
 mz_compute_operator_durations_histogram

@@ -54,6 +54,7 @@ ERROR_RE = re.compile(
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
     | environmentd .* unrecognized\ configuration\ parameter
+    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     )
     .* $
     """,
@@ -89,6 +90,10 @@ IGNORE_RE = re.compile(
     | internal\ error:\ panic\ at\ the\ `.*`\ optimization\ stage
     # redpanda INFO logging
     | larger\ sizes\ prevent\ running\ out\ of\ memory
+    # Old versions won't support new parameters
+    | (platform-checks|legacy-upgrade|upgrade-matrix)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
+    # For platform-checks upgrade tests
+    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage\ name=enable_dangerous_functions
     )
     """,
     re.VERBOSE | re.MULTILINE,

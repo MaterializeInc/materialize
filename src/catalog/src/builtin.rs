@@ -1894,6 +1894,18 @@ pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSo
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
+pub static MZ_COMPUTE_HYDRATION_STATUS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_compute_hydration_status",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::ComputeHydrationStatus),
+    desc: RelationDesc::empty()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("hydrated", ScalarType::Bool.nullable(false)),
+    is_retained_metrics_object: false,
+    sensitivity: DataSensitivity::Public,
+});
+
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
     schema: MZ_CATALOG_SCHEMA,
@@ -2520,9 +2532,14 @@ SELECT
     occurred_at as last_status_change_at,
     -- TODO(parkmycar): Report status of webhook source once #20036 is closed.
     CASE
-        WHEN mz_sources.type = 'webhook' THEN 'running'
-        ELSE coalesce(status, 'created')
-    END status,
+      WHEN
+            mz_sources.type = 'webhook'
+              OR
+            mz_sources.type = 'progress'
+          THEN 'running'
+        ELSE COALESCE(status, 'created')
+      END
+      AS status,
     error,
     details
 FROM mz_sources
@@ -6239,6 +6256,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_FRONTIERS),
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
+        Builtin::Source(&MZ_COMPUTE_HYDRATION_STATUS),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),

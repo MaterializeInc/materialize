@@ -44,6 +44,7 @@ use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
+use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, span, warn, Level};
@@ -360,18 +361,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 PendingPeek::index(peek, trace_bundle)
             }
             PeekTarget::Persist { metadata, .. } => {
-                let active_worker = {
-                    // Choose the worker that does the actual peek arbitrarily but consistently.
-                    let chosen_index =
-                        usize::cast_from(peek.uuid.hashed()) % self.timely_worker.peers();
-                    chosen_index == self.timely_worker.index()
-                };
                 let metadata = metadata.clone();
                 PendingPeek::persist(
                     peek,
                     Arc::clone(&self.compute_state.persist_clients),
                     metadata,
-                    active_worker,
+                    self.timely_worker,
                 )
             }
         };
@@ -702,12 +697,20 @@ impl PendingPeek {
         })
     }
 
-    fn persist(
+    fn persist<A: Allocate>(
         peek: Peek,
         persist_clients: Arc<PersistClientCache>,
         metadata: CollectionMetadata,
-        active_worker: bool,
+        timely_worker: &mut TimelyWorker<A>,
     ) -> Self {
+        let active_worker = {
+            // Choose the worker that does the actual peek arbitrarily but consistently.
+            let chosen_index = usize::cast_from(peek.uuid.hashed()) % timely_worker.peers();
+            chosen_index == timely_worker.index()
+        };
+        let activator = timely_worker.sync_activator_for(&[]);
+        let peek_uuid = peek.uuid;
+
         let (result_tx, result_rx) = oneshot::channel();
         let timestamp = peek.timestamp;
         let mfp_plan = peek.map_filter_project.clone();
@@ -731,7 +734,18 @@ impl PendingPeek {
                 Ok(rows) => PeekResponse::Rows(rows),
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
-            let _ = result_tx.send((result, start.elapsed()));
+            match result_tx.send((result, start.elapsed())) {
+                Ok(()) => {}
+                Err((_result, elapsed)) => {
+                    debug!(duration =? elapsed, "dropping result for cancelled peek {peek_uuid}")
+                }
+            }
+            match activator.activate() {
+                Ok(()) => {}
+                Err(_) => {
+                    debug!("unable to wake timely after completed peek {peek_uuid}");
+                }
+            }
         });
         PendingPeek::Persist(PersistPeek {
             peek,
@@ -957,9 +971,16 @@ impl IndexPeek {
         max_result_size: u32,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
-        Tr: TraceReader<Key = K, Val = V, Time = Timestamp, Diff = Diff>,
-        Tr::Key: Columnation + Data + FromRowByTypes + IntoRowByTypes,
-        Tr::Val: Columnation + Data + IntoRowByTypes,
+        Tr: for<'a> TraceReader<
+            Key<'a> = &'a K,
+            KeyOwned = K,
+            Val<'a> = &'a V,
+            ValOwned = V,
+            Time = Timestamp,
+            Diff = Diff,
+        >,
+        Tr::KeyOwned: Columnation + Data + FromRowByTypes + IntoRowByTypes,
+        Tr::ValOwned: Columnation + Data + IntoRowByTypes,
     {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();

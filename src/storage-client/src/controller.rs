@@ -70,6 +70,7 @@ pub enum IntrospectionType {
     // Collections written by the compute controller.
     ComputeDependencies,
     ComputeReplicaHeartbeats,
+    ComputeHydrationStatus,
 
     // Written by the Adapter for tracking AWS PrivateLink Connection Status History
     PrivatelinkConnectionStatusHistory,

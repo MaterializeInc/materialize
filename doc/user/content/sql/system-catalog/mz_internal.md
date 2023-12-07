@@ -247,6 +247,19 @@ SQL objects that don't exist in the compute layer (such as views) are omitted.
 | `object_id`     | [`text`] | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions).                                                           |
 | `dependency_id` | [`text`] | The ID of a compute dependency. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
 
+### `mz_compute_hydration_status`
+
+The `mz_compute_hydration_status` table describes the per-replica hydration status of each compute object (index, materialized view, or subscription).
+
+A compute object is hydrated on a given replica when it has fully processed the initial snapshot of data available in its inputs.
+
+<!-- RELATION_SPEC mz_internal.mz_compute_hydration_status -->
+| Field        | Type        | Meaning                                                                                                                                                                                                                                  |
+| -----------  | ----------- | --------                                                                                                                                                                                                                                 |
+| `object_id`  | [`text`]    | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions). |
+| `replica_id` | [`text`]    | The ID of a cluster replica.                                                                                                                                                                                                             |
+| `hydrated`   | [`boolean`] | Whether the compute object is hydrated on the replica.                                                                                                                                                                                   |
+
 ### `mz_frontiers`
 
 The `mz_frontiers` table describes the frontiers of each source, sink, table,
