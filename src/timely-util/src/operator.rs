@@ -232,7 +232,9 @@ where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice,
-        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, Diff = R> + 'static,
+        Tr: Trace
+            + for<'a> TraceReader<Key<'a> = &'a D1, Val<'a> = &'a (), Time = G::Timestamp, Diff = R>
+            + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp>,
         Tr::Builder:
@@ -548,7 +550,9 @@ where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice + Ord,
-        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, Diff = R> + 'static,
+        Tr: Trace
+            + for<'a> TraceReader<Key<'a> = &'a D1, Val<'a> = &'a (), Time = G::Timestamp, Diff = R>
+            + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp>,
         Tr::Builder:

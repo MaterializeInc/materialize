@@ -304,6 +304,9 @@ types_table           subsource <null>  <null>
 utf8_table            subsource <null>  <null>
 таблица               subsource <null>  <null>
 
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_progress';
+running
+
 > SELECT lsn > 0 FROM mz_source_progress
 true
 

@@ -76,12 +76,15 @@ enum Mode {
     Writable,
 }
 
-/// Handles and metadata needed to interact with persist.
+/// A Handle to an unopened catalog stored in persist. The unopened catalog can serve `Config` data
+/// or the current epoch. All other catalog data may be un-migrated and should not be read until the
+/// catalog has been opened. The [`UnopenedPersistCatalogState`] is responsible for opening the
+/// catalog, see [`OpenableDurableCatalogState::open`] for more details.
 ///
-/// Production users should call [`Self::expire`] before dropping a [`PersistHandle`] so that it
-/// can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
+/// Production users should call [`Self::expire`] before dropping a [`UnopenedPersistCatalogState`]
+/// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 #[derive(Debug)]
-pub struct PersistHandle {
+pub struct UnopenedPersistCatalogState {
     /// Write handle to persist.
     write_handle: WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
     /// Read handle to persist.
@@ -98,7 +101,7 @@ pub struct PersistHandle {
     metrics: Arc<Metrics>,
 }
 
-impl PersistHandle {
+impl UnopenedPersistCatalogState {
     /// Deterministically generate the a ID for the given `organization_id` and `seed`.
     fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
         let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
@@ -107,13 +110,13 @@ impl PersistHandle {
         ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
     }
 
-    /// Create a new [`PersistHandle`] to the catalog state associated with `organization_id`.
+    /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with `organization_id`.
     #[tracing::instrument(level = "debug", skip(persist_client))]
     pub(crate) async fn new(
         persist_client: PersistClient,
         organization_id: Uuid,
         metrics: Arc<Metrics>,
-    ) -> PersistHandle {
+    ) -> UnopenedPersistCatalogState {
         const SEED: usize = 1;
         let shard_id = Self::shard_id(organization_id, SEED);
         debug!(?shard_id, "new persist backed catalog state");
@@ -126,7 +129,7 @@ impl PersistHandle {
             )
             .await
             .expect("invalid usage");
-        let mut handle = PersistHandle {
+        let mut handle = UnopenedPersistCatalogState {
             write_handle,
             read_handle,
             persist_client,
@@ -508,7 +511,7 @@ impl PersistHandle {
 }
 
 #[async_trait]
-impl OpenableDurableCatalogState for PersistHandle {
+impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn open_savepoint(
         mut self: Box<Self>,
@@ -1298,7 +1301,7 @@ impl Trace {
     }
 }
 
-impl PersistHandle {
+impl UnopenedPersistCatalogState {
     /// Manually update value of `key` in collection `T` to `value`.
     #[tracing::instrument(level = "info", skip(self))]
     pub(crate) async fn debug_edit<T: Collection>(

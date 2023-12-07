@@ -11,6 +11,7 @@
 //! dataflow.
 
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
@@ -27,7 +28,6 @@ use mz_repr::{ColumnType, DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowAren
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
-use timely::communication::message::RefOrMut;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandle;
@@ -842,19 +842,19 @@ where
     ) -> timely::dataflow::Stream<S, I::Item>
     where
         K: PartialEq + IntoRowByTypes + 'static,
-        V: IntoRowByTypes,
-        Tr: TraceReader<Key = K, Val = V, Time = S::Timestamp, Diff = mz_repr::Diff>
-            + Clone
+        V: IntoRowByTypes + 'static,
+        Tr: for<'a> TraceReader<
+                Key<'a> = &'a K,
+                KeyOwned = K,
+                Val<'a> = &'a V,
+                ValOwned = V,
+                Time = S::Timestamp,
+                Diff = mz_repr::Diff,
+            > + Clone
             + 'static,
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(
-                RefOrMut<'b, K>,
-                RefOrMut<'b, V>,
-                &'a S::Timestamp,
-                &'a mz_repr::Diff,
-            ) -> I
-            + 'static,
+        L: for<'a, 'b> FnMut(&'b K, &'b V, &'a S::Timestamp, &'a mz_repr::Diff) -> I + 'static,
     {
         let mode = if key.is_some() { "index" } else { "scan" };
         let name = format!("ArrangementFlatMap({})", mode);
@@ -1156,20 +1156,22 @@ where
     }
 }
 
-struct PendingWork<C>
+struct PendingWork<C, K, V>
 where
-    C: Cursor,
+    C: for<'a> Cursor<KeyOwned = K, Key<'a> = &'a K, Val<'a> = &'a V, ValOwned = V>,
     C::Time: Timestamp,
 {
     capability: Capability<C::Time>,
     cursor: C,
     batch: C::Storage,
+    _phantom: PhantomData<(K, V)>,
 }
 
-impl<C: Cursor> PendingWork<C>
+impl<C, K, V> PendingWork<C, K, V>
 where
-    C::Key: PartialEq + Sized,
-    C::Val: Sized,
+    C: for<'a> Cursor<KeyOwned = K, Key<'a> = &'a K, Val<'a> = &'a V, ValOwned = V>,
+    C::KeyOwned: PartialEq + Sized,
+    C::ValOwned: Sized,
     C::Time: Timestamp,
 {
     /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
@@ -1178,12 +1180,13 @@ where
             capability,
             cursor,
             batch,
+            _phantom: PhantomData,
         }
     }
     /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to `output`.
     fn do_work<I, L>(
         &mut self,
-        key: &Option<C::Key>,
+        key: &Option<C::KeyOwned>,
         logic: &mut L,
         fuel: &mut usize,
         output: &mut OutputHandle<
@@ -1195,13 +1198,7 @@ where
     ) where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(
-                RefOrMut<'b, C::Key>,
-                RefOrMut<'b, C::Val>,
-                &'a C::Time,
-                &'a C::Diff,
-            ) -> I
-            + 'static,
+        L: for<'a, 'b> FnMut(C::Key<'b>, C::Val<'b>, &'a C::Time, &'a C::Diff) -> I + 'static,
     {
         // Attempt to make progress on this batch.
         let mut work: usize = 0;
@@ -1213,7 +1210,7 @@ where
             if self.cursor.get_key(&self.batch) == Some(key) {
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        for datum in logic(RefOrMut::Ref(key), RefOrMut::Ref(val), time, diff) {
+                        for datum in logic(key, val, time, diff) {
                             session.give(datum);
                             work += 1;
                         }
@@ -1229,7 +1226,7 @@ where
             while let Some(key) = self.cursor.get_key(&self.batch) {
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        for datum in logic(RefOrMut::Ref(key), RefOrMut::Ref(val), time, diff) {
+                        for datum in logic(key, val, time, diff) {
                             session.give(datum);
                             work += 1;
                         }
