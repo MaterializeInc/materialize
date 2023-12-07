@@ -155,6 +155,26 @@ Source materialize.public.numbers
 
 EOF
 
+# Check that we bound result set size correctly
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_result_size TO 100;
+----
+COMPLETE 0
+
+query T
+SELECT * FROM numbers LIMIT 1;
+----
+1
+
+query error db error: ERROR: result exceeds max size of 100 B
+SELECT * FROM numbers LIMIT 99;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET max_result_size
+----
+COMPLETE 0
+
 # Does not apply when an index exists.
 
 statement ok
