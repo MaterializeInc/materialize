@@ -911,20 +911,11 @@ where
     }
 
     pub(crate) fn is_tombstone(&self) -> bool {
-        if self.trace.upper().is_empty()
+        self.trace.upper().is_empty()
             && self.trace.since().is_empty()
             && self.writers.is_empty()
             && self.leased_readers.is_empty()
             && self.critical_readers.is_empty()
-        {
-            // Gate this more expensive check behind the cheaper is_empty ones.
-            let mut batches = Vec::new();
-            self.trace.map_batches(|b| batches.push(b));
-            if batches.len() == 1 && batches[0] == &Self::tombstone_batch() {
-                return true;
-            }
-        }
-        false
     }
 
     pub fn become_tombstone(&mut self) -> ControlFlow<NoOpStateTransition<()>, ()> {
@@ -938,11 +929,6 @@ where
         self.writers.clear();
         self.leased_readers.clear();
         self.critical_readers.clear();
-        let mut new_trace = Trace::default();
-        new_trace.downgrade_since(&Antichain::new());
-        let merge_reqs = new_trace.push_batch(Self::tombstone_batch());
-        assert_eq!(merge_reqs, Vec::new());
-        self.trace = new_trace;
 
         debug_assert!(self.is_tombstone());
         Continue(())
