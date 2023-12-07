@@ -21,7 +21,11 @@ INSERT INTO t1 VALUES (3);
 2
 3
 
-> SELECT status FROM mz_internal.mz_source_statuses st
-  JOIN mz_sources s ON st.id = s.id
-  WHERE s.name = 'mz_source'
-running
+> SELECT bool_and(error IS NULL)
+  FROM mz_internal.mz_source_statuses
+  WHERE
+      name
+      IN (
+      SELECT name FROM (SHOW SUBSOURCES ON mz_source WHERE type = 'subsource')
+      );
+true

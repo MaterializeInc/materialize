@@ -732,12 +732,11 @@ DROP PUBLICATION mz_source;
 DROP PUBLICATION mz_source_narrow;
 INSERT INTO pk_table VALUES (99999);
 
-# todo: we're purifying Postgres view names incorrectly, fix that and this error!
-# should be "materialize.public.pk_table"
-
-> SELECT error FROM mz_internal.mz_source_statuses where name in ('enum_source', 'mz_source');
-"postgres: publication \"mz_source\" does not exist"
-"postgres: publication \"mz_source\" does not exist"
+# Ensure that all subsources have error
+> SELECT bool_and(error ~* 'publication .+ does not exist')
+  FROM mz_internal.mz_source_statuses
+  WHERE id IN ( SELECT id FROM mz_sources WHERE type = 'subsource' );
+true
 
 > DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;
