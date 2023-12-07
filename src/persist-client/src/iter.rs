@@ -937,7 +937,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn prefetches() {
-        fn check(budget: usize, runs: Vec<Vec<usize>>) {
+        fn check(budget: usize, runs: Vec<Vec<usize>>, prefetch_all: bool) {
             let desc = Description::new(
                 Antichain::from_elem(0u64),
                 Antichain::new(),
@@ -999,14 +999,19 @@ mod tests {
                 ),
             }
 
-            // If we up the budget to match the total size, we should prefetch everything.
-            consolidator.budget = total_size;
-            assert!(consolidator.start_prefetches() == Some(0));
+            if prefetch_all {
+                // If we up the budget to match the total size, we should prefetch everything.
+                consolidator.budget = total_size;
+                assert!(consolidator.start_prefetches() == Some(0));
+            } else {
+                // Let the consolidator drop without fetching everything to check the Drop
+                // impl works when not all parts are prefetched.
+            }
         }
 
         let run_gen = vec(vec(0..20usize, 0..5usize), 0..5usize);
-        proptest!(|(budget in 0..20usize, state in run_gen)| {
-            check(budget, state)
+        proptest!(|(budget in 0..20usize, state in run_gen, prefetch_all in any::<bool>())| {
+            check(budget, state, prefetch_all)
         });
     }
 }
