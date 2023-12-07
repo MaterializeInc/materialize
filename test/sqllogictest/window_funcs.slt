@@ -402,6 +402,11 @@ c
 
 # rank and dense_rank
 
+query error db error: ERROR: function rank has 0 parameters, but was called with 1
+WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
+SELECT rank(x) OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
+ORDER BY dense_rank;
+
 query IIT
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT rank() OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t

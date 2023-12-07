@@ -4793,7 +4793,23 @@ fn plan_function<'a>(
                 partition_by,
                 scalar_args,
             ) = plan_window_function_non_aggr(ecx, f)?;
-            assert!(scalar_args.is_empty());
+
+            // All scalar window functions have 0 parameters. Let's print a nice error msg if the
+            // user gave some args. (The below `func::select_impl` would fail anyway, but the error
+            // msg there is less informative.)
+            if !scalar_args.is_empty() {
+                if let ResolvedItemName::Item {
+                    full_name: FullItemName { item, .. },
+                    ..
+                } = name
+                {
+                    sql_bail!(
+                        "function {} has 0 parameters, but was called with {}",
+                        item,
+                        scalar_args.len()
+                    );
+                }
+            }
 
             // Note: the window frame doesn't affect scalar window funcs, but, strangely, we should
             // accept a window frame here without an error msg. (Postgres also does this.)
