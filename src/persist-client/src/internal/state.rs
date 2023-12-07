@@ -935,6 +935,14 @@ where
     }
 
     pub fn shrink_tombstone(&mut self) -> ControlFlow<NoOpStateTransition<()>, ()> {
+        // If we're in a "tombstone" state -- ie. nobody can read the data from a shard or write to
+        // it -- the actual contents of our batches no longer matter.
+        // This method progressively replaces batches in our state with simpler versions, to allow
+        // freeing up resources and to reduce the state size. (Since the state is unreadable, this
+        // is not visible to clients.) We do this a little bit at a time to avoid really large state
+        // transitions... most operations happen incrementally, and large single writes can overwhelm
+        // a backing store. See comments for why we believe the relevant diffs are reasonably small.
+
         let mut to_replace = None;
         let mut batch_count = 0;
         self.trace.map_batches(|b| {
@@ -944,6 +952,9 @@ where
             }
         });
         if let Some(desc) = to_replace {
+            // We have a nonempty batch: replace it with an empty batch and return.
+            // This should not produce an excessively large diff: if it did, we wouldn't have been
+            // able to append that batch in the first place.
             let fake_merge = FueledMergeRes {
                 output: HollowBatch {
                     desc,
@@ -959,6 +970,10 @@ where
             );
             Continue(())
         } else if batch_count > 1 {
+            // All our batches are empty, but we have more than one of them. Replace the whole set
+            // with a new single-batch trace.
+            // This produces a diff with a size proportional to the number of batches, but since
+            // Spine keeps a logarithmic number of batches this should never be excessively large.
             let mut new_trace = Trace::default();
             new_trace.downgrade_since(&Antichain::new());
             let merge_reqs = new_trace.push_batch(Self::tombstone_batch());
@@ -966,6 +981,8 @@ where
             self.trace = new_trace;
             Continue(())
         } else {
+            // All our batches are empty, and there's only one... there's no shrinking this
+            // tombstone further.
             Break(NoOpStateTransition(()))
         }
     }
