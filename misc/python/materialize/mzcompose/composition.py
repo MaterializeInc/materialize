@@ -770,8 +770,6 @@ class Composition:
                 return
 
             self.kill("materialized")
-            # TODO(def-): Better way to detect when kill has finished
-            time.sleep(3)
             self.up("materialized")
             self.sql("SELECT 1")
 
@@ -821,7 +819,7 @@ class Composition:
             *(["--remove-orphans"] if remove_orphans else []),
         )
 
-    def stop(self, *services: str) -> None:
+    def stop(self, *services: str, wait: bool = True) -> None:
         """Stop the docker containers for the named services.
 
         Delegates to `docker compose stop`. See that command's help for details.
@@ -831,7 +829,10 @@ class Composition:
         """
         self.invoke("stop", *services)
 
-    def kill(self, *services: str, signal: str = "SIGKILL") -> None:
+        if wait:
+            self.wait(*services)
+
+    def kill(self, *services: str, signal: str = "SIGKILL", wait: bool = True) -> None:
         """Force stop service containers.
 
         Delegates to `docker compose kill`. See that command's help for details.
@@ -839,8 +840,49 @@ class Composition:
         Args:
             services: The names of services in the composition.
             signal: The signal to deliver.
+            wait: Wait for the container die
         """
         self.invoke("kill", f"-s{signal}", *services)
+
+        if wait:
+            # Containers exit with exit code 137 ( = 128 + 9 ) when killed via SIGKILL
+            self.wait(*services, expect_exit_code=137 if signal == "SIGKILL" else None)
+
+    def wait(self, *services: str, expect_exit_code: int | None = None) -> None:
+        """Wait for a container to exit
+
+        Delegates to `docker wait`. See that command's help for details.
+
+        Args:
+            services: The names of services in the composition.
+            expect_exit_code: Optionally expect a specific exit code
+        """
+
+        for service in services:
+            container_id = self.container_id(service)
+
+            if container_id is None:
+                # Container has already exited, can not `docker wait` on it
+                continue
+
+            try:
+                exit_code = int(
+                    subprocess.run(
+                        ["docker", "wait", container_id],
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        text=True,
+                        bufsize=1,
+                    ).stdout
+                )
+                if expect_exit_code is not None:
+                    assert (
+                        expect_exit_code == exit_code
+                    ), f"service {service} exited with exit code {exit_code}, expected {expect_exit_code}"
+            except subprocess.CalledProcessError as e:
+                assert "No such container" in str(
+                    e
+                ), f"docker wait unexpectedly returned {e}"
 
     def pause(self, *services: str) -> None:
         """Pause service containers.
@@ -903,13 +945,18 @@ class Composition:
         print(f"Sleeping for {duration} seconds...")
         time.sleep(duration)
 
-    def container_id(self, service: str) -> str:
+    def container_id(self, service: str) -> str | None:
         """Return the container_id for the specified service
 
         Delegates to `docker compose ps`
         """
-        output_str = self.invoke("ps", "--quiet", service, capture=True).stdout
+        output_str = self.invoke(
+            "ps", "--quiet", service, capture=True, silent=True
+        ).stdout
         assert output_str is not None
+
+        if output_str == "":
+            return None
 
         output_list = output_str.strip("\n").split("\n")
         assert len(output_list) == 1
@@ -927,11 +974,14 @@ class Composition:
             service: The service whose container's stats will be probed.
         """
 
+        container_id = self.container_id(service)
+        assert container_id is not None
+
         return subprocess.run(
             [
                 "docker",
                 "stats",
-                self.container_id(service),
+                container_id,
                 "--format",
                 "{{json .}}",
                 "--no-stream",

@@ -474,9 +474,9 @@ disruptions: list[Disruption] = [
     # ),
     KafkaDisruption(
         name="sigstop-redpanda",
-        breakage=lambda c, _: c.kill("redpanda", signal="SIGSTOP"),
+        breakage=lambda c, _: c.kill("redpanda", signal="SIGSTOP", wait=False),
         expected_error="OperationTimedOut|BrokerTransportFailure|transaction",
-        fixage=lambda c, _: c.kill("redpanda", signal="SIGCONT"),
+        fixage=lambda c, _: c.kill("redpanda", signal="SIGCONT", wait=False),
     ),
     KafkaDisruption(
         name="kill-redpanda",

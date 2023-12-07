@@ -61,8 +61,8 @@ disruptions = [
     # docker compose pause has become unreliable recently
     Disruption(
         name="sigstop-pubsub",
-        breakage=lambda c: c.kill("toxiproxy", signal="SIGSTOP"),
-        fixage=lambda c: c.kill("toxiproxy", signal="SIGCONT"),
+        breakage=lambda c: c.kill("toxiproxy", signal="SIGSTOP", wait=False),
+        fixage=lambda c: c.kill("toxiproxy", signal="SIGCONT", wait=False),
     ),
 ]
 
