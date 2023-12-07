@@ -2073,6 +2073,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_expressions_in_limit_syntax,
+        desc: "LIMIT <expr> syntax",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 /// Represents the input to a variable.

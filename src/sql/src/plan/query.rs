@@ -93,7 +93,7 @@ use crate::plan::{
     transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
     WebhookValidationSecret,
 };
-use crate::session::vars::FeatureFlag;
+use crate::session::vars::{self, FeatureFlag};
 
 #[derive(Debug)]
 pub struct PlannedRootQuery<E> {
@@ -1298,6 +1298,9 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
                     _ => sql_bail!("constant LIMIT expression must reduce to an INT or NULL value"),
                 }
             } else {
+                // Gate non-constant LIMIT expressions behind a feature flag
+                qcx.scx
+                    .require_feature_flag(&vars::ENABLE_EXPRESSIONS_IN_LIMIT_SYNTAX)?;
                 limit
             };
 
