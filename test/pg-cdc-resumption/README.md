@@ -13,6 +13,11 @@ The following failures are injected:
 - restart of the Postgres server
 - restart of the Materialize instance
 
+This test suite additionally checks the failure logic for Postgres
+sources by verifying that a source is put into a failed state
+upon detecting a restore to a point-in-time backup of the Postgres
+server
+
 To run:
 
 ```bash
