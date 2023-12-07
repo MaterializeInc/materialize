@@ -189,32 +189,39 @@ def main() -> None:
         "// END LINT CONFIG\n",
     ]
 
-    metadata = json.loads(
-        subprocess.check_output(
-            ["cargo", "metadata", "--no-deps", "--format-version=1"]
+    for workspace_root in (".", "misc/wasm"):
+        metadata = json.loads(
+            subprocess.check_output(
+                [
+                    "cargo",
+                    "metadata",
+                    "--no-deps",
+                    "--format-version=1",
+                    f"--manifest-path={workspace_root}/Cargo.toml",
+                ]
+            )
         )
-    )
-    target_srcs = (
-        Path(target["src_path"])
-        for package in metadata["packages"]
-        for target in package["targets"]
-    )
+        target_srcs = (
+            Path(target["src_path"])
+            for package in metadata["packages"]
+            for target in package["targets"]
+        )
 
-    for src in target_srcs:
-        contents = src.read_text().splitlines(keepends=True)
-        try:
-            # Overwrite existing lint configuration block.
-            start = contents.index(lint_config[0])
-            end = contents.index(lint_config[-1])
-            contents[start : end + 1] = lint_config
-        except ValueError:
-            # No existing lint configuration block. Add a new one after the
-            # copyright header.
-            start = 0
-            while start < len(contents) and contents[start].startswith("//"):
-                start += 1
-            contents[start : start + 1] = ["\n", *lint_config, "\n"]
-        src.write_text("".join(contents))
+        for src in target_srcs:
+            contents = src.read_text().splitlines(keepends=True)
+            try:
+                # Overwrite existing lint configuration block.
+                start = contents.index(lint_config[0])
+                end = contents.index(lint_config[-1])
+                contents[start : end + 1] = lint_config
+            except ValueError:
+                # No existing lint configuration block. Add a new one after the
+                # copyright header.
+                start = 0
+                while start < len(contents) and contents[start].startswith("//"):
+                    start += 1
+                contents[start : start + 1] = ["\n", *lint_config, "\n"]
+            src.write_text("".join(contents))
 
 
 if __name__ == "__main__":
