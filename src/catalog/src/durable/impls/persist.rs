@@ -1210,7 +1210,6 @@ async fn get_epoch(
 ) -> Epoch {
     let epochs = snapshot_binary(read_handle, as_of, metrics)
         .await
-        .into_iter()
         .rev()
         // The epoch can never be migrated so we know that it will always convert successfully
         // from binary.
