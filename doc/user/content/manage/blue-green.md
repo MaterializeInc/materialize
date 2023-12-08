@@ -74,8 +74,8 @@ We highly recommend using dbt to manage deployments, but this workflow can be re
 
   ```sql
   BEGIN;
-  ALTER SCHEMA SWAP prod prod_deploy;
-  ALTER CLUSTER SWAP prod prod_deploy;
+  ALTER SCHEMA prod SWAP WITH prod_deploy;
+  ALTER CLUSTER prod SWAP WITH prod_deploy;
   COMMIT;
   ```
 
@@ -101,17 +101,17 @@ Schemas and clusters are the most common units for swapping out. But you can als
   ```sql
   BEGIN;
   -- Swap schemas
-  ALTER SCHEMA prod RENAME to temp;
-  ALTER SCHEMA prod_deploy RENAME to prod;
-  ALTER SCHEMA temp RENAME to prod_deploy;
+  ALTER SCHEMA prod RENAME TO temp;
+  ALTER SCHEMA prod_deploy RENAME TO prod;
+  ALTER SCHEMA temp RENAME TO prod_deploy;
   -- Swap multiple clusters
-  ALTER CLUSTER prod_serve RENAME to temp_compute;
-  ALTER CLUSTER prod_deploy_serve RENAME to prod_serve;
-  ALTER CLUSTER temp_serve RENAME to prod_deploy_serve;
+  ALTER CLUSTER prod_serve RENAME TO temp_compute;
+  ALTER CLUSTER prod_deploy_serve RENAME TO prod_serve;
+  ALTER CLUSTER temp_serve RENAME TO prod_deploy_serve;
 
-  ALTER CLUSTER prod_compute RENAME to temp_compute;
-  ALTER CLUSTER prod_deploy_compute RENAME to prod_compute;
-  ALTER CLUSTER temp_compute RENAME to prod_deploy_compute;
+  ALTER CLUSTER prod_compute RENAME TO temp_compute;
+  ALTER CLUSTER prod_deploy_compute RENAME TO prod_compute;
+  ALTER CLUSTER temp_compute RENAME TO prod_deploy_compute;
   COMMIT;
   ```
 
