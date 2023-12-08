@@ -48,6 +48,13 @@ pub trait IntoRowByTypes: Sized {
     fn into_datum_iter<'a>(&'a self, types: Option<&[ColumnType]>) -> Self::DatumIter<'a>;
 }
 
+impl<'b, T: IntoRowByTypes> IntoRowByTypes for &'b T {
+    type DatumIter<'a> = T::DatumIter<'a> where T: 'a, Self: 'a;
+    fn into_datum_iter<'a>(&'a self, types: Option<&[ColumnType]>) -> Self::DatumIter<'a> {
+        (**self).into_datum_iter(types)
+    }
+}
+
 // Blanket identity implementation for Row.
 impl IntoRowByTypes for Row {
     /// Datum iterator for `Row`.

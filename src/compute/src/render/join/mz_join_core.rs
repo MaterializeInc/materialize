@@ -64,7 +64,7 @@ use crate::render::context::ShutdownToken;
 /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
 /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
 /// every value returned by the iterator.
-pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, K, V1, V2, YFn>(
+pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, YFn>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
     shutdown_token: ShutdownToken,
@@ -74,30 +74,13 @@ pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, K, V1, V2, YFn>(
 where
     G: Scope,
     G::Timestamp: Lattice,
-    Tr1: for<'a> TraceReader<
-            Key<'a> = &'a K,
-            KeyOwned = K,
-            Val<'a> = &'a V1,
-            ValOwned = V1,
-            Time = G::Timestamp,
-            Diff = Diff,
-        > + Clone
-        + 'static,
-    Tr2: for<'a> TraceReader<
-            Key<'a> = &'a K,
-            KeyOwned = K,
-            Val<'a> = &'a V2,
-            ValOwned = V2,
-            Time = G::Timestamp,
-            Diff = Diff,
-        > + Clone
+    Tr1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+    Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
+        + Clone
         + 'static,
     L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
     I: IntoIterator,
     I::Item: Data,
-    K: Data,
-    V1: Data,
-    V2: Data,
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let mut trace1 = arranged1.trace.clone();
@@ -402,25 +385,11 @@ where
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<T, C1, C2, D, K, V1, V2>
+struct Deferred<T, C1, C2, D>
 where
     T: Timestamp,
-    C1: for<'a> Cursor<
-        Key<'a> = &'a K,
-        KeyOwned = K,
-        Val<'a> = &'a V1,
-        ValOwned = V1,
-        Time = T,
-        Diff = Diff,
-    >,
-    C2: for<'a> Cursor<
-        Key<'a> = &'a K,
-        KeyOwned = K,
-        Val<'a> = &'a V2,
-        ValOwned = V2,
-        Time = T,
-        Diff = Diff,
-    >,
+    C1: Cursor<Time = T, Diff = Diff>,
+    C2: for<'a> Cursor<Key<'a> = C1::Key<'a>, Time = T, Diff = Diff>,
 {
     cursor1: C1,
     storage1: C1::Storage,
@@ -431,29 +400,12 @@ where
     temp: Vec<(D, T, Diff)>,
 }
 
-impl<T, C1, C2, D, K, V1, V2> Deferred<T, C1, C2, D, K, V1, V2>
+impl<T, C1, C2, D> Deferred<T, C1, C2, D>
 where
     T: Timestamp + Lattice,
-    C1: for<'a> Cursor<
-        Key<'a> = &'a K,
-        KeyOwned = K,
-        Val<'a> = &'a V1,
-        ValOwned = V1,
-        Time = T,
-        Diff = Diff,
-    >,
-    C2: for<'a> Cursor<
-        Key<'a> = &'a K,
-        KeyOwned = K,
-        Val<'a> = &'a V2,
-        ValOwned = V2,
-        Time = T,
-        Diff = Diff,
-    >,
+    C1: Cursor<Time = T, Diff = Diff>,
+    C2: for<'a> Cursor<Key<'a> = C1::Key<'a>, Time = T, Diff = Diff>,
     D: Data,
-    K: Data,
-    V1: Data,
-    V2: Data,
 {
     fn new(
         cursor1: C1,
@@ -514,7 +466,7 @@ where
         assert_eq!(temp.len(), 0);
 
         while cursor1.key_valid(storage1) && cursor2.key_valid(storage2) {
-            match cursor1.key(storage1).cmp(cursor2.key(storage2)) {
+            match cursor1.key(storage1).cmp(&cursor2.key(storage2)) {
                 Ordering::Less => cursor1.seek_key(storage1, cursor2.key(storage2)),
                 Ordering::Greater => cursor2.seek_key(storage2, cursor1.key(storage1)),
                 Ordering::Equal => {

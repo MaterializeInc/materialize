@@ -27,7 +27,6 @@ use mz_compute_types::plan::reduce::{
 };
 use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MirScalarExpr};
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
-use mz_repr::fixed_length::IntoRowByTypes;
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -456,9 +455,9 @@ where
     }
 
     /// Build the dataflow to compute the set of distinct keys.
-    fn build_distinct<Tr, S, V>(
+    fn build_distinct<Tr, S>(
         &self,
-        collection: Collection<S, (Row, V), Diff>,
+        collection: Collection<S, (Row, Tr::ValOwned), Diff>,
         tag: &str,
     ) -> (
         Arranged<S, TraceAgent<Tr>>,
@@ -468,16 +467,14 @@ where
         S: Scope<Timestamp = G::Timestamp>,
         Tr: Trace
             + for<'a> TraceReader<
-                Key<'a> = &'a Row,
+                Key<'a> = &'a Row, // Required because of hardcoded use of `ErrValSpine`. TODO: remove requirement.
                 KeyOwned = Row,
-                Val<'a> = &'a V,
-                ValOwned = V,
                 Time = G::Timestamp,
                 Diff = Diff,
             > + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((Row, V), G::Timestamp, Diff)>,
-        V: Columnation + Default + ExchangeData + IntoRowByTypes,
+        Tr::Batcher: Batcher<Item = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
+        Tr::ValOwned: Columnation + ExchangeData + Default,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
@@ -496,7 +493,7 @@ where
                     // We're pushing a unit value here because the key is implicitly added by the
                     // arrangement, and the permutation logic takes care of using the key part of the
                     // output.
-                    output.push((V::default(), 1));
+                    output.push((Tr::ValOwned::default(), 1));
                 },
                 move |key, input: &[(_, Diff)], output| {
                     for (_, count) in input.iter() {
@@ -602,10 +599,11 @@ where
 
         // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
         if distinct {
+            use differential_dataflow::trace::cursor::MyTrait;
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_, Result<(), String>, RowSpine<_, _, _, _>>(partial, None)
-                    .as_collection(|k, v| (k.clone(), v.clone()))
+                    .build_reduce_inaccumulable_distinct::<_, RowSpine<_, Result<(), String>, _, _>>(partial, None)
+                    .as_collection(|k, v| (k.into_owned(), v.into_owned()))
                     .map_fallible("Demux Errors", move |(key, result)| match result {
                         Ok(()) => Ok(key),
                         Err(m) => Err(EvalError::Internal(m).into()),
@@ -614,11 +612,11 @@ where
                 partial = oks;
             } else {
                 partial = self
-                    .build_reduce_inaccumulable_distinct::<_, (), RowKeySpine<_, _, _>>(
+                    .build_reduce_inaccumulable_distinct::<_, RowKeySpine<_, _, _>>(
                         partial,
                         Some(" [val: empty]"),
                     )
-                    .as_collection(|k, _| k.clone());
+                    .as_collection(|k, _| k.into_owned());
             }
         }
 
@@ -678,25 +676,23 @@ where
         }
     }
 
-    fn build_reduce_inaccumulable_distinct<S, V, Tr>(
+    fn build_reduce_inaccumulable_distinct<S, Tr>(
         &self,
         input: Collection<S, (Row, Row), Diff>,
         name_tag: Option<&str>,
     ) -> Arranged<S, TraceAgent<Tr>>
     where
         S: Scope<Timestamp = G::Timestamp>,
-        V: MaybeValidatingRow<(), String>,
+        Tr::ValOwned: MaybeValidatingRow<(), String>,
         Tr: Trace
             + for<'a> TraceReader<
                 Key<'a> = &'a (Row, Row),
                 KeyOwned = (Row, Row),
-                Val<'a> = &'a V,
-                ValOwned = V,
                 Time = G::Timestamp,
                 Diff = Diff,
             > + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = (((Row, Row), V), G::Timestamp, Diff)>,
+        Tr::Batcher: Batcher<Item = (((Row, Row), Tr::ValOwned), G::Timestamp, Diff)>,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
@@ -712,7 +708,7 @@ where
                 "Arranged ReduceInaccumulable Distinct [val: empty]",
             )
             .mz_reduce_abelian::<_, Tr>(&output_name, move |_, source, t| {
-                if let Some(err) = V::into_error() {
+                if let Some(err) = Tr::ValOwned::into_error() {
                     for (value, count) in source.iter() {
                         if count.is_positive() {
                             continue;
@@ -724,7 +720,7 @@ where
                         return;
                     }
                 }
-                t.push((V::ok(()), 1))
+                t.push((Tr::ValOwned::ok(()), 1))
             })
     }
 

@@ -11,7 +11,6 @@
 //! dataflow.
 
 use std::collections::BTreeMap;
-use std::marker::PhantomData;
 use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
@@ -307,30 +306,35 @@ where
         I::Item: Data,
         L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
+        use differential_dataflow::operators::arrange::TraceAgent;
         let mut datums = DatumVec::new();
         match self {
-            SpecializedArrangement::RowUnit(inner) => CollectionBundle::<S, T>::flat_map_core(
-                inner,
-                key,
-                move |k, v, t, d| {
-                    let mut datums_borrow = datums.borrow();
-                    datums_borrow.extend(&**k);
-                    datums_borrow.extend(v.into_datum_iter(Some(&[])));
-                    logic(&mut datums_borrow, t, d)
-                },
-                refuel,
-            ),
-            SpecializedArrangement::RowRow(inner) => CollectionBundle::<S, T>::flat_map_core(
-                inner,
-                key,
-                move |k, v, t, d| {
-                    let mut datums_borrow = datums.borrow();
-                    datums_borrow.extend(&**k);
-                    datums_borrow.extend(&**v);
-                    logic(&mut datums_borrow, t, d)
-                },
-                refuel,
-            ),
+            SpecializedArrangement::RowUnit(inner) => {
+                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowKeySpine<Row, _, _>>, _, _>(
+                    inner,
+                    key,
+                    move |k, v, t, d| {
+                        let mut datums_borrow = datums.borrow();
+                        datums_borrow.extend(&**k);
+                        datums_borrow.extend(v.into_datum_iter(Some(&[])));
+                        logic(&mut datums_borrow, t, d)
+                    },
+                    refuel,
+                )
+            }
+            SpecializedArrangement::RowRow(inner) => {
+                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowSpine<Row, Row, _, _>>, _, _>(
+                    inner,
+                    key,
+                    move |k, v, t, d| {
+                        let mut datums_borrow = datums.borrow();
+                        datums_borrow.extend(&**k);
+                        datums_borrow.extend(&**v);
+                        logic(&mut datums_borrow, t, d)
+                    },
+                    refuel,
+                )
+            }
         }
     }
 }
@@ -446,7 +450,11 @@ where
         let mut datums = DatumVec::new();
         match self {
             SpecializedArrangementImport::RowUnit(inner) => {
-                CollectionBundle::<S, T>::flat_map_core(
+                CollectionBundle::<S, T>::flat_map_core::<
+                    TraceEnter<TraceFrontier<TraceKeyHandle<Row, T, Diff>>, S::Timestamp>,
+                    _,
+                    _,
+                >(
                     inner,
                     key,
                     move |k, v, t, d| {
@@ -458,17 +466,23 @@ where
                     refuel,
                 )
             }
-            SpecializedArrangementImport::RowRow(inner) => CollectionBundle::<S, T>::flat_map_core(
-                inner,
-                key,
-                move |k, v, t, d| {
-                    let mut datums_borrow = datums.borrow();
-                    datums_borrow.extend(&**k);
-                    datums_borrow.extend(&**v);
-                    logic(&mut datums_borrow, t, d)
-                },
-                refuel,
-            ),
+            SpecializedArrangementImport::RowRow(inner) => {
+                CollectionBundle::<S, T>::flat_map_core::<
+                    TraceEnter<TraceFrontier<TraceRowHandle<Row, Row, T, Diff>>, S::Timestamp>,
+                    _,
+                    _,
+                >(
+                    inner,
+                    key,
+                    move |k, v, t, d| {
+                        let mut datums_borrow = datums.borrow();
+                        datums_borrow.extend(&**k);
+                        datums_borrow.extend(&**v);
+                        logic(&mut datums_borrow, t, d)
+                    },
+                    refuel,
+                )
+            }
         }
     }
 }
@@ -834,27 +848,20 @@ where
     ///
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are potentially specialized, but convertible into rows.
-    fn flat_map_core<Tr, I, L, K, V>(
+    fn flat_map_core<Tr, I, L>(
         trace: &Arranged<S, Tr>,
-        key: Option<K>,
+        key: Option<Tr::KeyOwned>,
         mut logic: L,
         refuel: usize,
     ) -> timely::dataflow::Stream<S, I::Item>
     where
-        K: PartialEq + IntoRowByTypes + 'static,
-        V: IntoRowByTypes + 'static,
-        Tr: for<'a> TraceReader<
-                Key<'a> = &'a K,
-                KeyOwned = K,
-                Val<'a> = &'a V,
-                ValOwned = V,
-                Time = S::Timestamp,
-                Diff = mz_repr::Diff,
-            > + Clone
-            + 'static,
+        for<'a> Tr::Key<'a>: IntoRowByTypes,
+        for<'a> Tr::Val<'a>: IntoRowByTypes,
+        Tr: TraceReader<Time = S::Timestamp, Diff = mz_repr::Diff> + Clone + 'static,
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(&'b K, &'b V, &'a S::Timestamp, &'a mz_repr::Diff) -> I + 'static,
+        L: for<'a, 'b> FnMut(Tr::Key<'_>, Tr::Val<'_>, &'a S::Timestamp, &'a mz_repr::Diff) -> I
+            + 'static,
     {
         let mode = if key.is_some() { "index" } else { "scan" };
         let name = format!("ArrangementFlatMap({})", mode);
@@ -1156,20 +1163,19 @@ where
     }
 }
 
-struct PendingWork<C, K, V>
+struct PendingWork<C>
 where
-    C: for<'a> Cursor<KeyOwned = K, Key<'a> = &'a K, Val<'a> = &'a V, ValOwned = V>,
+    C: Cursor,
     C::Time: Timestamp,
 {
     capability: Capability<C::Time>,
     cursor: C,
     batch: C::Storage,
-    _phantom: PhantomData<(K, V)>,
 }
 
-impl<C, K, V> PendingWork<C, K, V>
+impl<C> PendingWork<C>
 where
-    C: for<'a> Cursor<KeyOwned = K, Key<'a> = &'a K, Val<'a> = &'a V, ValOwned = V>,
+    C: Cursor,
     C::KeyOwned: PartialEq + Sized,
     C::ValOwned: Sized,
     C::Time: Timestamp,
@@ -1180,7 +1186,6 @@ where
             capability,
             cursor,
             batch,
-            _phantom: PhantomData,
         }
     }
     /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to `output`.
@@ -1198,16 +1203,18 @@ where
     ) where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(C::Key<'b>, C::Val<'b>, &'a C::Time, &'a C::Diff) -> I + 'static,
+        L: for<'a, 'b> FnMut(C::Key<'_>, C::Val<'b>, &'a C::Time, &'a C::Diff) -> I + 'static,
     {
         // Attempt to make progress on this batch.
         let mut work: usize = 0;
         let mut session = output.session(&self.capability);
         if let Some(key) = key {
-            if self.cursor.get_key(&self.batch) != Some(key) {
-                self.cursor.seek_key(&self.batch, key);
+            use differential_dataflow::trace::cursor::MyTrait;
+            if self.cursor.get_key(&self.batch).map(|k| k.equals(key)) != Some(true) {
+                self.cursor.seek_key_owned(&self.batch, key);
             }
-            if self.cursor.get_key(&self.batch) == Some(key) {
+            if self.cursor.get_key(&self.batch).map(|k| k.equals(key)) == Some(true) {
+                let key = self.cursor.key(&self.batch);
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
                         for datum in logic(key, val, time, diff) {
