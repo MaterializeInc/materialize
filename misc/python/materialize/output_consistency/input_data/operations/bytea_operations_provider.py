@@ -8,6 +8,9 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mz_version import MzVersion
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.input_data.params.bytea_operation_param import (
     ByteaOperationParam,
 )
@@ -72,13 +75,16 @@ BYTEA_OPERATION_TYPES.append(
     )
 )
 
-BYTEA_OPERATION_TYPES.append(
-    DbFunction(
-        "encode",
-        [ByteaOperationParam(), TEXT_FORMAT_PARAM],
-        TextReturnTypeSpec(),
-    )
+encode_function = DbFunction(
+    "encode",
+    [ByteaOperationParam(), TEXT_FORMAT_PARAM],
+    TextReturnTypeSpec(),
 )
+# encode may introduce new lines
+encode_function.added_characteristics.add(
+    ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS
+)
+BYTEA_OPERATION_TYPES.append(encode_function)
 
 BYTEA_OPERATION_TYPES.append(
     DbFunction(
