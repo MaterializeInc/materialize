@@ -644,10 +644,7 @@ where
         self.applier.is_tombstone()
     }
 
-    async fn do_tombstone(
-        &mut self,
-        mut do_fn: impl FnMut(&mut StateCollections<T>) -> ControlFlow<NoOpStateTransition<()>, ()>,
-    ) -> Result<(bool, RoutineMaintenance), InvalidUsage<T>> {
+    async fn tombstone_step(&mut self) -> Result<(bool, RoutineMaintenance), InvalidUsage<T>> {
         let metrics = Arc::clone(&self.applier.metrics);
         let mut retry = self
             .applier
@@ -658,7 +655,9 @@ where
         loop {
             let res = self
                 .applier
-                .apply_unbatched_cmd(&metrics.cmds.become_tombstone, |_, _, state| do_fn(state))
+                .apply_unbatched_cmd(&metrics.cmds.become_tombstone, |_, _, state| {
+                    state.become_tombstone_and_shrink()
+                })
                 .await;
             let err = match res {
                 Ok((_seqno, Ok(()), maintenance)) => return Ok((true, maintenance)),
@@ -687,13 +686,12 @@ where
     pub async fn become_tombstone(&mut self) -> Result<RoutineMaintenance, InvalidUsage<T>> {
         self.applier.check_since_upper_both_empty()?;
 
-        let (_, mut maintenance) = self.do_tombstone(|state| state.become_tombstone()).await?;
+        let mut maintenance = RoutineMaintenance::default();
 
         loop {
-            let (shrank, more_maintenance) =
-                self.do_tombstone(|state| state.shrink_tombstone()).await?;
+            let (made_progress, more_maintenance) = self.tombstone_step().await?;
             maintenance.merge(more_maintenance);
-            if !shrank {
+            if !made_progress {
                 break;
             }
         }

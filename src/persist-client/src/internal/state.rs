@@ -918,24 +918,18 @@ where
             && self.critical_readers.is_empty()
     }
 
-    pub fn become_tombstone(&mut self) -> ControlFlow<NoOpStateTransition<()>, ()> {
+    pub fn become_tombstone_and_shrink(&mut self) -> ControlFlow<NoOpStateTransition<()>, ()> {
         assert_eq!(self.trace.upper(), &Antichain::new());
         assert_eq!(self.trace.since(), &Antichain::new());
 
-        if self.is_tombstone() {
-            return Break(NoOpStateTransition(()));
-        }
-
+        // Enter the "tombstone" state, if we're not in it already.
         self.writers.clear();
         self.leased_readers.clear();
         self.critical_readers.clear();
 
         debug_assert!(self.is_tombstone());
-        Continue(())
-    }
 
-    pub fn shrink_tombstone(&mut self) -> ControlFlow<NoOpStateTransition<()>, ()> {
-        // If we're in a "tombstone" state -- ie. nobody can read the data from a shard or write to
+        // Now that we're in a "tombstone" state -- ie. nobody can read the data from a shard or write to
         // it -- the actual contents of our batches no longer matter.
         // This method progressively replaces batches in our state with simpler versions, to allow
         // freeing up resources and to reduce the state size. (Since the state is unreadable, this
