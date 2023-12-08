@@ -109,16 +109,19 @@ This will show you the last ten records ingested from SnowcatCloud. Note that wh
 
 ## Step 6. Parse Incoming Data
 
-The query below parses the incoming data, transforming the nested JSON structure into discernible columns on a materialized view. Refer to SnowcatCloud's [documentation](https://docs.snowcatcloud.com/) on which columns are available for your pipeline (enrichments).
+The query below parses the incoming data, transforming the nested JSON structure into discernible columns on a materialized view. It uses
+the [`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/) function when parsing timestamps, to enable
+[temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown). Refer to SnowcatCloud's
+[documentation](https://docs.snowcatcloud.com/) on which columns are available for your pipeline (enrichments).
 
 ```sql
 CREATE MATERIALIZED VIEW events AS
 SELECT
     body ->> 'app_id' AS app_id,
     body ->> 'platform' AS platform,
-    (body ->> 'etl_tstamp')::timestamp AS etl_tstamp,
-    (body ->> 'collector_tstamp')::timestamp AS collector_tstamp,
-    (body ->> 'dvce_created_tstamp')::timestamp AS dvce_created_tstamp,
+    try_parse_monotonic_iso8601_timestamp(body ->> 'etl_tstamp') AS etl_tstamp,
+    try_parse_monotonic_iso8601_timestamp(body ->> 'collector_tstamp') AS collector_tstamp,
+    try_parse_monotonic_iso8601_timestamp(body ->> 'dvce_created_tstamp') AS dvce_created_tstamp,
     body ->> 'event' AS event,
     body ->> 'event_id' AS event_id,
     body ->> 'txn_id' AS txn_id,
@@ -230,11 +233,11 @@ SELECT
     body ->> 'mkt_clickid' AS mkt_clickid,
     body ->> 'mkt_network' AS mkt_network,
     body ->> 'etl_tags' AS etl_tags,
-    (body ->> 'dvce_sent_tstamp')::timestamp AS dvce_sent_tstamp,
+    try_parse_monotonic_iso8601_timestamp(body ->> 'dvce_sent_tstamp') AS dvce_sent_tstamp,
     body ->> 'refr_domain_userid' AS refr_domain_userid,
-    (body ->> 'refr_dvce_tstamp')::timestamp AS refr_dvce_tstamp,
+    try_parse_monotonic_iso8601_timestamp(body ->> 'refr_dvce_tstamp') AS refr_dvce_tstamp,
     body ->> 'domain_sessionid' AS domain_sessionid,
-    (body ->> 'derived_tstamp')::timestamp AS derived_tstamp,
+    try_parse_monotonic_iso8601_timestamp(body ->> 'derived_tstamp') AS derived_tstamp,
     body ->> 'event_vendor' AS event_vendor,
     body ->> 'event_name' AS event_name,
     body ->> 'event_format' AS event_format,

@@ -238,8 +238,8 @@ CREATE MATERIALIZED VIEW my_build_jobs_merged IN CLUSTER my_compute_cluster AS (
   FROM (
     SELECT
       body->>'id' as id,
-      (body->>'started_at')::timestamptz as started_at,
-      (body->>'finished_at')::timestamptz as finished_at
+      try_parse_monotonic_iso8601_timestamp(body->>'started_at') as started_at,
+      try_parse_monotonic_iso8601_timestamp(body->>'finished_at') as finished_at
     FROM my_build_jobs_source
   )
   ORDER BY id, finished_at NULLS LAST, started_at NULLS LAST
@@ -248,9 +248,8 @@ CREATE MATERIALIZED VIEW my_build_jobs_merged IN CLUSTER my_compute_cluster AS (
 
 {{< note >}}
 
-If the feature is enabled, when casting from `text` to `timestamp` you should prefer to use the
-[`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/) function, which enables
-[temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+When casting from `text` to `timestamp` you should prefer to use the [`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/)
+function, which enables [temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 {{< /note >}}
 
