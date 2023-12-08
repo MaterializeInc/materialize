@@ -46,7 +46,7 @@ where
     G::Timestamp: Lattice + Ord,
     G: Scope,
     T1: TraceReader<Time = G::Timestamp> + Clone + 'static,
-    T1::Diff: differential_dataflow::difference::Semigroup,
+    T1::Diff: Semigroup,
 {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
     fn mz_reduce_abelian<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
@@ -61,7 +61,7 @@ where
             + 'static,
         Arranged<G, TraceAgent<T2>>: ArrangementSize,
     {
-        // Allow access to `reduce_abelian` since we're within Mz's wrapper.
+        // Allow access to `reduce_abelian` since we're within Mz's wrapper and force arrangement size logging.
         #[allow(clippy::disallowed_methods)]
         Arranged::<_, _>::reduce_abelian::<_, T2>(self, name, logic).log_arrangement_size()
     }

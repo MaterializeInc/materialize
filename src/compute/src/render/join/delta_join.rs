@@ -650,8 +650,6 @@ where
     Tr: for<'a> TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
     for<'a> Tr::Key<'a>: IntoRowByTypes,
     for<'a> Tr::Val<'a>: IntoRowByTypes,
-    // K: Columnation + ExchangeData + FromRowByTypes + Hashable + IntoRowByTypes,
-    // V: Columnation + ExchangeData + IntoRowByTypes,
 {
     let mut inner_as_of = Antichain::new();
     for event_time in as_of.elements().iter() {

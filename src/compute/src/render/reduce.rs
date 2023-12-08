@@ -688,8 +688,6 @@ where
             + for<'a> TraceReader<
                 Key<'a> = &'a (Row, Row),
                 KeyOwned = (Row, Row),
-                // Val<'a> = &'a V,
-                // ValOwned = V,
                 Time = G::Timestamp,
                 Diff = Diff,
             > + 'static,
