@@ -417,7 +417,7 @@ Explained Query:
               Project (#0) // { arity: 1 }
                 Join on=(#1 = #2) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l1[#1]Kif
+                    %1[#0]UKA » %0:l1[#1]KAif
                   ArrangeBy keys=[[#1]] // { arity: 2 }
                     Project (#4, #11) // { arity: 2 }
                       Get l1 // { arity: 16 }
@@ -438,7 +438,7 @@ Explained Query:
       Project (#0..=#4) // { arity: 5 }
         Join on=(#2 = #5) type=differential // { arity: 6 }
           implementation
-            %0:lineitem[#2]K » %1:orders[#1]K
+            %0:lineitem[#2]KA » %1:orders[#1]KA
           ArrangeBy keys=[[#2]] // { arity: 4 }
             Project (#0, #4, #11, #12) // { arity: 4 }
               ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }

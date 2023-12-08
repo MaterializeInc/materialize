@@ -154,7 +154,8 @@ impl JoinImplementation {
         } = relation
         {
             // If we eagerly plan delta joins, we don't need the second run to "pick up" delta joins
-            // that could be planned with the arrangements from a differential.
+            // that could be planned with the arrangements from a differential. If such a delta
+            // join were viable, we'd have already planned it the first time.
             if eager_delta_joins && !matches!(implementation, Unimplemented) {
                 return Ok(());
             }
@@ -242,7 +243,9 @@ impl JoinImplementation {
             // The first fundamental question is whether we should employ a delta query or not.
             //
             // Here we conservatively use the rule that if sufficient arrangements exist we will
-            // use a delta query (except for 2-input joins).
+            // use a delta query (except for 2-input joins). (With eager delta joins, we will
+            // settle for fewer arrangements in the delta join than in the differential join.)
+            //
             // An arrangement is considered available for an input
             // - if it is a `Get` with columns present in `indexes`,
             //   - or the same wrapped by an IndexedFilter,
@@ -497,6 +500,10 @@ impl JoinImplementation {
             ) {
                 // If delta plan's inputs need no new arrangements, pick the delta plan.
                 Ok((delta_query_plan, 0)) => {
+                    soft_assert!(
+                        matches!(old_implementation, Unimplemented | Differential(..)),
+                        "delta query plans should not be planned twice"
+                    );
                     *relation = delta_query_plan;
                 }
                 // If the delta plan needs new arrangements, compare with the differential plan.
@@ -622,6 +629,20 @@ mod delta_queries {
                 input_mapper,
             )?;
 
+            // Count new arrangements.
+            let new_arrangements: usize = orders
+                .iter()
+                .flat_map(|o| {
+                    o.iter().skip(1).filter_map(|(c, key, input)| {
+                        if c.arranged {
+                            None
+                        } else {
+                            Some((*input, key.clone()))
+                        }
+                    })
+                })
+                .count();
+
             // Convert the order information into specific (input, key, characteristics) information.
             let mut orders = orders
                 .into_iter()
@@ -634,7 +655,7 @@ mod delta_queries {
                 .collect::<Vec<_>>();
 
             // Implement arrangements in each of the inputs.
-            let (lifted_mfp, lifted_projections, new_arrangements) =
+            let (lifted_mfp, lifted_projections) =
                 super::implement_arrangements(inputs, available, orders.iter().flatten());
 
             // Permute `order` to compensate for projections being lifted as part of
@@ -697,6 +718,25 @@ mod differential {
                 input_mapper,
             )?;
 
+            // Count new arrangements.
+            //
+            // We collect the count for each input, to be used to calculate `new_arrangements` below.
+            let new_input_arrangements: Vec<usize> = orders
+                .iter()
+                .map(|o| {
+                    o.iter()
+                        .skip(1)
+                        .filter_map(|(c, key, input)| {
+                            if c.arranged {
+                                None
+                            } else {
+                                Some((*input, key.clone()))
+                            }
+                        })
+                        .count()
+                })
+                .collect();
+
             // Inside each order, we take the `FilterCharacteristics` from each element, and OR it
             // to every other element to the right. This is because we are gonna be looking for the
             // worst `Characteristic` in every order, and for this it makes sense to include a
@@ -751,8 +791,11 @@ mod differential {
 
             let (start, mut start_key, start_characteristics) = order[0].clone();
 
+            // Count new arrangements for this choice of ordering.
+            let new_arrangements = inputs.len() + new_input_arrangements[start];
+
             // Implement arrangements in each of the inputs.
-            let (lifted_mfp, lifted_projections, new_arrangements) =
+            let (lifted_mfp, lifted_projections) =
                 super::implement_arrangements(inputs, available, order.iter());
 
             // Permute `start_key` and `order` to compensate for projections being lifted as part of
@@ -795,22 +838,18 @@ mod differential {
 ///  - The lifted mfps combined into one mfp.
 ///  - Permutations for each input, which were lifted as part of the mfp lifting. These should be
 ///    applied to the join order.
-///  - The number of new arrangements.
 fn implement_arrangements<'a>(
     inputs: &mut [MirRelationExpr],
     available_arrangements: &[Vec<Vec<MirScalarExpr>>],
     needed_arrangements: impl Iterator<
         Item = &'a (usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>),
     >,
-) -> (MapFilterProject, Vec<Option<Vec<usize>>>, usize) {
+) -> (MapFilterProject, Vec<Option<Vec<usize>>>) {
     // Collect needed arrangements by source index.
     let mut needed = vec![Vec::new(); inputs.len()];
     for (index, key, _characteristics) in needed_arrangements {
         needed[*index].push(key.clone());
     }
-
-    // Count new arrangements.
-    let mut new_arrangements = 0;
 
     let mut lifted_mfps = vec![None; inputs.len()];
     let mut lifted_projections = vec![None; inputs.len()];
@@ -847,7 +886,6 @@ fn implement_arrangements<'a>(
         }
         if !needed.is_empty() {
             inputs[index] = MirRelationExpr::arrange_by(inputs[index].take_dangerous(), needed);
-            new_arrangements += 1;
         }
     }
 
@@ -886,7 +924,6 @@ fn implement_arrangements<'a>(
             .filter(combined_filter)
             .project(combined_project),
         lifted_projections,
-        new_arrangements,
     )
 }
 
