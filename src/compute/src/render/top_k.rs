@@ -362,7 +362,7 @@ where
             })
             .into();
         let result = partial
-            .mz_arrange::<RowKeySpine<Row, _, _>>("Arranged MonotonicTop1 partial [val: empty]")
+            .mz_arrange("Arranged MonotonicTop1 partial [val: empty]")
             .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("MonotonicTop1", {
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
@@ -391,7 +391,7 @@ where
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_internal.mz_expected_group_size_advice.
     input
-        .mz_arrange::<RowSpine<(Row, u64), _, _, _>>("Arranged TopK input")
+        .mz_arrange("Arranged TopK input")
         .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced TopK input", {
             move |_key, source, target: &mut Vec<(R, Diff)>| {
                 if let Some(err) = R::into_error() {

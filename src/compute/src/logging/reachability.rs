@@ -27,7 +27,7 @@ use timely::dataflow::operators::Filter;
 
 use crate::extensions::arrange::MzArrange;
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
-use crate::typedefs::{KeysValsHandle, RowSpine};
+use crate::typedefs::KeysValsHandle;
 
 pub(super) type ReachabilityEvent = (
     Vec<usize>,
@@ -105,7 +105,7 @@ pub(super) fn construct<A: Allocate>(
 
         let updates = updates
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely reachability");
+            .mz_arrange_core(Pipeline, "PreArrange Timely reachability");
 
         let mut result = BTreeMap::new();
         for variant in logs_active {
@@ -146,9 +146,7 @@ pub(super) fn construct<A: Allocate>(
                         (key_row, value_row)
                     });
 
-                let trace = updates
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
-                    .trace;
+                let trace = updates.mz_arrange(&format!("Arrange {variant:?}")).trace;
                 result.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
         }

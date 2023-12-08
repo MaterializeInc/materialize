@@ -107,15 +107,13 @@ use std::sync::Arc;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
-use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashable};
+use differential_dataflow::{AsCollection, Collection, Data};
 use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::GlobalId;
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -135,7 +133,7 @@ use timely::PartialOrder;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
@@ -541,10 +539,8 @@ where
                 let oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
                 let oks_trace = oks.trace_handle();
 
-                let errs = errs
-                    .as_collection(|k, v| (k.clone(), v.clone()))
-                    .leave()
-                    .mz_arrange("Arrange export iterative err");
+                let errs = errs.as_collection(|k, ()| k.clone()).leave();
+                let errs = KeyCollection::from(errs).mz_arrange("Arrange export iterative err");
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -584,39 +580,22 @@ where
         oks: SpecializedArrangement<Child<'g, G, T>>,
         name: &str,
     ) -> SpecializedArrangement<G> {
+        use differential_dataflow::trace::cursor::MyTrait;
         match oks {
             SpecializedArrangement::RowUnit(inner) => {
                 let name = format!("{} [val: empty]", name);
-                let oks = self.rearrange_iterative(inner, &name);
+                let oks = KeyCollection::from(inner.as_collection(|k, ()| k.into_owned()).leave())
+                    .mz_arrange(&name);
                 SpecializedArrangement::RowUnit(oks)
             }
             SpecializedArrangement::RowRow(inner) => {
-                let oks = self.rearrange_iterative(inner, name);
+                let oks = inner
+                    .as_collection(|k, v| (k.into_owned(), v.into_owned()))
+                    .leave()
+                    .mz_arrange(name);
                 SpecializedArrangement::RowRow(oks)
             }
         }
-    }
-
-    /// Rearranges an arrangement coming from an iterative scope into an arrangement
-    /// in the outer timestamp scope.
-    fn rearrange_iterative<Tr1, Tr2>(
-        &self,
-        oks: Arranged<Child<'g, G, T>, TraceAgent<Tr1>>,
-        name: &str,
-    ) -> Arranged<G, TraceAgent<Tr2>>
-    where
-        Tr1: TraceReader<Time = T, Diff = Diff>,
-        Tr1::KeyOwned: Columnation + ExchangeData + Hashable,
-        Tr1::ValOwned: Columnation + ExchangeData,
-        Tr2: Trace + TraceReader<Time = G::Timestamp, Diff = Diff> + 'static,
-        Tr2::Batch: Batch,
-        Tr2::Batcher: Batcher<Item = ((Tr1::KeyOwned, Tr1::ValOwned), G::Timestamp, Diff)>,
-        Arranged<G, TraceAgent<Tr2>>: ArrangementSize,
-    {
-        use differential_dataflow::trace::cursor::MyTrait;
-        oks.as_collection(|k, v| (k.into_owned(), v.into_owned()))
-            .leave()
-            .mz_arrange(name)
     }
 }
 
@@ -711,7 +690,7 @@ where
                 // multiplicities of errors, but .. this seems to be the better call.
                 let err: KeyCollection<_, _, _> = err.into();
                 let mut errs = err
-                    .mz_arrange::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
+                    .mz_arrange("Arrange recursive err")
                     .mz_reduce_abelian::<_, ErrSpine<_, _, _>>(
                         "Distinct recursive err",
                         move |_k, _s, t| t.push(((), 1)),

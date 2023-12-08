@@ -41,9 +41,7 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinSpec;
 use crate::render::RenderTimestamp;
-use crate::typedefs::{
-    ErrSpine, RowKeySpine, RowSpine, TraceErrHandle, TraceKeyHandle, TraceRowHandle,
-};
+use crate::typedefs::{RowKeySpine, RowSpine, TraceErrHandle, TraceKeyHandle, TraceRowHandle};
 
 // Local type definition to avoid the horror in signatures.
 pub(crate) type KeyValArrangement<S, K, V> =
@@ -1057,7 +1055,7 @@ where
                     enable_specialized_arrangements,
                 );
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
-                let errs = errs.mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
+                let errs = errs.mz_arrange(&format!("{}-errors", name));
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }
@@ -1083,17 +1081,25 @@ where
             if let Some((_key_types, val_types)) = key_val_types {
                 if val_types.is_empty() {
                     // Emtpy value specialization.
-                    let (oks, errs) = oks.map_fallible(
-                        "FormArrangementKey [val: empty]",
-                        specialized_arrangement_key(
-                            key.clone(),
-                            thinning.clone(),
-                            None,
-                            Some(vec![]),
-                        ),
-                    );
+                    let key1 = key.clone();
+                    let thinning1 = thinning.clone();
+                    let val_types1 = Some(vec![]);
+                    let mut key_buf = Row::default();
+                    let mut datums = DatumVec::new();
+                    let (oks, errs) =
+                        oks.map_fallible("FormArrangementKey [val: empty]", move |row| {
+                            // TODO: Consider reusing the `row` allocation; probably in *next* invocation.
+                            let datums = datums.borrow_with(&row);
+                            let temp_storage = RowArena::new();
+                            let val_datum_iter = thinning1.iter().map(|c| datums[*c]);
+                            ().from_datum_iter(val_datum_iter, val_types1.as_deref());
+                            Ok(key_buf.try_from_datum_iter(
+                                key1.iter().map(|k| k.eval(&datums, &temp_storage)),
+                                None,
+                            )?)
+                        });
                     let name = &format!("{} [val: empty]", name);
-                    let oks = oks.mz_arrange::<RowKeySpine<Row, _, _>>(name);
+                    let oks = KeyCollection::<_, Row, _>::from(oks).mz_arrange(name);
                     return (SpecializedArrangement::RowUnit(oks), errs);
                 }
             }
@@ -1104,7 +1110,7 @@ where
             "FormArrangementKey",
             specialized_arrangement_key(key.clone(), thinning.clone(), None, None),
         );
-        let oks = oks.mz_arrange::<RowSpine<Row, Row, _, _>>(name);
+        let oks = oks.mz_arrange(name);
         (SpecializedArrangement::RowRow(oks), errs)
     }
 }

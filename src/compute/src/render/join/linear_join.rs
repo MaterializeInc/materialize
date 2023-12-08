@@ -300,7 +300,7 @@ where
             // TODO(vmarcos): We should implement further arrangement specialization here (#22104).
             // By knowing how types propagate through joins we could specialize intermediate
             // arrangements as well, either in values or eventually in keys.
-            let arranged = keyed.mz_arrange::<RowSpine<_, _, _, _>>("JoinStage");
+            let arranged = keyed.mz_arrange("JoinStage");
             joined = JoinedFlavor::Local(SpecializedArrangement::RowRow(arranged));
         }
 

@@ -12,6 +12,7 @@ use std::rc::Rc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
+use differential_dataflow::trace::implementations::ord_neu::{ColKeySpine, ColValSpine};
 use differential_dataflow::trace::implementations::OffsetList;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
@@ -28,6 +29,25 @@ use crate::typedefs::{RowKeySpine, RowSpine};
 pub trait MzArrange
 where
     <Self::Scope as ScopeParent>::Timestamp: Lattice,
+    <Self::Tr as TraceReader>::Batch: Batch,
+    <Self::Tr as Trace>::Batcher: Batcher<
+        Item = (
+            (Self::Key, Self::Val),
+            <Self::Scope as ScopeParent>::Timestamp,
+            Self::R,
+        ),
+        Time = <Self::Scope as ScopeParent>::Timestamp,
+    >,
+    <Self::Tr as Trace>::Builder: Builder<
+        Item = (
+            (Self::Key, Self::Val),
+            <Self::Scope as ScopeParent>::Timestamp,
+            Self::R,
+        ),
+        Time = <Self::Scope as ScopeParent>::Timestamp,
+        Output = <Self::Tr as TraceReader>::Batch,
+    >,
+    Arranged<Self::Scope, TraceAgent<Self::Tr>>: ArrangementSize,
 {
     /// The current scope.
     type Scope: Scope;
@@ -37,37 +57,19 @@ where
     type Val: Data;
     /// The difference type.
     type R: Data + Semigroup;
+    /// The spine type containing the arranged data.
+    type Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static;
 
     /// Arranges a stream of `(Key, Val)` updates by `Key` into a trace of type `Tr`.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange<Tr>(&self, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
+    fn mz_arrange(&self, name: &str) -> Arranged<Self::Scope, TraceAgent<Self::Tr>>
     where
         Self::Key: ExchangeData + Hashable,
         Self::Val: ExchangeData,
-        Self::R: ExchangeData,
-        Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<
-            Item = (
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            ),
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-        >,
-        Tr::Builder: Builder<
-            Item = (
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            ),
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Output = Tr::Batch,
-        >,
-        Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
+        Self::R: ExchangeData;
 
     /// Arranges a stream of `(Key, Val)` updates by `Key` into a trace of type `Tr`. Partitions
     /// the data according to `pact`.
@@ -75,7 +77,11 @@ where
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
+    fn mz_arrange_core<P>(
+        &self,
+        pact: P,
+        name: &str,
+    ) -> Arranged<Self::Scope, TraceAgent<Self::Tr>>
     where
         P: ParallelizationContract<
             <Self::Scope as ScopeParent>::Timestamp,
@@ -84,82 +90,37 @@ where
                 <Self::Scope as ScopeParent>::Timestamp,
                 Self::R,
             ),
-        >,
-        Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<
-            Item = (
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            ),
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-        >,
-        Tr::Builder: Builder<
-            Item = (
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            ),
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Output = Tr::Batch,
-        >,
-        Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
+        >;
 }
 
 impl<G, K, V, R> MzArrange for Collection<G, (K, V), R>
 where
     G: Scope,
-    G::Timestamp: Lattice,
+    G::Timestamp: Lattice + Columnation,
     K: Data + Columnation,
     V: Data + Columnation,
-    R: Semigroup,
+    R: Semigroup + Columnation,
 {
     type Scope = G;
     type Key = K;
     type Val = V;
     type R = R;
+    type Tr = ColValSpine<Self::Key, Self::Val, G::Timestamp, Self::R>;
 
-    fn mz_arrange<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange(&self, name: &str) -> Arranged<G, TraceAgent<Self::Tr>>
     where
         K: ExchangeData + Hashable,
         V: ExchangeData,
         R: ExchangeData,
-        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K, V), G::Timestamp, R), Time = G::Timestamp>,
-        Tr::Builder:
-            Builder<Item = ((K, V), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
-        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
         self.arrange_named(name).log_arrangement_size()
     }
 
-    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Self::Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K, V), G::Timestamp, R)>,
-        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<
-            Item = (
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            ),
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-        >,
-        Tr::Builder: Builder<
-            Item = (
-                (Self::Key, Self::Val),
-                <Self::Scope as ScopeParent>::Timestamp,
-                Self::R,
-            ),
-            Time = <Self::Scope as ScopeParent>::Timestamp,
-            Output = Tr::Batch,
-        >,
-        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
@@ -181,40 +142,39 @@ impl<G: Scope, K, R: Semigroup> From<Collection<G, K, R>> for KeyCollection<G, K
 impl<G, K, R> MzArrange for KeyCollection<G, K, R>
 where
     G: Scope,
+    G::Timestamp: Lattice + Columnation,
     K: Data + Columnation,
-    G::Timestamp: Lattice,
-    R: Semigroup,
+    R: Semigroup + Columnation,
 {
     type Scope = G;
     type Key = K;
     type Val = ();
     type R = R;
+    type Tr = ColKeySpine<Self::Key, G::Timestamp, Self::R>;
 
-    fn mz_arrange<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange(&self, name: &str) -> Arranged<G, TraceAgent<Self::Tr>>
     where
         K: ExchangeData + Hashable,
         R: ExchangeData,
-        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp>,
-        Tr::Builder:
-            Builder<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
-        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.0.map(|d| (d, ())).mz_arrange(name)
+        // Allow access to `arrange_named` because we're within Mz's wrapper.
+        #[allow(clippy::disallowed_methods)]
+        self.0
+            .map(|d| (d, ()))
+            .arrange_named(name)
+            .log_arrangement_size()
     }
 
-    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    fn mz_arrange_core<P>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Self::Tr>>
     where
         P: ParallelizationContract<G::Timestamp, ((K, ()), G::Timestamp, R)>,
-        Tr: Trace + TraceReader<Time = G::Timestamp> + 'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp>,
-        Tr::Builder:
-            Builder<Item = ((K, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
-        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.0.map(|d| (d, ())).mz_arrange_core(pact, name)
+        // Allow access to `arrange_named` because we're within Mz's wrapper.
+        #[allow(clippy::disallowed_methods)]
+        self.0
+            .map(|d| (d, ()))
+            .arrange_core(pact, name)
+            .log_arrangement_size()
     }
 }
 

@@ -34,7 +34,7 @@ use crate::logging::compute::ComputeEvent;
 use crate::logging::{
     DifferentialLog, EventQueue, LogVariant, PermutedRowPacker, SharedLoggingState,
 };
-use crate::typedefs::{KeysValsHandle, RowSpine};
+use crate::typedefs::KeysValsHandle;
 
 /// Constructs the logging dataflow for differential logs.
 ///
@@ -117,7 +117,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(DifferentialLog::ArrangementBatches);
         let arrangement_batches = batches
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential batches")
+            .mz_arrange_core(Pipeline, "PreArrange Differential batches")
             .as_collection(move |op, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
@@ -127,7 +127,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(DifferentialLog::ArrangementRecords);
         let arrangement_records = records
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential records")
+            .mz_arrange_core(Pipeline, "PreArrange Differential records")
             .as_collection(move |op, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
@@ -138,7 +138,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(DifferentialLog::Sharing);
         let sharing = sharing
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential sharing")
+            .mz_arrange_core(Pipeline, "PreArrange Differential sharing")
             .as_collection(move |op, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
@@ -158,9 +158,7 @@ pub(super) fn construct<A: Allocate>(
         for (variant, collection) in logs {
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
-                let trace = collection
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
-                    .trace;
+                let trace = collection.mz_arrange(&format!("Arrange {variant:?}")).trace;
                 traces.insert(variant, (trace, Rc::clone(&token)));
             }
         }
