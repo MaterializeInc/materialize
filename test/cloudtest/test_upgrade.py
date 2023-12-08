@@ -23,6 +23,9 @@ from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.wait import wait
 from materialize.mz_version import MzVersion
+from materialize.mzcompose.services.ssh_bastion_host import (
+    setup_default_ssh_test_connection,
+)
 from materialize.util import all_subclasses
 from materialize.version_list import get_latest_published_version
 
@@ -67,6 +70,13 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
     )
 
     executor = CloudtestExecutor(application=mz, version=last_released_version)
+
+    c = executor.mzcompose_composition()
+
+    for i in range(4):
+        ssh_tunnel_name = f"ssh_tunnel_{i}"
+        setup_default_ssh_test_connection(c, ssh_tunnel_name)
+
     # SshPg, SshKafka: No SSH bastion host
     # KafkaProtocols: No shared secrets directory
     checks = list(all_subclasses(Check) - {SshPg, SshKafka, KafkaProtocols})
