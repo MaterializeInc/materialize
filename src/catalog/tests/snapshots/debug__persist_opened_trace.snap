@@ -621,10 +621,22 @@ Trace {
             (
                 (
                     ConfigKey {
+                        key: "system_config_synced",
+                    },
+                    ConfigValue {
+                        value: 0,
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    ConfigKey {
                         key: "user_version",
                     },
                     ConfigValue {
-                        value: 44,
+                        value: 45,
                     },
                 ),
                 "1",

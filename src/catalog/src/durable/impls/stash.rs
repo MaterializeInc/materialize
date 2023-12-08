@@ -33,7 +33,9 @@ use mz_stash_types::StashError;
 use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{Collection, CollectionTrace, Trace};
-use crate::durable::initialize::{DEPLOY_GENERATION, PERSIST_TXN_TABLES, USER_VERSION_KEY};
+use crate::durable::initialize::{
+    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
+};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, DurableType, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey,
@@ -174,6 +176,19 @@ impl OpenableConnection {
         }
         Ok(self.stash.as_mut().expect("opened above"))
     }
+
+    async fn get_config(&mut self, key: String) -> Result<Option<u64>, CatalogError> {
+        let stash = match &mut self.stash {
+            None => match self.open_stash_read_only().await {
+                Ok(stash) => stash,
+                Err(e) if e.can_recover_with_write_mode() => return Ok(None),
+                Err(e) => return Err(e.into()),
+            },
+            Some(stash) => stash,
+        };
+
+        get_config(stash, key).await
+    }
 }
 
 #[async_trait]
@@ -233,26 +248,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
     }
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
-        let stash = match &mut self.stash {
-            None => match self.open_stash_read_only().await {
-                Ok(stash) => stash,
-                Err(e) if e.can_recover_with_write_mode() => return Ok(None),
-                Err(e) => return Err(e.into()),
-            },
-            Some(stash) => stash,
-        };
-
-        let deployment_generation = CONFIG_COLLECTION
-            .peek_key_one(
-                stash,
-                proto::ConfigKey {
-                    key: DEPLOY_GENERATION.into(),
-                },
-            )
-            .await?
-            .map(|v| v.value);
-
-        Ok(deployment_generation)
+        self.get_config(DEPLOY_GENERATION.into()).await
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -511,6 +507,15 @@ pub async fn is_stash_initialized(stash: &mut Stash) -> Result<bool, StashError>
     }
 }
 
+async fn get_config(stash: &mut Stash, key: String) -> Result<Option<u64>, CatalogError> {
+    let value = CONFIG_COLLECTION
+        .peek_key_one(stash, proto::ConfigKey { key })
+        .await?
+        .map(|v| v.value);
+
+    Ok(value)
+}
+
 /// A [`Connection`] represent an open connection to the stash. It exposes optimized methods for
 /// executing a single operation against the stash. If the consumer needs to execute multiple
 /// operations atomically, then they should start a transaction via [`Connection::transaction`].
@@ -593,15 +598,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     async fn get_persist_txn_tables(
         &mut self,
     ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
-        let value = CONFIG_COLLECTION
-            .peek_key_one(
-                &mut self.stash,
-                proto::ConfigKey {
-                    key: PERSIST_TXN_TABLES.into(),
-                },
-            )
-            .await?
-            .map(|v| v.value);
+        let value = get_config(&mut self.stash, PERSIST_TXN_TABLES.into()).await?;
 
         value
             .map(PersistTxnTablesImpl::try_from)
@@ -610,6 +607,13 @@ impl ReadOnlyDurableCatalogState for Connection {
                 DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
                     .into()
             })
+    }
+
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
+        Ok(get_config(&mut self.stash, SYSTEM_CONFIG_SYNCED_KEY.into())
+            .await?
+            .map(|value| value > 0)
+            .unwrap_or(false))
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
