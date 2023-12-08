@@ -68,6 +68,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
+use std::num::NonZeroI64;
 use std::ops::Neg;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -89,6 +90,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
+use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
@@ -114,6 +116,7 @@ use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
 use mz_transform::Optimizer;
 use opentelemetry::trace::TraceContextExt;
@@ -515,7 +518,9 @@ impl PlanValidity {
 
 /// Configures a coordinator.
 pub struct Config {
-    pub dataflow_client: mz_controller::Controller,
+    pub controller_config: ControllerConfig,
+    pub controller_envd_epoch: NonZeroI64,
+    pub controller_persist_txn_tables: PersistTxnTablesImpl,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
     pub timestamp_oracle_url: Option<String>,
     pub unsafe_mode: bool,
@@ -539,6 +544,7 @@ pub struct Config {
     pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
+    pub connection_context: ConnectionContext,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
     pub webhook_concurrency_limit: WebhookConcurrencyLimiter,
     pub http_host_name: Option<String>,
@@ -2242,7 +2248,9 @@ impl Coordinator {
 /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
 pub fn serve(
     Config {
-        dataflow_client,
+        controller_config,
+        controller_envd_epoch,
+        controller_persist_txn_tables,
         mut storage,
         timestamp_oracle_url,
         unsafe_mode,
@@ -2265,6 +2273,7 @@ pub fn serve(
         egress_ips,
         aws_account_id,
         aws_privatelink_availability_zones,
+        connection_context,
         system_parameter_sync_config,
         active_connection_count,
         webhook_concurrency_limit,
@@ -2288,10 +2297,7 @@ pub fn serve(
 
         let aws_principal_context = match (
             aws_account_id,
-            dataflow_client
-                .connection_context()
-                .aws_external_id_prefix
-                .clone(),
+            connection_context.aws_external_id_prefix.clone(),
         ) {
             (Some(aws_account_id), Some(aws_external_id_prefix)) => Some(AwsPrincipalContext {
                 aws_account_id,
@@ -2327,7 +2333,7 @@ pub fn serve(
                     egress_ips,
                     aws_principal_context,
                     aws_privatelink_availability_zones,
-                    connection_context: dataflow_client.connection_context().clone(),
+                    connection_context,
                     active_connection_count,
                     http_host_name,
                 },
@@ -2389,9 +2395,18 @@ pub fn serve(
                     ));
                 }
 
+                let controller = handle.block_on(
+                    mz_controller::Controller::new(
+                        controller_config,
+                        controller_envd_epoch,
+                        controller_persist_txn_tables,
+                    )
+                    .boxed(),
+                );
+
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let mut coord = Coordinator {
-                    controller: dataflow_client,
+                    controller,
                     view_optimizer: Optimizer::logical_optimizer(
                         &mz_transform::typecheck::empty_context(),
                     ),
