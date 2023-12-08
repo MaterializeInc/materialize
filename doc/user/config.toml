@@ -40,6 +40,12 @@ identifier = 'mysql'
 weight = 10
 
 [[menu.main]]
+name = "SQL Server"
+parent = 'ingest-data'
+identifier = 'sql-server'
+weight = 13
+
+[[menu.main]]
 name = "Kafka"
 parent = 'ingest-data'
 identifier = 'kafka'
