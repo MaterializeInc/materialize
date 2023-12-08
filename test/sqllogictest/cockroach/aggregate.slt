@@ -1173,7 +1173,7 @@ ORDER BY company_id;
 3  C
 4  D
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT company_id, string_agg(employee::BYTEA, b',')
 FROM string_agg_test
 GROUP BY company_id
@@ -1190,7 +1190,7 @@ ORDER BY company_id;
 3  CCC
 4  DDDD
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT company_id, string_agg(employee::BYTEA, b'')
 FROM string_agg_test
 GROUP BY company_id
@@ -1277,7 +1277,7 @@ ORDER BY company_id, id;
 4  D,D,D
 4  D,D,D,D
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT company_id, string_agg(employee::BYTEA, b',')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
@@ -1300,7 +1300,7 @@ ORDER BY company_id, id;
 4  DDD
 4  DDDD
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT company_id, string_agg(employee::BYTEA, b'')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
@@ -1487,7 +1487,7 @@ ORDER BY e.company_id;
 ----
 1  A,␠B,␠C,␠D
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
   SELECT employee::BYTEA, company_id
@@ -1510,7 +1510,7 @@ ORDER BY e.company_id;
 ----
 1  A,␠B,␠C,␠D
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
   SELECT employee::BYTEA, company_id

@@ -144,7 +144,7 @@ COMMENT ON TYPE special_int IS 'not enough bits'
 ----
 COMMENT ON TYPE special_int IS 'not enough bits'
 =>
-Comment(CommentStatement { object: Type { name: Name(UnresolvedItemName([Ident("special_int")])) }, comment: Some("not enough bits") })
+Comment(CommentStatement { object: Type { ty: Other { name: Name(UnresolvedItemName([Ident("special_int")])), typ_mod: [] } }, comment: Some("not enough bits") })
 
 parse-statement
 COMMENT ON SECRET api_key IS 'shhhhhh'

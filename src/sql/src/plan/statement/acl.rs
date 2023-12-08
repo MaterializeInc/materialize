@@ -27,7 +27,8 @@ use crate::names::{
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::{
-    ensure_cluster_is_not_linked, resolve_cluster, resolve_database, resolve_item, resolve_schema,
+    ensure_cluster_is_not_linked, resolve_cluster, resolve_database, resolve_item_or_type,
+    resolve_schema,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
@@ -196,7 +197,7 @@ fn plan_alter_item_owner(
     name: UnresolvedItemName,
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
-    match resolve_item(scx, name.clone(), if_exists)? {
+    match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
         Some(item) => {
             if item.id().is_system() {
                 sql_bail!(
@@ -459,8 +460,8 @@ fn plan_update_privilege(
                         .iter()
                         .map(|database| scx.get_database(database.database_id()))
                         .flat_map(|database| database.schemas().into_iter())
-                        .flat_map(|schema| schema.item_ids().values())
-                        .map(|item_id| (*item_id).into());
+                        .flat_map(|schema| schema.item_ids())
+                        .map(|item_id| item_id.into());
 
                     item_ids
                         .chain(schema_ids)
@@ -472,8 +473,8 @@ fn plan_update_privilege(
                 }) => schemas
                     .into_iter()
                     .map(|schema| scx.get_schema(schema.database_spec(), schema.schema_spec()))
-                    .flat_map(|schema| schema.item_ids().values())
-                    .map(|item_id| (*item_id).into())
+                    .flat_map(|schema| schema.item_ids())
+                    .map(|item_id| item_id.into())
                     .filter(|object_id| object_type_filter(object_id, &object_type, scx))
                     .collect(),
                 GrantTargetSpecificationInner::Objects { names } => names

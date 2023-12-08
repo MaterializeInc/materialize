@@ -217,6 +217,21 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
         item_name: &PartialItemName,
     ) -> Result<&dyn CatalogItem, CatalogError>;
 
+    /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
+    /// types within the catalog.
+    fn resolve_type(&self, item_name: &PartialItemName) -> Result<&dyn CatalogItem, CatalogError>;
+
+    /// Resolves `name` to a type or item, preferring the type if both exist.
+    fn resolve_item_or_type(
+        &self,
+        name: &PartialItemName,
+    ) -> Result<&dyn CatalogItem, CatalogError> {
+        if let Ok(ty) = self.resolve_type(name) {
+            return Ok(ty);
+        }
+        self.resolve_item(name)
+    }
+
     /// Gets an item by its ID.
     fn try_get_item(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
 
@@ -228,8 +243,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Gets all items.
     fn get_items(&self) -> Vec<&dyn CatalogItem>;
 
-    /// Reports whether the specified type exists in the catalog.
-    fn item_exists(&self, name: &QualifiedItemName) -> bool;
+    /// Looks up an item by its name.
+    fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<&dyn CatalogItem>;
+
+    /// Looks up a type by its name.
+    fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<&dyn CatalogItem>;
 
     /// Gets a cluster by ID.
     fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster;
@@ -396,9 +414,8 @@ pub trait CatalogSchema {
     /// Lists the `CatalogItem`s for the schema.
     fn has_items(&self) -> bool;
 
-    /// Returns the items of the schema as a map from item name to
-    /// item ID.
-    fn item_ids(&self) -> &BTreeMap<String, GlobalId>;
+    /// Returns the IDs of the items in the schema.
+    fn item_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -640,6 +657,41 @@ pub enum CatalogItemType {
     Secret,
     /// A connection.
     Connection,
+}
+
+impl CatalogItemType {
+    /// Reports whether the given type of item conflicts with items of type
+    /// `CatalogItemType::Type`.
+    ///
+    /// In PostgreSQL, even though types live in a separate namespace from other
+    /// schema objects, creating a table, view, or materialized view creates a
+    /// type named after that relation. This prevents creating a type with the
+    /// same name as a relational object, even though types and relational
+    /// objects live in separate namespaces. (Indexes are even weirder; while
+    /// they don't get a type with the same name, they get an entry in
+    /// `pg_class` that prevents *record* types of the same name as the index,
+    /// but not other types of types, like enums.)
+    ///
+    /// We don't presently construct types that mirror relational objects,
+    /// though we likely will need to in the future for full PostgreSQL
+    /// compatibility (see #23789). For now, we use this method to prevent
+    /// creating types and relational objects that have the same name, so that
+    /// it is a backwards compatible change in the future to introduce a type
+    /// named after each relational object in the system.
+    pub fn conflicts_with_type(&self) -> bool {
+        match self {
+            CatalogItemType::Table => true,
+            CatalogItemType::Source => true,
+            CatalogItemType::View => true,
+            CatalogItemType::MaterializedView => true,
+            CatalogItemType::Index => true,
+            CatalogItemType::Type => true,
+            CatalogItemType::Sink => false,
+            CatalogItemType::Func => false,
+            CatalogItemType::Secret => false,
+            CatalogItemType::Connection => false,
+        }
+    }
 }
 
 impl fmt::Display for CatalogItemType {
@@ -1101,6 +1153,11 @@ pub enum CatalogError {
         /// A suggested alternative to the named function.
         alternative: Option<String>,
     },
+    /// Unknown type.
+    UnknownType {
+        /// The identifier of the type we couldn't find.
+        name: String,
+    },
     /// Unknown connection.
     UnknownConnection(String),
     /// Expected the catalog item to have the given type, but it did not.
@@ -1137,6 +1194,7 @@ impl fmt::Display for CatalogError {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::DatabaseAlreadyExists(name) => write!(f, "database '{name}' already exists"),
             Self::UnknownFunction { name, .. } => write!(f, "function \"{}\" does not exist", name),
+            Self::UnknownType { name, .. } => write!(f, "type \"{}\" does not exist", name),
             Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::SchemaAlreadyExists(name) => write!(f, "schema '{name}' already exists"),

@@ -79,7 +79,7 @@ impl<'a> FuncRewriter<'a> {
         let item = self
             .scx
             .catalog
-            .resolve_item(name)
+            .resolve_type(name)
             .expect("data type known to be valid");
         let full_name = self.scx.catalog.resolve_full_name(item.name());
         ResolvedDataType::Named {

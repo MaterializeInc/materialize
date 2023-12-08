@@ -869,6 +869,32 @@ pub struct ItemValue {
     pub(crate) privileges: Vec<MzAclItem>,
 }
 
+impl ItemValue {
+    pub(crate) fn item_type(&self) -> CatalogItemType {
+        // NOTE(benesch): the implementation of this method is hideous, but is
+        // there a better alternative? Storing the object type alongside the
+        // `create_sql` would introduce the possibility of skew.
+        let mut tokens = self.create_sql.split_whitespace();
+        assert_eq!(tokens.next(), Some("CREATE"));
+        match tokens.next() {
+            Some("TABLE") => CatalogItemType::Table,
+            Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
+            Some("SINK") => CatalogItemType::Sink,
+            Some("VIEW") => CatalogItemType::View,
+            Some("MATERIALIZED") => {
+                assert_eq!(tokens.next(), Some("VIEW"));
+                CatalogItemType::MaterializedView
+            }
+            Some("INDEX") => CatalogItemType::Index,
+            Some("TYPE") => CatalogItemType::Type,
+            Some("FUNCTION") => CatalogItemType::Func,
+            Some("SECRET") => CatalogItemType::Secret,
+            Some("CONNECTION") => CatalogItemType::Connection,
+            _ => panic!("unexpected create sql: {}", self.create_sql),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 pub struct CommentKey {
     pub(crate) object_id: CommentObjectId,

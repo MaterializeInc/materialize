@@ -5445,10 +5445,14 @@ pub fn scalar_type_from_catalog(
     let entry = catalog.get_item(&id);
     let type_details = match entry.type_details() {
         Some(type_details) => type_details,
-        None => sql_bail!(
-            "{} does not refer to a type",
-            catalog.resolve_full_name(entry.name()).to_string().quoted()
-        ),
+        None => {
+            // Resolution should never produce a `ResolvedDataType::Named` with
+            // an ID of a non-type, but we error gracefully just in case.
+            sql_bail!(
+                "internal error: {} does not refer to a type",
+                catalog.resolve_full_name(entry.name()).to_string().quoted()
+            );
+        }
     };
     match &type_details.typ {
         CatalogType::Numeric => {

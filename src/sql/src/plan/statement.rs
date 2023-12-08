@@ -681,10 +681,6 @@ impl<'a> StatementContext<'a> {
         self.catalog.get_schema(database_spec, schema_spec)
     }
 
-    pub fn item_exists(&self, name: &QualifiedItemName) -> bool {
-        self.catalog.item_exists(name)
-    }
-
     pub fn resolve_item(&self, name: RawItemName) -> Result<&dyn CatalogItem, PlanError> {
         match name {
             RawItemName::Name(name) => {

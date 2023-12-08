@@ -21,7 +21,6 @@ use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::ColumnName;
 use mz_repr::GlobalId;
-use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
 use mz_sql_parser::ident;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -33,8 +32,9 @@ use crate::ast::fold::{Fold, FoldNode};
 use crate::ast::visit::{Visit, VisitNode};
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    self, AstInfo, Cte, CteBlock, CteMutRec, Ident, Query, Raw, RawClusterName, RawDataType,
-    RawItemName, Statement, UnresolvedItemName,
+    self, AstInfo, Cte, CteBlock, CteMutRec, DocOnIdentifier, GrantTargetSpecification,
+    GrantTargetSpecificationInner, Ident, MutRecBlock, ObjectType, Query, Raw, RawClusterName,
+    RawDataType, RawItemName, Statement, UnresolvedItemName, UnresolvedObjectName,
 };
 use crate::catalog::{
     CatalogError, CatalogItem, CatalogItemType, CatalogTypeDetails, SessionCatalog,
@@ -1181,6 +1181,7 @@ pub enum CommentObjectId {
 #[derive(Debug, Clone, Copy)]
 struct ItemResolutionConfig {
     functions: bool,
+    types: bool,
     relations: bool,
 }
 
@@ -1218,13 +1219,19 @@ impl<'a> NameResolver<'a> {
                                 ..
                             }) => self.catalog.get_item(array_id),
                             Some(_) => sql_bail!("type \"{}[]\" does not exist", name),
-                            None => sql_bail!(
-                                "{} does not refer to a type",
-                                self.catalog
-                                    .resolve_full_name(element_item.name())
-                                    .to_string()
-                                    .quoted()
-                            ),
+                            None => {
+                                // Resolution should never produce a
+                                // `ResolvedDataType::Named` with an ID of a
+                                // non-type, but we error gracefully just in
+                                // case.
+                                sql_bail!(
+                                    "internal error: {} does not refer to a type",
+                                    self.catalog
+                                        .resolve_full_name(element_item.name())
+                                        .to_string()
+                                        .quoted()
+                                );
+                            }
                         };
                         Ok(ResolvedDataType::Named {
                             id: array_item.id(),
@@ -1256,7 +1263,7 @@ impl<'a> NameResolver<'a> {
                 let (full_name, item) = match name {
                     RawItemName::Name(name) => {
                         let name = normalize::unresolved_item_name(name)?;
-                        let item = self.catalog.resolve_item(&name)?;
+                        let item = self.catalog.resolve_type(&name)?;
                         let full_name = self.catalog.resolve_full_name(item.name());
                         (full_name, item)
                     }
@@ -1307,6 +1314,10 @@ impl<'a> NameResolver<'a> {
 
         let mut r: Result<&dyn CatalogItem, CatalogError> =
             Err(CatalogError::UnknownItem(raw_name.to_string()));
+
+        if r.is_err() && config.types {
+            r = self.catalog.resolve_type(&raw_name);
+        }
 
         if r.is_err() && config.functions {
             r = self.catalog.resolve_function(&raw_name);
@@ -1542,6 +1553,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             // should be in scope.
             ItemResolutionConfig {
                 functions: false,
+                types: false,
                 relations: true,
             },
         )
@@ -1551,7 +1563,14 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         column_name: <Raw as AstInfo>::ColumnName,
     ) -> <Aug as AstInfo>::ColumnName {
-        let item_name = self.fold_item_name(column_name.relation);
+        let item_name = self.resolve_item_name(
+            column_name.relation,
+            ItemResolutionConfig {
+                functions: false,
+                types: true,
+                relations: true,
+            },
+        );
         match &item_name {
             ResolvedItemName::Item { id, full_name, .. } => {
                 let item = self.catalog.get_item(id);
@@ -1826,6 +1845,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 // considered.
                 ItemResolutionConfig {
                     functions: true,
+                    types: false,
                     relations: false,
                 },
             ),
@@ -1893,6 +1913,57 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 join: Box::new(self.fold_table_with_joins(*join)),
                 alias: alias.map(|alias| self.fold_table_alias(alias)),
             },
+        }
+    }
+
+    fn fold_grant_target_specification(
+        &mut self,
+        node: GrantTargetSpecification<Raw>,
+    ) -> GrantTargetSpecification<Aug> {
+        match node {
+            GrantTargetSpecification::Object {
+                object_type: ObjectType::Type,
+                object_spec_inner: GrantTargetSpecificationInner::Objects { names },
+            } => GrantTargetSpecification::Object {
+                object_type: ObjectType::Type,
+                object_spec_inner: GrantTargetSpecificationInner::Objects {
+                    names: names
+                        .into_iter()
+                        .map(|name| match name {
+                            UnresolvedObjectName::Item(name) => {
+                                ResolvedObjectName::Item(self.resolve_item_name_name(
+                                    name,
+                                    // `{GRANT|REVOKE} ... ON TYPE ...` can only
+                                    // refer to type names.
+                                    ItemResolutionConfig {
+                                        functions: false,
+                                        types: true,
+                                        relations: false,
+                                    },
+                                ))
+                            }
+                            _ => self.fold_object_name(name),
+                        })
+                        .collect(),
+                },
+            },
+            _ => mz_sql_parser::ast::fold::fold_grant_target_specification(self, node),
+        }
+    }
+
+    fn fold_doc_on_identifier(&mut self, node: DocOnIdentifier<Raw>) -> DocOnIdentifier<Aug> {
+        match node {
+            DocOnIdentifier::Column(name) => DocOnIdentifier::Column(self.fold_column_name(name)),
+            DocOnIdentifier::Type(name) => DocOnIdentifier::Type(self.resolve_item_name(
+                name,
+                // In `DOC ON TYPE ...`, the type can refer to either a type
+                // or a relation.
+                ItemResolutionConfig {
+                    functions: false,
+                    types: true,
+                    relations: true,
+                },
+            )),
         }
     }
 }

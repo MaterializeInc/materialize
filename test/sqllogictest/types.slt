@@ -33,7 +33,7 @@ SELECT pg_typeof('true'::boolean)
 ----
 boolean
 
-query error unknown catalog item 'pg_catalog.boolean'
+query error type "pg_catalog.boolean" does not exist
 SELECT 'true'::pg_catalog.boolean
 
 # 🔬🔬 bytea
@@ -55,7 +55,7 @@ SELECT 'a'::bytes
 ----
 a
 
-query error unknown catalog item 'pg_catalog.bytes'
+query error type "pg_catalog.bytes" does not exist
 SELECT ''::pg_catalog.bytes
 
 # 🔬🔬 date
@@ -89,7 +89,7 @@ SELECT '1.2'::float(1)
 ----
 1.200
 
-query error unknown catalog item 'pg_catalog.float'
+query error type "pg_catalog.float" does not exist
 SELECT '1.2'::pg_catalog.float(1)
 
 query T
@@ -102,7 +102,7 @@ SELECT '1.2'::real
 ----
 1.200
 
-query error unknown catalog item 'pg_catalog.real'
+query error type "pg_catalog.real" does not exist
 SELECT '1.2'::pg_catalog.real
 
 query T
@@ -129,7 +129,7 @@ SELECT '1.2'::float(53)
 ----
 1.200
 
-query error unknown catalog item 'pg_catalog.float'
+query error type "pg_catalog.float" does not exist
 SELECT '1.2'::pg_catalog.float(53)
 
 query T
@@ -142,7 +142,7 @@ SELECT '1.2'::double
 ----
 1.200
 
-query error unknown catalog item 'pg_catalog.double'
+query error type "pg_catalog.double" does not exist
 SELECT '1.2'::pg_catalog.double
 
 query T
@@ -169,7 +169,7 @@ SELECT '1'::smallint
 ----
 1
 
-query error unknown catalog item 'pg_catalog.smallint'
+query error type "pg_catalog.smallint" does not exist
 SELECT '1'::pg_catalog.smallint
 
 query T
@@ -196,7 +196,7 @@ SELECT '1'::int
 ----
 1
 
-query error unknown catalog item 'pg_catalog.int'
+query error type "pg_catalog.int" does not exist
 SELECT '1'::pg_catalog.int
 
 query T
@@ -209,7 +209,7 @@ SELECT '1'::integer
 ----
 1
 
-query error unknown catalog item 'pg_catalog.integer'
+query error type "pg_catalog.integer" does not exist
 SELECT '1'::pg_catalog.integer
 
 query T
@@ -236,7 +236,7 @@ SELECT '1'::bigint
 ----
 1
 
-query error unknown catalog item 'pg_catalog.bigint'
+query error type "pg_catalog.bigint" does not exist
 SELECT '1'::pg_catalog.bigint
 
 query T
@@ -291,7 +291,7 @@ SELECT '{"1":2,"3":4}'::json
 ----
 {"1":2,"3":4}
 
-query error unknown catalog item 'pg_catalog.json'
+query error type "pg_catalog.json" does not exist
 SELECT '{"1":2,"3":4}'::pg_catalog.json
 
 # 🔬🔬 numeric
@@ -314,7 +314,7 @@ SELECT '1'::decimal(38,0)
 ----
 1
 
-query error unknown catalog item 'pg_catalog.decimal'
+query error type "pg_catalog.decimal" does not exist
 SELECT '1'::pg_catalog.decimal(38,0)
 
 query T
@@ -322,7 +322,7 @@ SELECT '1'::dec(38,0)
 ----
 1
 
-query error unknown catalog item 'pg_catalog.dec'
+query error type "pg_catalog.dec" does not exist
 SELECT '1'::pg_catalog.dec(38,0)
 
 # 🔬🔬 oid
@@ -596,8 +596,106 @@ SELECT '1'::materialize.pg_catalog.int4
 1
 
 # tables are not types yet
-query error "pg_catalog.pg_enum" does not refer to a type
+query error type "pg_catalog.pg_enum" does not exist
 SELECT '1'::pg_catalog.pg_enum
+
+# relations can have the same name as built-in types
+statement ok
+CREATE VIEW int4 AS VALUES (1)
+
+query I
+SELECT * FROM int4
+----
+1
+
+# but within the same schema, types cannot have the same name as a relation
+statement error view "materialize.public.int4" already exists
+CREATE TYPE int4 AS (a int)
+
+# creating relations with the same name as an existing type is not allowed
+# (see #23789)...
+
+statement ok
+CREATE TYPE rectype AS (a int)
+
+statement error type "materialize.public.rectype" already exists
+CREATE VIEW rectype AS VALUES (1)
+
+statement error type "materialize.public.rectype" already exists
+CREATE MATERIALIZED VIEW rectype AS VALUES (1)
+
+statement error type "materialize.public.rectype" already exists
+CREATE TABLE rectype (a int)
+
+statement error type "materialize.public.rectype" already exists
+CREATE SOURCE rectype FROM LOAD GENERATOR COUNTER
+
+statement error type "materialize.public.rectype" already exists
+CREATE INDEX rectype ON int4 (column1)
+
+# ...not even via rename...
+
+statement ok
+CREATE VIEW rectype_sneaky_v AS VALUES (1)
+
+statement error catalog item 'rectype' already exists
+ALTER VIEW rectype_sneaky_v RENAME TO rectype
+
+statement ok
+CREATE MATERIALIZED VIEW rectype_sneaky_mv AS VALUES (1)
+
+statement error catalog item 'rectype' already exists
+ALTER MATERIALIZED VIEW rectype_sneaky_mv RENAME TO rectype
+
+statement ok
+CREATE TABLE rectype_sneaky_t (a int)
+
+statement error catalog item 'rectype' already exists
+ALTER TABLE rectype_sneaky_t RENAME TO rectype
+
+statement ok
+CREATE SOURCE rectype_sneaky_s FROM LOAD GENERATOR COUNTER
+
+statement error catalog item 'rectype' already exists
+ALTER SOURCE rectype_sneaky_s RENAME TO rectype
+
+statement ok
+CREATE INDEX rectype_sneaky_i ON int4 (column1)
+
+statement error catalog item 'rectype' already exists
+ALTER INDEX rectype_sneaky_i RENAME TO rectype
+
+# creating secrets with the same name as a type is ok though...
+
+statement ok
+CREATE SECRET rectype AS 'ignored'
+
+statement ok
+DROP SECRET rectype
+
+statement ok
+CREATE SECRET rectype_sneaky AS 'ignored'
+
+statement ok
+ALTER SECRET rectype_sneaky RENAME TO rectype
+
+statement ok
+DROP SECRET rectype
+
+statement ok
+CREATE CONNECTION rectype TO SSH TUNNEL (HOST 'localhost', USER 'ignored')
+
+statement ok
+DROP CONNECTION rectype
+
+statement ok
+CREATE CONNECTION rectype_sneaky TO SSH TUNNEL (HOST 'localhost', USER 'ignored')
+
+statement ok
+ALTER CONNECTION rectype_sneaky RENAME TO rectype
+
+statement ok
+DROP CONNECTION rectype
 
 # 🔬 format_type
 

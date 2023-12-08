@@ -435,8 +435,8 @@ impl CatalogState {
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
             let schema = self.get_schema(&database_spec, &schema_spec, conn_id);
-            for item_id in schema.item_ids().values() {
-                dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
+            for item_id in schema.item_ids() {
+                dependents.extend_from_slice(&self.item_dependents(item_id, seen));
             }
             dependents.push(object_id)
         }
@@ -563,7 +563,34 @@ impl CatalogState {
         self.entry_by_id.get_mut(id).expect("catalog out of sync")
     }
 
-    pub fn try_get_entry_in_schema(
+    /// Gets an type named `name` from exactly one of the system schemas.
+    ///
+    /// # Panics
+    /// - If `name` is not an entry in any system schema
+    /// - If more than one system schema has an entry named `name`.
+    pub(super) fn get_system_type(&self, name: &str) -> &CatalogEntry {
+        let mut res = None;
+        for system_schema in &[
+            PG_CATALOG_SCHEMA,
+            INFORMATION_SCHEMA,
+            MZ_CATALOG_SCHEMA,
+            MZ_INTERNAL_SCHEMA,
+            MZ_UNSAFE_SCHEMA,
+        ] {
+            let schema_id = &self.ambient_schemas_by_name[*system_schema];
+            let schema = &self.ambient_schemas_by_id[schema_id];
+            if let Some(global_id) = schema.types.get(name) {
+                match res {
+                    None => res = Some(self.get_entry(global_id)),
+                    Some(_) => panic!("only call get_system_type on objects uniquely identifiable in one system schema"),
+                }
+            }
+        }
+
+        res.unwrap_or_else(|| panic!("cannot find type {} in system schema", name))
+    }
+
+    pub fn get_item_by_name(
         &self,
         name: &QualifiedItemName,
         conn_id: &ConnectionId,
@@ -578,35 +605,19 @@ impl CatalogState {
         .and_then(|id| self.try_get_entry(id))
     }
 
-    /// Gets an entry named `item` from exactly one of system schemas.
-    ///
-    /// # Panics
-    /// - If `item` is not an entry in any system schema
-    /// - If more than one system schema has an entry named `item`.
-    pub(super) fn get_entry_in_system_schemas(&self, item: &str) -> &CatalogEntry {
-        let mut res = None;
-        for system_schema in &[
-            PG_CATALOG_SCHEMA,
-            INFORMATION_SCHEMA,
-            MZ_CATALOG_SCHEMA,
-            MZ_INTERNAL_SCHEMA,
-            MZ_UNSAFE_SCHEMA,
-        ] {
-            let schema_id = &self.ambient_schemas_by_name[*system_schema];
-            let schema = &self.ambient_schemas_by_id[schema_id];
-            if let Some(global_id) = schema.items.get(item) {
-                match res {
-                    None => res = Some(self.get_entry(global_id)),
-                    Some(_) => panic!("only call get_entry_in_system_schemas on objects uniquely identifiable in one system schema"),
-                }
-            }
-        }
-
-        res.unwrap_or_else(|| panic!("cannot find {} in system schema", item))
-    }
-
-    pub fn item_exists(&self, name: &QualifiedItemName, conn_id: &ConnectionId) -> bool {
-        self.try_get_entry_in_schema(name, conn_id).is_some()
+    pub fn get_type_by_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: &ConnectionId,
+    ) -> Option<&CatalogEntry> {
+        self.get_schema(
+            &name.qualifiers.database_spec,
+            &name.qualifiers.schema_spec,
+            conn_id,
+        )
+        .types
+        .get(&name.item)
+        .and_then(|id| self.try_get_entry(id))
     }
 
     pub(super) fn find_available_name(
@@ -616,7 +627,7 @@ impl CatalogState {
     ) -> QualifiedItemName {
         let mut i = 0;
         let orig_item_name = name.item.clone();
-        while self.item_exists(&name, conn_id) {
+        while self.get_item_by_name(&name, conn_id).is_some() {
             i += 1;
             name.item = format!("{}{}", orig_item_name, i);
         }
@@ -1072,12 +1083,12 @@ impl CatalogState {
             conn_id,
         );
 
-        let prev_id = if let CatalogItem::Func(_) = entry.item() {
-            schema
+        let prev_id = match entry.item() {
+            CatalogItem::Func(_) => schema
                 .functions
-                .insert(entry.name().item.clone(), entry.id())
-        } else {
-            schema.items.insert(entry.name().item.clone(), entry.id())
+                .insert(entry.name().item.clone(), entry.id()),
+            CatalogItem::Type(_) => schema.types.insert(entry.name().item.clone(), entry.id()),
+            _ => schema.items.insert(entry.name().item.clone(), entry.id()),
         };
 
         assert!(
@@ -1115,10 +1126,17 @@ impl CatalogState {
             &metadata.name().qualifiers.schema_spec,
             conn_id,
         );
-        schema
-            .items
-            .remove(&metadata.name().item)
-            .expect("catalog out of sync");
+        if metadata.item_type() == CatalogItemType::Type {
+            schema
+                .types
+                .remove(&metadata.name().item)
+                .expect("catalog out of sync");
+        } else {
+            schema
+                .items
+                .remove(&metadata.name().item)
+                .expect("catalog out of sync");
+        };
 
         if !id.is_system() {
             if let Some(cluster_id) = metadata.item().cluster_id() {
@@ -1586,6 +1604,7 @@ impl CatalogState {
                 oid,
                 items: BTreeMap::new(),
                 functions: BTreeMap::new(),
+                types: BTreeMap::new(),
                 owner_id,
                 privileges: PrivilegeMap::from_mz_acl_items(vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Schema,
@@ -1818,6 +1837,24 @@ impl CatalogState {
                 name,
                 alternative: None,
             },
+        )
+    }
+
+    /// Resolves `name` to a type [`CatalogEntry`].
+    pub fn resolve_type(
+        &self,
+        current_database: Option<&DatabaseId>,
+        search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
+        name: &PartialItemName,
+        conn_id: &ConnectionId,
+    ) -> Result<&CatalogEntry, SqlCatalogError> {
+        self.resolve(
+            |schema| &schema.types,
+            current_database,
+            search_path,
+            name,
+            conn_id,
+            |name| SqlCatalogError::UnknownType { name },
         )
     }
 
