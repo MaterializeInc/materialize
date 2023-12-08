@@ -59,6 +59,12 @@ use crate::durable::{
 /// New-type used to represent timestamps in persist.
 pub(crate) type Timestamp = mz_repr::Timestamp;
 
+/// The minimum value of an epoch.
+///
+/// # Safety
+/// `new_unchecked` is safe to call with a non-zero value.
+const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
+
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug)]
 enum Mode {
@@ -89,6 +95,8 @@ pub struct UnopenedPersistCatalogState {
     shard_id: ShardId,
     /// Cache of the most recent catalog snapshot.
     snapshot_cache: Option<(Timestamp, Vec<StateUpdate<StateUpdateKindBinary>>)>,
+    /// The epoch of the catalog, if one exists.
+    epoch: Option<Epoch>,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
@@ -112,7 +120,7 @@ impl UnopenedPersistCatalogState {
         const SEED: usize = 1;
         let shard_id = Self::shard_id(organization_id, SEED);
         debug!(?shard_id, "new persist backed catalog state");
-        let (write_handle, read_handle) = persist_client
+        let (mut write_handle, mut read_handle) = persist_client
             .open(
                 shard_id,
                 Arc::new(StateUpdateKindSchema::default()),
@@ -121,6 +129,7 @@ impl UnopenedPersistCatalogState {
             )
             .await
             .expect("invalid usage");
+        let epoch = get_current_epoch(&mut write_handle, &mut read_handle, &metrics).await;
         UnopenedPersistCatalogState {
             write_handle,
             read_handle,
@@ -128,6 +137,7 @@ impl UnopenedPersistCatalogState {
             shard_id,
             snapshot_cache: None,
             metrics,
+            epoch,
         }
     }
 
@@ -152,11 +162,11 @@ impl UnopenedPersistCatalogState {
                 ts: upper,
                 diff: -1,
             });
-            Some(prev_epoch.get())
+            Some(prev_epoch)
         } else {
             None
         };
-        let mut current_epoch = prev_epoch.unwrap_or(1);
+        let mut current_epoch = prev_epoch.unwrap_or(MIN_EPOCH).get();
         // Only writable catalogs attempt to increment the epoch.
         if matches!(mode, Mode::Writable) {
             current_epoch = current_epoch + 1;
@@ -178,8 +188,9 @@ impl UnopenedPersistCatalogState {
             self.compare_and_append(fence_updates, upper, next_upper)
                 .await?;
         }
+        self.epoch = Some(current_epoch);
 
-        let (is_initialized, mut upper) = self.is_initialized_inner().await;
+        let (is_initialized, mut upper) = self.is_initialized_inner().await?;
         if !matches!(mode, Mode::Writable) && !is_initialized {
             return Err(CatalogError::Durable(DurableCatalogError::NotWritable(
                 format!("catalog tables do not exist; will not create in {mode:?} mode"),
@@ -247,11 +258,6 @@ impl UnopenedPersistCatalogState {
         Ok(Box::new(catalog))
     }
 
-    /// Fetch the current upper of the catalog state.
-    pub(crate) async fn current_upper(&mut self) -> Timestamp {
-        current_upper(&mut self.write_handle).await
-    }
-
     /// Generates a timestamp for reading from the catalog that is as fresh as possible, given
     /// `upper`.
     pub(crate) fn as_of(&self, upper: Timestamp) -> Timestamp {
@@ -259,7 +265,7 @@ impl UnopenedPersistCatalogState {
     }
 
     /// Reports if the catalog state has been initialized, and the current upper.
-    async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
+    async fn is_initialized_inner(&mut self) -> Result<(bool, Timestamp), CatalogError> {
         let (persist_shard_readable, upper) = self.is_persist_shard_readable().await;
         let is_initialized = if !persist_shard_readable {
             false
@@ -267,16 +273,15 @@ impl UnopenedPersistCatalogState {
             let as_of = self.as_of(upper);
             // Configs are readable using any catalog version since they can't be migrated, so they
             // can be used to tell if the catalog is populated.
-            self.get_configs(as_of).await.next().is_some()
+            !self.get_configs(as_of).await?.is_empty()
         };
-        (is_initialized, upper)
+        Ok((is_initialized, upper))
     }
 
     /// Reports if the persist shard can be read at some time, and the current upper. A persist
     /// shard can only be read once it's been written to at least once.
     async fn is_persist_shard_readable(&mut self) -> (bool, Timestamp) {
-        let upper = self.current_upper().await;
-        (upper > Timestamp::minimum(), upper)
+        is_persist_shard_readable(&mut self.write_handle).await
     }
 
     /// Generates a [`Vec<StateUpdate>`] that contain all updates to the catalog
@@ -363,23 +368,28 @@ impl UnopenedPersistCatalogState {
     /// Get the current value of config `key`.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
-    async fn get_current_config(&mut self, key: &str) -> Option<u64> {
+    async fn get_current_config(&mut self, key: &str) -> Result<Option<u64>, CatalogError> {
         let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
         if persist_shard_readable {
             let as_of = self.as_of(current_upper);
             self.get_config(key, as_of).await
         } else {
-            None
+            Ok(None)
         }
     }
 
     /// Get value of config `key` at `as_of`.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
-    async fn get_config(&mut self, key: &str, as_of: Timestamp) -> Option<u64> {
+    async fn get_config(
+        &mut self,
+        key: &str,
+        as_of: Timestamp,
+    ) -> Result<Option<u64>, CatalogError> {
         let mut configs: Vec<_> = self
             .get_configs(as_of)
-            .await
+            .await?
+            .into_iter()
             .filter_map(|config| {
                 if key == &config.key {
                     Some(config.value)
@@ -392,65 +402,61 @@ impl UnopenedPersistCatalogState {
             configs.len() <= 1,
             "multiple configs should not share the same key: {configs:?}"
         );
-        configs.pop()
+        Ok(configs.pop())
     }
 
     /// Get all Configs.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
-    async fn get_configs(&mut self, as_of: Timestamp) -> impl Iterator<Item = Config> + '_ {
+    async fn get_configs(&mut self, as_of: Timestamp) -> Result<Vec<Config>, DurableCatalogError> {
+        let current_epoch = self.epoch.clone();
         self.snapshot_binary(as_of)
             .await
             .into_iter()
             .rev()
-            // Configs can never be migrated so we know that they will always convert successfully
-            // from binary.
+            // Configs and the epoch can never be migrated so we know that they will always convert
+            // successfully from binary.
             .filter_map(|update| {
                 soft_assert_eq!(update.diff, 1, "snapshot returns consolidated results");
                 let kind: Option<StateUpdateKind> = update.kind.clone().try_into().ok();
                 kind
             })
-            .filter_map(|kind| match kind {
-                StateUpdateKind::Config(k, v) => {
+            .filter_map(|kind| match (kind, current_epoch) {
+                (StateUpdateKind::Config(k, v), _) => {
                     let k = k.clone().into_rust().expect("invalid config key persisted");
                     let v = v
                         .clone()
                         .into_rust()
                         .expect("invalid config value persisted");
-                    Some(Config::from_key_value(k, v))
+                    Some(Ok(Config::from_key_value(k, v)))
                 }
+                (StateUpdateKind::Epoch(epoch), Some(current_epoch)) if epoch > current_epoch => {
+                    Some(Err(DurableCatalogError::Fence(format!(
+                        "current catalog epoch {current_epoch} fenced by new catalog epoch {epoch}",
+                    ))))
+                }
+                (StateUpdateKind::Epoch(epoch), None) => Some(Err(DurableCatalogError::Fence(
+                    format!("current catalog epoch None fenced by new catalog epoch {epoch}",),
+                ))),
                 _ => None,
             })
+            .collect::<Result<_, _>>()
     }
 
     /// Get the user version of this instance.
     ///
     /// The user version is used to determine if a migration is needed.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn get_user_version(&mut self, as_of: Timestamp) -> Option<u64> {
+    pub(crate) async fn get_user_version(
+        &mut self,
+        as_of: Timestamp,
+    ) -> Result<Option<u64>, CatalogError> {
         self.get_config(USER_VERSION_KEY, as_of).await
     }
 
     /// Get epoch at `as_of`.
     async fn get_epoch(&mut self, as_of: Timestamp) -> Epoch {
-        let epochs = self
-            .snapshot_binary(as_of)
-            .await
-            .into_iter()
-            .rev()
-            // The epoch can never be migrated so we know that it will always convert successfully
-            // from binary.
-            .filter_map(|update| {
-                soft_assert_eq!(update.diff, 1, "snapshot returns consolidated results");
-                let kind: Option<StateUpdateKind> = update.kind.clone().try_into().ok();
-                kind
-            })
-            .filter_map(|kind| match kind {
-                StateUpdateKind::Epoch(epoch) => Some(epoch),
-                _ => None,
-            });
-        // There must always be a single epoch.
-        epochs.into_element()
+        get_epoch(&mut self.read_handle, as_of, &self.metrics).await
     }
 
     /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
@@ -513,12 +519,12 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
-        Ok(self.is_initialized_inner().await.0)
+        Ok(self.is_initialized_inner().await?.0)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
-        Ok(self.get_current_config(DEPLOY_GENERATION).await)
+        self.get_current_config(DEPLOY_GENERATION).await
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -1072,6 +1078,15 @@ async fn current_upper(
         .expect("we use a totally ordered time and never finalize the shard")
 }
 
+/// Reports if the persist shard can be read at some time, and the current upper. A persist
+/// shard can only be read once it's been written to at least once.
+async fn is_persist_shard_readable(
+    write_handle: &mut WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+) -> (bool, Timestamp) {
+    let upper = current_upper(write_handle).await;
+    (upper > Timestamp::minimum(), upper)
+}
+
 /// Generates a timestamp for reading from `read_handle` that is as fresh as possible, given
 /// `upper`.
 fn as_of(
@@ -1170,6 +1185,45 @@ async fn snapshot_binary_inner(
             diff,
         })
         .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
+}
+
+/// Get the current epoch.
+async fn get_current_epoch(
+    write_handle: &mut WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    read_handle: &mut ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    metrics: &Arc<Metrics>,
+) -> Option<Epoch> {
+    let (persist_shard_readable, current_upper) = is_persist_shard_readable(write_handle).await;
+    if persist_shard_readable {
+        let as_of = as_of(read_handle, current_upper);
+        Some(get_epoch(read_handle, as_of, metrics).await)
+    } else {
+        None
+    }
+}
+
+/// Get epoch at `as_of`.
+async fn get_epoch(
+    read_handle: &mut ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    as_of: Timestamp,
+    metrics: &Arc<Metrics>,
+) -> Epoch {
+    let epochs = snapshot_binary(read_handle, as_of, metrics)
+        .await
+        .rev()
+        // The epoch can never be migrated so we know that it will always convert successfully
+        // from binary.
+        .filter_map(|update| {
+            soft_assert_eq!(update.diff, 1, "snapshot returns consolidated results");
+            let kind: Option<StateUpdateKind> = update.kind.clone().try_into().ok();
+            kind
+        })
+        .filter_map(|kind| match kind {
+            StateUpdateKind::Epoch(epoch) => Some(epoch),
+            _ => None,
+        });
+    // There must always be a single epoch.
+    epochs.into_element()
 }
 
 // Debug methods.
