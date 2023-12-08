@@ -1721,6 +1721,34 @@ pub const MZ_ARRANGEMENT_SHARING_RAW: BuiltinLog = BuiltinLog {
     sensitivity: DataSensitivity::Public,
 };
 
+pub const MZ_ARRANGEMENT_BATCHER_RECORDS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_batcher_records_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Differential(DifferentialLog::BatcherRecords),
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_ARRANGEMENT_BATCHER_SIZE_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_batcher_size_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Differential(DifferentialLog::BatcherSize),
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_batcher_capacity_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Differential(DifferentialLog::BatcherCapacity),
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_batcher_allocations_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Differential(DifferentialLog::BatcherAllocations),
+    sensitivity: DataSensitivity::Public,
+};
+
 pub const MZ_COMPUTE_EXPORTS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_compute_exports_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4132,20 +4160,64 @@ heap_allocations_cte AS (
         mz_internal.mz_arrangement_heap_allocations_raw
     GROUP BY
         operator_id, worker_id
+),
+batcher_records_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS records
+    FROM
+        mz_internal.mz_arrangement_batcher_records_raw
+    GROUP BY
+        operator_id, worker_id
+),
+batcher_size_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS size
+    FROM
+        mz_internal.mz_arrangement_batcher_size_raw
+    GROUP BY
+        operator_id, worker_id
+),
+batcher_capacity_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS capacity
+    FROM
+        mz_internal.mz_arrangement_batcher_capacity_raw
+    GROUP BY
+        operator_id, worker_id
+),
+batcher_allocations_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS allocations
+    FROM
+        mz_internal.mz_arrangement_batcher_allocations_raw
+    GROUP BY
+        operator_id, worker_id
 )
 SELECT
     batches_cte.operator_id,
     batches_cte.worker_id,
-    COALESCE(records_cte.records, 0) AS records,
+    COALESCE(records_cte.records, 0) + COALESCE(batcher_records_cte.records, 0) AS records,
     batches_cte.batches,
-    COALESCE(heap_size_cte.size, 0) AS size,
-    COALESCE(heap_capacity_cte.capacity, 0) AS capacity,
-    COALESCE(heap_allocations_cte.allocations, 0) AS allocations
+    COALESCE(heap_size_cte.size, 0) + COALESCE(batcher_size_cte.size, 0) AS size,
+    COALESCE(heap_capacity_cte.capacity, 0) + COALESCE(batcher_capacity_cte.capacity, 0) AS capacity,
+    COALESCE(heap_allocations_cte.allocations, 0) + COALESCE(batcher_allocations_cte.allocations, 0) AS allocations
 FROM batches_cte
 LEFT OUTER JOIN records_cte USING (operator_id, worker_id)
 LEFT OUTER JOIN heap_size_cte USING (operator_id, worker_id)
 LEFT OUTER JOIN heap_capacity_cte USING (operator_id, worker_id)
-LEFT OUTER JOIN heap_allocations_cte USING (operator_id, worker_id)",
+LEFT OUTER JOIN heap_allocations_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN batcher_records_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN batcher_size_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN batcher_capacity_cte USING (operator_id, worker_id)
+LEFT OUTER JOIN batcher_allocations_cte USING (operator_id, worker_id)",
     sensitivity: DataSensitivity::Public,
 };
 
@@ -4188,6 +4260,106 @@ pub const MZ_ARRANGEMENT_SHARING: BuiltinView = BuiltinView {
 SELECT operator_id, count
 FROM mz_internal.mz_arrangement_sharing_per_worker
 WHERE worker_id = 0",
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_ARRANGEMENT_BATCHER_RECORDS_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_arrangement_batcher_records_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT
+    operator_id,
+    worker_id,
+    pg_catalog.count(*) AS count
+FROM mz_internal.mz_arrangement_batcher_records_raw
+GROUP BY operator_id, worker_id",
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_ARRANGEMENT_BATCHER_RECORDS: BuiltinView = BuiltinView {
+    name: "mz_arrangement_batcher_records",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT operator_id, sum(count)
+FROM mz_internal.mz_arrangement_batcher_records_per_worker
+GROUP BY operator_id",
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_ARRANGEMENT_BATCHER_SIZE_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_arrangement_batcher_size_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT
+    operator_id,
+    worker_id,
+    pg_catalog.count(*) AS count
+FROM mz_internal.mz_arrangement_batcher_size_raw
+GROUP BY operator_id, worker_id",
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_ARRANGEMENT_BATCHER_SIZE: BuiltinView = BuiltinView {
+    name: "mz_arrangement_batcher_size",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT operator_id, sum(count)
+FROM mz_internal.mz_arrangement_batcher_size_per_worker
+GROUP BY operator_id",
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_ARRANGEMENT_BATCHER_CAPACITY_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_arrangement_batcher_capacity_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT
+    operator_id,
+    worker_id,
+    pg_catalog.count(*) AS count
+FROM mz_internal.mz_arrangement_batcher_capacity_raw
+GROUP BY operator_id, worker_id",
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_ARRANGEMENT_BATCHER_CAPACITY: BuiltinView = BuiltinView {
+    name: "mz_arrangement_batcher_capacity",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT operator_id, sum(count)
+FROM mz_internal.mz_arrangement_batcher_capacity_per_worker
+GROUP BY operator_id",
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_arrangement_batcher_allocations_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT
+    operator_id,
+    worker_id,
+    pg_catalog.count(*) AS count
+FROM mz_internal.mz_arrangement_batcher_allocations_raw
+GROUP BY operator_id, worker_id",
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_ARRANGEMENT_BATCHER_ALLOCATIONS: BuiltinView = BuiltinView {
+    name: "mz_arrangement_batcher_allocations",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT operator_id, sum(count)
+FROM mz_internal.mz_arrangement_batcher_allocations_per_worker
+GROUP BY operator_id",
     sensitivity: DataSensitivity::Public,
 };
 
@@ -6046,6 +6218,10 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_ARRANGEMENT_SHARING_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_BATCHES_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_RECORDS_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_BATCHER_RECORDS_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_BATCHER_SIZE_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW),
         Builtin::Log(&MZ_DATAFLOW_CHANNELS_PER_WORKER),
         Builtin::Log(&MZ_DATAFLOW_OPERATORS_PER_WORKER),
         Builtin::Log(&MZ_DATAFLOW_ADDRESSES_PER_WORKER),
@@ -6123,6 +6299,14 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SIZES),
+        Builtin::View(&MZ_ARRANGEMENT_BATCHER_RECORDS_PER_WORKER),
+        Builtin::View(&MZ_ARRANGEMENT_BATCHER_RECORDS),
+        Builtin::View(&MZ_ARRANGEMENT_BATCHER_SIZE_PER_WORKER),
+        Builtin::View(&MZ_ARRANGEMENT_BATCHER_SIZE),
+        Builtin::View(&MZ_ARRANGEMENT_BATCHER_CAPACITY_PER_WORKER),
+        Builtin::View(&MZ_ARRANGEMENT_BATCHER_CAPACITY),
+        Builtin::View(&MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_PER_WORKER),
+        Builtin::View(&MZ_ARRANGEMENT_BATCHER_ALLOCATIONS),
         Builtin::View(&MZ_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_ADDRESSES),

@@ -214,6 +214,10 @@ pub enum DifferentialLog {
     ArrangementBatches,
     ArrangementRecords,
     Sharing,
+    BatcherRecords,
+    BatcherSize,
+    BatcherCapacity,
+    BatcherAllocations,
 }
 
 impl RustType<ProtoDifferentialLog> for DifferentialLog {
@@ -224,6 +228,10 @@ impl RustType<ProtoDifferentialLog> for DifferentialLog {
                 DifferentialLog::ArrangementBatches => ArrangementBatches(()),
                 DifferentialLog::ArrangementRecords => ArrangementRecords(()),
                 DifferentialLog::Sharing => Sharing(()),
+                DifferentialLog::BatcherRecords => BatcherRecords(()),
+                DifferentialLog::BatcherSize => BatcherSize(()),
+                DifferentialLog::BatcherCapacity => BatcherCapacity(()),
+                DifferentialLog::BatcherAllocations => BatcherAllocations(()),
             }),
         }
     }
@@ -234,6 +242,10 @@ impl RustType<ProtoDifferentialLog> for DifferentialLog {
             Some(ArrangementBatches(())) => Ok(DifferentialLog::ArrangementBatches),
             Some(ArrangementRecords(())) => Ok(DifferentialLog::ArrangementRecords),
             Some(Sharing(())) => Ok(DifferentialLog::Sharing),
+            Some(BatcherRecords(())) => Ok(DifferentialLog::BatcherRecords),
+            Some(BatcherSize(())) => Ok(DifferentialLog::BatcherSize),
+            Some(BatcherCapacity(())) => Ok(DifferentialLog::BatcherCapacity),
+            Some(BatcherAllocations(())) => Ok(DifferentialLog::BatcherAllocations),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoDifferentialLog::kind",
             )),
@@ -419,6 +431,10 @@ impl LogVariant {
             LogVariant::Differential(DifferentialLog::ArrangementBatches)
             | LogVariant::Differential(DifferentialLog::ArrangementRecords)
             | LogVariant::Differential(DifferentialLog::Sharing)
+            | LogVariant::Differential(DifferentialLog::BatcherRecords)
+            | LogVariant::Differential(DifferentialLog::BatcherSize)
+            | LogVariant::Differential(DifferentialLog::BatcherCapacity)
+            | LogVariant::Differential(DifferentialLog::BatcherAllocations)
             | LogVariant::Compute(ComputeLog::ArrangementHeapSize)
             | LogVariant::Compute(ComputeLog::ArrangementHeapCapacity)
             | LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => RelationDesc::empty()

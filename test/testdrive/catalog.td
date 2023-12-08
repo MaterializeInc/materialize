@@ -526,12 +526,16 @@ SELECT ${arg.replicas} > 1;
 name                                           type   size  cluster
 ------------------------------------------------------------------
 mz_active_peeks_per_worker                   log   <null>   <null>
+mz_arrangement_batcher_allocations_raw       log   <null>   <null>
+mz_arrangement_batcher_capacity_raw          log   <null>   <null>
+mz_arrangement_batcher_records_raw           log   <null>   <null>
+mz_arrangement_batcher_size_raw              log   <null>   <null>
 mz_arrangement_batches_raw                   log   <null>   <null>
+mz_arrangement_heap_allocations_raw          log   <null>   <null>
+mz_arrangement_heap_capacity_raw             log   <null>   <null>
+mz_arrangement_heap_size_raw                 log   <null>   <null>
 mz_arrangement_records_raw                   log   <null>   <null>
 mz_arrangement_sharing_raw                   log   <null>   <null>
-mz_arrangement_heap_size_raw                 log   <null>   <null>
-mz_arrangement_heap_capacity_raw             log   <null>   <null>
-mz_arrangement_heap_allocations_raw          log   <null>   <null>
 mz_aws_privatelink_connection_status_history source <null>  <null>
 mz_cluster_replica_frontiers                 source <null>  <null>
 mz_cluster_replica_heartbeats                source <null>  <null>
@@ -590,6 +594,14 @@ name
 mz_active_peeks
 mz_activity_log
 mz_activity_log_redacted
+mz_arrangement_batcher_allocations
+mz_arrangement_batcher_allocations_per_worker
+mz_arrangement_batcher_capacity
+mz_arrangement_batcher_capacity_per_worker
+mz_arrangement_batcher_records
+mz_arrangement_batcher_records_per_worker
+mz_arrangement_batcher_size
+mz_arrangement_batcher_size_per_worker
 mz_arrangement_sharing
 mz_arrangement_sharing_per_worker
 mz_arrangement_sizes
@@ -640,26 +652,26 @@ mz_scheduling_elapsed
 mz_scheduling_elapsed_per_worker
 mz_scheduling_parks_histogram
 mz_scheduling_parks_histogram_per_worker
+mz_show_all_my_privileges
 mz_show_all_privileges
 mz_show_cluster_privileges
+mz_show_cluster_replicas
 mz_show_database_privileges
 mz_show_default_privileges
-mz_show_all_my_privileges
-mz_show_my_cluster_privileges
-mz_show_cluster_replicas
-mz_show_my_database_privileges
-mz_show_my_default_privileges
 mz_show_indexes
 mz_show_materialized_views
+mz_show_my_cluster_privileges
+mz_show_my_database_privileges
+mz_show_my_default_privileges
 mz_show_my_object_privileges
 mz_show_my_role_members
 mz_show_my_schema_privileges
-mz_show_sinks
-mz_show_sources
 mz_show_my_system_privileges
 mz_show_object_privileges
 mz_show_role_members
 mz_show_schema_privileges
+mz_show_sinks
+mz_show_sources
 mz_show_system_privileges
 mz_sink_statuses
 mz_source_statuses
@@ -682,7 +694,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-113
+125
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

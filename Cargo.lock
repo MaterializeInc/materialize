@@ -1723,13 +1723,12 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#f93f1de3c236bee04eff659f56fe65eb34858d3b"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7596c843c745ef13ec7ea638be5e6b91b5fdf1a2"
 dependencies = [
  "abomonation",
  "abomonation_derive",
  "fnv",
  "serde",
- "serde_derive",
  "timely",
 ]
 
@@ -1780,7 +1779,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#f93f1de3c236bee04eff659f56fe65eb34858d3b"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7596c843c745ef13ec7ea638be5e6b91b5fdf1a2"
 dependencies = [
  "abomonation",
  "abomonation_derive",
