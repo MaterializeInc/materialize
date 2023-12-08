@@ -512,10 +512,6 @@ impl Listeners {
             "persist_txn_tables value of {} computed from catalog {:?} and flag {:?}",
             persist_txn_tables, persist_txn_tables_stash_ld, config.persist_txn_tables_cli,
         );
-        let controller =
-            mz_controller::Controller::new(config.controller, envd_epoch, persist_txn_tables)
-                .boxed()
-                .await;
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
@@ -535,7 +531,10 @@ impl Listeners {
         let segment_client = config.segment_api_key.map(mz_segment::Client::new);
         let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
-            dataflow_client: controller,
+            connection_context: config.controller.connection_context.clone(),
+            controller_config: config.controller,
+            controller_envd_epoch: envd_epoch,
+            controller_persist_txn_tables: persist_txn_tables,
             storage: adapter_storage,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,

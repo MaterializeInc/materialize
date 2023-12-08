@@ -199,7 +199,7 @@ impl<T: Codec64 + Timestamp + Lattice> SnapshotCursor<T> {
 }
 
 #[async_trait(?Send)]
-pub trait StorageController: Debug + Send {
+pub trait StorageController: Debug {
     type Timestamp;
 
     /// Marks the end of any initialization commands.
