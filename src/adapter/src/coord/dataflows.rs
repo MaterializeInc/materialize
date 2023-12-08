@@ -130,6 +130,7 @@ pub enum EvalTime {
 
 impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
         let compute = self
             .instance_snapshot(instance)

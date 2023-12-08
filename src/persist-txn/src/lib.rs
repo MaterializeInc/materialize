@@ -315,6 +315,13 @@ impl TxnsEntry {
             TxnsEntry::Append(data_id, _, _) => data_id,
         }
     }
+
+    fn ts<T: Codec64>(&self) -> T {
+        match self {
+            TxnsEntry::Register(_, ts) => T::decode(*ts),
+            TxnsEntry::Append(_, ts, _) => T::decode(*ts),
+        }
+    }
 }
 
 /// An abstraction over the encoding format of [TxnsEntry].

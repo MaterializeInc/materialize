@@ -254,6 +254,25 @@ If the feature is enabled, when casting from `text` to `timestamp` you should pr
 
 {{< /note >}}
 
+### Handling batch events
+
+The application pushing events to your webhook source may batch multiple events into a single
+HTTP request. You can automatically expand this batch of requests into separate rows, using a
+[`MATERIALIZED VIEW`](/sql/create-materialized-view/) and the [`jsonb_array_elements`](/sql/types/jsonb/#functions)
+function.
+
+```sql
+-- Webhook source that parses request bodies as JSON.
+CREATE SOURCE webhook_source_json_batch IN CLUSTER my_cluster FROM WEBHOOK
+  BODY FORMAT JSON
+  INCLUDE HEADERS;
+
+-- Materialized view which expands the JSON array into separate rows.
+CREATE MATERIALIZED VIEW expanded_batch_request IN CLUSTER my_compute_cluster AS (
+  SELECT jsonb_array_elements(body), headers FROM webhook_source_json_batch
+);
+```
+
 ## Request limits
 
 Webhook sources apply the following limits to received requests:

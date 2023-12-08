@@ -342,6 +342,10 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
         compare_and_return_async!(self, get_persist_txn_tables)
     }
 
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
+        compare_and_return_async!(self, has_system_config_synced_once)
+    }
+
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         if self.is_read_only() {
             // Read-only catalogs cannot fix timestamps or storage usage ID so we must ignore them.

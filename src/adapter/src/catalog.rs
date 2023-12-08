@@ -599,11 +599,11 @@ impl Catalog {
                 default_storage_cluster_size: None,
                 builtin_cluster_replica_size: "1".into(),
                 system_parameter_defaults: Default::default(),
+                remote_system_parameters: None,
                 availability_zones: vec![],
                 egress_ips: vec![],
                 aws_principal_context: None,
                 aws_privatelink_availability_zones: None,
-                system_parameter_sync_config: None,
                 http_host_name: None,
                 connection_context: ConnectionContext::for_tests(secrets_reader),
                 active_connection_count,
@@ -3402,6 +3402,8 @@ impl Catalog {
 
         *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
     }
+
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
         Ok(self.storage().await.confirm_leadership().await?)
     }

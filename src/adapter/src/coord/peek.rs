@@ -602,7 +602,6 @@ impl crate::coord::Coordinator {
 
         Ok(crate::ExecuteResponse::SendingRows {
             future: Box::pin(rows_rx),
-            span: tracing::Span::current(),
         })
     }
 
@@ -710,10 +709,7 @@ impl crate::coord::Coordinator {
     /// client immediately, as opposed to asking the dataflow layer to send along
     /// the rows after some computation.
     pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-        ExecuteResponse::SendingRowsImmediate {
-            rows,
-            span: tracing::Span::none(),
-        }
+        ExecuteResponse::SendingRowsImmediate { rows }
     }
 }
 

@@ -13,7 +13,7 @@ from random import Random
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, disabled, externally_idempotent
+from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
@@ -30,14 +30,10 @@ class SshChange(Enum):
 
 
 # {i} will be replaced later
-SHOW_CONNECTION_WITHOUT_SSH = """materialize.public.kafka_conn_alter_connection_{i}a "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn_alter_connection_{i}a\\" TO KAFKA (BROKER = 'kafka:9092', SECURITY PROTOCOL = \\"plaintext\\")" """
-SHOW_CONNECTION_WITH_SSH = """materialize.public.kafka_conn_alter_connection_{i}a "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn_alter_connection_{i}a\\" TO KAFKA (BROKER = 'kafka:9092'USING SSH TUNNEL \\"materialize\\".\\"public\\".\\"ssh_tunnel_{i}\\", SECURITY PROTOCOL = \\"plaintext\\")" """
 SHOW_CONNECTION_SSH_TUNNEL = """materialize.public.ssh_tunnel_{i} "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"ssh_tunnel_{i}\\" TO SSH TUNNEL (HOST = 'ssh-bastion-host', PORT = 22, USER = 'mz')" """
-SHOW_CONNECTION_SSH_TUNNEL_OTHER = """materialize.public.ssh_tunnel_{i} "CREATE CONNECTION \\"materialize\\".\\"public\\".\\"ssh_tunnel_{i}\\" TO SSH TUNNEL (HOST = 'other_ssh_bastion', PORT = 22, USER = 'mz')" """
 WITH_SSH_SUFFIX = "USING SSH TUNNEL ssh_tunnel_{i}"
 
 
-@disabled("reenable with 23613")
 class AlterConnectionSshChangeBase(Check):
     def __init__(
         self,
@@ -51,7 +47,7 @@ class AlterConnectionSshChangeBase(Check):
         self.index = index
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.78.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.79.0-dev")
 
     def initialize(self) -> Testdrive:
         i = self.index
@@ -79,11 +75,11 @@ class AlterConnectionSshChangeBase(Check):
                   FORMAT TEXT
                   ENVELOPE NONE;
 
-                > SHOW CREATE CONNECTION kafka_conn_alter_connection_{i}a;
-                {SHOW_CONNECTION_WITHOUT_SSH.replace('{i}', str(i)) if self.ssh_change == SshChange.ADD_SSH else SHOW_CONNECTION_WITH_SSH.replace('{i}', str(i))}
+                > SELECT count(regexp_match(create_sql, 'USING SSH TUNNEL')) > 0 FROM (SHOW CREATE CONNECTION kafka_conn_alter_connection_{i}a);
+                {'false' if self.ssh_change == SshChange.ADD_SSH else 'true'}
 
-                > SHOW CREATE CONNECTION ssh_tunnel_{i};
-                {SHOW_CONNECTION_SSH_TUNNEL.replace('{i}', str(i))}
+                > SELECT count(regexp_match(create_sql, 'ssh-bastion-host')) > 0 FROM (SHOW CREATE CONNECTION ssh_tunnel_{i});
+                true
 
                 > CREATE TABLE alter_connection_table_{i} (f1 INTEGER, PRIMARY KEY (f1));
                 > INSERT INTO alter_connection_table_{i} VALUES (1);
@@ -158,11 +154,11 @@ class AlterConnectionSshChangeBase(Check):
         return Testdrive(
             dedent(
                 f"""
-                > SHOW CREATE CONNECTION ssh_tunnel_{i};
-                {SHOW_CONNECTION_SSH_TUNNEL_OTHER.replace('{i}', str(i)) if self.ssh_change == SshChange.CHANGE_SSH_HOST else SHOW_CONNECTION_SSH_TUNNEL.replace('{i}', str(i))}
+                > SELECT regexp_match(create_sql, '(ssh-bastion-host|other_ssh_bastion)') FROM (SHOW CREATE CONNECTION ssh_tunnel_{i});
+                {"{other_ssh_bastion}" if self.ssh_change == SshChange.CHANGE_SSH_HOST else "{ssh-bastion-host}"}
 
-                > SHOW CREATE CONNECTION kafka_conn_alter_connection_{i}a;
-                {SHOW_CONNECTION_WITH_SSH.replace('{i}', str(i)) if self.ssh_change in {SshChange.ADD_SSH, SshChange.CHANGE_SSH_HOST} else SHOW_CONNECTION_WITHOUT_SSH.replace('{i}', str(i))}
+                > SELECT count(regexp_match(create_sql, 'USING SSH TUNNEL')) > 0 FROM (SHOW CREATE CONNECTION kafka_conn_alter_connection_{i}a);
+                {'true' if self.ssh_change in {SshChange.ADD_SSH, SshChange.CHANGE_SSH_HOST} else 'false'}
 
                 > SELECT * FROM alter_connection_source_{i}a;
                 one

@@ -358,7 +358,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         // which is not what we want. If we ever expose an interface for
         // registering and committing to a data shard at the same
         // timestamp, this will also have to sort registrations first.
-        entries.sort_by(|(_, at, _), (_, bt, _)| at.cmp(bt));
+        entries.sort_by(|(a, _, _), (b, _, _)| a.ts::<T>().cmp(&b.ts::<T>()));
         for (e, _t, d) in entries {
             match e {
                 TxnsEntry::Register(data_id, ts) => {
@@ -413,7 +413,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 .datas
                 .get_mut(&data_id)
                 .and_then(|x| x.registered.back_mut())
-                .expect("data shard registered before forget");
+                .expect("data shard should be registered before forget");
             assert_eq!(active_reg.forget_ts.replace(ts), None);
         } else {
             unreachable!("only +1/-1 diffs are used");
@@ -1236,5 +1236,27 @@ mod tests {
         cache.update_gt(&15).await;
         let snap = cache.data_snapshot(d0, 12);
         assert_eq!(snap.latest_write, None);
+    }
+
+    // Regression test for a bug where we were sorting TxnEvents by the
+    // compacted timestamp instead of the original one when applying them to a
+    // cache. This caused them to be applied in a surprising order (e.g. forget
+    // before register).
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn regression_ts_sort() {
+        let client = PersistClient::new_for_tests().await;
+        let txns = TxnsHandle::expect_open(client.clone()).await;
+        let mut cache = TxnsCache::expect_open(0, &txns).await;
+        let d0 = ShardId::new();
+
+        // With the bug, this panics via an internal sanity assertion.
+        cache.push_entries(
+            vec![
+                (TxnsEntry::Register(d0, u64::encode(&2)), 2, -1),
+                (TxnsEntry::Register(d0, u64::encode(&1)), 2, 1),
+            ],
+            3,
+        );
     }
 }

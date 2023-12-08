@@ -39,7 +39,7 @@ use mz_transform::Optimizer;
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::error;
+use tracing::{error, instrument};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -93,7 +93,7 @@ impl Handle {
 #[derive(Debug, Clone)]
 pub struct Client {
     build_info: &'static BuildInfo,
-    inner_cmd_tx: mpsc::UnboundedSender<Command>,
+    inner_cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
     id_alloc: IdAllocator<ConnectionIdType>,
     now: NowFn,
     metrics: Metrics,
@@ -104,7 +104,7 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         build_info: &'static BuildInfo,
-        cmd_tx: mpsc::UnboundedSender<Command>,
+        cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
         metrics: Metrics,
         now: NowFn,
         environment_id: EnvironmentId,
@@ -293,7 +293,7 @@ Issue a SQL query to get started. Need help?
             .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
             .await?
         {
-            (ExecuteResponse::SendingRows { future, span: _ }, _) => match future.await {
+            (ExecuteResponse::SendingRows { future }, _) => match future.await {
                 PeekResponseUnary::Rows(rows) => Ok(rows),
                 PeekResponseUnary::Canceled => bail!("query canceled"),
                 PeekResponseUnary::Error(e) => bail!(e),
@@ -340,9 +340,10 @@ Issue a SQL query to get started. Need help?
         response
     }
 
+    #[instrument(level = "debug", skip_all)]
     fn send(&self, cmd: Command) {
         self.inner_cmd_tx
-            .send(cmd)
+            .send((OpenTelemetryContext::obtain(), cmd))
             .expect("coordinator unexpectedly gone");
     }
 }
@@ -489,6 +490,7 @@ impl SessionClient {
     }
 
     /// Binds a statement to a portal.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn declare(
         &mut self,
         name: String,
@@ -531,7 +533,6 @@ impl SessionClient {
                     portal_name,
                     session,
                     tx,
-                    span: tracing::Span::current(),
                     outer_ctx_extra,
                 },
                 cancel_future,
@@ -567,6 +568,7 @@ impl SessionClient {
     }
 
     /// Ends a transaction.
+    #[instrument(level = "debug", skip_all)]
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
@@ -575,7 +577,6 @@ impl SessionClient {
             action,
             session,
             tx,
-            otel_ctx: OpenTelemetryContext::obtain(),
         })
         .await
     }
@@ -588,6 +589,7 @@ impl SessionClient {
     }
 
     /// Fetches the catalog.
+    #[instrument(level = "debug", skip_all)]
     pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
         let CatalogSnapshot { catalog } = self
             .send_without_session(|tx| Command::CatalogSnapshot { tx })
@@ -729,6 +731,7 @@ impl SessionClient {
         rx.await.expect("sender dropped")
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn send<T, F>(&mut self, f: F) -> Result<T, AdapterError>
     where
         F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
@@ -736,6 +739,7 @@ impl SessionClient {
         self.send_with_cancel(f, futures::future::pending()).await
     }
 
+    #[instrument(level = "debug", skip_all)]
     async fn send_with_cancel<T, F>(
         &mut self,
         f: F,

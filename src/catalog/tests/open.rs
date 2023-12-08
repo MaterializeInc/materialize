@@ -75,11 +75,13 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
     shadow_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
-    test_persist_backed_catalog_state, test_stash_backed_catalog_state, CatalogError, Epoch,
-    OpenableDurableCatalogState, StashConfig,
+    test_persist_backed_catalog_state, test_stash_backed_catalog_state, CatalogError,
+    DurableCatalogError, Epoch, OpenableDurableCatalogState, StashConfig,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
@@ -94,7 +96,7 @@ use uuid::Uuid;
 async fn test_stash_is_initialized() {
     let (debug_factory, stash_config) = stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state2 = stash_backed_catalog_state(stash_config);
+    let openable_state2 = std::future::ready(stash_backed_catalog_state(stash_config)).boxed();
     test_is_initialized(openable_state1, openable_state2).await;
     debug_factory.drop().await;
 }
@@ -104,7 +106,8 @@ async fn test_stash_is_initialized() {
 async fn test_debug_stash_is_initialized() {
     let debug_factory = DebugStashFactory::new().await;
     let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state2 =
+        std::future::ready(test_stash_backed_catalog_state(&debug_factory)).boxed();
     test_is_initialized(debug_openable_state1, debug_openable_state2).await;
     debug_factory.drop().await;
 }
@@ -117,13 +120,13 @@ async fn test_persist_is_initialized() {
     let persist_openable_state1 =
         test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
-        test_persist_backed_catalog_state(persist_client, organization_id).await;
+        test_persist_backed_catalog_state(persist_client, organization_id).boxed();
     test_is_initialized(persist_openable_state1, persist_openable_state2).await;
 }
 
 async fn test_is_initialized(
     mut openable_state1: impl OpenableDurableCatalogState,
-    mut openable_state2: impl OpenableDurableCatalogState,
+    openable_state2: BoxFuture<'_, impl OpenableDurableCatalogState>,
 ) {
     assert!(
         !openable_state1.is_initialized().await.unwrap(),
@@ -136,6 +139,7 @@ async fn test_is_initialized(
         .unwrap();
     state.expire().await;
 
+    let mut openable_state2 = openable_state2.await;
     assert!(
         openable_state2.is_initialized().await.unwrap(),
         "catalog has been opened"
@@ -152,7 +156,7 @@ async fn test_is_initialized(
 async fn test_stash_get_deployment_generation() {
     let (debug_factory, stash_config) = stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state2 = stash_backed_catalog_state(stash_config);
+    let openable_state2 = std::future::ready(stash_backed_catalog_state(stash_config)).boxed();
     test_get_deployment_generation(openable_state1, openable_state2).await;
     debug_factory.drop().await;
 }
@@ -162,7 +166,8 @@ async fn test_stash_get_deployment_generation() {
 async fn test_debug_stash_get_deployment_generation() {
     let debug_factory = DebugStashFactory::new().await;
     let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state2 =
+        std::future::ready(test_stash_backed_catalog_state(&debug_factory)).boxed();
     test_get_deployment_generation(debug_openable_state1, debug_openable_state2).await;
     debug_factory.drop().await;
 }
@@ -175,13 +180,13 @@ async fn test_persist_get_deployment_generation() {
     let persist_openable_state1 =
         test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
-        test_persist_backed_catalog_state(persist_client, organization_id).await;
+        test_persist_backed_catalog_state(persist_client, organization_id).boxed();
     test_get_deployment_generation(persist_openable_state1, persist_openable_state2).await;
 }
 
 async fn test_get_deployment_generation(
     mut openable_state1: impl OpenableDurableCatalogState,
-    mut openable_state2: impl OpenableDurableCatalogState,
+    openable_state2: BoxFuture<'_, impl OpenableDurableCatalogState>,
 ) {
     assert_eq!(
         openable_state1.get_deployment_generation().await.unwrap(),
@@ -195,6 +200,7 @@ async fn test_get_deployment_generation(
         .unwrap();
     state.expire().await;
 
+    let mut openable_state2 = openable_state2.await;
     assert_eq!(
         openable_state2.get_deployment_generation().await.unwrap(),
         Some(42),
@@ -600,6 +606,139 @@ async fn test_open(
         assert_eq!(state.get_audit_logs().await.unwrap(), audit_log);
         Box::new(state).expire().await;
     }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_unopened_fencing() {
+    let (debug_factory, stash_config) = stash_config().await;
+    let openable_state1 = stash_backed_catalog_state(stash_config.clone());
+    let openable_state2 =
+        std::future::ready(stash_backed_catalog_state(stash_config.clone())).boxed();
+    let openable_state3 = stash_backed_catalog_state(stash_config);
+    test_unopened_fencing(openable_state1, openable_state2, openable_state3).await;
+    debug_factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_debug_stash_unopened_fencing() {
+    let debug_factory = DebugStashFactory::new().await;
+    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state2 =
+        std::future::ready(test_stash_backed_catalog_state(&debug_factory)).boxed();
+    let debug_openable_state3 = test_stash_backed_catalog_state(&debug_factory);
+    test_unopened_fencing(
+        debug_openable_state1,
+        debug_openable_state2,
+        debug_openable_state3,
+    )
+    .await;
+    debug_factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_unopened_fencing() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let persist_openable_state1 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let persist_openable_state2 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).boxed();
+    let persist_openable_state3 =
+        test_persist_backed_catalog_state(persist_client, organization_id).await;
+    test_unopened_fencing(
+        persist_openable_state1,
+        persist_openable_state2,
+        persist_openable_state3,
+    )
+    .await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_shadow_unopened_fencing() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let (debug_factory, stash_config) = stash_config().await;
+
+    let shadow_openable_state1 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state2 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .boxed();
+    let shadow_openable_state3 =
+        shadow_catalog_state(stash_config.clone(), persist_client, organization_id).await;
+    test_unopened_fencing(
+        shadow_openable_state1,
+        shadow_openable_state2,
+        shadow_openable_state3,
+    )
+    .await;
+    debug_factory.drop().await;
+}
+
+async fn test_unopened_fencing(
+    openable_state1: impl OpenableDurableCatalogState,
+    openable_state2: BoxFuture<'_, impl OpenableDurableCatalogState>,
+    openable_state3: impl OpenableDurableCatalogState,
+) {
+    let deployment_generation = 42;
+
+    // Initialize catalog.
+    {
+        let _ = Box::new(openable_state1)
+            // Use `NOW_ZERO` for consistent timestamps in the snapshots.
+            .open(
+                NOW_ZERO(),
+                &test_bootstrap_args(),
+                Some(deployment_generation),
+            )
+            .await
+            .unwrap();
+    }
+    let mut openable_state2 = openable_state2.await;
+
+    // Read config collection with unopened catalog.
+    assert_eq!(
+        Some(deployment_generation),
+        openable_state2.get_deployment_generation().await.unwrap()
+    );
+
+    // Open catalog, which should bump the epoch.
+    let _state = Box::new(openable_state3)
+        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
+        .open(
+            NOW_ZERO(),
+            &test_bootstrap_args(),
+            Some(deployment_generation + 1),
+        )
+        .await
+        .unwrap();
+
+    // Unopened catalog should be fenced now.
+    let err = openable_state2
+        .get_deployment_generation()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CatalogError::Durable(DurableCatalogError::Fence(_))),
+        "unexpected err: {err:?}"
+    );
+
+    let err = openable_state2.is_initialized().await.unwrap_err();
+    assert!(
+        matches!(err, CatalogError::Durable(DurableCatalogError::Fence(_))),
+        "unexpected err: {err:?}"
+    );
 }
 
 async fn stash_config() -> (DebugStashFactory, StashConfig) {

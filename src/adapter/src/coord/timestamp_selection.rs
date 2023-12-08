@@ -498,6 +498,7 @@ impl Coordinator {
     }
 
     /// Determines the timestamp for a query.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn determine_timestamp(
         &self,
         session: &Session,
