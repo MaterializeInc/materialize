@@ -427,6 +427,7 @@ where
     ) -> Result<NextState<K, V, T, D, R>, (SeqNo, E)> {
         let is_write = cmd.name == metrics.cmds.compare_and_append.name;
         let is_rollup = cmd.name == metrics.cmds.add_rollup.name;
+        let is_become_tombstone = cmd.name == metrics.cmds.become_tombstone.name;
 
         let expected = state.seqno;
         let was_tombstone_before = state.collections.is_tombstone();
@@ -448,7 +449,7 @@ where
         // TODO: Even better would be to write the rollup in the
         // tombstone transition so it's a single terminal state
         // transition, but it'll be tricky to get right.
-        if was_tombstone_before && !is_rollup {
+        if was_tombstone_before && !(is_rollup || is_become_tombstone) {
             panic!(
                 "cmd {} unexpectedly tried to commit a new state on a tombstone: {:?}",
                 cmd.name, state
