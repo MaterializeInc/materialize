@@ -35,7 +35,7 @@ For the following table, replace the two variables, _X_ and _Y_, by your organiz
 
 Metric | Warning | Alert | Description
 -- | -- | -- | --
-Latency | Avg > X | Avg > Y | Average latency from `SELECT` statements in the last *15 minutes*. Where X and Y are the expected latencies in milliseconds.
+Latency | Avg > X | Avg > Y | Average latency in the last *15 minutes*. Where X and Y are the expected latencies in milliseconds.
 Credits | Consumption rate increase by X% | Consumption rate increase by Y% | Average credit consumption in the last *60 minutes*.
 
 ## Maintenance window
