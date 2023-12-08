@@ -341,7 +341,8 @@ impl ShouldHalt for StorageError {
             | StorageError::Generic(_)
             | StorageError::DataflowError(_)
             | StorageError::InvalidAlter { .. }
-            | StorageError::ShuttingDown(_) => false,
+            | StorageError::ShuttingDown(_)
+            | StorageError::RaceDetected => false,
             StorageError::IOError(e) => e.is_unrecoverable(),
         }
     }

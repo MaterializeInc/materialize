@@ -8,11 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
+use derivative::Derivative;
 use mz_repr::{ColumnType, Datum, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
@@ -44,22 +44,17 @@ pub enum AppendWebhookError {
 /// Contains all of the components necessary for running webhook validation.
 ///
 /// To actually validate a webhook request call [`AppendWebhookValidator::eval`].
+#[derive(Clone)]
 pub struct AppendWebhookValidator {
     validation: WebhookValidation,
     secrets_reader: CachingSecretsReader,
-    received_at: DateTime<Utc>,
 }
 
 impl AppendWebhookValidator {
-    pub fn new(
-        validation: WebhookValidation,
-        secrets_reader: CachingSecretsReader,
-        received_at: DateTime<Utc>,
-    ) -> Self {
+    pub fn new(validation: WebhookValidation, secrets_reader: CachingSecretsReader) -> Self {
         AppendWebhookValidator {
             validation,
             secrets_reader,
-            received_at,
         }
     }
 
@@ -67,11 +62,11 @@ impl AppendWebhookValidator {
         self,
         body: bytes::Bytes,
         headers: Arc<BTreeMap<String, String>>,
+        received_at: DateTime<Utc>,
     ) -> Result<bool, AppendWebhookError> {
         let AppendWebhookValidator {
             validation,
             secrets_reader,
-            received_at,
         } = self;
 
         let WebhookValidation {
@@ -217,21 +212,34 @@ impl AppendWebhookValidator {
     }
 }
 
+#[derive(Derivative, Clone)]
+#[derivative(Debug)]
 pub struct AppendWebhookResponse {
+    /// Channel to monotonically append rows to a webhook source.
     pub tx: MonotonicAppender,
+    /// Column type for the `body` column.
     pub body_ty: ColumnType,
+    /// Types of the columns for the headers of a request.
     pub header_tys: WebhookHeaders,
+    /// Expression used to validate a webhook request.
+    #[derivative(Debug = "ignore")]
     pub validator: Option<AppendWebhookValidator>,
+    /// Transient revision of the `Catalog` when this appender was created.
+    pub expected_catalog_revision: u64,
 }
 
-impl fmt::Debug for AppendWebhookResponse {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AppendWebhookResponse")
-            .field("tx", &self.tx)
-            .field("body_ty", &self.body_ty)
-            .field("header_tys", &self.header_tys)
-            .field("validate_expr", &"(...)")
-            .finish()
+pub type WebhookAppenderName = (String, String, String);
+
+#[derive(Debug, Clone)]
+pub struct WebhookAppenderCache {
+    pub entries: Arc<tokio::sync::Mutex<BTreeMap<WebhookAppenderName, AppendWebhookResponse>>>,
+}
+
+impl WebhookAppenderCache {
+    pub fn new() -> Self {
+        WebhookAppenderCache {
+            entries: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+        }
     }
 }
 

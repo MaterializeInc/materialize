@@ -70,6 +70,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::Neg;
 use std::str::FromStr;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -245,7 +246,7 @@ impl Message {
                 Command::Commit { .. } => "command-commit",
                 Command::CancelRequest { .. } => "command-cancel_request",
                 Command::PrivilegedCancelRequest { .. } => "command-privileged_cancel_request",
-                Command::AppendWebhook { .. } => "command-append_webhook",
+                Command::GetWebhook { .. } => "command-get_webhook",
                 Command::GetSystemVars { .. } => "command-get_system_vars",
                 Command::SetSystemVars { .. } => "command-set_system_vars",
                 Command::Terminate { .. } => "command-terminate",
@@ -930,6 +931,8 @@ pub struct Coordinator {
     /// read their catalog as long as needed. In the future we would like this
     /// to be a pTVC, but for now this is sufficient.
     catalog: Arc<Catalog>,
+    /// Shareable reference to the [`Catalog`]'s transient revision.
+    catalog_transient_revision: Arc<AtomicU64>,
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
@@ -2347,6 +2350,7 @@ pub fn serve(
         let span = tracing::Span::current();
         let coord_now = now.clone();
         let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
+        let catalog_transient_revision = Arc::new(AtomicU64::new(catalog.transient_revision()));
 
         // We get the timestamp oracle impl once on startup, to ensure that it
         // doesn't change in between when the system var changes: all oracles must
@@ -2424,6 +2428,7 @@ pub fn serve(
                     webhook_concurrency_limit,
                     timestamp_oracle_impl,
                     timestamp_oracle_url,
+                    catalog_transient_revision: Arc::clone(&catalog_transient_revision),
                 };
                 let bootstrap = handle.block_on(async {
                     coord

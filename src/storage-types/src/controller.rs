@@ -201,6 +201,8 @@ pub enum StorageError {
     ResourceExhausted(&'static str),
     /// The specified component is shutting down.
     ShuttingDown(&'static str),
+    /// We detected a race which invalidated an operation, please retry.
+    RaceDetected,
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -224,6 +226,7 @@ impl Error for StorageError {
             Self::InvalidUsage(_) => None,
             Self::ResourceExhausted(_) => None,
             Self::ShuttingDown(_) => None,
+            Self::RaceDetected => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -287,6 +290,7 @@ impl fmt::Display for StorageError {
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
             Self::ResourceExhausted(rsc) => write!(f, "{rsc} is exhausted"),
             Self::ShuttingDown(cmp) => write!(f, "{cmp} is shutting down"),
+            Self::RaceDetected => write!(f, "detected a race, please retry"),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
     }

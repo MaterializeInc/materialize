@@ -53,7 +53,7 @@ use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
-use crate::webhook::AppendWebhookResponse;
+use crate::webhook::{AppendWebhookResponse, WebhookAppenderCache};
 use crate::{AdapterNotice, PeekResponseUnary, StartupResponse};
 
 /// A handle to a running coordinator.
@@ -99,6 +99,7 @@ pub struct Client {
     metrics: Metrics,
     environment_id: EnvironmentId,
     segment_client: Option<mz_segment::Client>,
+    webhook_appenders: WebhookAppenderCache,
 }
 
 impl Client {
@@ -118,6 +119,7 @@ impl Client {
             metrics,
             environment_id,
             segment_client,
+            webhook_appenders: WebhookAppenderCache::new(),
         }
     }
 
@@ -312,32 +314,50 @@ Issue a SQL query to get started. Need help?
         to_datetime((self.now)())
     }
 
-    pub async fn append_webhook(
+    /// Get a metadata and a channel that can be used to append to a webhook source.
+    pub async fn get_webhook_appender(
         &self,
         database: String,
         schema: String,
         name: String,
         conn_id: ConnectionId,
-        received_at: DateTime<Utc>,
     ) -> Result<AppendWebhookResponse, AdapterError> {
         let (tx, rx) = oneshot::channel();
 
-        // Send our request.
-        self.send(Command::AppendWebhook {
-            database,
-            schema,
-            name,
-            conn_id,
-            received_at,
-            tx,
-        });
+        // Check if we have an appender in our cache.
+        let mut guard = self.webhook_appenders.entries.lock().await;
 
-        // Using our one shot channel to get the result, returning an error if the sender dropped.
-        let response = rx.await.map_err(|_| {
-            AdapterError::Internal("failed to receive webhook response".to_string())
-        })?;
+        // Remove the appender from our map, only re-insert it, if it's valid.
+        let appender = match guard.remove(&(database.clone(), schema.clone(), name.clone())) {
+            Some(appender) if appender.tx.is_valid(appender.expected_catalog_revision) => {
+                guard.insert((database, schema, name), appender.clone());
+                appender
+            }
+            // We don't have a valid appender, so we need to get one.
+            _ => {
+                tracing::info!(?database, ?schema, ?name, "fetching webhook appender");
+                self.metrics().webhook_get_appender.inc();
 
-        response
+                self.send(Command::GetWebhook {
+                    database: database.clone(),
+                    schema: schema.clone(),
+                    name: name.clone(),
+                    conn_id,
+                    tx,
+                });
+                let appender = rx.await.map_err(|_| {
+                    AdapterError::Internal("failed to receive webhook response".to_string())
+                })??;
+
+                // Cache the appender.
+                guard.insert((database, schema, name), appender.clone());
+
+                appender
+            }
+        };
+        drop(guard);
+
+        Ok(appender)
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -761,7 +781,7 @@ impl SessionClient {
             // - execute reports success of dataflow execution
             match cmd {
                 Command::Execute { .. } => typ = Some("execute"),
-                Command::AppendWebhook { .. } => typ = Some("webhook"),
+                Command::GetWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }

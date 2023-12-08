@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use http::header::RETRY_AFTER;
 use mz_adapter::{AdapterError, AppendWebhookError, AppendWebhookResponse};
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::JsonbPacker;
@@ -23,7 +24,7 @@ use anyhow::Context;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use bytes::Bytes;
-use http::StatusCode;
+use http::{HeaderMap, HeaderValue, StatusCode};
 use thiserror::Error;
 
 pub async fn handle_webhook(
@@ -56,14 +57,15 @@ pub async fn handle_webhook(
         body_ty,
         header_tys,
         validator,
+        expected_catalog_revision,
     } = client
-        .append_webhook(database, schema, name, conn_id, received_at)
+        .get_webhook_appender(database, schema, name, conn_id)
         .await?;
 
     // If this source requires validation, then validate!
     if let Some(validator) = validator {
         let valid = validator
-            .eval(Bytes::clone(&body), Arc::clone(&headers))
+            .eval(Bytes::clone(&body), Arc::clone(&headers), received_at)
             .await?;
         if !valid {
             return Err(WebhookError::ValidationFailed);
@@ -74,7 +76,7 @@ pub async fn handle_webhook(
     let row = pack_row(body, &headers, body_ty, header_tys)?;
 
     // Send the row to get appended.
-    tx.append(vec![(row, 1)]).await?;
+    tx.append(vec![(row, 1)], expected_catalog_revision).await?;
 
     Ok::<_, WebhookError>(())
 }
@@ -91,7 +93,7 @@ fn pack_row(
     let mut num_cols_written = 0;
 
     // Pack our row.
-    let mut row = Row::with_capacity(num_cols);
+    let mut row = Row::with_capacity(body.len());
     let mut packer = row.packer();
 
     // Pack our body into a row.
@@ -189,6 +191,8 @@ pub enum WebhookError {
     ValidationError,
     #[error("service unavailable")]
     Unavailable,
+    #[error("service temporarily unavailable, please retry")]
+    TemporarilyUnavailable,
     #[error("internal storage failure! {0:?}")]
     InternalStorageError(StorageError),
     #[error("internal adapter failure! {0:?}")]
@@ -205,6 +209,7 @@ impl From<StorageError> for WebhookError {
                 WebhookError::NotFound(id.to_string())
             }
             StorageError::ShuttingDown(_) => WebhookError::Unavailable,
+            StorageError::RaceDetected => WebhookError::TemporarilyUnavailable,
             e => WebhookError::InternalStorageError(e),
         }
     }
@@ -257,6 +262,13 @@ impl IntoResponse for WebhookError {
             }
             e @ WebhookError::Unavailable => {
                 (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
+            }
+            e @ WebhookError::TemporarilyUnavailable => {
+                // Indicates the caller should retry after 3 seconds, which we arbitrarily picked.
+                let mut headers = HeaderMap::new();
+                headers.insert(RETRY_AFTER, HeaderValue::from_static("3"));
+
+                (StatusCode::SERVICE_UNAVAILABLE, headers, e.to_string()).into_response()
             }
             e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {
                 (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response()

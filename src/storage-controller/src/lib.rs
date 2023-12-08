@@ -83,6 +83,7 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -1382,9 +1383,14 @@ where
             .append(write_ts, advance_to, commands))
     }
 
-    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
+    fn monotonic_appender(
+        &self,
+        id: GlobalId,
+        catalog_revision: Arc<AtomicU64>,
+    ) -> Result<MonotonicAppender, StorageError> {
         assert!(self.txns_init_run);
-        self.collection_manager.monotonic_appender(id)
+        self.collection_manager
+            .monotonic_appender(id, catalog_revision)
     }
 
     // TODO(petrosagg): This signature is not very useful in the context of partially ordered times

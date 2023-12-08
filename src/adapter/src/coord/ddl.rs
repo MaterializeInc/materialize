@@ -11,6 +11,7 @@
 //! and altering objects.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -465,6 +466,8 @@ impl Coordinator {
                 })
             })
             .await?;
+        self.catalog_transient_revision
+            .store(catalog.transient_revision(), Ordering::SeqCst);
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.

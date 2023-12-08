@@ -14,7 +14,6 @@ use std::any::Any;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
@@ -117,15 +116,14 @@ impl Coordinator {
                     self.handle_privileged_cancel(conn_id);
                 }
 
-                Command::AppendWebhook {
+                Command::GetWebhook {
                     database,
                     schema,
                     name,
                     conn_id,
-                    received_at,
                     tx,
                 } => {
-                    self.handle_append_webhook(database, schema, name, conn_id, received_at, tx);
+                    self.handle_get_webhook(database, schema, name, conn_id, tx);
                 }
 
                 Command::GetSystemVars { conn_id, tx } => {
@@ -816,14 +814,15 @@ impl Coordinator {
         let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
     }
 
+    /// Returns the necessary metadata for appending to a webhook source, and a channel to send
+    /// rows.
     #[tracing::instrument(level = "debug", skip(self, tx))]
-    fn handle_append_webhook(
+    fn handle_get_webhook(
         &mut self,
         database: String,
         schema: String,
         name: String,
         conn_id: ConnectionId,
-        received_at: DateTime<Utc>,
         tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     ) {
         /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
@@ -836,7 +835,6 @@ impl Coordinator {
             schema: String,
             name: String,
             conn_id: ConnectionId,
-            received_at: DateTime<Utc>,
         ) -> Result<AppendWebhookResponse, PartialItemName> {
             // Resolve our collection.
             let name = PartialItemName {
@@ -878,7 +876,6 @@ impl Coordinator {
                         AppendWebhookValidator::new(
                             validation,
                             coord.caching_secrets_reader.clone(),
-                            received_at,
                         )
                     });
                     (body, headers.clone(), validator)
@@ -887,27 +884,30 @@ impl Coordinator {
             };
 
             // Get a channel so we can queue updates to be written.
+            let catalog_revision = Arc::clone(&coord.catalog_transient_revision);
             let row_tx = coord
                 .controller
                 .storage
-                .monotonic_appender(entry.id())
+                .monotonic_appender(entry.id(), catalog_revision)
                 .map_err(|_| name)?;
+
+            let expected_catalog_revision = coord.catalog().transient_revision();
             Ok(AppendWebhookResponse {
                 tx: row_tx,
                 body_ty,
                 header_tys,
                 validator,
+                expected_catalog_revision,
             })
         }
 
-        let response =
-            resolve(self, database, schema, name, conn_id, received_at).map_err(|name| {
-                AdapterError::UnknownWebhookSource {
-                    database: name.database.expect("provided"),
-                    schema: name.schema.expect("provided"),
-                    name: name.item,
-                }
-            });
+        let response = resolve(self, database, schema, name, conn_id).map_err(|name| {
+            AdapterError::UnknownWebhookSource {
+                database: name.database.expect("provided"),
+                schema: name.schema.expect("provided"),
+                name: name.item,
+            }
+        });
         let _ = tx.send(response);
     }
 }
