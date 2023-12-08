@@ -205,17 +205,17 @@ pub(crate) mod persist {
 
     mod v42_to_v43;
     mod v43_to_v44;
+    mod v44_to_v45;
 
     /// Describes a single action to take during a migration from `V1` to `V2`.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
     enum MigrationAction<V1: IntoStateUpdateKindBinary, V2: IntoStateUpdateKindBinary> {
         /// Deletes the provided key.
-        #[allow(dead_code)]
         Delete(V1),
         /// Inserts the provided key-value pair. The key must not currently exist!
-        #[allow(dead_code)]
         Insert(V2),
         /// Update the key-value pair for the provided key.
-        #[allow(dead_code)]
+        #[allow(unused)]
         Update(V1, V2),
     }
 
@@ -318,7 +318,15 @@ pub(crate) mod persist {
                     )
                     .await
                 }
-                44 => todo!(),
+                44 => {
+                    run_versioned_upgrade(
+                        unopened_catalog_state,
+                        upper,
+                        version,
+                        v44_to_v45::upgrade,
+                    )
+                    .await
+                }
 
                 // Up-to-date, no migration needed!
                 CATALOG_VERSION => Ok((CATALOG_VERSION, upper)),
