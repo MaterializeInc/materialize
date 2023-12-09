@@ -113,33 +113,7 @@ mod tests {
 
         let actions = upgrade(snapshot);
 
-        assert_eq!(
-            actions,
-            [
-                MigrationAction::Delete(v44::StateUpdateKind {
-                    kind: Some(v44::state_update_kind::Kind::ServerConfiguration(
-                        v44::state_update_kind::ServerConfiguration {
-                            key: Some(v44::ServerConfigurationKey {
-                                name: SYSTEM_CONFIG_KEY.to_string(),
-                            }),
-                            value: Some(v44::ServerConfigurationValue {
-                                value: "on".to_string(),
-                            }),
-                        },
-                    )),
-                }),
-                MigrationAction::Insert(v45::StateUpdateKind {
-                    kind: Some(v45::state_update_kind::Kind::Config(
-                        v45::state_update_kind::Config {
-                            key: Some(v45::ConfigKey {
-                                key: CONFIG_KEY.to_string(),
-                            }),
-                            value: Some(v45::ConfigValue { value: 1 }),
-                        },
-                    )),
-                }),
-            ]
-        );
+        insta::assert_debug_snapshot!("sync_on", actions);
     }
 
     #[mz_ore::test(tokio::test)]
@@ -174,33 +148,7 @@ mod tests {
 
         let actions = upgrade(snapshot);
 
-        assert_eq!(
-            actions,
-            [
-                MigrationAction::Delete(v44::StateUpdateKind {
-                    kind: Some(v44::state_update_kind::Kind::ServerConfiguration(
-                        v44::state_update_kind::ServerConfiguration {
-                            key: Some(v44::ServerConfigurationKey {
-                                name: SYSTEM_CONFIG_KEY.to_string(),
-                            }),
-                            value: Some(v44::ServerConfigurationValue {
-                                value: "off".to_string(),
-                            }),
-                        },
-                    )),
-                }),
-                MigrationAction::Insert(v45::StateUpdateKind {
-                    kind: Some(v45::state_update_kind::Kind::Config(
-                        v45::state_update_kind::Config {
-                            key: Some(v45::ConfigKey {
-                                key: CONFIG_KEY.to_string(),
-                            }),
-                            value: Some(v45::ConfigValue { value: 0 }),
-                        },
-                    )),
-                }),
-            ]
-        );
+        insta::assert_debug_snapshot!("sync_off", actions);
     }
 
     #[mz_ore::test(tokio::test)]
@@ -221,18 +169,6 @@ mod tests {
 
         let actions = upgrade(snapshot);
 
-        assert_eq!(
-            actions,
-            [MigrationAction::Insert(v45::StateUpdateKind {
-                kind: Some(v45::state_update_kind::Kind::Config(
-                    v45::state_update_kind::Config {
-                        key: Some(v45::ConfigKey {
-                            key: CONFIG_KEY.to_string(),
-                        }),
-                        value: Some(v45::ConfigValue { value: 0 }),
-                    },
-                )),
-            }),]
-        );
+        insta::assert_debug_snapshot!("sync_missing", actions);
     }
 }
