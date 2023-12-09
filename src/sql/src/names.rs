@@ -36,7 +36,9 @@ use crate::ast::{
     self, AstInfo, Cte, CteBlock, CteMutRec, Ident, Query, Raw, RawClusterName, RawDataType,
     RawItemName, Statement, UnresolvedItemName,
 };
-use crate::catalog::{CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog};
+use crate::catalog::{
+    CatalogError, CatalogItem, CatalogItemType, CatalogTypeDetails, SessionCatalog,
+};
 use crate::normalize;
 use crate::plan::PlanError;
 
@@ -1176,6 +1178,12 @@ pub enum CommentObjectId {
     ClusterReplica((ClusterId, ReplicaId)),
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ItemResolutionConfig {
+    functions: bool,
+    relations: bool,
+}
+
 #[derive(Debug)]
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
@@ -1194,14 +1202,11 @@ impl<'a> NameResolver<'a> {
         }
     }
 
-    fn fold_data_type_internal(
-        &mut self,
-        data_type: <Raw as AstInfo>::DataType,
-    ) -> Result<<Aug as AstInfo>::DataType, PlanError> {
+    fn resolve_data_type(&mut self, data_type: RawDataType) -> Result<ResolvedDataType, PlanError> {
         match data_type {
             RawDataType::Array(elem_type) => {
                 let name = elem_type.to_string();
-                match self.fold_data_type_internal(*elem_type)? {
+                match self.resolve_data_type(*elem_type)? {
                     ResolvedDataType::AnonymousList(_) | ResolvedDataType::AnonymousMap { .. } => {
                         sql_bail!("type \"{}[]\" does not exist", name)
                     }
@@ -1233,15 +1238,15 @@ impl<'a> NameResolver<'a> {
                 }
             }
             RawDataType::List(elem_type) => {
-                let elem_type = self.fold_data_type_internal(*elem_type)?;
+                let elem_type = self.resolve_data_type(*elem_type)?;
                 Ok(ResolvedDataType::AnonymousList(Box::new(elem_type)))
             }
             RawDataType::Map {
                 key_type,
                 value_type,
             } => {
-                let key_type = self.fold_data_type_internal(*key_type)?;
-                let value_type = self.fold_data_type_internal(*value_type)?;
+                let key_type = self.resolve_data_type(*key_type)?;
+                let value_type = self.resolve_data_type(*value_type)?;
                 Ok(ResolvedDataType::AnonymousMap {
                     key_type: Box::new(key_type),
                     value_type: Box::new(value_type),
@@ -1274,99 +1279,142 @@ impl<'a> NameResolver<'a> {
         }
     }
 
-    fn fold_raw_object_name_name_internal(
+    fn resolve_item_name(
         &mut self,
-        name: RawItemName,
-        consider_function: bool,
+        item_name: RawItemName,
+        config: ItemResolutionConfig,
     ) -> ResolvedItemName {
-        match name {
-            RawItemName::Name(raw_name) => {
-                let raw_name = match normalize::unresolved_item_name(raw_name) {
-                    Ok(raw_name) => raw_name,
-                    Err(e) => {
-                        if self.status.is_ok() {
-                            self.status = Err(e);
-                        }
-                        return ResolvedItemName::Error;
-                    }
-                };
+        match item_name {
+            RawItemName::Name(name) => self.resolve_item_name_name(name, config),
+            RawItemName::Id(id, raw_name) => self.resolve_item_name_id(id, raw_name),
+        }
+    }
 
-                let r = if consider_function {
-                    self.catalog.resolve_function(&raw_name)
-                } else {
-                    // Check if unqualified name refers to a CTE.
-                    //
-                    // Note that this is done in non-function contexts as CTEs
-                    // are treated as relations.
-                    if raw_name.database.is_none() && raw_name.schema.is_none() {
-                        let norm_name = normalize::ident(Ident::new_unchecked(&raw_name.item));
-                        if let Some(id) = self.ctes.get(&norm_name) {
-                            return ResolvedItemName::Cte {
-                                id: *id,
-                                name: norm_name,
-                            };
-                        }
-                    }
+    fn resolve_item_name_name(
+        &mut self,
+        raw_name: UnresolvedItemName,
+        config: ItemResolutionConfig,
+    ) -> ResolvedItemName {
+        let raw_name = match normalize::unresolved_item_name(raw_name) {
+            Ok(raw_name) => raw_name,
+            Err(e) => {
+                if self.status.is_ok() {
+                    self.status = Err(e);
+                }
+                return ResolvedItemName::Error;
+            }
+        };
 
-                    self.catalog.resolve_item(&raw_name)
-                };
+        let mut r: Result<&dyn CatalogItem, CatalogError> =
+            Err(CatalogError::UnknownItem(raw_name.to_string()));
 
-                match r {
-                    Ok(item) => {
-                        self.ids.insert(item.id());
-                        let print_id = !matches!(
-                            item.item_type(),
-                            CatalogItemType::Func | CatalogItemType::Type
-                        );
-                        ResolvedItemName::Item {
-                            id: item.id(),
-                            qualifiers: item.name().qualifiers.clone(),
-                            full_name: self.catalog.resolve_full_name(item.name()),
-                            print_id,
-                        }
-                    }
-                    Err(mut e) => {
-                        if self.status.is_ok() {
-                            match &mut e {
-                                CatalogError::UnknownFunction { name, alternative } => {
-                                    // Suggest using the `jsonb_` version of
-                                    // `json_` functions that do not exist.
-                                    let name: Vec<&str> = name.split('.').collect();
-                                    match name.split_last() {
-                                        Some((i, q)) if i.starts_with("json_") && q.len() < 2 => {
-                                            let mut jsonb_version = q
-                                                .iter()
-                                                .map(|q| Ident::new_unchecked(*q))
-                                                .collect::<Vec<_>>();
-                                            jsonb_version.push(Ident::new_unchecked(
-                                                i.replace("json_", "jsonb_"),
-                                            ));
-                                            let jsonb_version = RawItemName::Name(
-                                                UnresolvedItemName(jsonb_version),
-                                            );
-                                            let _ = self.fold_raw_object_name_name_internal(
-                                                jsonb_version.clone(),
-                                                true,
-                                            );
+        if r.is_err() && config.functions {
+            r = self.catalog.resolve_function(&raw_name);
+        }
 
-                                            if self.status.is_ok() {
-                                                *alternative = Some(jsonb_version.to_string());
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                _ => {}
-                            }
-
-                            self.status = Err(e.into());
-                        }
-                        ResolvedItemName::Error
-                    }
+        if r.is_err() && config.relations {
+            // Check if unqualified name refers to a CTE.
+            //
+            // Note that this is done in non-function contexts as CTEs
+            // are treated as relations.
+            if raw_name.database.is_none() && raw_name.schema.is_none() {
+                let norm_name = normalize::ident(Ident::new_unchecked(&raw_name.item));
+                if let Some(id) = self.ctes.get(&norm_name) {
+                    return ResolvedItemName::Cte {
+                        id: *id,
+                        name: norm_name,
+                    };
                 }
             }
-            // We don't want to hit this code path, but immaterial if we do
-            name @ RawItemName::Id(..) => self.fold_item_name(name),
+            r = self.catalog.resolve_item(&raw_name);
+        };
+
+        match r {
+            Ok(item) => {
+                self.ids.insert(item.id());
+                let print_id = !matches!(
+                    item.item_type(),
+                    CatalogItemType::Func | CatalogItemType::Type
+                );
+                ResolvedItemName::Item {
+                    id: item.id(),
+                    qualifiers: item.name().qualifiers.clone(),
+                    full_name: self.catalog.resolve_full_name(item.name()),
+                    print_id,
+                }
+            }
+            Err(mut e) => {
+                if self.status.is_ok() {
+                    match &mut e {
+                        CatalogError::UnknownFunction {
+                            name: _,
+                            alternative,
+                        } => {
+                            // Suggest using the `jsonb_` version of `json_`
+                            // functions that do not exist.
+                            if raw_name.database.is_none()
+                                && (raw_name.schema.is_none()
+                                    || raw_name.schema.as_deref() == Some("pg_catalog")
+                                        && raw_name.item.starts_with("json_"))
+                            {
+                                let jsonb_name = PartialItemName {
+                                    item: raw_name.item.replace("json_", "jsonb_"),
+                                    ..raw_name
+                                };
+                                if self.catalog.resolve_function(&jsonb_name).is_ok() {
+                                    *alternative = Some(jsonb_name.to_string());
+                                }
+                            }
+                        }
+                        _ => (),
+                    }
+
+                    self.status = Err(e.into());
+                }
+                ResolvedItemName::Error
+            }
+        }
+    }
+
+    fn resolve_item_name_id(
+        &mut self,
+        id: String,
+        raw_name: UnresolvedItemName,
+    ) -> ResolvedItemName {
+        let gid: GlobalId = match id.parse() {
+            Ok(id) => id,
+            Err(e) => {
+                if self.status.is_ok() {
+                    self.status = Err(e.into());
+                }
+                return ResolvedItemName::Error;
+            }
+        };
+        let item = match self.catalog.try_get_item(&gid) {
+            Some(item) => item,
+            None => {
+                if self.status.is_ok() {
+                    self.status = Err(PlanError::InvalidId(gid));
+                }
+                return ResolvedItemName::Error;
+            }
+        };
+
+        self.ids.insert(gid.clone());
+        let full_name = match normalize::full_name(raw_name) {
+            Ok(full_name) => full_name,
+            Err(e) => {
+                if self.status.is_ok() {
+                    self.status = Err(e);
+                }
+                return ResolvedItemName::Error;
+            }
+        };
+        ResolvedItemName::Item {
+            id: gid,
+            qualifiers: item.name().qualifiers.clone(),
+            full_name,
+            print_id: true,
         }
     }
 }
@@ -1488,46 +1536,15 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         item_name: <Raw as AstInfo>::ItemName,
     ) -> <Aug as AstInfo>::ItemName {
-        match item_name {
-            name @ RawItemName::Name(..) => self.fold_raw_object_name_name_internal(name, false),
-            RawItemName::Id(id, raw_name) => {
-                let gid: GlobalId = match id.parse() {
-                    Ok(id) => id,
-                    Err(e) => {
-                        if self.status.is_ok() {
-                            self.status = Err(e.into());
-                        }
-                        return ResolvedItemName::Error;
-                    }
-                };
-                let item = match self.catalog.try_get_item(&gid) {
-                    Some(item) => item,
-                    None => {
-                        if self.status.is_ok() {
-                            self.status = Err(PlanError::InvalidId(gid));
-                        }
-                        return ResolvedItemName::Error;
-                    }
-                };
-
-                self.ids.insert(gid.clone());
-                let full_name = match normalize::full_name(raw_name) {
-                    Ok(full_name) => full_name,
-                    Err(e) => {
-                        if self.status.is_ok() {
-                            self.status = Err(e);
-                        }
-                        return ResolvedItemName::Error;
-                    }
-                };
-                ResolvedItemName::Item {
-                    id: gid,
-                    qualifiers: item.name().qualifiers.clone(),
-                    full_name,
-                    print_id: true,
-                }
-            }
-        }
+        self.resolve_item_name(
+            item_name,
+            // By default, when resolving an item name, we assume only relations
+            // should be in scope.
+            ItemResolutionConfig {
+                functions: false,
+                relations: true,
+            },
+        )
     }
 
     fn fold_column_name(
@@ -1576,7 +1593,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         data_type: <Raw as AstInfo>::DataType,
     ) -> <Aug as AstInfo>::DataType {
-        match self.fold_data_type_internal(data_type) {
+        match self.resolve_data_type(data_type) {
             Ok(data_type) => data_type,
             Err(e) => {
                 if self.status.is_ok() {
@@ -1803,10 +1820,15 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         node: mz_sql_parser::ast::Function<Raw>,
     ) -> mz_sql_parser::ast::Function<Aug> {
         mz_sql_parser::ast::Function {
-            name: match node.name {
-                name @ RawItemName::Name(..) => self.fold_raw_object_name_name_internal(name, true),
-                _ => self.fold_item_name(node.name),
-            },
+            name: self.resolve_item_name(
+                node.name,
+                // When resolving a function name, only function items should be
+                // considered.
+                ItemResolutionConfig {
+                    functions: true,
+                    relations: false,
+                },
+            ),
             args: self.fold_function_args(node.args),
             filter: node.filter.map(|expr| Box::new(self.fold_expr(*expr))),
             over: node.over.map(|over| self.fold_window_spec(over)),
