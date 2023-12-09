@@ -15,8 +15,6 @@ use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::wrappers::enter::TraceEnter;
-use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{Collection, Data};
 use mz_compute_types::dataflows::DataflowDescription;
@@ -42,32 +40,9 @@ use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinSpec;
 use crate::render::RenderTimestamp;
 use crate::typedefs::{
-    ErrSpine, RowKeySpine, RowSpine, TraceErrHandle, TraceKeyHandle, TraceRowHandle,
+    ErrAgent, ErrEnter, ErrSpine, RowAgent, RowEnter, RowRowAgent, RowRowEnter, RowRowSpine,
+    RowSpine,
 };
-
-// Local type definition to avoid the horror in signatures.
-pub(crate) type KeyValArrangement<S, K, V> =
-    Arranged<S, TraceRowHandle<K, V, <S as ScopeParent>::Timestamp, Diff>>;
-pub(crate) type Arrangement<S, V> = KeyValArrangement<S, V, V>;
-pub(crate) type KeyArrangement<S, K> =
-    Arranged<S, TraceKeyHandle<K, <S as ScopeParent>::Timestamp, Diff>>;
-pub(crate) type ErrArrangement<S> =
-    Arranged<S, TraceErrHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
-pub(crate) type KeyValArrangementImport<S, K, V, T> = Arranged<
-    S,
-    TraceEnter<TraceFrontier<TraceRowHandle<K, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
->;
-pub(crate) type KeyArrangementImport<S, K, T> = Arranged<
-    S,
-    TraceEnter<TraceFrontier<TraceKeyHandle<K, T, Diff>>, <S as ScopeParent>::Timestamp>,
->;
-pub(crate) type ErrArrangementImport<S, T> = Arranged<
-    S,
-    TraceEnter<
-        TraceFrontier<TraceErrHandle<DataflowError, T, Diff>>,
-        <S as ScopeParent>::Timestamp,
-    >,
->;
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -239,8 +214,8 @@ pub enum SpecializedArrangement<S: Scope>
 where
     <S as ScopeParent>::Timestamp: Lattice + Columnation,
 {
-    RowUnit(KeyArrangement<S, Row>),
-    RowRow(KeyValArrangement<S, Row, Row>),
+    RowUnit(Arranged<S, RowAgent<<S as ScopeParent>::Timestamp, Diff>>),
+    RowRow(Arranged<S, RowRowAgent<<S as ScopeParent>::Timestamp, Diff>>),
 }
 
 impl<S: Scope> SpecializedArrangement<S>
@@ -279,14 +254,14 @@ where
         match self {
             SpecializedArrangement::RowUnit(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(&**k);
+                datums_borrow.extend(k.into_datum_iter(None));
                 datums_borrow.extend(v.into_datum_iter(Some(&[])));
                 logic(&datums_borrow)
             }),
             SpecializedArrangement::RowRow(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(&**k);
-                datums_borrow.extend(&**v);
+                datums_borrow.extend(k.into_datum_iter(None));
+                datums_borrow.extend(v.into_datum_iter(None));
                 logic(&datums_borrow)
             }),
         }
@@ -310,12 +285,12 @@ where
         let mut datums = DatumVec::new();
         match self {
             SpecializedArrangement::RowUnit(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowKeySpine<Row, _, _>>, _, _>(
+                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowSpine<_, _>>, _, _>(
                     inner,
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(&**k);
+                        datums_borrow.extend(k.into_datum_iter(None));
                         datums_borrow.extend(v.into_datum_iter(Some(&[])));
                         logic(&mut datums_borrow, t, d)
                     },
@@ -323,13 +298,13 @@ where
                 )
             }
             SpecializedArrangement::RowRow(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowSpine<Row, Row, _, _>>, _, _>(
+                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowRowSpine<_, _>>, _, _>(
                     inner,
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(&**k);
-                        datums_borrow.extend(&**v);
+                        datums_borrow.extend(k.into_datum_iter(None));
+                        datums_borrow.extend(v.into_datum_iter(None));
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -381,8 +356,8 @@ where
     T: Timestamp + Lattice + Columnation,
     <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
 {
-    RowUnit(KeyArrangementImport<S, Row, T>),
-    RowRow(KeyValArrangementImport<S, Row, Row, T>),
+    RowUnit(Arranged<S, RowEnter<T, Diff, <S as ScopeParent>::Timestamp>>),
+    RowRow(Arranged<S, RowRowEnter<T, Diff, <S as ScopeParent>::Timestamp>>),
 }
 
 impl<S: Scope, T> SpecializedArrangementImport<S, T>
@@ -422,14 +397,14 @@ where
         match self {
             SpecializedArrangementImport::RowUnit(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(&**k);
+                datums_borrow.extend(k.into_datum_iter(None));
                 datums_borrow.extend(v.into_datum_iter(Some(&[])));
                 logic(&datums_borrow)
             }),
             SpecializedArrangementImport::RowRow(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(&**k);
-                datums_borrow.extend(&**v);
+                datums_borrow.extend(k.into_datum_iter(None));
+                datums_borrow.extend(v.into_datum_iter(None));
                 logic(&datums_borrow)
             }),
         }
@@ -450,16 +425,12 @@ where
         let mut datums = DatumVec::new();
         match self {
             SpecializedArrangementImport::RowUnit(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<
-                    TraceEnter<TraceFrontier<TraceKeyHandle<Row, T, Diff>>, S::Timestamp>,
-                    _,
-                    _,
-                >(
+                CollectionBundle::<S, T>::flat_map_core::<RowEnter<T, Diff, S::Timestamp>, _, _>(
                     inner,
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(&**k);
+                        datums_borrow.extend(k.into_datum_iter(None));
                         datums_borrow.extend(v.into_datum_iter(Some(&[])));
                         logic(&mut datums_borrow, t, d)
                     },
@@ -467,17 +438,13 @@ where
                 )
             }
             SpecializedArrangementImport::RowRow(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<
-                    TraceEnter<TraceFrontier<TraceRowHandle<Row, Row, T, Diff>>, S::Timestamp>,
-                    _,
-                    _,
-                >(
+                CollectionBundle::<S, T>::flat_map_core::<RowRowEnter<T, Diff, S::Timestamp>, _, _>(
                     inner,
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(&**k);
-                        datums_borrow.extend(&**v);
+                        datums_borrow.extend(k.into_datum_iter(None));
+                        datums_borrow.extend(v.into_datum_iter(None));
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -513,7 +480,10 @@ where
     S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// A dataflow-local arrangement.
-    Local(SpecializedArrangement<S>, ErrArrangement<S>),
+    Local(
+        SpecializedArrangement<S>,
+        Arranged<S, ErrAgent<<S as ScopeParent>::Timestamp, Diff>>,
+    ),
     /// An imported trace from outside the dataflow.
     ///
     /// The `GlobalId` identifier exists so that exports of this same trace
@@ -521,7 +491,7 @@ where
     Trace(
         GlobalId,
         SpecializedArrangementImport<S, T>,
-        ErrArrangementImport<S, T>,
+        Arranged<S, ErrEnter<T, <S as ScopeParent>::Timestamp>>,
     ),
 }
 
@@ -1057,7 +1027,7 @@ where
                     enable_specialized_arrangements,
                 );
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
-                let errs = errs.mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
+                let errs = errs.mz_arrange::<ErrSpine<_, _>>(&format!("{}-errors", name));
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }
@@ -1093,7 +1063,7 @@ where
                         ),
                     );
                     let name = &format!("{} [val: empty]", name);
-                    let oks = oks.mz_arrange::<RowKeySpine<Row, _, _>>(name);
+                    let oks = oks.mz_arrange::<RowSpine<_, _>>(name);
                     return (SpecializedArrangement::RowUnit(oks), errs);
                 }
             }
@@ -1104,7 +1074,7 @@ where
             "FormArrangementKey",
             specialized_arrangement_key(key.clone(), thinning.clone(), None, None),
         );
-        let oks = oks.mz_arrange::<RowSpine<Row, Row, _, _>>(name);
+        let oks = oks.mz_arrange::<RowRowSpine<_, _>>(name);
         (SpecializedArrangement::RowRow(oks), errs)
     }
 }

@@ -27,7 +27,7 @@ use timely::dataflow::operators::Filter;
 
 use crate::extensions::arrange::MzArrange;
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
-use crate::typedefs::{KeysValsHandle, RowSpine};
+use crate::typedefs::{KeyValSpine, RowRowAgent, RowRowSpine};
 
 pub(super) type ReachabilityEvent = (
     Vec<usize>,
@@ -47,7 +47,7 @@ pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     event_queue: EventQueue<ReachabilityEvent>,
-) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
+) -> BTreeMap<LogVariant, (RowRowAgent<Timestamp, Diff>, Rc<dyn Any>)> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_index = worker.index();
 
@@ -105,7 +105,10 @@ pub(super) fn construct<A: Allocate>(
 
         let updates = updates
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely reachability");
+            .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
+                Pipeline,
+                "PreArrange Timely reachability",
+            );
 
         let mut result = BTreeMap::new();
         for variant in logs_active {
@@ -147,7 +150,7 @@ pub(super) fn construct<A: Allocate>(
                     });
 
                 let trace = updates
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
+                    .mz_arrange::<RowRowSpine<_, _>>(&format!("Arrange {variant:?}"))
                     .trace;
                 result.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
