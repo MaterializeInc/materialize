@@ -9,15 +9,13 @@
 
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::bail;
-use mz_kafka_util::client::DEFAULT_FETCH_METADATA_TIMEOUT;
+use mz_kafka_util::client::{DEFAULT_FETCH_METADATA_TIMEOUT, DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL};
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
-use mz_storage_types::connections::StringOrSecret;
 use mz_storage_types::sinks::KafkaSinkCompressionType;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -48,7 +46,7 @@ pub fn validate_options_for_context<T: AstInfo>(
             CompressionType => Some(Sink),
             GroupIdPrefix => None,
             Topic => None,
-            TopicMetadataRefreshIntervalMs => None,
+            TopicMetadataRefreshInterval => None,
             StartTimestamp => Some(Source),
             StartOffset => Some(Source),
             PartitionCount => Some(Sink),
@@ -80,7 +78,7 @@ generate_extracted_config!(
     ),
     (GroupIdPrefix, String),
     (Topic, String),
-    (TopicMetadataRefreshIntervalMs, i32),
+    (TopicMetadataRefreshInterval, Duration, Default(DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL)),
     (StartTimestamp, i64),
     (StartOffset, Vec<i64>),
     (PartitionCount, i32, Default(-1)),
@@ -114,54 +112,6 @@ impl TryFromValue<Value> for KafkaSinkCompressionType {
 impl ImpliedValue for KafkaSinkCompressionType {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide a compression type value")
-    }
-}
-
-/// The config options we expect to pass along when connecting to librdkafka.
-///
-/// Note that these are meant to be disjoint from the options we permit being
-/// set on Kafka connections (CREATE CONNECTION), i.e. these are meant to be
-/// per-client options (CREATE SOURCE, CREATE SINK).
-#[derive(Debug)]
-pub struct LibRdKafkaConfig(pub BTreeMap<String, StringOrSecret>);
-
-impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
-    type Error = PlanError;
-    // We are in a macro, so allow calling a closure immediately.
-    #[allow(clippy::redundant_closure_call)]
-    fn try_from(
-        KafkaConfigOptionExtracted {
-            topic_metadata_refresh_interval_ms,
-            ..
-        }: &KafkaConfigOptionExtracted,
-    ) -> Result<LibRdKafkaConfig, Self::Error> {
-        let mut o = BTreeMap::new();
-
-        macro_rules! fill_options {
-            // Values that are not option can just be wrapped in some before being passed to the macro
-            ($v:expr, $s:expr) => {
-                if let Some(v) = $v {
-                    o.insert($s.to_string(), StringOrSecret::String(v.to_string()));
-                }
-            };
-            ($v:expr, $s:expr, $check:expr, $err:expr) => {
-                if let Some(v) = $v {
-                    if !$check(v) {
-                        sql_bail!($err);
-                    }
-                    o.insert($s.to_string(), StringOrSecret::String(v.to_string()));
-                }
-            };
-        }
-
-        fill_options!(
-            topic_metadata_refresh_interval_ms,
-            "topic.metadata.refresh.interval.ms",
-            |i: &i32| { 0 <= *i && *i <= 3_600_000 },
-            "TOPIC METADATA REFRESH INTERVAL MS must be within [0, 3,600,000]"
-        );
-
-        Ok(LibRdKafkaConfig(o))
     }
 }
 

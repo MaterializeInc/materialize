@@ -290,12 +290,12 @@ async fn purify_create_sink(
             connection:
                 KafkaConnection {
                     connection,
-                    options,
+                    options: _,
                 },
             key: _,
         } => {
             let scx = StatementContext::new(None, &catalog);
-            let mut connection = {
+            let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 // Get Kafka connection
                 match item.connection()? {
@@ -308,12 +308,6 @@ async fn purify_create_sink(
                     ),
                 }
             };
-
-            let extracted_options: KafkaConfigOptionExtracted = options.clone().try_into()?;
-
-            for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
-                connection.options.insert(k, v);
-            }
 
             let client: AdminClient<_> = connection
                 .create_with_context(
@@ -458,7 +452,7 @@ async fn purify_create_source(
             }
 
             let scx = StatementContext::new(None, &catalog);
-            let mut connection = {
+            let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 // Get Kafka connection
                 match item.connection()? {
@@ -476,10 +470,6 @@ async fn purify_create_source(
 
             let offset_type =
                 Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
-
-            for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
-                connection.options.insert(k, v);
-            }
 
             let topic = extracted_options
                 .topic

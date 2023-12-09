@@ -648,8 +648,6 @@ pub fn plan_create_source(
             let optional_start_offset =
                 Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
 
-            let connection_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
-
             let topic = extracted_options
                 .topic
                 .expect("validated exists during purification");
@@ -673,6 +671,13 @@ pub fn plan_create_source(
 
             if !start_offsets.is_empty() && envelope.requires_all_input() {
                 sql_bail!("START OFFSET is not supported with ENVELOPE {}", envelope)
+            }
+
+            let topic_metadata_refresh_interval = extracted_options.topic_metadata_refresh_interval;
+            if topic_metadata_refresh_interval > Duration::from_secs(60 * 60) {
+                // This is a librdkafka-enforced restriction that, if violated,
+                // would result in a runtime error for the source.
+                sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
             }
 
             let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
@@ -742,8 +747,8 @@ pub fn plan_create_source(
                 topic,
                 start_offsets,
                 group_id_prefix,
+                topic_metadata_refresh_interval,
                 metadata_columns,
-                connection_options,
             };
 
             let connection = GenericSourceConnection::Kafka(connection);

@@ -40,7 +40,7 @@ one
 > CREATE SOURCE fixed_text IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn_using (
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL MS 1000
+    TOPIC METADATA REFRESH INTERVAL '1s'
   )
   FORMAT TEXT
   ENVELOPE NONE
@@ -48,7 +48,7 @@ one
 > CREATE SOURCE dynamic_text  IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn_dynamic (
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL MS 1000
+    TOPIC METADATA REFRESH INTERVAL '1s'
   )
   FORMAT TEXT
   ENVELOPE NONE

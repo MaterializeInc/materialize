@@ -34,6 +34,12 @@ use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use tokio::runtime::Handle;
 use tracing::{debug, error, info, warn, Level};
 
+/// A reasonable default timeout when refreshing topic metadata.
+// 30s may seem infrequent, but the default is 5m. More frequent metadata
+// refresh rates are surprising to Kafka users, as topic partition counts hardly
+// ever change in production.
+pub const DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+
 /// A reasonable default timeout when fetching metadata or partitions.
 pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 

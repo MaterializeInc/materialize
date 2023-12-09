@@ -2387,8 +2387,8 @@ impl<'a> Parser<'a> {
             },
             TOPIC => {
                 if self.parse_keyword(METADATA) {
-                    self.expect_keywords(&[REFRESH, INTERVAL, MS])?;
-                    KafkaConfigOptionName::TopicMetadataRefreshIntervalMs
+                    self.expect_keywords(&[REFRESH, INTERVAL])?;
+                    KafkaConfigOptionName::TopicMetadataRefreshInterval
                 } else {
                     KafkaConfigOptionName::Topic
                 }

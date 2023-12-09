@@ -823,7 +823,7 @@ pub enum KafkaConfigOptionName {
     CompressionType,
     GroupIdPrefix,
     Topic,
-    TopicMetadataRefreshIntervalMs,
+    TopicMetadataRefreshInterval,
     StartTimestamp,
     StartOffset,
     PartitionCount,
@@ -838,8 +838,8 @@ impl AstDisplay for KafkaConfigOptionName {
             KafkaConfigOptionName::CompressionType => "COMPRESSION TYPE",
             KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
             KafkaConfigOptionName::Topic => "TOPIC",
-            KafkaConfigOptionName::TopicMetadataRefreshIntervalMs => {
-                "TOPIC METADATA REFRESH INTERVAL MS"
+            KafkaConfigOptionName::TopicMetadataRefreshInterval => {
+                "TOPIC METADATA REFRESH INTERVAL"
             }
             KafkaConfigOptionName::StartOffset => "START OFFSET",
             KafkaConfigOptionName::StartTimestamp => "START TIMESTAMP",

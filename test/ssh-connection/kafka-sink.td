@@ -32,7 +32,7 @@ one
 > CREATE SOURCE non_ssh IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn_non_ssh (
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL MS 1000
+    TOPIC METADATA REFRESH INTERVAL '1s'
   )
   FORMAT TEXT
   ENVELOPE NONE

@@ -9,6 +9,10 @@
 
 # Test that Kafka sources with no format are disallowed.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+ALTER SYSTEM SET enable_kafka_config_denylist_options = true
+
 > CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE SOURCE s
@@ -44,3 +48,23 @@ contains: FOR ALL TABLES is only valid for multi-output sources
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
   FORMAT BYTES FOR TABLES (t1);
 contains: FOR TABLES (t1) is only valid for multi-output sources
+
+# Ensure the `TOPIC METADATA REFRESH INTERVAL` rejects too large and too
+# small values.
+! CREATE SOURCE bad_topic_metadata_refresh_interval
+  FROM KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-thetopic-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL '-30s'
+  )
+  FORMAT TEXT
+  ENVELOPE NONE
+contains:cannot convert negative interval to duration
+
+! CREATE SOURCE bad_topic_metadata_refresh_interval
+  FROM KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-thetopic-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL '1hr 1ms'
+  )
+  FORMAT TEXT
+  ENVELOPE NONE
+contains:TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour

@@ -50,7 +50,7 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::connections::{ConnectionContext, StringOrSecret};
+use crate::connections::ConnectionContext;
 use crate::controller::{CollectionMetadata, StorageError};
 use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
@@ -1397,9 +1397,7 @@ pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub start_offsets: BTreeMap<i32, i64>,
     pub group_id_prefix: Option<String>,
     pub metadata_columns: Vec<(String, KafkaMetadataKind)>,
-    /// Additional options that need to be set on the connection whenever it's
-    /// inlined.
-    pub connection_options: BTreeMap<String, StringOrSecret>,
+    pub topic_metadata_refresh_interval: Duration,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
@@ -1413,20 +1411,16 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
             start_offsets,
             group_id_prefix,
             metadata_columns,
-            connection_options,
+            topic_metadata_refresh_interval,
         } = self;
-
-        let mut connection = r.resolve_connection(connection).unwrap_kafka();
-        connection.options.extend(connection_options);
-
         KafkaSourceConnection {
-            connection,
+            connection: r.resolve_connection(connection).unwrap_kafka(),
             connection_id,
             topic,
             start_offsets,
             group_id_prefix,
             metadata_columns,
-            connection_options: BTreeMap::default(),
+            topic_metadata_refresh_interval,
         }
     }
 }
@@ -1536,7 +1530,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
             start_offsets,
             group_id_prefix,
             metadata_columns,
-            connection_options,
+            topic_metadata_refresh_interval,
         } = self;
 
         let compatibility_checks = [
@@ -1549,8 +1543,8 @@ impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
                 "metadata_columns",
             ),
             (
-                connection_options == &other.connection_options,
-                "connection_options",
+                topic_metadata_refresh_interval == &other.topic_metadata_refresh_interval,
+                "topic_metadata_refresh_interval",
             ),
         ];
 
@@ -1585,7 +1579,7 @@ where
             proptest::collection::btree_map(any::<i32>(), any::<i64>(), 1..4),
             any::<Option<String>>(),
             proptest::collection::vec(any::<(String, KafkaMetadataKind)>(), 0..4),
-            proptest::collection::btree_map(any::<String>(), any::<StringOrSecret>(), 0..4),
+            any::<Duration>(),
         )
             .prop_map(
                 |(
@@ -1595,7 +1589,7 @@ where
                     start_offsets,
                     group_id_prefix,
                     metadata_columns,
-                    connection_options,
+                    topic_metadata_refresh_interval,
                 )| KafkaSourceConnection {
                     connection,
                     connection_id,
@@ -1603,7 +1597,7 @@ where
                     start_offsets,
                     group_id_prefix,
                     metadata_columns,
-                    connection_options,
+                    topic_metadata_refresh_interval,
                 },
             )
             .boxed()
@@ -1626,11 +1620,9 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
                     kind: Some(kind.into_proto()),
                 })
                 .collect(),
-            connection_options: self
-                .connection_options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.into_proto()))
-                .collect(),
+            topic_metadata_refresh_interval: Some(
+                self.topic_metadata_refresh_interval.into_proto(),
+            ),
         }
     }
 
@@ -1652,11 +1644,9 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
             start_offsets: proto.start_offsets,
             group_id_prefix: proto.group_id_prefix,
             metadata_columns,
-            connection_options: proto
-                .connection_options
-                .into_iter()
-                .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
-                .collect::<Result<_, _>>()?,
+            topic_metadata_refresh_interval: proto
+                .topic_metadata_refresh_interval
+                .into_rust_if_some("ProtoKafkaSourceConnection::topic_metadata_refresh_interval")?,
         })
     }
 }

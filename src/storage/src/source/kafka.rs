@@ -29,7 +29,6 @@ use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
-use mz_storage_types::connections::StringOrSecret;
 use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::{
     KafkaMetadataKind, KafkaSourceConnection, MzOffset, SourceTimestamp,
@@ -164,9 +163,21 @@ impl SourceRender for KafkaSourceConnection {
         let button = builder.build(move |caps| async move {
             let [mut data_cap, mut progress_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
 
+            let group_id = self.group_id(&config.config.connection_context, config.id);
+            let KafkaSourceConnection {
+                connection,
+                topic,
+                topic_metadata_refresh_interval,
+                start_offsets,
+                metadata_columns,
+                // Exhaustive match protects against forgetting to apply an
+                // option. Ignored fields are justified below.
+                connection_id: _, // not needed here
+                group_id_prefix: _, // used above via `self.group_id`
+            } = self;
+
             // Start offsets is a map from partition to the next offset to read from.
-            let mut start_offsets: BTreeMap<_, i64> = self
-                .start_offsets
+            let mut start_offsets: BTreeMap<_, i64> = start_offsets
                 .clone()
                 .into_iter()
                 .filter(|(pid, _offset)| config.responsible_for(pid))
@@ -212,10 +223,6 @@ impl SourceRender for KafkaSourceConnection {
                 "instantiating Kafka source reader at offsets {start_offsets:?}"
             );
 
-            let group_id = self.group_id(&config.config.connection_context, config.id);
-            let KafkaSourceConnection {
-                connection, topic, ..
-            } = self;
             let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
             let health_status = Arc::new(Mutex::new(Default::default()));
             let notificator = Arc::new(Notify::new());
@@ -235,18 +242,9 @@ impl SourceRender for KafkaSourceConnection {
                         // Always begin ingest at 0 when restarted, even if Kafka
                         // contains committed consumer read offsets
                         "auto.offset.reset" => "earliest".into(),
-                        // How often to refresh metadata from the Kafka broker. This
-                        // can have a minor impact on startup latency and latency
-                        // after adding a new partition, as the metadata for a
-                        // partition must be fetched before we can retrieve data
-                        // from it. We try to manually trigger metadata fetches when
-                        // it makes sense, but if those manual fetches fail, this is
-                        // the interval at which we retry.
-                        //
-                        // 30s may seem low, but the default is 5m. More frequent
-                        // metadata refresh rates are surprising to Kafka users, as
-                        // topic partition counts hardly ever change in production.
-                        "topic.metadata.refresh.interval.ms" => "30000".into(), // 30s
+                        // Use the user-configured topic metadata refresh
+                        // interval.
+                        "topic.metadata.refresh.interval.ms" => topic_metadata_refresh_interval.as_millis().to_string(),
                         // TODO: document the rationale for this.
                         "fetch.message.max.bytes" => "134217728".into(),
                         // Consumer group ID. librdkafka requires this, and we use
@@ -318,23 +316,11 @@ impl SourceRender for KafkaSourceConnection {
                 let partition_info = Arc::downgrade(&partition_info);
                 let topic = topic.clone();
                 let consumer = Arc::clone(&consumer);
-                let metadata_refresh_interval = connection
-                    .options
-                    .get("topic.metadata.refresh.interval.ms")
-                    // Safe conversion: statement::extract_config enforces that option is a value
-                    // between 0 and 3600000
-                    .map(|s| match s {
-                        StringOrSecret::String(s) => Duration::from_millis(s.parse().unwrap()),
-                        StringOrSecret::Secret(_) => unreachable!(),
-                    })
-                    // By default, rdkafka will check for updated metadata every five minutes:
-                    // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-                    .unwrap_or_else(|| Duration::from_secs(15));
 
                 // We want a fairly low ceiling on our polling frequency, since we rely
                 // on this heartbeat to determine the health of our Kafka connection.
-                let metadata_refresh_frequency =
-                    metadata_refresh_interval.min(Duration::from_secs(60));
+                let topic_metadata_refresh_interval =
+                    topic_metadata_refresh_interval.min(Duration::from_secs(60));
 
                 let status_report = Arc::clone(&health_status);
 
@@ -345,7 +331,7 @@ impl SourceRender for KafkaSourceConnection {
                             source_id = config.id.to_string(),
                             worker_id = config.worker_id,
                             num_workers = config.worker_count,
-                            refresh_frequency =? metadata_refresh_frequency,
+                            poll_interval =? poll_interval,
                             "kafka metadata thread: starting..."
                         );
                         while let Some(partition_info) = partition_info.upgrade() {
@@ -397,7 +383,7 @@ impl SourceRender for KafkaSourceConnection {
                                     }
                                 }
                             }
-                            thread::park_timeout(metadata_refresh_frequency);
+                            thread::park_timeout(topic_metadata_refresh_interval);
                         }
                         info!(
                             source_id = config.id.to_string(),
@@ -425,8 +411,7 @@ impl SourceRender for KafkaSourceConnection {
                 start_offsets,
                 stats_rx,
                 partition_info,
-                metadata_columns: self
-                    .metadata_columns
+                metadata_columns: metadata_columns
                     .into_iter()
                     .map(|(_name, kind)| kind)
                     .collect(),
