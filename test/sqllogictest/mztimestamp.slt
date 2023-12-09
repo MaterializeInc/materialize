@@ -43,3 +43,25 @@ CREATE MATERIALIZED VIEW valid AS
 SELECT *
 FROM intervals
 WHERE mz_now() BETWEEN a AND b;
+
+query TTBBB
+SELECT
+  '1702129950259'::mz_timestamp::text,
+  '1990-01-04 11:00'::mz_timestamp::text,
+  greatest('1990-01-04 11:00', mz_now()) > '1990-01-04 11:00'::mz_timestamp,
+     least('1990-01-04 11:00', mz_now()) > '1990-01-04 11:00'::mz_timestamp,
+  greatest(mz_now(), '1990-01-04 11:00') > '3000-01-04 11:00'::mz_timestamp
+----
+1702129950259
+631450800000
+true
+false
+false
+
+# Bad timestamp string
+query error db error: ERROR: invalid input syntax for type mz_timestamp: could not parse mz_timestamp: could not parse as number of milliseconds since epoch; could not parse as date and time: invalid input syntax for type timestamp: YEAR, MONTH, DAY are all required: "1990\-01": "1990\-01"
+SELECT '1990-01'::mz_timestamp;
+
+# This would be negative milliseconds since the Unix epoch
+query error db error: ERROR: invalid input syntax for type mz_timestamp: could not parse mz_timestamp: out of range for mz_timestamp: "1960\-01\-01 11:00"
+SELECT '1960-01-01 11:00'::mz_timestamp;

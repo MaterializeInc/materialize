@@ -16,6 +16,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::adt::numeric::Numeric;
+use crate::strconv::parse_timestamp;
 
 /// System-wide timestamp type.
 #[derive(
@@ -334,11 +335,26 @@ impl std::fmt::Debug for Timestamp {
 }
 
 impl std::str::FromStr for Timestamp {
-    type Err = &'static str;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self {
-            internal: s.parse().map_err(|_| "could not parse mz_timestamp")?,
+            internal: s
+                .parse::<u64>()
+                .map_err(|_| "could not parse as number of milliseconds since epoch".to_string())
+                .or_else(|err_num_of_millis| {
+                    parse_timestamp(s)
+                        .map_err(|parse_error| {
+                            format!(
+                                "{}; could not parse as date and time: {}",
+                                err_num_of_millis, parse_error
+                            )
+                        })?
+                        .timestamp_millis()
+                        .try_into()
+                        .map_err(|_| "out of range for mz_timestamp".to_string())
+                })
+                .map_err(|e: String| format!("could not parse mz_timestamp: {}", e))?,
         })
     }
 }
