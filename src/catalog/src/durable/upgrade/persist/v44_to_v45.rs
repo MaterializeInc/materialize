@@ -22,21 +22,23 @@ pub fn upgrade(
     let mut migrations = Vec::new();
 
     // Get current value of system variable, if one exists.
-    let system_config =
-        snapshot.iter().find_map(
-            |update| match update.kind.as_ref().expect("missing field") {
-                v44::state_update_kind::Kind::ServerConfiguration(server_conf)
-                    if server_conf.key.as_ref().expect("missing field").name
-                        == SYSTEM_CONFIG_KEY =>
-                {
-                    Some((
-                        server_conf.key.clone().expect("missing field"),
-                        server_conf.value.clone().expect("missing field"),
-                    ))
-                }
-                _ => None,
-            },
-        );
+    let system_config = snapshot.iter().find_map(|update| {
+        let v44::state_update_kind::Kind::ServerConfiguration(server_conf) =
+            update.kind.as_ref().expect("missing field")
+        else {
+            return None;
+        };
+
+        let key = server_conf.key.as_ref().expect("missing field");
+        if key.name == SYSTEM_CONFIG_KEY {
+            Some((
+                key.clone(),
+                server_conf.value.clone().expect("missing field"),
+            ))
+        } else {
+            None
+        }
+    });
     let system_config_value = system_config
         .as_ref()
         .map(|(_key, value)| value.value == "on")
