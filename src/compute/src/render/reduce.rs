@@ -40,11 +40,11 @@ use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
-use crate::render::context::{Arrangement, CollectionBundle, Context, SpecializedArrangement};
+use crate::render::context::{CollectionBundle, Context, SpecializedArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
 use crate::render::ArrangementFlavor;
-use crate::typedefs::{KeyErrSpine, KeySpine, KeyValSpine};
+use crate::typedefs::{KeyErrSpine, KeySpine, KeyValArrangement, KeyValSpine};
 
 impl<G, T> Context<G, T>
 where
@@ -272,10 +272,13 @@ where
     /// so we can do a linear merge to form the output.
     fn build_collation<S>(
         &self,
-        arrangements: Vec<(ReductionType, Arrangement<S, Row>)>,
+        arrangements: Vec<(ReductionType, KeyValArrangement<S, Row, Row>)>,
         aggregate_types: Vec<ReductionType>,
         scope: &mut S,
-    ) -> (Arrangement<S, Row>, Collection<S, DataflowError, Diff>)
+    ) -> (
+        KeyValArrangement<S, Row, Row>,
+        Collection<S, DataflowError, Diff>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -521,7 +524,10 @@ where
         &self,
         input: Collection<S, (Row, Row), Diff>,
         aggrs: Vec<(usize, AggregateExpr)>,
-    ) -> (Arrangement<S, Row>, Collection<S, DataflowError, Diff>)
+    ) -> (
+        KeyValArrangement<S, Row, Row>,
+        Collection<S, DataflowError, Diff>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -574,7 +580,7 @@ where
         aggr: &AggregateExpr,
         validating: bool,
     ) -> (
-        Arrangement<S, Row>,
+        KeyValArrangement<S, Row, Row>,
         Option<Collection<S, DataflowError, Diff>>,
     )
     where
@@ -746,7 +752,7 @@ where
             buckets,
         }: BucketedPlan,
     ) -> (
-        Arrangement<S, Row>,
+        KeyValArrangement<S, Row, Row>,
         Option<Collection<S, DataflowError, Diff>>,
     )
     where
@@ -949,7 +955,10 @@ where
             skips,
             must_consolidate,
         }: MonotonicPlan,
-    ) -> (Arrangement<S, Row>, Collection<S, DataflowError, Diff>)
+    ) -> (
+        KeyValArrangement<S, Row, Row>,
+        Collection<S, DataflowError, Diff>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -1026,7 +1035,10 @@ where
             simple_aggrs,
             distinct_aggrs,
         }: AccumulablePlan,
-    ) -> (Arrangement<S, Row>, Collection<S, DataflowError, Diff>)
+    ) -> (
+        KeyValArrangement<S, Row, Row>,
+        Collection<S, DataflowError, Diff>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {

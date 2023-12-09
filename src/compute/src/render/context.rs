@@ -41,23 +41,10 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinSpec;
 use crate::render::RenderTimestamp;
-use crate::typedefs::{ErrAgent, ErrSpine, KeyAgent, KeySpine, KeyValAgent, KeyValSpine};
-
-// Local type definition to avoid the horror in signatures.
-pub(crate) type KeyValArrangement<S, K, V> =
-    Arranged<S, KeyValAgent<K, V, <S as ScopeParent>::Timestamp, Diff>>;
-pub(crate) type Arrangement<S, V> = KeyValArrangement<S, V, V>;
-pub(crate) type KeyArrangement<S, K> =
-    Arranged<S, KeyAgent<K, <S as ScopeParent>::Timestamp, Diff>>;
-pub(crate) type ErrArrangement<S> = Arranged<S, ErrAgent<<S as ScopeParent>::Timestamp, Diff>>;
-pub(crate) type KeyValArrangementImport<S, K, V, T> = Arranged<
-    S,
-    TraceEnter<TraceFrontier<KeyValAgent<K, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
->;
-pub(crate) type KeyArrangementImport<S, K, T> =
-    Arranged<S, TraceEnter<TraceFrontier<KeyAgent<K, T, Diff>>, <S as ScopeParent>::Timestamp>>;
-pub(crate) type ErrArrangementImport<S, T> =
-    Arranged<S, TraceEnter<TraceFrontier<ErrAgent<T, Diff>>, <S as ScopeParent>::Timestamp>>;
+use crate::typedefs::{
+    ErrArrangement, ErrArrangementImport, ErrSpine, KeyAgent, KeyArrangement, KeyArrangementImport,
+    KeySpine, KeyValAgent, KeyValArrangement, KeyValArrangementImport, KeyValSpine,
+};
 
 /// Dataflow-local collections and arrangements.
 ///
