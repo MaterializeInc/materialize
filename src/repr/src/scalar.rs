@@ -92,6 +92,7 @@ pub enum Datum<'a> {
     /// A time.
     Time(NaiveTime),
     /// A date and time, without a timezone.
+    /// Note that this is not [`crate::Timestamp`]! That's in [`Datum::MzTimestamp`].
     Timestamp(CheckedTimestamp<NaiveDateTime>),
     /// A date and time, with a timezone.
     TimestampTz(CheckedTimestamp<DateTime<Utc>>),
@@ -1475,7 +1476,7 @@ pub enum ScalarType {
     /// A vector on small ints; this is a legacy type in PG used primarily in
     /// the catalog.
     Int2Vector,
-    /// A Materialize timestamp.
+    /// A Materialize timestamp. The type of [`Datum::MzTimestamp`].
     MzTimestamp,
     Range {
         element_type: Box<ScalarType>,
