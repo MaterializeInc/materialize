@@ -430,10 +430,7 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
     pub topic: String,
-    pub partition_count: i32,
-    pub replication_factor: i32,
     pub fuel: usize,
-    pub retention: KafkaSinkConnectionRetention,
     pub compression_type: KafkaSinkCompressionType,
 }
 
@@ -467,10 +464,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             key_desc_and_indices,
             value_desc,
             topic,
-            partition_count,
-            replication_factor,
             fuel,
-            retention,
             compression_type,
         } = self;
 
@@ -487,13 +481,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             ),
             (value_desc == &other.value_desc, "value_desc"),
             (topic == &other.topic, "topic"),
-            (partition_count == &other.partition_count, "partition_count"),
-            (
-                replication_factor == &other.replication_factor,
-                "replication_factor",
-            ),
             (fuel == &other.fuel, "fuel"),
-            (retention == &other.retention, "retention"),
             (
                 compression_type == &other.compression_type,
                 "compression_type",
@@ -527,10 +515,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             value_desc,
             topic,
-            partition_count,
-            replication_factor,
             fuel,
-            retention,
             compression_type,
         } = self;
         KafkaSinkConnection {
@@ -541,10 +526,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             value_desc,
             topic,
-            partition_count,
-            replication_factor,
             fuel,
-            retention,
             compression_type,
         }
     }
@@ -561,10 +543,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             relation_key_indices: self.relation_key_indices.into_proto(),
             value_desc: Some(self.value_desc.into_proto()),
             topic: self.topic.clone(),
-            partition_count: self.partition_count,
-            replication_factor: self.replication_factor,
             fuel: u64::cast_from(self.fuel),
-            retention: Some(self.retention.into_proto()),
             compression_type: Some(match self.compression_type {
                 KafkaSinkCompressionType::None => CompressionType::None(()),
                 KafkaSinkCompressionType::Gzip => CompressionType::Gzip(()),
@@ -593,12 +572,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 .value_desc
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::value_desc")?,
             topic: proto.topic,
-            partition_count: proto.partition_count,
-            replication_factor: proto.replication_factor,
             fuel: proto.fuel.into_rust()?,
-            retention: proto
-                .retention
-                .into_rust_if_some("ProtoKafkaSinkConnectionV2::retention")?,
             compression_type: match proto.compression_type {
                 Some(CompressionType::None(())) => KafkaSinkCompressionType::None,
                 Some(CompressionType::Gzip(())) => KafkaSinkCompressionType::Gzip,
@@ -611,28 +585,6 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                     ))
                 }
             },
-        })
-    }
-}
-
-#[derive(Arbitrary, Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSinkConnectionRetention {
-    pub duration: Option<i64>,
-    pub bytes: Option<i64>,
-}
-
-impl RustType<ProtoKafkaSinkConnectionRetention> for KafkaSinkConnectionRetention {
-    fn into_proto(&self) -> ProtoKafkaSinkConnectionRetention {
-        ProtoKafkaSinkConnectionRetention {
-            duration: self.duration,
-            bytes: self.bytes,
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaSinkConnectionRetention) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaSinkConnectionRetention {
-            duration: proto.duration,
-            bytes: proto.bytes,
         })
     }
 }

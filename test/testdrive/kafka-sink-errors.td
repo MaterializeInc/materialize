@@ -23,68 +23,12 @@ ALTER SYSTEM SET enable_kafka_config_denylist_options = true
     URL '${testdrive.schema-registry-url}'
   );
 
-! CREATE SINK invalid_partition_count FROM v1
-  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT = a, TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-contains:invalid PARTITION COUNT: cannot use value as number
-
-! CREATE SINK invalid_partition_count FROM v1
-  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT = -2, TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-contains:PARTION COUNT for sink topics must be a positive integer or -1 for broker default
-
-! CREATE SINK invalid_replication_factor FROM v1
-  INTO KAFKA CONNECTION kafka_conn (REPLICATION FACTOR = a, TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-contains:invalid REPLICATION FACTOR: cannot use value as number
-
-! CREATE SINK invalid_replication_factor FROM v1
-  INTO KAFKA CONNECTION kafka_conn (REPLICATION FACTOR = -2, TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-contains:REPLICATION FACTOR for sink topics must be a positive integer or -1 for broker default
-
-# Ensure that a sink whose topic fails to create does not result in an
-# orphaned linked cluster. See #17061.
-> SELECT count(*) FROM mz_clusters WHERE name = 'materialize_public_invalid_acks'
-0
-
 ! CREATE SINK invalid_key FROM v1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   KEY(f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 contains:No such column: f2
-
-#
-# Retention options
-#
-! CREATE SINK invalid_retention_ms FROM v1
-  INTO KAFKA CONNECTION kafka_conn (RETENTION MS = a, TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-contains:invalid RETENTION MS: cannot use value as number
-
-! CREATE SINK invalid_retention_ms FROM v1
-  INTO KAFKA CONNECTION kafka_conn (RETENTION MS = -2, TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-contains:RETENTION MS for sink topics must be greater than or equal to -1
-
-! CREATE SINK invalid_retention_bytes FROM v1
-  INTO KAFKA CONNECTION kafka_conn (RETENTION BYTES = a, TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-contains:invalid RETENTION BYTES: cannot use value as number
-
-! CREATE SINK invalid_retention_bytes FROM v1
-  INTO KAFKA CONNECTION kafka_conn (RETENTION BYTES = -2, TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-contains:RETENTION BYTES for sink topics must be greater than or equal to -1
 
 #
 # Sink dependencies

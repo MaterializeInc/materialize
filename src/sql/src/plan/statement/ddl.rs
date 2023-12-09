@@ -46,8 +46,7 @@ use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope,
-    StorageSinkConnection,
+    KafkaSinkConnection, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -2546,11 +2545,7 @@ fn kafka_sink_builder(
 
     let KafkaConfigOptionExtracted {
         topic,
-        partition_count,
-        replication_factor,
         compression_type,
-        retention_ms,
-        retention_bytes,
         ..
     } = extracted_options;
 
@@ -2649,43 +2644,15 @@ fn kafka_sink_builder(
         None => bail_unsupported!("sink without format"),
     };
 
-    if partition_count == 0 || partition_count < -1 {
-        sql_bail!(
-            "PARTION COUNT for sink topics must be a positive integer or -1 for broker default"
-        );
-    }
-
-    if replication_factor == 0 || replication_factor < -1 {
-        sql_bail!(
-            "REPLICATION FACTOR for sink topics must be a positive integer or -1 for broker default"
-        );
-    }
-
-    if retention_ms.unwrap_or(0) < -1 {
-        sql_bail!("RETENTION MS for sink topics must be greater than or equal to -1");
-    }
-
-    if retention_bytes.unwrap_or(0) < -1 {
-        sql_bail!("RETENTION BYTES for sink topics must be greater than or equal to -1");
-    }
-
-    let retention = KafkaSinkConnectionRetention {
-        duration: retention_ms,
-        bytes: retention_bytes,
-    };
-
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
         connection_id,
         connection: connection_id,
         format,
         topic: topic_name,
-        partition_count,
-        replication_factor,
         fuel: 10000,
         relation_key_indices,
         key_desc_and_indices,
         value_desc,
-        retention,
         compression_type,
     }))
 }

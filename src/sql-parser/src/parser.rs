@@ -2354,16 +2354,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_kafka_config_option(&mut self) -> Result<KafkaConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[
-            COMPRESSION,
-            GROUP,
-            PARTITION,
-            REPLICATION,
-            RETENTION,
-            SNAPSHOT,
-            START,
-            TOPIC,
-        ])? {
+        let name = match self.expect_one_of_keywords(&[COMPRESSION, GROUP, START, TOPIC])? {
             COMPRESSION => {
                 self.expect_keyword(TYPE)?;
                 KafkaConfigOptionName::CompressionType
@@ -2372,17 +2363,9 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[ID, PREFIX])?;
                 KafkaConfigOptionName::GroupIdPrefix
             }
-            PARTITION => {
-                self.expect_keyword(COUNT)?;
-                KafkaConfigOptionName::PartitionCount
-            }
-            REPLICATION => {
-                self.expect_keyword(FACTOR)?;
-                KafkaConfigOptionName::ReplicationFactor
-            }
-            RETENTION => match self.expect_one_of_keywords(&[BYTES, MS])? {
-                BYTES => KafkaConfigOptionName::RetentionBytes,
-                MS => KafkaConfigOptionName::RetentionMs,
+            START => match self.expect_one_of_keywords(&[OFFSET, TIMESTAMP])? {
+                OFFSET => KafkaConfigOptionName::StartOffset,
+                TIMESTAMP => KafkaConfigOptionName::StartTimestamp,
                 _ => unreachable!(),
             },
             TOPIC => {
@@ -2393,11 +2376,6 @@ impl<'a> Parser<'a> {
                     KafkaConfigOptionName::Topic
                 }
             }
-            START => match self.expect_one_of_keywords(&[OFFSET, TIMESTAMP])? {
-                OFFSET => KafkaConfigOptionName::StartOffset,
-                TIMESTAMP => KafkaConfigOptionName::StartTimestamp,
-                _ => unreachable!(),
-            },
             _ => unreachable!(),
         };
         Ok(KafkaConfigOption {

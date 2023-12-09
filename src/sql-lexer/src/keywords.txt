@@ -229,7 +229,6 @@ Minutes
 Mode
 Month
 Months
-Ms
 Mutually
 Name
 Names
@@ -307,7 +306,6 @@ Replication
 Reset
 Respect
 Restrict
-Retention
 Return
 Returning
 Revoke

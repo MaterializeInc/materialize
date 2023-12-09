@@ -12,7 +12,9 @@
 use std::sync::Arc;
 
 use anyhow::bail;
-use mz_kafka_util::client::{DEFAULT_FETCH_METADATA_TIMEOUT, DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL};
+use mz_kafka_util::client::{
+    DEFAULT_FETCH_METADATA_TIMEOUT, DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL,
+};
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
@@ -49,10 +51,6 @@ pub fn validate_options_for_context<T: AstInfo>(
             TopicMetadataRefreshInterval => None,
             StartTimestamp => Some(Source),
             StartOffset => Some(Source),
-            PartitionCount => Some(Sink),
-            ReplicationFactor => Some(Sink),
-            RetentionBytes => Some(Sink),
-            RetentionMs => Some(Sink),
         };
         if limited_to_context.is_some() && limited_to_context != Some(context) {
             bail!(
@@ -78,13 +76,13 @@ generate_extracted_config!(
     ),
     (GroupIdPrefix, String),
     (Topic, String),
-    (TopicMetadataRefreshInterval, Duration, Default(DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL)),
+    (
+        TopicMetadataRefreshInterval,
+        Duration,
+        Default(DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL)
+    ),
     (StartTimestamp, i64),
-    (StartOffset, Vec<i64>),
-    (PartitionCount, i32, Default(-1)),
-    (ReplicationFactor, i32, Default(-1)),
-    (RetentionBytes, i64),
-    (RetentionMs, i64)
+    (StartOffset, Vec<i64>)
 );
 
 impl TryFromValue<Value> for KafkaSinkCompressionType {
