@@ -118,7 +118,7 @@ pub(super) fn construct<A: Allocate>(
         let arrangement_batches = batches
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential batches")
-            .as_collection(move |op, ()| {
+            .as_collection(move |op, _| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
                     Datum::UInt64(u64::cast_from(worker_id)),
@@ -128,7 +128,7 @@ pub(super) fn construct<A: Allocate>(
         let arrangement_records = records
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential records")
-            .as_collection(move |op, ()| {
+            .as_collection(move |op, _| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
                     Datum::UInt64(u64::cast_from(worker_id)),
@@ -139,7 +139,7 @@ pub(super) fn construct<A: Allocate>(
         let sharing = sharing
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential sharing")
-            .as_collection(move |op, ()| {
+            .as_collection(move |op, _| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
                     Datum::UInt64(u64::cast_from(worker_id)),

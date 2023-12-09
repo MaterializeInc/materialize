@@ -337,39 +337,39 @@ where
                 allocations += usize::from(cap > 0);
             };
             trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
+                // batch.storage.keys.heap_size(&mut callback);
                 offset_list_size(&batch.storage.keys_offs, &mut callback);
-                batch.storage.vals.heap_size(&mut callback);
+                // batch.storage.vals.heap_size(&mut callback);
                 offset_list_size(&batch.storage.vals_offs, &mut callback);
-                batch.storage.updates.heap_size(&mut callback);
+                // batch.storage.updates.heap_size(&mut callback);
             });
             (size, capacity, allocations)
         })
     }
 }
 
-impl<G, K, T, R> ArrangementSize for Arranged<G, TraceAgent<RowKeySpine<K, T, R>>>
-where
-    G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord,
-    K: Data + Columnation,
-    T: Lattice + Timestamp + Columnation,
-    R: Semigroup + Columnation,
-{
-    fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                size += siz;
-                capacity += cap;
-                allocations += usize::from(cap > 0);
-            };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                offset_list_size(&batch.storage.keys_offs, &mut callback);
-                batch.storage.updates.heap_size(&mut callback);
-            });
-            (size, capacity, allocations)
-        })
-    }
-}
+// impl<G, K, T, R> ArrangementSize for Arranged<G, TraceAgent<RowKeySpine<K, T, R>>>
+// where
+//     G: Scope<Timestamp = T>,
+//     G::Timestamp: Lattice + Ord,
+//     K: Data + Columnation,
+//     T: Lattice + Timestamp + Columnation,
+//     R: Semigroup + Columnation,
+// {
+//     fn log_arrangement_size(self) -> Self {
+//         log_arrangement_size_inner(self, |trace| {
+//             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+//             let mut callback = |siz, cap| {
+//                 size += siz;
+//                 capacity += cap;
+//                 allocations += usize::from(cap > 0);
+//             };
+//             trace.map_batches(|batch| {
+//                 // batch.storage.keys.heap_size(&mut callback);
+//                 offset_list_size(&batch.storage.keys_offs, &mut callback);
+//                 // batch.storage.updates.heap_size(&mut callback);
+//             });
+//             (size, capacity, allocations)
+//         })
+//     }
+// }

@@ -156,14 +156,14 @@ pub(super) fn construct<A: Allocate>(
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*id)),
                     Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::String(name),
+                    Datum::String(&name),
                 ])
             });
         let mut packer = PermutedRowPacker::new(TimelyLog::Channels);
         let channels = channels
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely operates")
-            .as_collection(move |datum, ()| {
+            .as_collection(move |datum, _| {
                 let (source_node, source_port) = datum.source;
                 let (target_node, target_port) = datum.target;
                 packer.pack_slice(&[
@@ -195,7 +195,7 @@ pub(super) fn construct<A: Allocate>(
         let parks = parks
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely parks")
-            .as_collection(move |datum, ()| {
+            .as_collection(move |datum, _| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::try_from(datum.duration_pow).expect("duration too big")),
@@ -209,7 +209,7 @@ pub(super) fn construct<A: Allocate>(
         let batches_sent = batches_sent
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely batches sent")
-            .as_collection(move |datum, ()| {
+            .as_collection(move |datum, _| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(worker_id)),
@@ -223,7 +223,7 @@ pub(super) fn construct<A: Allocate>(
                 Pipeline,
                 "PreArrange Timely batches received",
             )
-            .as_collection(move |datum, ()| {
+            .as_collection(move |datum, _| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(datum.worker)),
@@ -234,7 +234,7 @@ pub(super) fn construct<A: Allocate>(
         let messages_sent = messages_sent
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely messages sent")
-            .as_collection(move |datum, ()| {
+            .as_collection(move |datum, _| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(worker_id)),
@@ -248,7 +248,7 @@ pub(super) fn construct<A: Allocate>(
                 Pipeline,
                 "PreArrange Timely messages received",
             )
-            .as_collection(move |datum, ()| {
+            .as_collection(move |datum, _| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(datum.worker)),

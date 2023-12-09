@@ -119,32 +119,36 @@ pub(super) fn construct<A: Allocate>(
                     variant.desc().arity(),
                 );
 
-                let updates =
-                    updates.as_collection(move |(update_type, addr, source, port, ts), _| {
-                        let row_arena = RowArena::default();
-                        let update_type = if *update_type { "source" } else { "target" };
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
-                        row_builder.packer().push_list(
-                            addr.iter()
-                                .chain_one(source)
-                                .map(|id| Datum::UInt64(u64::cast_from(*id))),
-                        );
-                        let datums = &[
-                            row_arena.push_unary_row(row_builder.clone()),
-                            Datum::UInt64(u64::cast_from(*port)),
-                            Datum::UInt64(u64::cast_from(worker_index)),
-                            Datum::String(update_type),
-                            Datum::from(ts.clone()),
-                        ];
-                        row_builder.packer().extend(key.iter().map(|k| datums[*k]));
-                        let key_row = row_builder.clone();
-                        row_builder
-                            .packer()
-                            .extend(value.iter().map(|k| datums[*k]));
-                        let value_row = row_builder.clone();
-                        (key_row, value_row)
-                    });
+                let updates = updates.as_collection(move |item, _| {
+                    let update_type = &item.0;
+                    let addr = &item.1;
+                    let source = &item.2;
+                    let port = &item.3;
+                    let ts = &item.4;
+                    let row_arena = RowArena::default();
+                    let update_type = if *update_type { "source" } else { "target" };
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    row_builder.packer().push_list(
+                        addr.iter()
+                            .chain_one(source)
+                            .map(|id| Datum::UInt64(u64::cast_from(*id))),
+                    );
+                    let datums = &[
+                        row_arena.push_unary_row(row_builder.clone()),
+                        Datum::UInt64(u64::cast_from(*port)),
+                        Datum::UInt64(u64::cast_from(worker_index)),
+                        Datum::String(update_type),
+                        Datum::from(ts.clone()),
+                    ];
+                    row_builder.packer().extend(key.iter().map(|k| datums[*k]));
+                    let key_row = row_builder.clone();
+                    row_builder
+                        .packer()
+                        .extend(value.iter().map(|k| datums[*k]));
+                    let value_row = row_builder.clone();
+                    (key_row, value_row)
+                });
 
                 let trace = updates
                     .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))

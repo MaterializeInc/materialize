@@ -15,6 +15,7 @@ use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::MyTrait;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -544,7 +545,7 @@ where
                     row_buf.packer().extend(&**borrow);
                     row_buf.clone()
                 }),
-                errs.as_collection(|k, &()| k.clone()),
+                errs.as_collection(|k, _| k.into_owned()),
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
                 oks.as_collection(move |borrow| {
@@ -553,7 +554,7 @@ where
                     row_buf.packer().extend(&**borrow);
                     row_buf.clone()
                 }),
-                errs.as_collection(|k, &()| k.clone()),
+                errs.as_collection(|k, _| k.into_owned()),
             ),
         }
     }
@@ -590,13 +591,13 @@ where
             ArrangementFlavor::Local(oks, errs) => {
                 let logic = constructor();
                 let oks = oks.flat_map(key, logic, refuel);
-                let errs = errs.as_collection(|k, &()| k.clone());
+                let errs = errs.as_collection(|k, _| k.into_owned());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
                 let logic = constructor();
                 let oks = oks.flat_map(key, logic, refuel);
-                let errs = errs.as_collection(|k, &()| k.clone());
+                let errs = errs.as_collection(|k, _| k.into_owned());
                 (oks, errs)
             }
         }
@@ -1209,7 +1210,6 @@ where
         let mut work: usize = 0;
         let mut session = output.session(&self.capability);
         if let Some(key) = key {
-            use differential_dataflow::trace::cursor::MyTrait;
             if self.cursor.get_key(&self.batch).map(|k| k.equals(key)) != Some(true) {
                 self.cursor.seek_key_owned(&self.batch, key);
             }

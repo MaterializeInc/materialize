@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
+use differential_dataflow::trace::cursor::MyTrait;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
 use mz_compute_types::dataflows::YieldSpec;
@@ -158,11 +159,17 @@ where
             // We can use an arrangement if it exists and an initial closure does not.
             let mut joined = match (arrangement, linear_plan.initial_closure) {
                 (Some(ArrangementFlavor::Local(oks, errs)), None) => {
-                    errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
+                    errors.push(
+                        errs.as_collection(|k, _v| k.into_owned())
+                            .enter_region(inner),
+                    );
                     JoinedFlavor::Local(oks.enter_region(inner))
                 }
                 (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
-                    errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
+                    errors.push(
+                        errs.as_collection(|k, _v| k.into_owned())
+                            .enter_region(inner),
+                    );
                     JoinedFlavor::Trace(oks.enter_region(inner))
                 }
                 (_, initial_closure) => {
@@ -327,7 +334,7 @@ where
                         (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangement::RowRow(next_input))  => self.differential_join_inner::<_,TraceAgent<RowSpine<Row, Row, _, _>>,TraceAgent<RowSpine<Row, Row, _, _>>>(prev_keyed, next_input, None, None, None, closure),
                     };
 
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.push(errs1.as_collection(|k, _v| k.into_owned()));
                     errors.extend(errs2);
                     oks
                 }
@@ -339,7 +346,7 @@ where
                         (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangementImport::RowRow(next_input))  => self.differential_join_inner::<_,TraceAgent<RowSpine<Row, Row, _, _>>,TraceEnter<TraceFrontier<TraceRowHandle<Row, Row, T, Diff>>, G::Timestamp>>(prev_keyed, next_input, None, None, None, closure),
                     };
 
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.push(errs1.as_collection(|k, _v| k.into_owned()));
                     errors.extend(errs2);
                     oks
                 }
@@ -400,7 +407,7 @@ where
                         ),
                     };
 
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.push(errs1.as_collection(|k, _v| k.into_owned()));
                     errors.extend(errs2);
                     oks
                 }
@@ -461,7 +468,7 @@ where
                         ),
                     };
 
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.push(errs1.as_collection(|k, _v| k.into_owned()));
                     errors.extend(errs2);
                     oks
                 }

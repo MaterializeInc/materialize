@@ -19,6 +19,7 @@ use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::cursor::MyTrait;
 use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{Collection, ExchangeData};
 use mz_compute_types::plan::reduce::{
@@ -293,8 +294,9 @@ where
 
         // First, lets collect all results into a single collection.
         for (reduction_type, arrangement) in arrangements.into_iter() {
-            let collection = arrangement
-                .as_collection(move |key, val| (key.clone(), (reduction_type, val.clone())));
+            let collection = arrangement.as_collection(move |key, val| {
+                (key.into_owned(), (reduction_type, val.into_owned()))
+            });
             to_concat.push(collection);
         }
 
@@ -334,7 +336,9 @@ where
                             return;
                         }
 
-                        for ((reduction_type, row), _) in input.iter() {
+                        for (item, _) in input.iter() {
+                            let reduction_type = &item.0;
+                            let row = &item.1;
                             match reduction_type {
                                 ReductionType::Accumulable => accumulable = row.iter(),
                                 ReductionType::Hierarchical => hierarchical = row.iter(),
@@ -389,7 +393,9 @@ where
                     let mut accumulable = DatumList::empty().iter();
                     let mut hierarchical = DatumList::empty().iter();
                     let mut basic = DatumList::empty().iter();
-                    for ((reduction_type, row), _) in input.iter() {
+                    for (item, _) in input.iter() {
+                        let reduction_type = &item.0;
+                        let row = &item.1;
                         match reduction_type {
                             ReductionType::Accumulable => accumulable = row.iter(),
                             ReductionType::Hierarchical => hierarchical = row.iter(),
@@ -427,7 +433,7 @@ where
                     output.push((EvalError::Internal(message.to_string()).into(), 1));
                 },
             );
-        (oks, errs.as_collection(|_, v| v.clone()))
+        (oks, errs.as_collection(|_, v| v.into_owned()))
     }
 
     fn dispatch_build_distinct<S>(
@@ -445,37 +451,48 @@ where
                 assert!(v.is_empty());
                 (k, ())
             });
-            let (arrangement, errs) = self.build_distinct(collection, " [val: empty]");
+            let (arrangement, errs) = self
+                .build_distinct::<RowKeySpine<_, _, _>, ErrValSpine<_, _, _>, _>(
+                    collection,
+                    " [val: empty]",
+                );
             (SpecializedArrangement::RowUnit(arrangement), errs)
         } else {
             let collection = collection.inspect(|((_, v), _, _)| assert!(v.is_empty()));
-            let (arrangement, errs) = self.build_distinct(collection, "");
+            let (arrangement, errs) = self
+                .build_distinct::<RowSpine<_, _, _, _>, ErrValSpine<_, _, _>, _>(collection, "");
             (SpecializedArrangement::RowRow(arrangement), errs)
         }
     }
 
     /// Build the dataflow to compute the set of distinct keys.
-    fn build_distinct<Tr, S>(
+    fn build_distinct<T1, T2, S>(
         &self,
-        collection: Collection<S, (Row, Tr::ValOwned), Diff>,
+        collection: Collection<S, (Row, T1::ValOwned), Diff>,
         tag: &str,
     ) -> (
-        Arranged<S, TraceAgent<Tr>>,
+        Arranged<S, TraceAgent<T1>>,
         Collection<S, DataflowError, Diff>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        Tr: Trace
+        T1: Trace + for<'a> TraceReader<KeyOwned = Row, Time = G::Timestamp, Diff = Diff> + 'static,
+        T1::Batch: Batch,
+        T1::Batcher: Batcher<Item = ((Row, T1::ValOwned), G::Timestamp, Diff)>,
+        T1::ValOwned: Columnation + ExchangeData + Default,
+        Arranged<S, TraceAgent<T1>>: ArrangementSize,
+        // ErrValSpine<_, _, _>
+        T2: Trace
             + for<'a> TraceReader<
-                Key<'a> = &'a Row, // Required because of hardcoded use of `ErrValSpine`. TODO: remove requirement.
+                Key<'a> = T1::Key<'a>,
                 KeyOwned = Row,
+                ValOwned = DataflowError,
                 Time = G::Timestamp,
                 Diff = Diff,
             > + 'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
-        Tr::ValOwned: Columnation + ExchangeData + Default,
-        Arranged<S, TraceAgent<Tr>>: ArrangementSize,
+        T2::Batch: Batch,
+        T2::Batcher: Batcher<Item = ((Row, T2::ValOwned), G::Timestamp, Diff)>,
+        Arranged<S, TraceAgent<T2>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
 
@@ -485,15 +502,15 @@ where
         );
 
         let (output, errors) = collection
-            .mz_arrange::<Tr>(&input_name)
-            .reduce_pair::<_, Tr, _, ErrValSpine<_, _, _>>(
+            .mz_arrange::<T1>(&input_name)
+            .reduce_pair::<_, T1, _, T2>(
                 &output_name,
                 "DistinctByErrorCheck",
                 |_key, _input, output| {
                     // We're pushing a unit value here because the key is implicitly added by the
                     // arrangement, and the permutation logic takes care of using the key part of the
                     // output.
-                    output.push((Tr::ValOwned::default(), 1));
+                    output.push((T1::ValOwned::default(), 1));
                 },
                 move |key, input: &[(_, Diff)], output| {
                     for (_, count) in input.iter() {
@@ -501,13 +518,14 @@ where
                             continue;
                         }
                         let message = "Non-positive multiplicity in DistinctBy";
+                        let key = key.into_owned();
                         error_logger.log(message, &format!("row={key:?}, count={count}"));
                         output.push((EvalError::Internal(message.to_string()).into(), 1));
                         return;
                     }
                 },
             );
-        (output, errors.as_collection(|_k, v| v.clone()))
+        (output, errors.as_collection(|_k, v| v.into_owned()))
     }
 
     /// Build the dataflow to compute and arrange multiple non-accumulable,
@@ -541,8 +559,9 @@ where
             if errs.is_some() {
                 err_output = errs
             }
-            to_collect
-                .push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
+            to_collect.push(
+                result.as_collection(move |key, val| (key.into_owned(), (index, val.into_owned()))),
+            );
         }
         let output = differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
             .mz_arrange::<RowSpine<_, _, _, _>>("Arranged ReduceFuseBasic input")
@@ -551,8 +570,8 @@ where
                     let binding = SharedRow::get();
                     let mut row_builder = binding.borrow_mut();
                     let mut row_packer = row_builder.packer();
-                    for ((_, row), _) in input.iter() {
-                        let datum = row.unpack_first();
+                    for (row, _) in input.iter() {
+                        let datum = row.1.unpack_first();
                         row_packer.push(datum);
                     }
                     output.push((row_builder.clone(), 1));
@@ -599,10 +618,9 @@ where
 
         // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
         if distinct {
-            use differential_dataflow::trace::cursor::MyTrait;
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_, RowSpine<_, Result<(), String>, _, _>>(partial, None)
+                    .build_reduce_inaccumulable_distinct::<_,RowKeySpine<(Row, Row), _, _>,RowSpine<_, Result<(), String>, _, _>>(partial, None)
                     .as_collection(|k, v| (k.into_owned(), v.into_owned()))
                     .map_fallible("Demux Errors", move |(key, result)| match result {
                         Ok(()) => Ok(key),
@@ -612,7 +630,7 @@ where
                 partial = oks;
             } else {
                 partial = self
-                    .build_reduce_inaccumulable_distinct::<_, RowKeySpine<_, _, _>>(
+                    .build_reduce_inaccumulable_distinct::<_,RowKeySpine<(Row, Row), _, _>, RowKeySpine<_, _, _>>(
                         partial,
                         Some(" [val: empty]"),
                     )
@@ -670,30 +688,35 @@ where
                     }
                 },
             );
-            (oks, Some(errs.as_collection(|_, v| v.clone())))
+            (oks, Some(errs.as_collection(|_, v| v.into_owned())))
         } else {
             (oks, err_output)
         }
     }
 
-    fn build_reduce_inaccumulable_distinct<S, Tr>(
+    fn build_reduce_inaccumulable_distinct<S, T1, T2>(
         &self,
         input: Collection<S, (Row, Row), Diff>,
         name_tag: Option<&str>,
-    ) -> Arranged<S, TraceAgent<Tr>>
+    ) -> Arranged<S, TraceAgent<T2>>
     where
         S: Scope<Timestamp = G::Timestamp>,
-        Tr::ValOwned: MaybeValidatingRow<(), String>,
-        Tr: Trace
-            + for<'a> TraceReader<
-                Key<'a> = &'a (Row, Row),
+        // RowKeySpine<(Row, Row), _, _>
+        T1: Trace<KeyOwned = (Row, Row), Time = G::Timestamp, Diff = Diff> + 'static,
+        T1::ValOwned: std::fmt::Debug,
+        T1::Batch: Batch,
+        T1::Batcher: Batcher<Item = (((Row, Row), ()), G::Timestamp, Diff)>,
+        Arranged<S, TraceAgent<T1>>: ArrangementSize,
+        T2: for<'a> Trace<
+                Key<'a> = T1::Key<'a>,
                 KeyOwned = (Row, Row),
                 Time = G::Timestamp,
                 Diff = Diff,
             > + 'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = (((Row, Row), Tr::ValOwned), G::Timestamp, Diff)>,
-        Arranged<S, TraceAgent<Tr>>: ArrangementSize,
+        T2::ValOwned: MaybeValidatingRow<(), String>,
+        T2::Batch: Batch,
+        T2::Batcher: Batcher<Item = (((Row, Row), T2::ValOwned), G::Timestamp, Diff)>,
+        Arranged<S, TraceAgent<T2>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
 
@@ -704,23 +727,21 @@ where
 
         let input: KeyCollection<_, _, _> = input.into();
         input
-            .mz_arrange::<RowKeySpine<(Row, Row), _, _>>(
-                "Arranged ReduceInaccumulable Distinct [val: empty]",
-            )
-            .mz_reduce_abelian::<_, Tr>(&output_name, move |_, source, t| {
-                if let Some(err) = Tr::ValOwned::into_error() {
+            .mz_arrange::<T1>("Arranged ReduceInaccumulable Distinct [val: empty]")
+            .mz_reduce_abelian::<_, T2>(&output_name, move |_, source, t| {
+                if let Some(err) = T2::ValOwned::into_error() {
                     for (value, count) in source.iter() {
                         if count.is_positive() {
                             continue;
                         }
-
+                        let value = (*value).into_owned();
                         let message = "Non-positive accumulation in ReduceInaccumulable DISTINCT";
                         error_logger.log(message, &format!("value={value:?}, count={count}"));
                         t.push((err(message.to_string()), 1));
                         return;
                     }
                 }
-                t.push((Tr::ValOwned::ok(()), 1))
+                t.push((T2::ValOwned::ok(()), 1))
             })
     }
 
@@ -750,7 +771,7 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
-        let mut err_output: Option<Collection<S, _, _>> = None;
+        let mut err_output: Option<Collection<S, DataflowError, _>> = None;
         let arranged_output = input.scope().region_named("ReduceHierarchical", |inner| {
             let input = input.enter(inner);
 
@@ -844,12 +865,12 @@ where
                             }
                         },
                     )
-                    .as_collection(|_, v| v.clone());
+                    .as_collection(|_, v| v.into_owned());
                 err_output = Some(errs.leave_region());
             }
             arranged
                 .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
-                    move |_key, source: &[(&Vec<Row>, Diff)], target: &mut Vec<(Row, Diff)>| {
+                    move |_key, source, target| {
                         let binding = SharedRow::get();
                         let mut row_builder = binding.borrow_mut();
                         let mut row_packer = row_builder.packer();
@@ -909,7 +930,7 @@ where
                             );
                             // After complaining, output an error here so that we can eventually
                             // report it in an error stream.
-                            target.push((err(key.clone()), -1));
+                            target.push((err(key.into_owned()), -1));
                             return;
                         }
                     }
@@ -932,11 +953,11 @@ where
                     target.extend(
                         source
                             .iter()
-                            .map(|(values, cnt)| (R::ok((*values).clone()), *cnt)),
+                            .map(|(values, cnt)| (R::ok((*values).into_owned()), *cnt)),
                     );
                 },
             )
-            .as_collection(|k, v| (k.clone(), v.clone()))
+            .as_collection(|k, v| (k.into_owned(), v.into_owned()))
     }
 
     /// Build the dataflow to compute and arrange multiple hierarchical aggregations
@@ -1108,10 +1129,12 @@ where
                     "Reduced Accumulable Distinct [val: empty]",
                     move |_k, _s, t| t.push(((), 1)),
                 )
-                .as_collection(|k, _| k.clone())
+                .as_collection(|k, _| k.into_owned())
                 .explode_one({
                     let zero_diffs = zero_diffs.clone();
-                    move |(key, row)| {
+                    move |key_row| {
+                        let key = key_row.0;
+                        let row = &key_row.1;
                         let datum = row.iter().next().unwrap();
                         let mut diffs = zero_diffs.clone();
                         diffs.0[accumulable_index] = datum_to_accumulator(&aggr.func, datum);
@@ -1188,7 +1211,7 @@ where
             );
         (
             arranged_output,
-            arranged_errs.as_collection(|_key, error| error.clone()),
+            arranged_errs.as_collection(|_key, error| error.into_owned()),
         )
     }
 }

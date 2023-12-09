@@ -13,6 +13,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::cursor::MyTrait;
 use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::Data;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
@@ -56,7 +57,6 @@ where
     arrangement.mz_reduce_abelian(name, move |_key, s, t| {
         for (record, count) in s.iter() {
             if logic(count) {
-                use differential_dataflow::trace::cursor::MyTrait;
                 t.push(((*record).into_owned(), *count));
             }
         }
@@ -78,11 +78,11 @@ where
     match oks {
         SpecializedArrangement::RowUnit(inner) => {
             let name = format!("{} [val: empty]", name);
-            let oks = threshold_arrangement(inner, &name, logic);
+            let oks = threshold_arrangement::<_, TraceAgent<_>, _, _>(inner, &name, logic);
             SpecializedArrangement::RowUnit(oks)
         }
         SpecializedArrangement::RowRow(inner) => {
-            let oks = threshold_arrangement(inner, name, logic);
+            let oks = threshold_arrangement::<_, TraceAgent<_>, _, _>(inner, name, logic);
             SpecializedArrangement::RowRow(oks)
         }
     }
@@ -100,14 +100,15 @@ where
     G::Timestamp: Lattice + Refines<T> + Columnation,
     L: Fn(&Diff) -> bool + 'static,
 {
+    use differential_dataflow::trace::wrappers::enter::TraceEnter;
     match oks {
         SpecializedArrangementImport::RowUnit(inner) => {
             let name = format!("{} [val: empty]", name);
-            let oks = threshold_arrangement(inner, &name, logic);
+            let oks = threshold_arrangement::<_, TraceEnter<_, _>, _, _>(inner, &name, logic);
             SpecializedArrangement::RowUnit(oks)
         }
         SpecializedArrangementImport::RowRow(inner) => {
-            let oks = threshold_arrangement(inner, name, logic);
+            let oks = threshold_arrangement::<G, TraceEnter<_, _>, _, _>(inner, name, logic);
             SpecializedArrangement::RowRow(oks)
         }
     }
@@ -138,7 +139,7 @@ where
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks =
                 dispatch_threshold_arrangement_trace(&oks, "Threshold trace", |count| *count > 0);
-            let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
+            let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.into_owned()).into();
             let errs = errs.mz_arrange("Arrange threshold basic err");
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }

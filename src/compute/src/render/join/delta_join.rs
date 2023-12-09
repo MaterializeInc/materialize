@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::MyTrait;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection, ExchangeData, Hashable};
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
@@ -90,7 +91,7 @@ where
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
                                         inner_errs.push(
                                             errs.enter_region(inner)
-                                                .as_collection(|k, _v| k.clone()),
+                                                .as_collection(|k, _v| k.into_owned()),
                                         );
                                     }
                                     Ok(oks.enter_region(inner))
@@ -99,7 +100,7 @@ where
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
                                         inner_errs.push(
                                             errs.enter_region(inner)
-                                                .as_collection(|k, _v| k.clone()),
+                                                .as_collection(|k, _v| k.into_owned()),
                                         );
                                     }
                                     Err(oks.enter_region(inner))

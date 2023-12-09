@@ -108,6 +108,7 @@ use std::sync::Arc;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::cursor::MyTrait;
 use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashable};
 use itertools::izip;
@@ -542,7 +543,7 @@ where
                 let oks_trace = oks.trace_handle();
 
                 let errs = errs
-                    .as_collection(|k, v| (k.clone(), v.clone()))
+                    .as_collection(|k, v| (k.into_owned(), v.into_owned()))
                     .leave()
                     .mz_arrange("Arrange export iterative err");
 
@@ -613,7 +614,6 @@ where
         Tr2::Batcher: Batcher<Item = ((Tr1::KeyOwned, Tr1::ValOwned), G::Timestamp, Diff)>,
         Arranged<G, TraceAgent<Tr2>>: ArrangementSize,
     {
-        use differential_dataflow::trace::cursor::MyTrait;
         oks.as_collection(|k, v| (k.into_owned(), v.into_owned()))
             .leave()
             .mz_arrange(name)
@@ -716,7 +716,7 @@ where
                         "Distinct recursive err",
                         move |_k, _s, t| t.push(((), 1)),
                     )
-                    .as_collection(|k, _| k.clone());
+                    .as_collection(|k, _| k.into_owned());
                 if let Some(token) = &self.shutdown_token.get_inner() {
                     errs = errs.with_token(Weak::clone(token));
                 }

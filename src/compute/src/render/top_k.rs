@@ -17,6 +17,7 @@ use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::cursor::MyTrait;
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
@@ -370,7 +371,7 @@ where
                 }
             });
         // TODO(#7331): Here we discard the arranged output.
-        (result.as_collection(|_k, v| v.clone()), errs)
+        (result.as_collection(|_k, v| v.into_owned()), errs)
     }
 }
 
@@ -399,7 +400,7 @@ where
                         if diff.is_positive() {
                             continue;
                         }
-                        target.push((err((*row).clone()), -1));
+                        target.push((err((*row).into_owned()), -1));
                         return;
                     }
                 }
@@ -417,7 +418,7 @@ where
 
                 // First go ahead and emit all records
                 for (row, diff) in source.iter() {
-                    target.push((R::ok((*row).clone()), diff.clone()));
+                    target.push((R::ok((*row).into_owned()), diff.clone()));
                 }
                 // local copies that may count down to zero.
                 let mut offset = offset;
@@ -467,12 +468,12 @@ where
                     if diff > 0 {
                         // Emit retractions for the elements actually part of
                         // the set of TopK elements.
-                        target.push((R::ok(row.clone()), -diff));
+                        target.push((R::ok(row.into_owned()), -diff));
                     }
                 }
             }
         })
-        .as_collection(|k, v| (k.clone(), v.clone()))
+        .as_collection(|k, v| (k.into_owned(), v.into_owned()))
 }
 
 fn render_intra_ts_thinning<S>(
