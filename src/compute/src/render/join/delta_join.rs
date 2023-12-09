@@ -375,10 +375,10 @@ where
     G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    use crate::typedefs::{RowImport, RowRowImport};
+    use crate::typedefs::{RowEnter, RowRowEnter};
     match trace {
         SpecializedArrangementImport::RowUnit(inner) => {
-            build_halfjoin::<_, RowImport<T, Diff, G::Timestamp>, _>(
+            build_halfjoin::<_, RowEnter<T, Diff, G::Timestamp>, _>(
                 updates,
                 inner,
                 None,
@@ -391,7 +391,7 @@ where
             )
         }
         SpecializedArrangementImport::RowRow(inner) => {
-            build_halfjoin::<_, RowRowImport<T, Diff, G::Timestamp>, _>(
+            build_halfjoin::<_, RowRowEnter<T, Diff, G::Timestamp>, _>(
                 updates,
                 inner,
                 None,
@@ -596,10 +596,10 @@ where
     T: Timestamp + Lattice + Columnation,
     G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
 {
-    use crate::typedefs::{RowImport, RowRowImport};
+    use crate::typedefs::{RowEnter, RowRowEnter};
     match trace {
         SpecializedArrangementImport::RowUnit(inner) => {
-            build_update_stream::<_, RowImport<T, Diff, G::Timestamp>>(
+            build_update_stream::<_, RowEnter<T, Diff, G::Timestamp>>(
                 inner,
                 None,
                 Some(vec![]),
@@ -609,7 +609,7 @@ where
             )
         }
         SpecializedArrangementImport::RowRow(inner) => {
-            build_update_stream::<_, RowRowImport<T, Diff, G::Timestamp>>(
+            build_update_stream::<_, RowRowEnter<T, Diff, G::Timestamp>>(
                 inner,
                 None,
                 None,

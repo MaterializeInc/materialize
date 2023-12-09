@@ -26,19 +26,19 @@ use mz_storage_types::errors::DataflowError;
 // Fully generic spines and agents.
 pub type KeyValSpine<K, V, T, R> = ColValSpine<K, V, T, R>;
 pub type KeyValAgent<K, V, T, R> = TraceAgent<KeyValSpine<K, V, T, R>>;
-pub type KeyValImport<K, V, T, R, TEnter> =
+pub type KeyValEnter<K, V, T, R, TEnter> =
     TraceEnter<TraceFrontier<KeyValAgent<K, V, T, R>>, TEnter>;
 
 // Fully generic key-only spines and agents
 pub type KeySpine<K, T, R> = ColKeySpine<K, T, R>;
 pub type KeyAgent<K, T, R> = TraceAgent<KeySpine<K, T, R>>;
-pub type KeyImport<K, T, R, TEnter> = TraceEnter<TraceFrontier<KeyAgent<K, T, R>>, TEnter>;
+pub type KeyEnter<K, T, R, TEnter> = TraceEnter<TraceFrontier<KeyAgent<K, T, R>>, TEnter>;
 
 // Row specialized spines and agents.
 pub type RowRowSpine<T, R> = ColValSpine<Row, Row, T, R>;
 pub type RowRowAgent<T, R> = TraceAgent<RowRowSpine<T, R>>;
 pub type RowRowArrangement<S> = Arranged<S, RowRowAgent<<S as ScopeParent>::Timestamp, Diff>>;
-pub type RowRowImport<T, R, TEnter> = TraceEnter<TraceFrontier<RowRowAgent<T, R>>, TEnter>;
+pub type RowRowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowRowAgent<T, R>>, TEnter>;
 // Row specialized spines and agents.
 pub type RowValSpine<V, T, R> = ColValSpine<Row, V, T, R>;
 pub type RowValAgent<V, T, R> = TraceAgent<RowValSpine<V, T, R>>;
@@ -48,10 +48,10 @@ pub type RowValImport<V, T, R, TEnter> = TraceEnter<TraceFrontier<RowValAgent<V,
 pub type RowSpine<T, R> = ColKeySpine<Row, T, R>;
 pub type RowAgent<T, R> = TraceAgent<RowSpine<T, R>>;
 pub type RowArrangement<S> = Arranged<S, RowAgent<<S as ScopeParent>::Timestamp, Diff>>;
-pub type RowImport<T, R, TEnter> = TraceEnter<TraceFrontier<RowAgent<T, R>>, TEnter>;
+pub type RowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowAgent<T, R>>, TEnter>;
 
 // Error specialized spines and agents.
 pub type ErrSpine<T, R> = ColKeySpine<DataflowError, T, R>;
 pub type ErrAgent<T, R> = TraceAgent<ErrSpine<T, R>>;
-pub type ErrImport<T, TEnter> = TraceEnter<TraceFrontier<ErrAgent<T, Diff>>, TEnter>;
+pub type ErrEnter<T, TEnter> = TraceEnter<TraceFrontier<ErrAgent<T, Diff>>, TEnter>;
 pub type KeyErrSpine<K, T, R> = ColValSpine<K, DataflowError, T, R>;

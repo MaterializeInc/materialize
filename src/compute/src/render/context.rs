@@ -40,7 +40,7 @@ use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinSpec;
 use crate::render::RenderTimestamp;
 use crate::typedefs::{
-    ErrAgent, ErrImport, ErrSpine, RowAgent, RowImport, RowRowAgent, RowRowImport, RowRowSpine,
+    ErrAgent, ErrEnter, ErrSpine, RowAgent, RowEnter, RowRowAgent, RowRowEnter, RowRowSpine,
     RowSpine,
 };
 
@@ -356,8 +356,8 @@ where
     T: Timestamp + Lattice + Columnation,
     <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
 {
-    RowUnit(Arranged<S, RowImport<T, Diff, <S as ScopeParent>::Timestamp>>),
-    RowRow(Arranged<S, RowRowImport<T, Diff, <S as ScopeParent>::Timestamp>>),
+    RowUnit(Arranged<S, RowEnter<T, Diff, <S as ScopeParent>::Timestamp>>),
+    RowRow(Arranged<S, RowRowEnter<T, Diff, <S as ScopeParent>::Timestamp>>),
 }
 
 impl<S: Scope, T> SpecializedArrangementImport<S, T>
@@ -425,7 +425,7 @@ where
         let mut datums = DatumVec::new();
         match self {
             SpecializedArrangementImport::RowUnit(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<RowImport<T, Diff, S::Timestamp>, _, _>(
+                CollectionBundle::<S, T>::flat_map_core::<RowEnter<T, Diff, S::Timestamp>, _, _>(
                     inner,
                     key,
                     move |k, v, t, d| {
@@ -438,7 +438,7 @@ where
                 )
             }
             SpecializedArrangementImport::RowRow(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<RowRowImport<T, Diff, S::Timestamp>, _, _>(
+                CollectionBundle::<S, T>::flat_map_core::<RowRowEnter<T, Diff, S::Timestamp>, _, _>(
                     inner,
                     key,
                     move |k, v, t, d| {
@@ -491,7 +491,7 @@ where
     Trace(
         GlobalId,
         SpecializedArrangementImport<S, T>,
-        Arranged<S, ErrImport<T, <S as ScopeParent>::Timestamp>>,
+        Arranged<S, ErrEnter<T, <S as ScopeParent>::Timestamp>>,
     ),
 }
 
