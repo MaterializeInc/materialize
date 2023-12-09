@@ -41,7 +41,7 @@ use uuid::Uuid;
 use crate::extensions::arrange::MzArrange;
 use crate::logging::{ComputeLog, EventQueue, LogVariant, PermutedRowPacker, SharedLoggingState};
 use crate::metrics::LoggingMetrics;
-use crate::typedefs::{KeyValSpine, RowRowAgent};
+use crate::typedefs::{RowRowAgent, RowRowSpine};
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;
@@ -375,7 +375,7 @@ pub(super) fn construct<A: Allocate + 'static>(
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange::<KeyValSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
+                    .mz_arrange::<RowRowSpine<_, _>>(&format!("Arrange {variant:?}"))
                     .trace;
                 traces.insert(variant, (trace, Rc::clone(&token)));
             }

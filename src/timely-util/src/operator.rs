@@ -16,7 +16,7 @@ use std::rc::Weak;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Batcher, Builder, Trace};
 use differential_dataflow::{AsCollection, Collection};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
@@ -232,9 +232,7 @@ where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice,
-        Tr: Trace
-            + for<'a> TraceReader<Key<'a> = &'a D1, Val<'a> = &'a (), Time = G::Timestamp, Diff = R>
-            + 'static,
+        Tr: Trace<KeyOwned = D1, ValOwned = (), Time = G::Timestamp, Diff = R> + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp>,
         Tr::Builder:
@@ -550,9 +548,7 @@ where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice + Ord,
-        Tr: Trace
-            + for<'a> TraceReader<Key<'a> = &'a D1, Val<'a> = &'a (), Time = G::Timestamp, Diff = R>
-            + 'static,
+        Tr: Trace<KeyOwned = D1, ValOwned = (), Time = G::Timestamp, Diff = R> + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp>,
         Tr::Builder:
@@ -588,10 +584,11 @@ where
                 data.hash(&mut h);
                 h.finish()
             });
+            use differential_dataflow::trace::cursor::MyTrait;
             // Access to `arrange_core` is OK because we specify the trace and don't hold on to it.
             #[allow(clippy::disallowed_methods)]
             self.arrange_core::<_, Tr>(exchange, name)
-                .as_collection(|k, _v| k.clone())
+                .as_collection(|k, _v| k.into_owned())
         } else {
             self
         }

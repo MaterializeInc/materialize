@@ -34,7 +34,7 @@ use crate::logging::compute::ComputeEvent;
 use crate::logging::{
     DifferentialLog, EventQueue, LogVariant, PermutedRowPacker, SharedLoggingState,
 };
-use crate::typedefs::{KeyValSpine, RowRowAgent};
+use crate::typedefs::{KeyValSpine, RowRowAgent, RowRowSpine};
 
 /// Constructs the logging dataflow for differential logs.
 ///
@@ -168,7 +168,7 @@ pub(super) fn construct<A: Allocate>(
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange::<KeyValSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
+                    .mz_arrange::<RowRowSpine<_, _>>(&format!("Arrange {variant:?}"))
                     .trace;
                 traces.insert(variant, (trace, Rc::clone(&token)));
             }

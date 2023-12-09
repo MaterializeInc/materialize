@@ -35,17 +35,17 @@ pub type KeyAgent<K, T, R> = TraceAgent<KeySpine<K, T, R>>;
 pub type KeyEnter<K, T, R, TEnter> = TraceEnter<TraceFrontier<KeyAgent<K, T, R>>, TEnter>;
 
 // Row specialized spines and agents.
-pub type RowRowSpine<T, R> = ColValSpine<Row, Row, T, R>;
+pub type RowValSpine<V, T, R> = ColValSpine<Row, V, T, R>;
+pub type RowValAgent<V, T, R> = TraceAgent<RowValSpine<V, T, R>>;
+pub type RowValArrangement<S, V> = Arranged<S, RowValAgent<V, <S as ScopeParent>::Timestamp, Diff>>;
+pub type RowValEnter<V, T, R, TEnter> = TraceEnter<TraceFrontier<RowValAgent<V, T, R>>, TEnter>;
+// Row specialized spines and agents.
+pub type RowRowSpine<T, R> = RowValSpine<Row, T, R>;
 pub type RowRowAgent<T, R> = TraceAgent<RowRowSpine<T, R>>;
 pub type RowRowArrangement<S> = Arranged<S, RowRowAgent<<S as ScopeParent>::Timestamp, Diff>>;
 pub type RowRowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowRowAgent<T, R>>, TEnter>;
 // Row specialized spines and agents.
-pub type RowValSpine<V, T, R> = ColValSpine<Row, V, T, R>;
-pub type RowValAgent<V, T, R> = TraceAgent<RowValSpine<V, T, R>>;
-pub type RowValArrangement<S, V> = Arranged<S, RowValAgent<V, <S as ScopeParent>::Timestamp, Diff>>;
-pub type RowValImport<V, T, R, TEnter> = TraceEnter<TraceFrontier<RowValAgent<V, T, R>>, TEnter>;
-// Row specialized spines and agents.
-pub type RowSpine<T, R> = ColKeySpine<Row, T, R>;
+pub type RowSpine<T, R> = RowValSpine<(), T, R>;
 pub type RowAgent<T, R> = TraceAgent<RowSpine<T, R>>;
 pub type RowArrangement<S> = Arranged<S, RowAgent<<S as ScopeParent>::Timestamp, Diff>>;
 pub type RowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowAgent<T, R>>, TEnter>;
@@ -55,3 +55,4 @@ pub type ErrSpine<T, R> = ColKeySpine<DataflowError, T, R>;
 pub type ErrAgent<T, R> = TraceAgent<ErrSpine<T, R>>;
 pub type ErrEnter<T, TEnter> = TraceEnter<TraceFrontier<ErrAgent<T, Diff>>, TEnter>;
 pub type KeyErrSpine<K, T, R> = ColValSpine<K, DataflowError, T, R>;
+pub type RowErrSpine<T, R> = RowValSpine<DataflowError, T, R>;

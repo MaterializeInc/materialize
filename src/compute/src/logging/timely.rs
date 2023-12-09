@@ -38,7 +38,7 @@ use crate::extensions::arrange::MzArrange;
 use crate::logging::compute::ComputeEvent;
 use crate::logging::PermutedRowPacker;
 use crate::logging::{EventQueue, LogVariant, SharedLoggingState, TimelyLog};
-use crate::typedefs::{KeyValSpine, RowRowAgent};
+use crate::typedefs::{KeyValSpine, RowRowAgent, RowRowSpine};
 
 /// Constructs the logging dataflow for timely logs.
 ///
@@ -303,7 +303,7 @@ pub(super) fn construct<A: Allocate>(
             let variant = LogVariant::Timely(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange::<KeyValSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
+                    .mz_arrange::<RowRowSpine<_, _>>(&format!("Arrange {variant:?}"))
                     .trace;
                 traces.insert(variant, (trace, Rc::clone(&token)));
             }

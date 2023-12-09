@@ -27,7 +27,7 @@ use timely::dataflow::operators::Filter;
 
 use crate::extensions::arrange::MzArrange;
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
-use crate::typedefs::{KeyValSpine, RowRowAgent};
+use crate::typedefs::{KeyValSpine, RowRowAgent, RowRowSpine};
 
 pub(super) type ReachabilityEvent = (
     Vec<usize>,
@@ -150,7 +150,7 @@ pub(super) fn construct<A: Allocate>(
                     });
 
                 let trace = updates
-                    .mz_arrange::<KeyValSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
+                    .mz_arrange::<RowRowSpine<_, _>>(&format!("Arrange {variant:?}"))
                     .trace;
                 result.insert(variant.clone(), (trace, Rc::clone(&token)));
             }

@@ -35,7 +35,7 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
-use crate::typedefs::{KeySpine, KeyValSpine, RowSpine};
+use crate::typedefs::{KeySpine, KeyValSpine, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<G> Context<G>
@@ -363,14 +363,15 @@ where
             .into();
         let result = partial
             .mz_arrange::<RowSpine<_, _>>("Arranged MonotonicTop1 partial [val: empty]")
-            .mz_reduce_abelian::<_, KeyValSpine<_, _, _, _>>("MonotonicTop1", {
+            .mz_reduce_abelian::<_, RowRowSpine<_, _>>("MonotonicTop1", {
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
                     output.push((accum.row.clone(), 1));
                 }
             });
         // TODO(#7331): Here we discard the arranged output.
-        (result.as_collection(|_k, v| v.clone()), errs)
+        use differential_dataflow::trace::cursor::MyTrait;
+        (result.as_collection(|_k, v| v.into_owned()), errs)
     }
 }
 

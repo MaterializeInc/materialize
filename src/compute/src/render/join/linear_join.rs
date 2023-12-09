@@ -300,11 +300,10 @@ where
             // TODO(vmarcos): We should implement further arrangement specialization here (#22104).
             // By knowing how types propagate through joins we could specialize intermediate
             // arrangements as well, either in values or eventually in keys.
-            let arranged = keyed.mz_arrange::<KeyValSpine<_, _, _, _>>("JoinStage");
+            let arranged = keyed.mz_arrange::<RowRowSpine<_, _>>("JoinStage");
             joined = JoinedFlavor::Local(SpecializedArrangement::RowRow(arranged));
         }
 
-        use crate::typedefs::KeyValSpine;
         use crate::typedefs::{
             RowAgent, RowEnter, RowRowAgent, RowRowEnter, RowRowSpine, RowSpine,
         };

@@ -22,7 +22,7 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::Timestamp;
 
 use crate::logging::compute::ComputeEvent;
-use crate::typedefs::{KeySpine, KeyValSpine};
+use crate::typedefs::{KeyAgent, KeyValAgent};
 
 /// Extension trait to arrange data.
 pub trait MzArrange
@@ -319,7 +319,7 @@ where
     }
 }
 
-impl<G, K, V, T, R> ArrangementSize for Arranged<G, TraceAgent<KeyValSpine<K, V, T, R>>>
+impl<G, K, V, T, R> ArrangementSize for Arranged<G, KeyValAgent<K, V, T, R>>
 where
     G: Scope<Timestamp = T>,
     G::Timestamp: Lattice + Ord + Columnation,
@@ -348,7 +348,7 @@ where
     }
 }
 
-impl<G, K, T, R> ArrangementSize for Arranged<G, TraceAgent<KeySpine<K, T, R>>>
+impl<G, K, T, R> ArrangementSize for Arranged<G, KeyAgent<K, T, R>>
 where
     G: Scope<Timestamp = T>,
     G::Timestamp: Lattice + Ord,
