@@ -20,7 +20,7 @@ use differential_dataflow::logging::{
     BatchEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
 };
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
@@ -34,7 +34,7 @@ use crate::logging::compute::ComputeEvent;
 use crate::logging::{
     DifferentialLog, EventQueue, LogVariant, PermutedRowPacker, SharedLoggingState,
 };
-use crate::typedefs::{KeyValAgent, KeyValSpine};
+use crate::typedefs::{KeyValSpine, RowRowAgent};
 
 /// Constructs the logging dataflow for differential logs.
 ///
@@ -49,7 +49,7 @@ pub(super) fn construct<A: Allocate>(
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<DifferentialEvent>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-) -> BTreeMap<LogVariant, (KeyValAgent<Row, Row, Timestamp, Diff>, Rc<dyn Any>)> {
+) -> BTreeMap<LogVariant, (RowRowAgent<Timestamp, Diff>, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
 

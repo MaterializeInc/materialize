@@ -17,7 +17,7 @@ use std::time::Instant;
 use differential_dataflow::lattice::{antichain_join, Lattice};
 use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::trace::TraceReader;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -27,7 +27,7 @@ use timely::progress::timestamp::Refines;
 use crate::logging::compute::{LogImportFrontiers, Logger};
 use crate::metrics::TraceMetrics;
 use crate::render::context::SpecializedArrangementImport;
-use crate::typedefs::{ErrAgent, KeyAgent, KeyValAgent};
+use crate::typedefs::{ErrAgent, RowAgent, RowRowAgent};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
@@ -111,8 +111,8 @@ impl TraceManager {
 /// arrangements.
 #[derive(Clone)]
 pub enum SpecializedTraceHandle {
-    RowUnit(KeyAgent<Row, Timestamp, Diff>),
-    RowRow(KeyValAgent<Row, Row, Timestamp, Diff>),
+    RowUnit(RowAgent<Timestamp, Diff>),
+    RowRow(RowRowAgent<Timestamp, Diff>),
 }
 
 impl SpecializedTraceHandle {

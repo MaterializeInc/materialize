@@ -19,7 +19,7 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
-use mz_repr::{Datum, Diff, Row, RowArena, SharedRow, Timestamp};
+use mz_repr::{Datum, Diff, RowArena, SharedRow, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
@@ -27,7 +27,7 @@ use timely::dataflow::operators::Filter;
 
 use crate::extensions::arrange::MzArrange;
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
-use crate::typedefs::{KeyValAgent, KeyValSpine};
+use crate::typedefs::{KeyValSpine, RowRowAgent};
 
 pub(super) type ReachabilityEvent = (
     Vec<usize>,
@@ -47,7 +47,7 @@ pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     event_queue: EventQueue<ReachabilityEvent>,
-) -> BTreeMap<LogVariant, (KeyValAgent<Row, Row, Timestamp, Diff>, Rc<dyn Any>)> {
+) -> BTreeMap<LogVariant, (RowRowAgent<Timestamp, Diff>, Rc<dyn Any>)> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_index = worker.index();
 

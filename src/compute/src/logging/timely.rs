@@ -18,7 +18,7 @@ use std::time::Duration;
 use differential_dataflow::collection::AsCollection;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use serde::{Deserialize, Serialize};
@@ -38,7 +38,7 @@ use crate::extensions::arrange::MzArrange;
 use crate::logging::compute::ComputeEvent;
 use crate::logging::PermutedRowPacker;
 use crate::logging::{EventQueue, LogVariant, SharedLoggingState, TimelyLog};
-use crate::typedefs::{KeyValAgent, KeyValSpine};
+use crate::typedefs::{KeyValSpine, RowRowAgent};
 
 /// Constructs the logging dataflow for timely logs.
 ///
@@ -53,7 +53,7 @@ pub(super) fn construct<A: Allocate>(
     config: &LoggingConfig,
     event_queue: EventQueue<TimelyEvent>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-) -> BTreeMap<LogVariant, (KeyValAgent<Row, Row, Timestamp, Diff>, Rc<dyn Any>)> {
+) -> BTreeMap<LogVariant, (RowRowAgent<Timestamp, Diff>, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
     let peers = worker.peers();
