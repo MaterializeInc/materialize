@@ -254,14 +254,14 @@ where
         match self {
             SpecializedArrangement::RowUnit(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(&**k);
+                datums_borrow.extend(k.into_datum_iter(None));
                 datums_borrow.extend(v.into_datum_iter(Some(&[])));
                 logic(&datums_borrow)
             }),
             SpecializedArrangement::RowRow(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(&**k);
-                datums_borrow.extend(&**v);
+                datums_borrow.extend(k.into_datum_iter(None));
+                datums_borrow.extend(v.into_datum_iter(None));
                 logic(&datums_borrow)
             }),
         }
@@ -290,7 +290,7 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(&**k);
+                        datums_borrow.extend(k.into_datum_iter(None));
                         datums_borrow.extend(v.into_datum_iter(Some(&[])));
                         logic(&mut datums_borrow, t, d)
                     },
@@ -303,8 +303,8 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(&**k);
-                        datums_borrow.extend(&**v);
+                        datums_borrow.extend(k.into_datum_iter(None));
+                        datums_borrow.extend(v.into_datum_iter(None));
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -397,14 +397,14 @@ where
         match self {
             SpecializedArrangementImport::RowUnit(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(&**k);
+                datums_borrow.extend(k.into_datum_iter(None));
                 datums_borrow.extend(v.into_datum_iter(Some(&[])));
                 logic(&datums_borrow)
             }),
             SpecializedArrangementImport::RowRow(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(&**k);
-                datums_borrow.extend(&**v);
+                datums_borrow.extend(k.into_datum_iter(None));
+                datums_borrow.extend(v.into_datum_iter(None));
                 logic(&datums_borrow)
             }),
         }
@@ -430,7 +430,7 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(&**k);
+                        datums_borrow.extend(k.into_datum_iter(None));
                         datums_borrow.extend(v.into_datum_iter(Some(&[])));
                         logic(&mut datums_borrow, t, d)
                     },
@@ -443,8 +443,8 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(&**k);
-                        datums_borrow.extend(&**v);
+                        datums_borrow.extend(k.into_datum_iter(None));
+                        datums_borrow.extend(v.into_datum_iter(None));
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,

@@ -649,7 +649,8 @@ where
                     // Note that in the non-positive case, this is wrong, but harmless because
                     // our other reduction will produce an error.
                     let count = usize::try_from(*w).unwrap_or(0);
-                    std::iter::repeat(v.iter().next().unwrap()).take(count)
+                    use mz_repr::fixed_length::IntoRowByTypes;
+                    std::iter::repeat(v.into_datum_iter(None).next().unwrap()).take(count)
                 });
                 let binding = SharedRow::get();
                 let mut row_builder = binding.borrow_mut();
