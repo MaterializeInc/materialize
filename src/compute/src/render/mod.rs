@@ -139,7 +139,7 @@ use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
-use crate::typedefs::{ErrSpine, RowKeySpine};
+use crate::typedefs::{ErrSpine, KeySpine};
 
 pub mod context;
 mod errors;
@@ -675,7 +675,7 @@ where
                 let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation");
+                let mut oks = oks.consolidate_named::<KeySpine<_, _, _>>("LetRecConsolidation");
                 if let Some(token) = &self.shutdown_token.get_inner() {
                     oks = oks.with_token(Weak::clone(token));
                 }
@@ -711,8 +711,8 @@ where
                 // multiplicities of errors, but .. this seems to be the better call.
                 let err: KeyCollection<_, _, _> = err.into();
                 let mut errs = err
-                    .mz_arrange::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
-                    .mz_reduce_abelian::<_, ErrSpine<_, _, _>>(
+                    .mz_arrange::<ErrSpine<_, _>>("Arrange recursive err")
+                    .mz_reduce_abelian::<_, ErrSpine<_, _>>(
                         "Distinct recursive err",
                         move |_k, _s, t| t.push(((), 1)),
                     )
@@ -921,7 +921,7 @@ where
                 }
                 let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
                 if consolidate_output {
-                    oks = oks.consolidate_named::<RowKeySpine<_, _, _>>("UnionConsolidation")
+                    oks = oks.consolidate_named::<KeySpine<_, _, _>>("UnionConsolidation")
                 }
                 let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)

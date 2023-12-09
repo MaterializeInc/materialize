@@ -41,33 +41,23 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinSpec;
 use crate::render::RenderTimestamp;
-use crate::typedefs::{
-    ErrSpine, RowKeySpine, RowSpine, TraceErrHandle, TraceKeyHandle, TraceRowHandle,
-};
+use crate::typedefs::{ErrAgent, ErrSpine, KeyAgent, KeySpine, KeyValAgent, KeyValSpine};
 
 // Local type definition to avoid the horror in signatures.
 pub(crate) type KeyValArrangement<S, K, V> =
-    Arranged<S, TraceRowHandle<K, V, <S as ScopeParent>::Timestamp, Diff>>;
+    Arranged<S, KeyValAgent<K, V, <S as ScopeParent>::Timestamp, Diff>>;
 pub(crate) type Arrangement<S, V> = KeyValArrangement<S, V, V>;
 pub(crate) type KeyArrangement<S, K> =
-    Arranged<S, TraceKeyHandle<K, <S as ScopeParent>::Timestamp, Diff>>;
-pub(crate) type ErrArrangement<S> =
-    Arranged<S, TraceErrHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
+    Arranged<S, KeyAgent<K, <S as ScopeParent>::Timestamp, Diff>>;
+pub(crate) type ErrArrangement<S> = Arranged<S, ErrAgent<<S as ScopeParent>::Timestamp, Diff>>;
 pub(crate) type KeyValArrangementImport<S, K, V, T> = Arranged<
     S,
-    TraceEnter<TraceFrontier<TraceRowHandle<K, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
+    TraceEnter<TraceFrontier<KeyValAgent<K, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
 >;
-pub(crate) type KeyArrangementImport<S, K, T> = Arranged<
-    S,
-    TraceEnter<TraceFrontier<TraceKeyHandle<K, T, Diff>>, <S as ScopeParent>::Timestamp>,
->;
-pub(crate) type ErrArrangementImport<S, T> = Arranged<
-    S,
-    TraceEnter<
-        TraceFrontier<TraceErrHandle<DataflowError, T, Diff>>,
-        <S as ScopeParent>::Timestamp,
-    >,
->;
+pub(crate) type KeyArrangementImport<S, K, T> =
+    Arranged<S, TraceEnter<TraceFrontier<KeyAgent<K, T, Diff>>, <S as ScopeParent>::Timestamp>>;
+pub(crate) type ErrArrangementImport<S, T> =
+    Arranged<S, TraceEnter<TraceFrontier<ErrAgent<T, Diff>>, <S as ScopeParent>::Timestamp>>;
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -310,7 +300,7 @@ where
         let mut datums = DatumVec::new();
         match self {
             SpecializedArrangement::RowUnit(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowKeySpine<Row, _, _>>, _, _>(
+                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<KeySpine<Row, _, _>>, _, _>(
                     inner,
                     key,
                     move |k, v, t, d| {
@@ -322,19 +312,21 @@ where
                     refuel,
                 )
             }
-            SpecializedArrangement::RowRow(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowSpine<Row, Row, _, _>>, _, _>(
-                    inner,
-                    key,
-                    move |k, v, t, d| {
-                        let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(&**k);
-                        datums_borrow.extend(&**v);
-                        logic(&mut datums_borrow, t, d)
-                    },
-                    refuel,
-                )
-            }
+            SpecializedArrangement::RowRow(inner) => CollectionBundle::<S, T>::flat_map_core::<
+                TraceAgent<KeyValSpine<Row, Row, _, _>>,
+                _,
+                _,
+            >(
+                inner,
+                key,
+                move |k, v, t, d| {
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(&**k);
+                    datums_borrow.extend(&**v);
+                    logic(&mut datums_borrow, t, d)
+                },
+                refuel,
+            ),
         }
     }
 }
@@ -451,7 +443,7 @@ where
         match self {
             SpecializedArrangementImport::RowUnit(inner) => {
                 CollectionBundle::<S, T>::flat_map_core::<
-                    TraceEnter<TraceFrontier<TraceKeyHandle<Row, T, Diff>>, S::Timestamp>,
+                    TraceEnter<TraceFrontier<KeyAgent<Row, T, Diff>>, S::Timestamp>,
                     _,
                     _,
                 >(
@@ -468,7 +460,7 @@ where
             }
             SpecializedArrangementImport::RowRow(inner) => {
                 CollectionBundle::<S, T>::flat_map_core::<
-                    TraceEnter<TraceFrontier<TraceRowHandle<Row, Row, T, Diff>>, S::Timestamp>,
+                    TraceEnter<TraceFrontier<KeyValAgent<Row, Row, T, Diff>>, S::Timestamp>,
                     _,
                     _,
                 >(
@@ -1057,7 +1049,7 @@ where
                     enable_specialized_arrangements,
                 );
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
-                let errs = errs.mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
+                let errs = errs.mz_arrange::<ErrSpine<_, _>>(&format!("{}-errors", name));
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }
@@ -1093,7 +1085,7 @@ where
                         ),
                     );
                     let name = &format!("{} [val: empty]", name);
-                    let oks = oks.mz_arrange::<RowKeySpine<Row, _, _>>(name);
+                    let oks = oks.mz_arrange::<KeySpine<Row, _, _>>(name);
                     return (SpecializedArrangement::RowUnit(oks), errs);
                 }
             }
@@ -1104,7 +1096,7 @@ where
             "FormArrangementKey",
             specialized_arrangement_key(key.clone(), thinning.clone(), None, None),
         );
-        let oks = oks.mz_arrange::<RowSpine<Row, Row, _, _>>(name);
+        let oks = oks.mz_arrange::<KeyValSpine<Row, Row, _, _>>(name);
         (SpecializedArrangement::RowRow(oks), errs)
     }
 }

@@ -20,7 +20,7 @@ use differential_dataflow::logging::{
     BatchEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
 };
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, Timestamp};
+use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
@@ -34,7 +34,7 @@ use crate::logging::compute::ComputeEvent;
 use crate::logging::{
     DifferentialLog, EventQueue, LogVariant, PermutedRowPacker, SharedLoggingState,
 };
-use crate::typedefs::{KeysValsHandle, RowSpine};
+use crate::typedefs::{KeyValAgent, KeyValSpine};
 
 /// Constructs the logging dataflow for differential logs.
 ///
@@ -49,7 +49,7 @@ pub(super) fn construct<A: Allocate>(
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<DifferentialEvent>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
+) -> BTreeMap<LogVariant, (KeyValAgent<Row, Row, Timestamp, Diff>, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
 
@@ -117,7 +117,10 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(DifferentialLog::ArrangementBatches);
         let arrangement_batches = batches
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential batches")
+            .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
+                Pipeline,
+                "PreArrange Differential batches",
+            )
             .as_collection(move |op, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
@@ -127,7 +130,10 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(DifferentialLog::ArrangementRecords);
         let arrangement_records = records
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential records")
+            .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
+                Pipeline,
+                "PreArrange Differential records",
+            )
             .as_collection(move |op, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
@@ -138,7 +144,10 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(DifferentialLog::Sharing);
         let sharing = sharing
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential sharing")
+            .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
+                Pipeline,
+                "PreArrange Differential sharing",
+            )
             .as_collection(move |op, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
@@ -159,7 +168,7 @@ pub(super) fn construct<A: Allocate>(
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
+                    .mz_arrange::<KeyValSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
                     .trace;
                 traces.insert(variant, (trace, Rc::clone(&token)));
             }

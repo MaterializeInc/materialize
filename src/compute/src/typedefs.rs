@@ -14,15 +14,18 @@
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord_neu::{ColKeySpine, ColValSpine};
 
-use mz_repr::{Diff, Row, Timestamp};
 use mz_storage_types::errors::DataflowError;
 
-pub type RowSpine<K, V, T, R> = ColValSpine<K, V, T, R>;
-pub type RowKeySpine<K, T, R> = ColKeySpine<K, T, R>;
-pub type ErrSpine<K, T, R> = ColKeySpine<K, T, R>;
-pub type ErrValSpine<K, T, R> = ColValSpine<K, DataflowError, T, R>;
-pub type TraceRowHandle<K, V, T, R> = TraceAgent<RowSpine<K, V, T, R>>;
-pub type TraceKeyHandle<K, T, R> = TraceAgent<RowKeySpine<K, T, R>>;
-pub type TraceErrHandle<K, T, R> = TraceAgent<ErrSpine<K, T, R>>;
-pub type KeysValsHandle = TraceRowHandle<Row, Row, Timestamp, Diff>;
-pub type ErrsHandle = TraceErrHandle<DataflowError, Timestamp, Diff>;
+// Spines are data structures that collect and maintain updates.
+// Agents are wrappers around spines that allow shared read access.
+
+// Fully generic spines and agents.
+pub type KeyValSpine<K, V, T, R> = ColValSpine<K, V, T, R>;
+pub type KeyValAgent<K, V, T, R> = TraceAgent<KeyValSpine<K, V, T, R>>;
+pub type KeySpine<K, T, R> = ColKeySpine<K, T, R>;
+pub type KeyAgent<K, T, R> = TraceAgent<KeySpine<K, T, R>>;
+
+// Error specialized spines and agents.
+pub type ErrSpine<T, R> = ColKeySpine<DataflowError, T, R>;
+pub type ErrAgent<T, R> = TraceAgent<ErrSpine<T, R>>;
+pub type KeyErrSpine<K, T, R> = ColValSpine<K, DataflowError, T, R>;

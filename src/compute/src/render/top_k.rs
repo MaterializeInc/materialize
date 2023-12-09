@@ -35,7 +35,7 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
-use crate::typedefs::{RowKeySpine, RowSpine};
+use crate::typedefs::{KeySpine, KeyValSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<G> Context<G>
@@ -91,7 +91,7 @@ where
                             };
                             (group_row, row)
                         })
-                        .consolidate_named_if::<RowKeySpine<_, _, _>>(
+                        .consolidate_named_if::<KeySpine<_, _, _>>(
                             must_consolidate,
                             "Consolidated MonotonicTopK input",
                         );
@@ -301,7 +301,7 @@ where
         (
             oks.negate()
                 .concat(&input)
-                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated TopK"),
+                .consolidate_named::<KeySpine<_, _, _>>("Consolidated TopK"),
             errs,
         )
     }
@@ -335,7 +335,7 @@ where
                     (group_key, row)
                 }
             })
-            .consolidate_named_if::<RowKeySpine<_, _, _>>(
+            .consolidate_named_if::<KeySpine<_, _, _>>(
                 must_consolidate,
                 "Consolidated MonotonicTop1 input",
             );
@@ -362,8 +362,8 @@ where
             })
             .into();
         let result = partial
-            .mz_arrange::<RowKeySpine<Row, _, _>>("Arranged MonotonicTop1 partial [val: empty]")
-            .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("MonotonicTop1", {
+            .mz_arrange::<KeySpine<Row, _, _>>("Arranged MonotonicTop1 partial [val: empty]")
+            .mz_reduce_abelian::<_, KeyValSpine<_, _, _, _>>("MonotonicTop1", {
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
                     output.push((accum.row.clone(), 1));
@@ -391,8 +391,8 @@ where
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_internal.mz_expected_group_size_advice.
     input
-        .mz_arrange::<RowSpine<(Row, u64), _, _, _>>("Arranged TopK input")
-        .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("Reduced TopK input", {
+        .mz_arrange::<KeyValSpine<(Row, u64), _, _, _>>("Arranged TopK input")
+        .mz_reduce_abelian::<_, KeyValSpine<_, _, _, _>>("Reduced TopK input", {
             move |_key, source, target: &mut Vec<(R, Diff)>| {
                 if let Some(err) = R::into_error() {
                     for (row, diff) in source.iter() {

@@ -27,7 +27,7 @@ use timely::progress::timestamp::Refines;
 use crate::logging::compute::{LogImportFrontiers, Logger};
 use crate::metrics::TraceMetrics;
 use crate::render::context::SpecializedArrangementImport;
-use crate::typedefs::{ErrsHandle, TraceKeyHandle, TraceRowHandle};
+use crate::typedefs::{ErrAgent, KeyAgent, KeyValAgent};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
@@ -111,8 +111,8 @@ impl TraceManager {
 /// arrangements.
 #[derive(Clone)]
 pub enum SpecializedTraceHandle {
-    RowUnit(TraceKeyHandle<Row, Timestamp, Diff>),
-    RowRow(TraceRowHandle<Row, Row, Timestamp, Diff>),
+    RowUnit(KeyAgent<Row, Timestamp, Diff>),
+    RowRow(KeyValAgent<Row, Row, Timestamp, Diff>),
 }
 
 impl SpecializedTraceHandle {
@@ -204,13 +204,13 @@ impl SpecializedTraceHandle {
 #[derive(Clone)]
 pub struct TraceBundle {
     oks: SpecializedTraceHandle,
-    errs: ErrsHandle,
+    errs: ErrAgent<Timestamp, Diff>,
     to_drop: Option<Rc<dyn Any>>,
 }
 
 impl TraceBundle {
     /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
-    pub fn new(oks: SpecializedTraceHandle, errs: ErrsHandle) -> TraceBundle {
+    pub fn new(oks: SpecializedTraceHandle, errs: ErrAgent<Timestamp, Diff>) -> TraceBundle {
         TraceBundle {
             oks,
             errs,
@@ -235,7 +235,7 @@ impl TraceBundle {
     }
 
     /// Returns a mutable reference to the `errs` trace.
-    pub fn errs_mut(&mut self) -> &mut ErrsHandle {
+    pub fn errs_mut(&mut self) -> &mut ErrAgent<Timestamp, Diff> {
         &mut self.errs
     }
 

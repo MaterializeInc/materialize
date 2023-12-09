@@ -955,8 +955,8 @@ impl IndexPeek {
         match oks {
             SpecializedTraceHandle::RowUnit(oks_handle) => {
                 // Explicit types required due to Rust type inference limitations.
-                use crate::typedefs::RowKeySpine;
-                Self::collect_ok_finished_data::<RowKeySpine<Row, _, _>>(
+                use crate::typedefs::KeySpine;
+                Self::collect_ok_finished_data::<KeySpine<Row, _, _>>(
                     peek,
                     oks_handle,
                     None,
@@ -966,8 +966,8 @@ impl IndexPeek {
             }
             SpecializedTraceHandle::RowRow(oks_handle) => {
                 // Explicit types required due to Rust type inference limitations.
-                use crate::typedefs::RowSpine;
-                Self::collect_ok_finished_data::<RowSpine<Row, Row, _, _>>(
+                use crate::typedefs::KeyValSpine;
+                Self::collect_ok_finished_data::<KeyValSpine<Row, Row, _, _>>(
                     peek,
                     oks_handle,
                     None,
