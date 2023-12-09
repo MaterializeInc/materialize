@@ -164,6 +164,7 @@ Groups
 Having
 Header
 Headers
+History
 Hold
 Host
 Hour
@@ -309,6 +310,7 @@ Replication
 Reset
 Respect
 Restrict
+Retain
 Return
 Returning
 Revoke

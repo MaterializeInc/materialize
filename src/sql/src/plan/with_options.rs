@@ -446,6 +446,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                 },
                 V::name()
             ),
+            WithOptionValue::RetainHistoryFor(v) => V::try_from_value(v),
         }
     }
     fn name() -> String {

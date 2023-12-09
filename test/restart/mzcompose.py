@@ -6,7 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+import json
 from textwrap import dedent
+import time
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -15,6 +17,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.ui import UIError
 
 testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
 
@@ -27,6 +30,46 @@ SERVICES = [
     testdrive_no_reset,
     Cockroach(setup_materialize=True),
 ]
+
+
+def workflow_retain_history(c: Composition) -> None:
+    def check_retain_history():
+        start = time.time()
+        while True:
+            ts = c.sql_query("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM retain_mv")
+            ts = ts[0][0]
+            ts = json.loads(ts)
+            source = ts["sources"][0]
+            since = source["read_frontier"][0]
+            upper = source["write_frontier"][0]
+            if upper - since > 2000:
+                break
+            end = time.time()
+            # seconds since start
+            elapsed = end - start
+            if elapsed > 10:
+                raise UIError("timeout hit while waiting for retain history")
+            time.sleep(0.5)
+
+    c.up("materialized")
+    c.sql(
+        "ALTER SYSTEM SET enable_logical_compaction_window = true",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql("CREATE TABLE retain_t (i INT)")
+    c.sql("INSERT INTO retain_t VALUES (1)")
+    c.sql(
+        "CREATE MATERIALIZED VIEW retain_mv WITH (RETAIN HISTORY = FOR '2s') AS SELECT * FROM retain_t"
+    )
+    check_retain_history()
+
+    # Ensure that RETAIN HISTORY is respected on boot.
+    c.kill("materialized")
+    c.up("materialized")
+    check_retain_history()
+
+    c.kill("materialized")
 
 
 def workflow_github_8021(c: Composition) -> None:
