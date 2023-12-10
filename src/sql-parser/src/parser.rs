@@ -2337,48 +2337,51 @@ impl<'a> Parser<'a> {
         Ok(KafkaBrokerAwsPrivatelinkOption { name, value })
     }
 
-    fn parse_kafka_connection_reference(&mut self) -> Result<KafkaConnection<Raw>, ParserError> {
-        let connection = self.parse_raw_name()?;
-        let options = if self.consume_token(&Token::LParen) {
-            let options = self.parse_comma_separated(Parser::parse_kafka_config_option)?;
-            self.expect_token(&Token::RParen)?;
-            options
-        } else {
-            vec![]
-        };
-
-        Ok(KafkaConnection {
-            connection,
-            options,
-        })
-    }
-
-    fn parse_kafka_config_option(&mut self) -> Result<KafkaConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[COMPRESSION, GROUP, START, TOPIC])? {
-            COMPRESSION => {
-                self.expect_keyword(TYPE)?;
-                KafkaConfigOptionName::CompressionType
-            }
+    fn parse_kafka_source_config_option(
+        &mut self,
+    ) -> Result<KafkaSourceConfigOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[GROUP, START, TOPIC])? {
             GROUP => {
                 self.expect_keywords(&[ID, PREFIX])?;
-                KafkaConfigOptionName::GroupIdPrefix
+                KafkaSourceConfigOptionName::GroupIdPrefix
             }
             START => match self.expect_one_of_keywords(&[OFFSET, TIMESTAMP])? {
-                OFFSET => KafkaConfigOptionName::StartOffset,
-                TIMESTAMP => KafkaConfigOptionName::StartTimestamp,
+                OFFSET => KafkaSourceConfigOptionName::StartOffset,
+                TIMESTAMP => KafkaSourceConfigOptionName::StartTimestamp,
                 _ => unreachable!(),
             },
             TOPIC => {
                 if self.parse_keyword(METADATA) {
                     self.expect_keywords(&[REFRESH, INTERVAL])?;
-                    KafkaConfigOptionName::TopicMetadataRefreshInterval
+                    KafkaSourceConfigOptionName::TopicMetadataRefreshInterval
                 } else {
-                    KafkaConfigOptionName::Topic
+                    KafkaSourceConfigOptionName::Topic
                 }
             }
             _ => unreachable!(),
         };
-        Ok(KafkaConfigOption {
+        Ok(KafkaSourceConfigOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
+    }
+
+    fn parse_kafka_sink_config_option(
+        &mut self,
+    ) -> Result<KafkaSinkConfigOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[COMPRESSION, GROUP, TOPIC])? {
+            COMPRESSION => {
+                self.expect_keyword(TYPE)?;
+                KafkaSinkConfigOptionName::CompressionType
+            }
+            GROUP => {
+                self.expect_keywords(&[ID, PREFIX])?;
+                KafkaSinkConfigOptionName::GroupIdPrefix
+            }
+            TOPIC => KafkaSinkConfigOptionName::Topic,
+            _ => unreachable!(),
+        };
+        Ok(KafkaSinkConfigOption {
             name,
             value: self.parse_optional_option_value()?,
         })
@@ -2981,22 +2984,21 @@ impl<'a> Parser<'a> {
             }
             KAFKA => {
                 self.expect_keyword(CONNECTION)?;
-                let connection = self.parse_kafka_connection_reference()?;
-                // one token of lookahead:
-                // * `KEY (` means we're parsing a list of columns for the key
-                // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
-                let key = if self.peek_keyword(KEY)
-                    && self.peek_nth_token(1) != Some(Token::Keyword(FORMAT))
-                {
-                    let _ = self.expect_keyword(KEY);
-                    Some(self.parse_parenthesized_column_list(Mandatory)?)
+                let connection = self.parse_raw_name()?;
+
+                let options = if self.consume_token(&Token::LParen) {
+                    let options =
+                        self.parse_comma_separated(Parser::parse_kafka_source_config_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
                 } else {
-                    None
+                    vec![]
                 };
-                Ok(CreateSourceConnection::Kafka(KafkaSourceConnection {
+
+                Ok(CreateSourceConnection::Kafka {
                     connection,
-                    key,
-                }))
+                    options,
+                })
             }
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
@@ -3091,7 +3093,15 @@ impl<'a> Parser<'a> {
         self.expect_keyword(KAFKA)?;
         self.expect_keyword(CONNECTION)?;
 
-        let connection = self.parse_kafka_connection_reference()?;
+        let connection = self.parse_raw_name()?;
+
+        let options = if self.consume_token(&Token::LParen) {
+            let options = self.parse_comma_separated(Parser::parse_kafka_sink_config_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
 
         // one token of lookahead:
         // * `KEY (` means we're parsing a list of columns for the key
@@ -3114,7 +3124,12 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-        Ok(CreateSinkConnection::Kafka { connection, key })
+
+        Ok(CreateSinkConnection::Kafka {
+            connection,
+            options,
+            key,
+        })
     }
 
     fn parse_create_view(&mut self) -> Result<Statement<Raw>, ParserError> {

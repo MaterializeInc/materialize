@@ -38,9 +38,9 @@ use mz_sql_parser::ast::{
     AlterSystemResetStatement, AlterSystemSetStatement, CommentObjectType, CommentStatement,
     CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
-    MaterializedViewOptionName, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    DocOnIdentifier, DocOnSchema, DropOwnedStatement, KafkaSinkConfigOption,
+    KafkaSinkConfigOptionName, MaterializedViewOption, MaterializedViewOptionName, SetRoleVar,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
@@ -75,7 +75,7 @@ use crate::ast::{
     CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
     DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KafkaConfigOptionName, KeyConstraint, LoadGeneratorOption,
+    IndexOptionName, KafkaSourceConfigOptionName, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
     ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
     SourceIncludeMetadata, Statement, TableConstraint, UnresolvedDatabaseName, ViewDefinition,
@@ -84,7 +84,7 @@ use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
     CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SystemObjectType,
 };
-use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
+use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
     Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
     RawDatabaseSpecifier, ResolvedClusterName, ResolvedColumnName, ResolvedDataType,
@@ -602,14 +602,10 @@ pub fn plan_create_source(
     }
 
     let (mut external_connection, encoding, available_subsources) = match connection {
-        CreateSourceConnection::Kafka(mz_sql_parser::ast::KafkaSourceConnection {
-            connection:
-                mz_sql_parser::ast::KafkaConnection {
-                    connection: connection_name,
-                    options,
-                },
-            key: _,
-        }) => {
+        CreateSourceConnection::Kafka {
+            connection: connection_name,
+            options,
+        } => {
             let connection_item = scx.get_item_by_resolved_name(connection_name)?;
             if !matches!(connection_item.connection()?, Connection::Kafka(_)) {
                 sql_bail!(
@@ -620,10 +616,10 @@ pub fn plan_create_source(
 
             // Starting offsets are allowed out with feature flags mode, as they are a simple,
             // useful way to specify where to start reading a topic.
-            const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[
-                KafkaConfigOptionName::StartOffset,
-                KafkaConfigOptionName::StartTimestamp,
-                KafkaConfigOptionName::Topic,
+            const ALLOWED_OPTIONS: &[KafkaSourceConfigOptionName] = &[
+                KafkaSourceConfigOptionName::StartOffset,
+                KafkaSourceConfigOptionName::StartTimestamp,
+                KafkaSourceConfigOptionName::Topic,
             ];
 
             if let Some(op) = options
@@ -637,34 +633,24 @@ pub fn plan_create_source(
                 )?;
             }
 
-            kafka_util::validate_options_for_context(
-                options,
-                kafka_util::KafkaOptionCheckContext::Source,
-            )?;
+            let KafkaSourceConfigOptionExtracted {
+                group_id_prefix,
+                topic,
+                topic_metadata_refresh_interval,
+                start_timestamp: _, // purified into `start_offset`
+                start_offset,
+                seen: _,
+            }: KafkaSourceConfigOptionExtracted = options.clone().try_into()?;
 
-            let extracted_options: KafkaConfigOptionExtracted = options.clone().try_into()?;
-
-            let optional_start_offset =
-                Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
-
-            let topic = extracted_options
-                .topic
-                .expect("validated exists during purification");
-            let group_id_prefix = extracted_options.group_id_prefix;
+            let topic = topic.expect("validated exists during purification");
 
             let mut start_offsets = BTreeMap::new();
-            match optional_start_offset {
-                None => (),
-                Some(KafkaStartOffsetType::StartOffset(offsets)) => {
-                    for (part, offset) in offsets.iter().enumerate() {
-                        if *offset < 0 {
-                            sql_bail!("START OFFSET must be a nonnegative integer");
-                        }
-                        start_offsets.insert(i32::try_from(part)?, *offset);
+            if let Some(offsets) = start_offset {
+                for (part, offset) in offsets.iter().enumerate() {
+                    if *offset < 0 {
+                        sql_bail!("START OFFSET must be a nonnegative integer");
                     }
-                }
-                Some(KafkaStartOffsetType::StartTimestamp(_)) => {
-                    unreachable!("time offsets should be converted in purification")
+                    start_offsets.insert(i32::try_from(part)?, *offset);
                 }
             }
 
@@ -672,7 +658,6 @@ pub fn plan_create_source(
                 sql_bail!("START OFFSET is not supported with ENVELOPE {}", envelope)
             }
 
-            let topic_metadata_refresh_interval = extracted_options.topic_metadata_refresh_interval;
             if topic_metadata_refresh_interval > Duration::from_secs(60 * 60) {
                 // This is a librdkafka-enforced restriction that, if violated,
                 // would result in a runtime error for the source.
@@ -1607,7 +1592,7 @@ fn get_encoding(
         }
     };
 
-    let force_nullable_keys = matches!(connection, Some(CreateSourceConnection::Kafka(_)))
+    let force_nullable_keys = matches!(connection, Some(CreateSourceConnection::Kafka { .. }))
         && matches!(envelope, Envelope::None);
     let encoding = encoding.into_source_data_encoding(force_nullable_keys);
 
@@ -2347,9 +2332,14 @@ pub fn plan_create_sink(
     }
 
     let connection_builder = match connection {
-        CreateSinkConnection::Kafka { connection, .. } => kafka_sink_builder(
+        CreateSinkConnection::Kafka {
+            connection,
+            options,
+            ..
+        } => kafka_sink_builder(
             scx,
             connection,
+            options,
             format,
             relation_key_indices,
             key_desc_and_indices,
@@ -2499,10 +2489,8 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
 
 fn kafka_sink_builder(
     scx: &StatementContext,
-    mz_sql_parser::ast::KafkaConnection {
-        connection,
-        options,
-    }: mz_sql_parser::ast::KafkaConnection<Aug>,
+    connection: ResolvedItemName,
+    options: Vec<KafkaSinkConfigOption<Aug>>,
     format: Option<Format<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
@@ -2523,9 +2511,9 @@ fn kafka_sink_builder(
 
     // Starting offsets are allowed with feature flags mode, as they are a simple,
     // useful way to specify where to start reading a topic.
-    const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[
-        KafkaConfigOptionName::Topic,
-        KafkaConfigOptionName::CompressionType,
+    const ALLOWED_OPTIONS: &[KafkaSinkConfigOptionName] = &[
+        KafkaSinkConfigOptionName::Topic,
+        KafkaSinkConfigOptionName::CompressionType,
     ];
 
     if let Some(op) = options
@@ -2539,15 +2527,13 @@ fn kafka_sink_builder(
         )?;
     }
 
-    kafka_util::validate_options_for_context(&options, kafka_util::KafkaOptionCheckContext::Sink)?;
-
-    let extracted_options: KafkaConfigOptionExtracted = options.try_into()?;
-
-    let KafkaConfigOptionExtracted {
+    let KafkaSinkConfigOptionExtracted {
         topic,
         compression_type,
-        ..
-    } = extracted_options;
+        // TODO: plumb group ID through to sink.
+        group_id_prefix: _,
+        seen: _,
+    }: KafkaSinkConfigOptionExtracted = options.try_into()?;
 
     let topic_name = topic.ok_or_else(|| sql_err!("KAFKA CONNECTION must specify TOPIC"))?;
 

@@ -819,8 +819,7 @@ impl<T: AstInfo> AstDisplay for CreateConnectionOption<T> {
 impl_display_t!(CreateConnectionOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum KafkaConfigOptionName {
-    CompressionType,
+pub enum KafkaSourceConfigOptionName {
     GroupIdPrefix,
     Topic,
     TopicMetadataRefreshInterval,
@@ -828,30 +827,28 @@ pub enum KafkaConfigOptionName {
     StartOffset,
 }
 
-impl AstDisplay for KafkaConfigOptionName {
+impl AstDisplay for KafkaSourceConfigOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            KafkaConfigOptionName::CompressionType => "COMPRESSION TYPE",
-            KafkaConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
-            KafkaConfigOptionName::Topic => "TOPIC",
-            KafkaConfigOptionName::TopicMetadataRefreshInterval => {
+            KafkaSourceConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
+            KafkaSourceConfigOptionName::Topic => "TOPIC",
+            KafkaSourceConfigOptionName::TopicMetadataRefreshInterval => {
                 "TOPIC METADATA REFRESH INTERVAL"
             }
-            KafkaConfigOptionName::StartOffset => "START OFFSET",
-            KafkaConfigOptionName::StartTimestamp => "START TIMESTAMP",
+            KafkaSourceConfigOptionName::StartOffset => "START OFFSET",
+            KafkaSourceConfigOptionName::StartTimestamp => "START TIMESTAMP",
         })
     }
 }
-impl_display!(KafkaConfigOptionName);
+impl_display!(KafkaSourceConfigOptionName);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// An option in a `{FROM|INTO} CONNECTION ...` statement.
-pub struct KafkaConfigOption<T: AstInfo> {
-    pub name: KafkaConfigOptionName,
+pub struct KafkaSourceConfigOption<T: AstInfo> {
+    pub name: KafkaSourceConfigOptionName,
     pub value: Option<WithOptionValue<T>>,
 }
 
-impl<T: AstInfo> AstDisplay for KafkaConfigOption<T> {
+impl<T: AstInfo> AstDisplay for KafkaSourceConfigOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
         if let Some(v) = &self.value {
@@ -860,32 +857,42 @@ impl<T: AstInfo> AstDisplay for KafkaConfigOption<T> {
         }
     }
 }
-impl_display_t!(KafkaConfigOption);
+impl_display_t!(KafkaSourceConfigOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KafkaConnection<T: AstInfo> {
-    pub connection: T::ItemName,
-    pub options: Vec<KafkaConfigOption<T>>,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum KafkaSinkConfigOptionName {
+    CompressionType,
+    GroupIdPrefix,
+    Topic,
 }
 
-impl<T: AstInfo> AstDisplay for KafkaConnection<T> {
+impl AstDisplay for KafkaSinkConfigOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("CONNECTION ");
-        f.write_node(&self.connection);
-        if !self.options.is_empty() {
-            f.write_str(" (");
-            f.write_node(&display::comma_separated(&self.options));
-            f.write_str(")");
+        f.write_str(match self {
+            KafkaSinkConfigOptionName::CompressionType => "COMPRESSION TYPE",
+            KafkaSinkConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
+            KafkaSinkConfigOptionName::Topic => "TOPIC",
+        })
+    }
+}
+impl_display!(KafkaSinkConfigOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KafkaSinkConfigOption<T: AstInfo> {
+    pub name: KafkaSinkConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaSinkConfigOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
         }
     }
 }
-impl_display_t!(KafkaConnection);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KafkaSourceConnection<T: AstInfo> {
-    pub connection: KafkaConnection<T>,
-    pub key: Option<Vec<Ident>>,
-}
+impl_display_t!(KafkaSinkConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PgConfigOptionName {
@@ -928,7 +935,10 @@ impl_display_t!(PgConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceConnection<T: AstInfo> {
-    Kafka(KafkaSourceConnection<T>),
+    Kafka {
+        connection: T::ItemName,
+        options: Vec<KafkaSourceConfigOption<T>>,
+    },
     Postgres {
         /// The postgres connection.
         connection: T::ItemName,
@@ -946,12 +956,15 @@ pub enum CreateSourceConnection<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceConnection::Kafka(KafkaSourceConnection { connection, key }) => {
-                f.write_str("KAFKA ");
+            CreateSourceConnection::Kafka {
+                connection,
+                options,
+            } => {
+                f.write_str("KAFKA CONNECTION ");
                 f.write_node(connection);
-                if let Some(key) = key.as_ref() {
-                    f.write_str(" KEY (");
-                    f.write_node(&display::comma_separated(key));
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
                     f.write_str(")");
                 }
             }
@@ -1048,7 +1061,8 @@ impl_display_t!(LoadGeneratorOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSinkConnection<T: AstInfo> {
     Kafka {
-        connection: KafkaConnection<T>,
+        connection: T::ItemName,
+        options: Vec<KafkaSinkConfigOption<T>>,
         key: Option<KafkaSinkKey>,
     },
 }
@@ -1056,9 +1070,18 @@ pub enum CreateSinkConnection<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSinkConnection::Kafka { connection, key } => {
-                f.write_str("KAFKA ");
+            CreateSinkConnection::Kafka {
+                connection,
+                options,
+                key,
+            } => {
+                f.write_str("KAFKA CONNECTION ");
                 f.write_node(connection);
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
+                }
                 if let Some(key) = key.as_ref() {
                     f.write_node(key);
                 }

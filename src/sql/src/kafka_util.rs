@@ -11,13 +11,15 @@
 
 use std::sync::Arc;
 
-use anyhow::bail;
 use mz_kafka_util::client::{
     DEFAULT_FETCH_METADATA_TIMEOUT, DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL,
 };
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
+use mz_sql_parser::ast::{
+    KafkaSinkConfigOption, KafkaSinkConfigOptionName, KafkaSourceConfigOption,
+    KafkaSourceConfigOptionName,
+};
 use mz_storage_types::sinks::KafkaSinkCompressionType;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -29,51 +31,8 @@ use crate::normalize::generate_extracted_config;
 use crate::plan::with_options::{ImpliedValue, TryFromValue};
 use crate::plan::PlanError;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum KafkaOptionCheckContext {
-    Source,
-    Sink,
-}
-
-/// Verifies that [`KafkaConfigOption`]s are only used in the appropriate contexts
-pub fn validate_options_for_context<T: AstInfo>(
-    options: &[KafkaConfigOption<T>],
-    context: KafkaOptionCheckContext,
-) -> Result<(), anyhow::Error> {
-    use KafkaConfigOptionName::*;
-    use KafkaOptionCheckContext::*;
-
-    for KafkaConfigOption { name, .. } in options {
-        let limited_to_context = match name {
-            CompressionType => Some(Sink),
-            GroupIdPrefix => None,
-            Topic => None,
-            TopicMetadataRefreshInterval => None,
-            StartTimestamp => Some(Source),
-            StartOffset => Some(Source),
-        };
-        if limited_to_context.is_some() && limited_to_context != Some(context) {
-            bail!(
-                "cannot set {} for {}",
-                name.to_ast_string(),
-                match context {
-                    Source => "SOURCE",
-                    Sink => "SINK",
-                }
-            );
-        }
-    }
-
-    Ok(())
-}
-
 generate_extracted_config!(
-    KafkaConfigOption,
-    (
-        CompressionType,
-        KafkaSinkCompressionType,
-        Default(KafkaSinkCompressionType::None)
-    ),
+    KafkaSourceConfigOption,
     (GroupIdPrefix, String),
     (Topic, String),
     (
@@ -83,6 +42,17 @@ generate_extracted_config!(
     ),
     (StartTimestamp, i64),
     (StartOffset, Vec<i64>)
+);
+
+generate_extracted_config!(
+    KafkaSinkConfigOption,
+    (
+        CompressionType,
+        KafkaSinkCompressionType,
+        Default(KafkaSinkCompressionType::None)
+    ),
+    (GroupIdPrefix, String),
+    (Topic, String)
 );
 
 impl TryFromValue<Value> for KafkaSinkCompressionType {
@@ -113,35 +83,6 @@ impl ImpliedValue for KafkaSinkCompressionType {
     }
 }
 
-/// An enum that represents start offsets for a kafka consumer.
-#[derive(Debug)]
-pub enum KafkaStartOffsetType {
-    /// Fully specified, either by the user or generated.
-    StartOffset(Vec<i64>),
-    /// Specified by the user.
-    StartTimestamp(i64),
-}
-
-impl TryFrom<&KafkaConfigOptionExtracted> for Option<KafkaStartOffsetType> {
-    type Error = PlanError;
-    fn try_from(
-        KafkaConfigOptionExtracted {
-            start_offset,
-            start_timestamp,
-            ..
-        }: &KafkaConfigOptionExtracted,
-    ) -> Result<Option<KafkaStartOffsetType>, Self::Error> {
-        Ok(match (start_offset, start_timestamp) {
-            (Some(_), Some(_)) => {
-                sql_bail!("cannot specify START TIMESTAMP and START OFFSET at same time")
-            }
-            (Some(so), _) => Some(KafkaStartOffsetType::StartOffset(so.clone())),
-            (_, Some(sto)) => Some(KafkaStartOffsetType::StartTimestamp(*sto)),
-            _ => None,
-        })
-    }
-}
-
 /// Returns start offsets for the partitions of `topic` and the provided
 /// `START TIMESTAMP` option.
 ///
@@ -151,40 +92,28 @@ impl TryFrom<&KafkaConfigOptionExtracted> for Option<KafkaStartOffsetType> {
 /// 0.10.0), the current end offset is returned for the partition.
 ///
 /// The provided `START TIMESTAMP` option must be a non-zero number:
-/// * Non-Negative numbers will used as is (e.g. `1622659034343`)
+/// * Non-negative numbers will used as is (e.g. `1622659034343`)
 /// * Negative numbers will be translated to a timestamp in millis
 ///   before now (e.g. `-10` means 10 millis ago)
-///
-/// If `START TIMESTAMP` has not been configured, an empty Option is
-/// returned, but we also validate that partitions for offsets in
-/// `offsets` do actually exist.
 pub async fn lookup_start_offsets<C>(
     consumer: Arc<BaseConsumer<C>>,
     topic: &str,
-    offsets: KafkaStartOffsetType,
+    time_offset: i64,
     now: u64,
-) -> Result<Option<Vec<i64>>, PlanError>
+) -> Result<Vec<i64>, PlanError>
 where
     C: ConsumerContext + 'static,
 {
-    let (requested_offsets, time_offset) = match offsets {
-        KafkaStartOffsetType::StartTimestamp(time_offset) => {
-            (
-                None,
-                Some(if time_offset < 0 {
-                    let now: i64 = now.try_into()?;
-                    let ts = now - time_offset.abs();
+    let time_offset = if time_offset < 0 {
+        let now: i64 = now.try_into()?;
+        let ts = now - time_offset.abs();
 
-                    if ts <= 0 {
-                        sql_bail!("Relative START TIMESTAMP must be smaller than current system timestamp")
-                    }
-                    ts
-                } else {
-                    time_offset
-                }),
-            )
+        if ts <= 0 {
+            sql_bail!("Relative START TIMESTAMP must be smaller than current system timestamp")
         }
-        KafkaStartOffsetType::StartOffset(offsets) => (Some(offsets.len()), None),
+        ts
+    } else {
+        time_offset
     };
 
     // Lookup offsets
@@ -192,6 +121,7 @@ where
     task::spawn_blocking(|| format!("kafka_lookup_start_offsets:{topic}"), {
         let topic = topic.to_string();
         move || {
+            // There cannot be more than i32 partitions
             let num_partitions = mz_kafka_util::client::get_partitions(
                 consumer.as_ref().client(),
                 &topic,
@@ -200,61 +130,42 @@ where
             .map_err(|e| sql_err!("{}", e))?
             .len();
 
-            match (requested_offsets, time_offset) {
-                (Some(requested_offsets), _) => {
-                    if requested_offsets > num_partitions {
-                        return Err(sql_err!(
-                        "START OFFSET specified more partitions ({}) than topic ({}) contains ({})",
-                        requested_offsets,
-                        topic,
-                        num_partitions
-                    ));
-                    }
+            let num_partitions_i32 = i32::try_from(num_partitions)
+                .map_err(|_| sql_err!("kafka topic had more than {} partitions", i32::MAX))?;
 
-                    Ok(None)
-                }
-                (_, Some(time_offset)) => {
-                    // There cannot be more than i32 partitions
-                    let num_partitions_i32 = i32::try_from(num_partitions).map_err(|_| {
-                        sql_err!("kafka topic had more than {} partitions", i32::MAX)
-                    })?;
+            let mut tpl = TopicPartitionList::with_capacity(1);
+            tpl.add_partition_range(&topic, 0, num_partitions_i32 - 1);
+            tpl.set_all_offsets(Offset::Offset(time_offset))
+                .map_err(|e| sql_err!("{}", e))?;
 
-                    let mut tpl = TopicPartitionList::with_capacity(1);
-                    tpl.add_partition_range(&topic, 0, num_partitions_i32 - 1);
-                    tpl.set_all_offsets(Offset::Offset(time_offset))
-                        .map_err(|e| sql_err!("{}", e))?;
+            let offsets_for_times = consumer
+                .offsets_for_times(tpl, Duration::from_secs(10))
+                .map_err(|e| sql_err!("{}", e))?;
 
-                    let offsets_for_times = consumer
-                        .offsets_for_times(tpl, Duration::from_secs(10))
-                        .map_err(|e| sql_err!("{}", e))?;
+            // Translate to `start_offsets`
+            let start_offsets = offsets_for_times
+                .elements()
+                .iter()
+                .map(|elem| match elem.offset() {
+                    Offset::Offset(offset) => Ok(offset),
+                    Offset::End => fetch_end_offset(&consumer, &topic, elem.partition()),
+                    _ => sql_bail!(
+                        "Unexpected offset {:?} for partition {}",
+                        elem.offset(),
+                        elem.partition()
+                    ),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
-                    // Translate to `start_offsets`
-                    let start_offsets = offsets_for_times
-                        .elements()
-                        .iter()
-                        .map(|elem| match elem.offset() {
-                            Offset::Offset(offset) => Ok(offset),
-                            Offset::End => fetch_end_offset(&consumer, &topic, elem.partition()),
-                            _ => sql_bail!(
-                                "Unexpected offset {:?} for partition {}",
-                                elem.offset(),
-                                elem.partition()
-                            ),
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-
-                    if start_offsets.len() != num_partitions {
-                        sql_bail!(
-                            "Expected offsets for {} partitions, but received {}",
-                            num_partitions,
-                            start_offsets.len(),
-                        );
-                    }
-
-                    Ok(Some(start_offsets))
-                }
-                _ => unreachable!(),
+            if start_offsets.len() != num_partitions {
+                sql_bail!(
+                    "Expected offsets for {} partitions, but received {}",
+                    num_partitions,
+                    start_offsets.len(),
+                );
             }
+
+            Ok(start_offsets)
         }
     })
     .await
@@ -273,4 +184,41 @@ where
         .fetch_watermarks(topic, pid, Duration::from_secs(10))
         .map_err(|e| sql_err!("{}", e))?;
     Ok(high)
+}
+
+/// Validates that the provided start offsets are valid for the specified topic.
+/// At present, the validation is merely that there are not more start offsets
+/// than parts in the topic.
+pub async fn validate_start_offsets<C>(
+    consumer: Arc<BaseConsumer<C>>,
+    topic: &str,
+    start_offsets: Vec<i64>,
+) -> Result<(), PlanError>
+where
+    C: ConsumerContext + 'static,
+{
+    // TODO(guswynn): see if we can add broker to this name
+    task::spawn_blocking(|| format!("kafka_validate_start_offsets:{topic}"), {
+        let topic = topic.to_string();
+        move || {
+            let num_partitions = mz_kafka_util::client::get_partitions(
+                consumer.as_ref().client(),
+                &topic,
+                DEFAULT_FETCH_METADATA_TIMEOUT,
+            )
+            .map_err(|e| sql_err!("{}", e))?
+            .len();
+            if start_offsets.len() > num_partitions {
+                sql_bail!(
+                    "START OFFSET specified more partitions ({}) than topic ({}) contains ({})",
+                    start_offsets.len(),
+                    topic,
+                    num_partitions
+                )
+            }
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|e| sql_err!("{}", e))?
 }

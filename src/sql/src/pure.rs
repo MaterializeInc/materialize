@@ -32,9 +32,8 @@ use mz_sql_parser::ast::{
     CreateSinkConnection, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
     CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
     CsrSeedProtobufSchema, DbzMode, DeferredItemName, DocOnIdentifier, DocOnSchema, Envelope,
-    Ident, KafkaConfigOption, KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection,
-    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement,
-    UnresolvedItemName,
+    Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName, PgConfigOption,
+    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement, UnresolvedItemName,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -47,7 +46,6 @@ use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use rdkafka::admin::AdminClient;
-use tracing::info;
 use uuid::Uuid;
 
 use crate::ast::{
@@ -56,7 +54,7 @@ use crate::ast::{
     Format, ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
 };
 use crate::catalog::{CatalogItemType, ErsatzCatalog, SessionCatalog};
-use crate::kafka_util::KafkaConfigOptionExtracted;
+use crate::kafka_util::KafkaSourceConfigOptionExtracted;
 use crate::names::{Aug, ResolvedColumnName, ResolvedItemName};
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
@@ -287,11 +285,8 @@ async fn purify_create_sink(
 
     match &connection {
         CreateSinkConnection::Kafka {
-            connection:
-                KafkaConnection {
-                    connection,
-                    options: _,
-                },
+            connection,
+            options: _,
             key: _,
         } => {
             let scx = StatementContext::new(None, &catalog);
@@ -426,7 +421,7 @@ async fn purify_create_source(
     let mut subsources = vec![];
 
     let progress_desc = match &connection {
-        CreateSourceConnection::Kafka(_) => &mz_storage_types::sources::KAFKA_PROGRESS_DESC,
+        CreateSourceConnection::Kafka { .. } => &mz_storage_types::sources::KAFKA_PROGRESS_DESC,
         CreateSourceConnection::Postgres { .. } => &mz_storage_types::sources::PG_PROGRESS_DESC,
         CreateSourceConnection::LoadGenerator { .. } => {
             &mz_storage_types::sources::LOAD_GEN_PROGRESS_DESC
@@ -437,14 +432,11 @@ async fn purify_create_source(
     };
 
     match connection {
-        CreateSourceConnection::Kafka(KafkaSourceConnection {
-            connection:
-                KafkaConnection {
-                    connection,
-                    options: base_with_options,
-                },
+        CreateSourceConnection::Kafka {
+            connection,
+            options: base_with_options,
             ..
-        }) => {
+        } => {
             if let Some(referenced_subsources) = referenced_subsources {
                 Err(KafkaSourcePurificationError::ReferencedSubsources(
                     referenced_subsources.clone(),
@@ -465,11 +457,8 @@ async fn purify_create_source(
                 }
             };
 
-            let extracted_options: KafkaConfigOptionExtracted =
+            let extracted_options: KafkaSourceConfigOptionExtracted =
                 base_with_options.clone().try_into()?;
-
-            let offset_type =
-                Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
 
             let topic = extracted_options
                 .topic
@@ -490,39 +479,47 @@ async fn purify_create_source(
                 })?;
             let consumer = Arc::new(consumer);
 
-            if let Some(offset_type) = offset_type {
-                // Translate `START TIMESTAMP` to a start offset
-                match kafka_util::lookup_start_offsets(
-                    Arc::clone(&consumer),
-                    &topic,
-                    offset_type,
-                    now,
-                )
-                .await?
-                {
-                    Some(start_offsets) => {
-                        // Drop the value we are purifying
-                        base_with_options.retain(|val| match val {
-                            KafkaConfigOption {
-                                name: KafkaConfigOptionName::StartTimestamp,
-                                ..
-                            } => false,
-                            _ => true,
-                        });
-                        info!("add start_offset {:?}", start_offsets);
-                        base_with_options.push(KafkaConfigOption {
-                            name: KafkaConfigOptionName::StartOffset,
-                            value: Some(WithOptionValue::Sequence(
-                                start_offsets
-                                    .iter()
-                                    .map(|offset| {
-                                        WithOptionValue::Value(Value::Number(offset.to_string()))
-                                    })
-                                    .collect(),
-                            )),
-                        });
-                    }
-                    None => {}
+            match (
+                extracted_options.start_offset,
+                extracted_options.start_timestamp,
+            ) {
+                (None, None) => (),
+                (Some(_), Some(_)) => {
+                    sql_bail!("cannot specify START TIMESTAMP and START OFFSET at same time")
+                }
+                (Some(start_offsets), None) => {
+                    // Validate the start offsets.
+                    kafka_util::validate_start_offsets(
+                        Arc::clone(&consumer),
+                        &topic,
+                        start_offsets,
+                    )
+                    .await?;
+                }
+                (None, Some(time_offset)) => {
+                    // Translate `START TIMESTAMP` to a start offset.
+                    let start_offsets = kafka_util::lookup_start_offsets(
+                        Arc::clone(&consumer),
+                        &topic,
+                        time_offset,
+                        now,
+                    )
+                    .await?;
+
+                    base_with_options.retain(|val| {
+                        !matches!(val.name, KafkaSourceConfigOptionName::StartTimestamp)
+                    });
+                    base_with_options.push(KafkaSourceConfigOption {
+                        name: KafkaSourceConfigOptionName::StartOffset,
+                        value: Some(WithOptionValue::Sequence(
+                            start_offsets
+                                .iter()
+                                .map(|offset| {
+                                    WithOptionValue::Value(Value::Number(offset.to_string()))
+                                })
+                                .collect(),
+                        )),
+                    });
                 }
             }
         }
@@ -1253,12 +1250,8 @@ async fn purify_csr_connection_proto(
     envelope: &Option<Envelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
-    let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
-        connection: KafkaConnection { options, .. },
-        ..
-    }) = connection
-    {
-        let KafkaConfigOptionExtracted { topic, .. } = options
+    let topic = if let CreateSourceConnection::Kafka { options, .. } = connection {
+        let KafkaSourceConfigOptionExtracted { topic, .. } = options
             .clone()
             .try_into()
             .expect("already verified options valid provided");
@@ -1312,12 +1305,8 @@ async fn purify_csr_connection_avro(
     envelope: &Option<Envelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
-    let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
-        connection: KafkaConnection { options, .. },
-        ..
-    }) = connection
-    {
-        let KafkaConfigOptionExtracted { topic, .. } = options
+    let topic = if let CreateSourceConnection::Kafka { options, .. } = connection {
+        let KafkaSourceConfigOptionExtracted { topic, .. } = options
             .clone()
             .try_into()
             .expect("already verified options valid provided");
