@@ -18,7 +18,7 @@ use mz_kafka_util::client::{
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::task;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::Timestamp;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt};
 use mz_storage_types::sinks::KafkaSinkConnection;
@@ -31,15 +31,6 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::sink::progress_key::ProgressKey;
-
-/// Formatter for Kafka group.id setting
-pub struct SinkGroupId;
-
-impl SinkGroupId {
-    pub fn new(sink_id: GlobalId) -> String {
-        format!("materialize-bootstrap-sink-{sink_id}")
-    }
-}
 
 pub mod progress_key {
     use std::fmt;
@@ -333,6 +324,8 @@ pub async fn build_kafka(
     storage_configuration: &StorageConfiguration,
 ) -> Result<Option<Timestamp>, ContextCreationError> {
     // Fetch the progress of the last incarnation of the sink, if any.
+    let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
+    let group_id = connection.progress_group_id(&storage_configuration.connection_context, sink_id);
     let progress_topic = connection
         .progress_topic(&storage_configuration.connection_context)
         .into_owned();
@@ -345,7 +338,12 @@ pub async fn build_kafka(
                 storage_configuration,
                 MzClientContext::default(),
                 &btreemap! {
-                    "group.id" => SinkGroupId::new(sink_id),
+                    // Consumer group ID, which may have been overridden by the
+                    // user. librdkafka requires this, even though we'd prefer
+                    // to disable the consumer group protocol entirely.
+                    "group.id" => group_id.clone(),
+                    // Allow Kafka monitoring tools to identify this consumer.
+                    "client.id" => client_id.clone(),
                     "isolation.level" => isolation_level.into(),
                     "enable.auto.commit" => "false".into(),
                     "auto.offset.reset" => "earliest".into(),

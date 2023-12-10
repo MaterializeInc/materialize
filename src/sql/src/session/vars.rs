@@ -1855,13 +1855,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_kafka_config_denylist_options,
-        desc: "Kafka sources with non-allowlisted options",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_list_length_max,
         desc: "the list_length_max function",
         default: false,

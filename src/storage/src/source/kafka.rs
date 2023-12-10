@@ -163,6 +163,7 @@ impl SourceRender for KafkaSourceConnection {
         let button = builder.build(move |caps| async move {
             let [mut data_cap, mut progress_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
 
+            let client_id = self.client_id(&config.config.connection_context, config.id);
             let group_id = self.group_id(&config.config.connection_context, config.id);
             let KafkaSourceConnection {
                 connection,
@@ -235,9 +236,10 @@ impl SourceRender for KafkaSourceConnection {
                         inner: MzClientContext::default(),
                     },
                     &btreemap! {
-                        // Default to disabling Kafka auto commit. This can be
-                        // explicitly enabled by the user if they want to use it for
-                        // progress tracking.
+                        // Disable Kafka auto commit. We manually commit offsets
+                        // to Kafka once we have reclocked those offsets, so
+                        // that users can use standard Kafka tools for progress
+                        // tracking.
                         "enable.auto.commit" => "false".into(),
                         // Always begin ingest at 0 when restarted, even if Kafka
                         // contains committed consumer read offsets
@@ -247,23 +249,15 @@ impl SourceRender for KafkaSourceConnection {
                         "topic.metadata.refresh.interval.ms" => topic_metadata_refresh_interval.as_millis().to_string(),
                         // TODO: document the rationale for this.
                         "fetch.message.max.bytes" => "134217728".into(),
-                        // Consumer group ID. librdkafka requires this, and we use
-                        // offset committing to provide a way for users to monitor
-                        // ingest progress, though we do not rely on the committed
-                        // offsets for any functionality.
-                        //
-                        // The group ID is partially dictated by the user and
-                        // partially dictated by us. Users can set a prefix so they
-                        // can see which consumers belong to which Materialize
-                        // deployment, but we set a suffix to ensure uniqueness. A
-                        // unique consumer group ID is the most surefire way to
-                        // ensure that librdkafka does not try to perform its own
-                        // consumer group balancing, which would wreak havoc with
-                        // our careful partition assignment strategy.
+                        // Consumer group ID, which may have been overridden by
+                        // the user. librdkafka requires this, and we use offset
+                        // committing to provide a way for users to monitor
+                        // ingest progress, though we do not rely on the
+                        // committed offsets for any functionality.
                         "group.id" => group_id.clone(),
-                        // We just use the `group.id` as the `client.id`, for simplicity,
-                        // as we present to kafka as a single consumer.
-                        "client.id" => group_id,
+                        // Allow Kafka monitoring tools to identify this
+                        // consumer.
+                        "client.id" => client_id.clone(),
                     },
                 )
                 .await;
@@ -319,7 +313,7 @@ impl SourceRender for KafkaSourceConnection {
 
                 // We want a fairly low ceiling on our polling frequency, since we rely
                 // on this heartbeat to determine the health of our Kafka connection.
-                let topic_metadata_refresh_interval =
+                let poll_interval =
                     topic_metadata_refresh_interval.min(Duration::from_secs(60));
 
                 let status_report = Arc::clone(&health_status);
@@ -383,7 +377,7 @@ impl SourceRender for KafkaSourceConnection {
                                     }
                                 }
                             }
-                            thread::park_timeout(topic_metadata_refresh_interval);
+                            thread::park_timeout(poll_interval);
                         }
                         info!(
                             source_id = config.id.to_string(),

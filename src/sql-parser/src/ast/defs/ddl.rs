@@ -862,16 +862,18 @@ impl_display_t!(KafkaSourceConfigOption);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KafkaSinkConfigOptionName {
     CompressionType,
-    GroupIdPrefix,
+    ProgressGroupIdPrefix,
     Topic,
+    TransactionalIdPrefix,
 }
 
 impl AstDisplay for KafkaSinkConfigOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             KafkaSinkConfigOptionName::CompressionType => "COMPRESSION TYPE",
-            KafkaSinkConfigOptionName::GroupIdPrefix => "GROUP ID PREFIX",
+            KafkaSinkConfigOptionName::ProgressGroupIdPrefix => "PROGRESS GROUP ID PREFIX",
             KafkaSinkConfigOptionName::Topic => "TOPIC",
+            KafkaSinkConfigOptionName::TransactionalIdPrefix => "TRANSACTIONAL ID PREFIX",
         })
     }
 }

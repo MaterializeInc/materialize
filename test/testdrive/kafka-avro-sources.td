@@ -9,7 +9,6 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-ALTER SYSTEM SET enable_kafka_config_denylist_options = true
 
 # Test support for Avro sources without using the Confluent Schema Registry.
 

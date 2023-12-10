@@ -1438,17 +1438,26 @@ pub static KAFKA_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
 });
 
 impl<C: ConnectionAccess> KafkaSourceConnection<C> {
-    /// Returns the id for the consumer group the configured source will use.
+    /// Returns the client ID to register with librdkafka with.
+    ///
+    /// The caller is responsible for providing the source ID as it is not known
+    /// to `KafkaSourceConnection`.
+    pub fn client_id(&self, connection_context: &ConnectionContext, source_id: GlobalId) -> String {
+        format!(
+            "materialize-{}-{}-{}",
+            connection_context.environment_id, self.connection_id, source_id,
+        )
+    }
+
+    /// Returns the ID for the consumer group the configured source will use.
     ///
     /// The caller is responsible for providing the source ID as it is not known
     /// to `KafkaSourceConnection`.
     pub fn group_id(&self, connection_context: &ConnectionContext, source_id: GlobalId) -> String {
         format!(
-            "{}materialize-{}-{}-{}",
-            self.group_id_prefix.clone().unwrap_or_else(String::new),
-            connection_context.environment_id,
-            self.connection_id,
-            source_id,
+            "{}{}",
+            self.group_id_prefix.as_deref().unwrap_or(""),
+            self.client_id(connection_context, source_id)
         )
     }
 }

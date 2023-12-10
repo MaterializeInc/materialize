@@ -382,6 +382,7 @@ Tpch
 Trace
 Trailing
 Transaction
+Transactional
 Trim
 True
 Tunnel

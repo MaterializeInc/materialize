@@ -13,8 +13,9 @@ use futures::future::BoxFuture;
 use mz_catalog::durable::Transaction;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_repr::GlobalId;
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::Raw;
+use mz_sql::ast::{Raw, Statement};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::GenericSourceConnection;
@@ -33,7 +34,8 @@ where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
         &'a &ConnCatalog<'_>,
-        &'a mut mz_sql::ast::Statement<Raw>,
+        GlobalId,
+        &'a mut Statement<Raw>,
     ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
 {
     let mut updated_items = BTreeMap::new();
@@ -41,7 +43,7 @@ where
     for mut item in items {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
 
-        f(tx, &cat, &mut stmt).await?;
+        f(tx, &cat, item.id, &mut stmt).await?;
 
         item.create_sql = stmt.to_ast_string_stable();
 
@@ -70,8 +72,8 @@ pub(crate) async fn migrate(
 
     // Perform per-item AST migrations.
     let conn_cat = state.for_system_session();
-    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _item| {
-        let _catalog_version = catalog_version.clone();
+    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, id, stmt| {
+        let catalog_version = catalog_version.clone();
         Box::pin(async move {
             // Add per-item AST migrations below.
             //
@@ -86,6 +88,10 @@ pub(crate) async fn migrate(
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
+
+            if catalog_version <= Version::new(0, 79, u64::MAX) {
+                ast_rewrite_create_sink_into_kafka_options_0_80_0(id, stmt)?;
+            }
 
             Ok(())
         })
@@ -241,6 +247,49 @@ async fn ast_rewrite_postgres_source_timeline_id_0_80_0(
         }
     }
     txn.update_items(updated_items)?;
+    Ok(())
+}
+
+fn ast_rewrite_create_sink_into_kafka_options_0_80_0(
+    id: GlobalId,
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::visit_mut::VisitMut;
+    use mz_sql::ast::{
+        CreateSinkConnection, CreateSinkStatement, KafkaSinkConfigOption,
+        KafkaSinkConfigOptionName, Value, WithOptionValue,
+    };
+
+    struct Rewriter {
+        id: GlobalId,
+    }
+
+    impl<'ast> VisitMut<'ast, Raw> for Rewriter {
+        fn visit_create_sink_statement_mut(&mut self, node: &'ast mut CreateSinkStatement<Raw>) {
+            match &mut node.connection {
+                CreateSinkConnection::Kafka { options, .. } => {
+                    options.push(KafkaSinkConfigOption {
+                        name: KafkaSinkConfigOptionName::ProgressGroupIdPrefix,
+                        value: Some(WithOptionValue::Value(Value::String(format!(
+                            "materialize-bootstrap-sink-{}",
+                            self.id
+                        )))),
+                    });
+                    options.push(KafkaSinkConfigOption {
+                        name: KafkaSinkConfigOptionName::TransactionalIdPrefix,
+                        value: Some(WithOptionValue::Value(Value::String(format!(
+                            "mz-producer-{}-0",
+                            self.id
+                        )))),
+                    });
+                }
+            }
+        }
+    }
+
+    let mut rewriter = Rewriter { id };
+    rewriter.visit_statement_mut(stmt);
+
     Ok(())
 }
 

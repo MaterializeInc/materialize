@@ -51,8 +51,9 @@ generate_extracted_config!(
         KafkaSinkCompressionType,
         Default(KafkaSinkCompressionType::None)
     ),
-    (GroupIdPrefix, String),
-    (Topic, String)
+    (ProgressGroupIdPrefix, String),
+    (Topic, String),
+    (TransactionalIdPrefix, String)
 );
 
 impl TryFromValue<Value> for KafkaSinkCompressionType {

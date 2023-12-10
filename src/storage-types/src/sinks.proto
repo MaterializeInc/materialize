@@ -92,6 +92,8 @@ message ProtoKafkaSinkConnectionV2 {
         google.protobuf.Empty lz4 = 17;
         google.protobuf.Empty zstd = 18;
     }
+    optional string progress_group_id_prefix = 19;
+    optional string transactional_id_prefix = 20;
 }
 
 message ProtoPersistSinkConnection {

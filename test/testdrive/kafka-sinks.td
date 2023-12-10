@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_kafka_config_denylist_options = true
-
 $ kafka-create-topic topic=test partitions=1
 $ kafka-ingest topic=test format=bytes
 jack,jill
@@ -241,7 +238,7 @@ $ kafka-create-topic topic=snk9 partitions=4
 2
 
 # Including for sinks with default size
-> SELECT size FROM mz_sinks WHERE name = 'snk13'
+> SELECT size FROM mz_sinks WHERE name = 'snk9'
 "${arg.default-storage-size}"
 
 # Check that SHOW SINKS shows the size correctly

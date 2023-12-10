@@ -286,7 +286,7 @@ The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 | Field                  | Type           | Meaning                                                                                                   |
 |------------------------|----------------|-----------------------------------------------------------------------------------------------------------|
 | `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
-| `group_id_base`        | [`text`]       | The prefix of the group ID that Materialize will use when consuming data for the Kafka source.            |
+| `group_id_prefix`      | [`text`]       | The prefix of the group ID that Materialize will use when consuming data for the Kafka source.            |
 
 ### `mz_materialization_lag`
 

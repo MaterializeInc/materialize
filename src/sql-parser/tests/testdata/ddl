@@ -451,11 +451,11 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red')
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic', GROUP ID PREFIX 'prefix', COMPRESSION TYPE = gzip) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic', PROGRESS GROUP ID PREFIX 'prefix', COMPRESSION TYPE = gzip) FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic', GROUP ID PREFIX = 'prefix', COMPRESSION TYPE = gzip) FORMAT BYTES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic', PROGRESS GROUP ID PREFIX = 'prefix', COMPRESSION TYPE = gzip) FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }, KafkaSinkConfigOption { name: GroupIdPrefix, value: Some(Value(String("prefix"))) }, KafkaSinkConfigOption { name: CompressionType, value: Some(Ident(Ident("gzip"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }, KafkaSinkConfigOption { name: ProgressGroupIdPrefix, value: Some(Value(String("prefix"))) }, KafkaSinkConfigOption { name: CompressionType, value: Some(Ident(Ident("gzip"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
 CREATE SINK FROM bar INTO KAFKA CONNECTION baz

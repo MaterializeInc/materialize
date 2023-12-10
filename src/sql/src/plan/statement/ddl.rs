@@ -39,8 +39,8 @@ use mz_sql_parser::ast::{
     CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
     DocOnIdentifier, DocOnSchema, DropOwnedStatement, KafkaSinkConfigOption,
-    KafkaSinkConfigOptionName, MaterializedViewOption, MaterializedViewOptionName, SetRoleVar,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    MaterializedViewOption, MaterializedViewOptionName, SetRoleVar, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
@@ -75,10 +75,10 @@ use crate::ast::{
     CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
     DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KafkaSourceConfigOptionName, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
-    ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
-    SourceIncludeMetadata, Statement, TableConstraint, UnresolvedDatabaseName, ViewDefinition,
+    IndexOptionName, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName, PgConfigOption,
+    PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SourceIncludeMetadata, Statement,
+    TableConstraint, UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
@@ -612,25 +612,6 @@ pub fn plan_create_source(
                     "{} is not a kafka connection",
                     scx.catalog.resolve_full_name(connection_item.name())
                 )
-            }
-
-            // Starting offsets are allowed out with feature flags mode, as they are a simple,
-            // useful way to specify where to start reading a topic.
-            const ALLOWED_OPTIONS: &[KafkaSourceConfigOptionName] = &[
-                KafkaSourceConfigOptionName::StartOffset,
-                KafkaSourceConfigOptionName::StartTimestamp,
-                KafkaSourceConfigOptionName::Topic,
-            ];
-
-            if let Some(op) = options
-                .iter()
-                .find(|op| !ALLOWED_OPTIONS.contains(&op.name))
-            {
-                scx.require_feature_flag_w_dynamic_desc(
-                    &vars::ENABLE_KAFKA_CONFIG_DENYLIST_OPTIONS,
-                    format!("FROM KAFKA CONNECTION ({}...)", op.name.to_ast_string()),
-                    format!("permitted options are {}", comma_separated(ALLOWED_OPTIONS)),
-                )?;
             }
 
             let KafkaSourceConfigOptionExtracted {
@@ -2509,29 +2490,11 @@ fn kafka_sink_builder(
         ),
     };
 
-    // Starting offsets are allowed with feature flags mode, as they are a simple,
-    // useful way to specify where to start reading a topic.
-    const ALLOWED_OPTIONS: &[KafkaSinkConfigOptionName] = &[
-        KafkaSinkConfigOptionName::Topic,
-        KafkaSinkConfigOptionName::CompressionType,
-    ];
-
-    if let Some(op) = options
-        .iter()
-        .find(|op| !ALLOWED_OPTIONS.contains(&op.name))
-    {
-        scx.require_feature_flag_w_dynamic_desc(
-            &vars::ENABLE_KAFKA_CONFIG_DENYLIST_OPTIONS,
-            format!("FROM KAFKA CONNECTION ({}...)", op.name.to_ast_string()),
-            format!("permitted options are {}", comma_separated(ALLOWED_OPTIONS)),
-        )?;
-    }
-
     let KafkaSinkConfigOptionExtracted {
         topic,
         compression_type,
-        // TODO: plumb group ID through to sink.
-        group_id_prefix: _,
+        progress_group_id_prefix,
+        transactional_id_prefix,
         seen: _,
     }: KafkaSinkConfigOptionExtracted = options.try_into()?;
 
@@ -2640,6 +2603,8 @@ fn kafka_sink_builder(
         key_desc_and_indices,
         value_desc,
         compression_type,
+        progress_group_id_prefix,
+        transactional_id_prefix,
     }))
 }
 

@@ -189,46 +189,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # Restrict the `materialize_no_describe_configs` user from running the
     # `DescribeConfigs` cluster operation, but allow it to idempotently read and
     # write to all topics.
-    c.exec(
-        "kafka",
-        "kafka-acls",
-        "--bootstrap-server",
-        "localhost:9092",
-        "--add",
-        "--cluster",
-        "--deny-principal=User:materialize_no_describe_configs",
-        "--operation=DescribeConfigs",
+    user = "materialize_no_describe_configs"
+    add_acl(c, user, "deny", "DescribeConfigs")
+    add_acl(c, user, "allow", "ALL", "transactional-id=*")
+    add_acl(c, user, "allow", "ALL", "topic=*")
+    add_acl(c, user, "allow", "ALL", "group=*")
+
+    # Only allow the `materialize_lockdown` user access to specific
+    # transactional IDs, topics, and group IDs.
+    user = "materialize_lockdown"
+    add_acl(
+        c, user, "allow", "ALL", "transactional-id=lockdown", pattern_type="prefixed"
     )
-    c.exec(
-        "kafka",
-        "kafka-acls",
-        "--bootstrap-server",
-        "localhost:9092",
-        "--add",
-        "--allow-principal=User:materialize_no_describe_configs",
-        "--operation=ALL",
-        "--transactional-id=*",
-    )
-    c.exec(
-        "kafka",
-        "kafka-acls",
-        "--bootstrap-server",
-        "localhost:9092",
-        "--add",
-        "--allow-principal=User:materialize_no_describe_configs",
-        "--operation=ALL",
-        "--topic=*",
-    )
-    c.exec(
-        "kafka",
-        "kafka-acls",
-        "--bootstrap-server",
-        "localhost:9092",
-        "--add",
-        "--allow-principal=User:materialize_no_describe_configs",
-        "--operation=ALL",
-        "--group=*",
-    )
+    add_acl(c, user, "allow", "ALL", "topic=lockdown-progress")
+    add_acl(c, user, "allow", "ALL", "topic=lockdown-data", pattern_type="prefixed")
+    add_acl(c, user, "allow", "ALL", "group=lockdown", pattern_type="prefixed")
+    add_acl(c, user, "allow", "ALL", "topic=testdrive-data", pattern_type="prefixed")
 
     # Now that the Kafka topic has been bootstrapped, it's safe to bring up all
     # the other schema registries in parallel.
@@ -283,3 +259,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     c.run("testdrive", f"test-{args.filter}.td")
+
+
+def add_acl(
+    c: Composition,
+    user: str,
+    action: str,
+    operation: str,
+    resource: str | None = None,
+    pattern_type: str = "literal",
+):
+    c.exec(
+        "kafka",
+        "kafka-acls",
+        "--bootstrap-server=localhost:9092",
+        "--add",
+        f"--{action}-principal=User:{user}",
+        f"--operation={operation}",
+        f"--{resource}" if resource else "--cluster",
+        f"--resource-pattern-type={pattern_type}",
+    )

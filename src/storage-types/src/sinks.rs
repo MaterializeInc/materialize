@@ -432,13 +432,59 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub topic: String,
     pub fuel: usize,
     pub compression_type: KafkaSinkCompressionType,
+    pub progress_group_id_prefix: Option<String>,
+    pub transactional_id_prefix: Option<String>,
 }
 
 impl KafkaSinkConnection {
+    /// Returns the client ID to register with librdkafka with.
+    ///
+    /// The caller is responsible for providing the sink ID as it is not known
+    /// to `KafkaSinkConnection`.
+    pub fn client_id(&self, connection_context: &ConnectionContext, sink_id: GlobalId) -> String {
+        format!(
+            "materialize-{}-{}-{}",
+            connection_context.environment_id, self.connection_id, sink_id,
+        )
+    }
+
     /// Returns the name of the progress topic to use for the sink.
     pub fn progress_topic(&self, connection_context: &ConnectionContext) -> Cow<str> {
         self.connection
             .progress_topic(connection_context, self.connection_id)
+    }
+
+    /// Returns the ID for the consumer group the sink will use to read the
+    /// progress topic on resumption.
+    ///
+    /// The caller is responsible for providing the sink ID as it is not known
+    /// to `KafkaSinkConnection`.
+    pub fn progress_group_id(
+        &self,
+        connection_context: &ConnectionContext,
+        sink_id: GlobalId,
+    ) -> String {
+        format!(
+            "{}{}",
+            self.progress_group_id_prefix.as_deref().unwrap_or(""),
+            self.client_id(connection_context, sink_id)
+        )
+    }
+
+    /// Returns the transactional ID to use for the sink.
+    ///
+    /// The caller is responsible for providing the sink ID as it is not known
+    /// to `KafkaSinkConnection`.
+    pub fn transactional_id(
+        &self,
+        connection_context: &ConnectionContext,
+        sink_id: GlobalId,
+    ) -> String {
+        format!(
+            "{}{}",
+            self.transactional_id_prefix.as_deref().unwrap_or(""),
+            self.client_id(connection_context, sink_id)
+        )
     }
 }
 
@@ -466,6 +512,8 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             topic,
             fuel,
             compression_type,
+            progress_group_id_prefix,
+            transactional_id_prefix: transactional_id,
         } = self;
 
         let compatibility_checks = [
@@ -485,6 +533,14 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             (
                 compression_type == &other.compression_type,
                 "compression_type",
+            ),
+            (
+                progress_group_id_prefix == &other.progress_group_id_prefix,
+                "progress_group_id_prefix",
+            ),
+            (
+                transactional_id == &other.transactional_id_prefix,
+                "transactional_id",
             ),
         ];
         for (compatible, field) in compatibility_checks {
@@ -517,6 +573,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             topic,
             fuel,
             compression_type,
+            progress_group_id_prefix,
+            transactional_id_prefix: transactional_id,
         } = self;
         KafkaSinkConnection {
             connection_id,
@@ -528,6 +586,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             topic,
             fuel,
             compression_type,
+            progress_group_id_prefix,
+            transactional_id_prefix: transactional_id,
         }
     }
 }
@@ -551,6 +611,8 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 KafkaSinkCompressionType::Lz4 => CompressionType::Lz4(()),
                 KafkaSinkCompressionType::Zstd => CompressionType::Zstd(()),
             }),
+            progress_group_id_prefix: self.progress_group_id_prefix.clone(),
+            transactional_id_prefix: self.transactional_id_prefix.clone(),
         }
     }
 
@@ -585,6 +647,8 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                     ))
                 }
             },
+            progress_group_id_prefix: proto.progress_group_id_prefix,
+            transactional_id_prefix: proto.transactional_id_prefix,
         })
     }
 }
