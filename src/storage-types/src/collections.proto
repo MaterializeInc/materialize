@@ -31,15 +31,6 @@ message TimestampAntichain {
     repeated Timestamp elements = 1;
 }
 
-message SinkAsOf {
-    TimestampAntichain frontier = 1;
-    bool strict = 2;
-}
-
-message DurableExportMetadata {
-    SinkAsOf initial_as_of = 1;
-}
-
 message DurableCollectionMetadata {
     reserved 1;
     reserved "remap_shard";

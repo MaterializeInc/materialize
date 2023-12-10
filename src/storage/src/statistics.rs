@@ -503,28 +503,28 @@ impl SinkStatistics {
         }
     }
 
-    /// Increment the `messages_received` stat.
+    /// Increment the `messages_staged` stat.
     pub fn inc_messages_staged_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
         cur.1.messages_staged = cur.1.messages_staged + value;
         cur.2.messages_staged.inc_by(value);
     }
 
-    /// Increment the `messages_received` stat.
+    /// Increment the `bytes_received` stat.
     pub fn inc_bytes_staged_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
         cur.1.bytes_staged = cur.1.bytes_staged + value;
         cur.2.bytes_staged.inc_by(value);
     }
 
-    /// Increment the `messages_received` stat.
+    /// Increment the `messages_committed` stat.
     pub fn inc_messages_committed_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
         cur.1.messages_committed = cur.1.messages_committed + value;
         cur.2.messages_committed.inc_by(value);
     }
 
-    /// Increment the `messages_received` stat.
+    /// Increment the `bytes_committed` stat.
     pub fn inc_bytes_committed_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
         cur.1.bytes_committed = cur.1.bytes_committed + value;
