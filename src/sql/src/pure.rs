@@ -36,8 +36,9 @@ use mz_sql_parser::ast::{
     PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement,
     UnresolvedItemName,
 };
+use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::connections::{Connection, ConnectionContext};
+use mz_storage_types::connections::Connection;
 use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::{
     GenericSourceConnection, PostgresSourcePublicationDetails, SourceConnection,
@@ -145,7 +146,7 @@ pub async fn purify_statement(
     catalog: impl SessionCatalog,
     now: u64,
     stmt: Statement<Aug>,
-    connection_context: ConnectionContext,
+    storage_configuration: &StorageConfiguration,
 ) -> Result<
     (
         Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
@@ -155,13 +156,13 @@ pub async fn purify_statement(
 > {
     match stmt {
         Statement::CreateSource(stmt) => {
-            purify_create_source(catalog, now, stmt, connection_context).await
+            purify_create_source(catalog, now, stmt, storage_configuration).await
         }
         Statement::AlterSource(stmt) => {
-            purify_alter_source(catalog, stmt, connection_context).await
+            purify_alter_source(catalog, stmt, storage_configuration).await
         }
         Statement::CreateSink(stmt) => {
-            let r = purify_create_sink(catalog, stmt, connection_context).await?;
+            let r = purify_create_sink(catalog, stmt, storage_configuration).await?;
             Ok((vec![], r))
         }
         o => unreachable!("{:?} does not need to be purified", o),
@@ -276,7 +277,7 @@ pub(crate) fn add_materialize_comments(
 async fn purify_create_sink(
     catalog: impl SessionCatalog,
     mut stmt: CreateSinkStatement<Aug>,
-    connection_context: ConnectionContext,
+    storage_configuration: &StorageConfiguration,
 ) -> Result<Statement<Aug>, PlanError> {
     add_materialize_comments(&catalog, &mut stmt)?;
     // General purification
@@ -316,7 +317,7 @@ async fn purify_create_sink(
 
             let client: AdminClient<_> = connection
                 .create_with_context(
-                    &connection_context,
+                    storage_configuration,
                     MzClientContext::default(),
                     &BTreeMap::new(),
                 )
@@ -364,7 +365,7 @@ async fn purify_create_sink(
                 };
 
                 let client = connection
-                    .connect(&connection_context)
+                    .connect(storage_configuration)
                     .await
                     .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
@@ -390,7 +391,7 @@ async fn purify_create_source(
     catalog: impl SessionCatalog,
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
-    connection_context: ConnectionContext,
+    storage_configuration: &StorageConfiguration,
 ) -> Result<
     (
         Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
@@ -486,7 +487,7 @@ async fn purify_create_source(
 
             let consumer = connection
                 .create_with_context(
-                    &connection_context,
+                    storage_configuration,
                     MzClientContext::default(),
                     &BTreeMap::new(),
                 )
@@ -574,19 +575,24 @@ async fn purify_create_source(
 
             // verify that we can connect upstream and snapshot publication metadata
             let config = connection
-                .config(&*connection_context.secrets_reader)
+                .config(
+                    &*storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                )
                 .await?;
 
-            let wal_level =
-                mz_postgres_util::get_wal_level(&connection_context.ssh_tunnel_manager, &config)
-                    .await?;
+            let wal_level = mz_postgres_util::get_wal_level(
+                &storage_configuration.connection_context.ssh_tunnel_manager,
+                &config,
+            )
+            .await?;
 
             if wal_level < WalLevel::Logical {
                 Err(PgSourcePurificationError::InsufficientWalLevel { wal_level })?;
             }
 
             let max_wal_senders = mz_postgres_util::get_max_wal_senders(
-                &connection_context.ssh_tunnel_manager,
+                &storage_configuration.connection_context.ssh_tunnel_manager,
                 &config,
             )
             .await?;
@@ -596,7 +602,7 @@ async fn purify_create_source(
             }
 
             let available_replication_slots = mz_postgres_util::available_replication_slots(
-                &connection_context.ssh_tunnel_manager,
+                &storage_configuration.connection_context.ssh_tunnel_manager,
                 &config,
             )
             .await?;
@@ -607,7 +613,7 @@ async fn purify_create_source(
             }
 
             let publication_tables = mz_postgres_util::publication_info(
-                &connection_context.ssh_tunnel_manager,
+                &storage_configuration.connection_context.ssh_tunnel_manager,
                 &config,
                 &publication,
                 None,
@@ -644,7 +650,7 @@ async fn purify_create_source(
                 }
                 ReferencedSubsources::SubsetSchemas(schemas) => {
                     let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(
-                        &connection_context.ssh_tunnel_manager,
+                        &storage_configuration.connection_context.ssh_tunnel_manager,
                         &config,
                     )
                     .await?
@@ -702,7 +708,7 @@ async fn purify_create_source(
             postgres::validate_requested_subsources(
                 &config,
                 &validated_requested_subsources,
-                &connection_context.ssh_tunnel_manager,
+                &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
 
@@ -742,7 +748,7 @@ async fn purify_create_source(
             // Record the active replication timeline_id to allow detection of a future upstream
             // point-in-time-recovery that will put the source into an error state.
             let replication_client = config
-                .connect_replication(&connection_context.ssh_tunnel_manager)
+                .connect_replication(&storage_configuration.connection_context.ssh_tunnel_manager)
                 .await?;
             let timeline_id = mz_postgres_util::get_timeline_id(&replication_client).await?;
 
@@ -901,7 +907,14 @@ async fn purify_create_source(
     };
     subsources.push((transient_id, subsource));
 
-    purify_source_format(&catalog, format, connection, envelope, &connection_context).await?;
+    purify_source_format(
+        &catalog,
+        format,
+        connection,
+        envelope,
+        storage_configuration,
+    )
+    .await?;
 
     Ok((subsources, Statement::CreateSource(stmt)))
 }
@@ -915,7 +928,7 @@ async fn purify_create_source(
 async fn purify_alter_source(
     catalog: impl SessionCatalog,
     mut stmt: AlterSourceStatement<Aug>,
-    connection_context: ConnectionContext,
+    storage_configuration: &StorageConfiguration,
 ) -> Result<
     (
         Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
@@ -996,11 +1009,14 @@ async fn purify_alter_source(
     let pg_connection = &pg_source_connection.connection;
 
     let config = pg_connection
-        .config(&*connection_context.secrets_reader)
+        .config(
+            &*storage_configuration.connection_context.secrets_reader,
+            storage_configuration,
+        )
         .await?;
 
     let available_replication_slots = mz_postgres_util::available_replication_slots(
-        &connection_context.ssh_tunnel_manager,
+        &storage_configuration.connection_context.ssh_tunnel_manager,
         &config,
     )
     .await?;
@@ -1011,7 +1027,7 @@ async fn purify_alter_source(
     }
 
     let mut publication_tables = mz_postgres_util::publication_info(
-        &connection_context.ssh_tunnel_manager,
+        &storage_configuration.connection_context.ssh_tunnel_manager,
         &config,
         &pg_source_connection.publication,
         None,
@@ -1063,7 +1079,7 @@ async fn purify_alter_source(
     postgres::validate_requested_subsources(
         &config,
         &validated_requested_subsources,
-        &connection_context.ssh_tunnel_manager,
+        &storage_configuration.connection_context.ssh_tunnel_manager,
     )
     .await?;
     let mut subsource_id_counter = 0;
@@ -1140,7 +1156,7 @@ async fn purify_alter_source(
         None => {
             // If we had not yet been able to fill in the source's timeline ID, fill it in now.
             let replication_client = config
-                .connect_replication(&connection_context.ssh_tunnel_manager)
+                .connect_replication(&storage_configuration.connection_context.ssh_tunnel_manager)
                 .await?;
             let timeline_id = mz_postgres_util::get_timeline_id(&replication_client).await?;
             Some(timeline_id)
@@ -1166,7 +1182,7 @@ async fn purify_source_format(
     format: &mut CreateSourceFormat<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<Envelope>,
-    connection_context: &ConnectionContext,
+    storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
         && !matches!(
@@ -1181,14 +1197,20 @@ async fn purify_source_format(
     match format {
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {
-            purify_source_format_single(catalog, format, connection, envelope, connection_context)
-                .await?;
+            purify_source_format_single(
+                catalog,
+                format,
+                connection,
+                envelope,
+                storage_configuration,
+            )
+            .await?;
         }
 
         CreateSourceFormat::KeyValue { key, value: val } => {
-            purify_source_format_single(catalog, key, connection, envelope, connection_context)
+            purify_source_format_single(catalog, key, connection, envelope, storage_configuration)
                 .await?;
-            purify_source_format_single(catalog, val, connection, envelope, connection_context)
+            purify_source_format_single(catalog, val, connection, envelope, storage_configuration)
                 .await?;
         }
     }
@@ -1200,7 +1222,7 @@ async fn purify_source_format_single(
     format: &mut Format<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<Envelope>,
-    connection_context: &ConnectionContext,
+    storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     match format {
         Format::Avro(schema) => match schema {
@@ -1210,7 +1232,7 @@ async fn purify_source_format_single(
                     connection,
                     csr_connection,
                     envelope,
-                    connection_context,
+                    storage_configuration,
                 )
                 .await?
             }
@@ -1223,7 +1245,7 @@ async fn purify_source_format_single(
                     connection,
                     csr_connection,
                     envelope,
-                    connection_context,
+                    storage_configuration,
                 )
                 .await?;
             }
@@ -1239,7 +1261,7 @@ async fn purify_csr_connection_proto(
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionProtobuf<Aug>,
     envelope: &Option<Envelope>,
-    connection_context: &ConnectionContext,
+    storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
         connection: KafkaConnection { options, .. },
@@ -1272,7 +1294,7 @@ async fn purify_csr_connection_proto(
             };
 
             let ccsr_client = ccsr_connection
-                .connect(connection_context)
+                .connect(storage_configuration)
                 .await
                 .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
@@ -1298,7 +1320,7 @@ async fn purify_csr_connection_avro(
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionAvro<Aug>,
     envelope: &Option<Envelope>,
-    connection_context: &ConnectionContext,
+    storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     let topic = if let CreateSourceConnection::Kafka(KafkaSourceConnection {
         connection: KafkaConnection { options, .. },
@@ -1327,7 +1349,7 @@ async fn purify_csr_connection_avro(
             _ => sql_bail!("{} is not a schema registry connection", connection),
         };
         let ccsr_client = csr_connection
-            .connect(connection_context)
+            .connect(storage_configuration)
             .await
             .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 

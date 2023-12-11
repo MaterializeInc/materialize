@@ -33,7 +33,7 @@ use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_client::sink::ProgressRecord;
-use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
     KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkAsOf, SinkEnvelope, StorageSinkDesc,
@@ -128,7 +128,7 @@ where
                 .get(&sink_id)
                 .expect("statistics initialized")
                 .clone(),
-            storage_state.connection_context.clone(),
+            &storage_state.storage_configuration,
         );
 
         storage_state
@@ -217,7 +217,7 @@ impl ProducerContext for SinkProducerContext {
 struct KafkaTxProducerConfig<'a> {
     name: String,
     connection: &'a KafkaSinkConnection,
-    connection_context: &'a ConnectionContext,
+    storage_configuration: &'a StorageConfiguration,
     producer_context: SinkProducerContext,
     sink_id: GlobalId,
     worker_id: String,
@@ -235,7 +235,7 @@ impl KafkaTxProducer {
         KafkaTxProducerConfig {
             name,
             connection,
-            connection_context,
+            storage_configuration,
             producer_context,
             sink_id,
             worker_id,
@@ -247,7 +247,7 @@ impl KafkaTxProducer {
         let fence_producer: ThreadedProducer<_> = connection
             .connection
             .create_with_context(
-                connection_context,
+                storage_configuration,
                 MzClientContext::default(),
                 &btreemap! {
                     "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
@@ -267,7 +267,7 @@ impl KafkaTxProducer {
         let producer = connection
             .connection
             .create_with_context(
-                connection_context,
+                storage_configuration,
                 producer_context,
                 &btreemap! {
                     // Ensure that messages are sinked in order and without
@@ -471,7 +471,7 @@ impl KafkaSinkState {
         worker_id: usize,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
         metrics: &StorageMetrics,
-        connection_context: &ConnectionContext,
+        storage_configuration: &StorageConfiguration,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
         healthchecker: HealthOutputHandle,
     ) -> (Self, Option<Timestamp>) {
@@ -497,7 +497,7 @@ impl KafkaSinkState {
                 KafkaTxProducer::new(KafkaTxProducerConfig {
                     name: sink_name.clone(),
                     connection: &connection,
-                    connection_context,
+                    storage_configuration,
                     producer_context,
                     sink_id,
                     worker_id,
@@ -515,12 +515,14 @@ impl KafkaSinkState {
         // details, see `mz_storage_client::sink::build_kafka`.
         let latest_ts = halt_on_err(
             &healthchecker,
-            mz_storage_client::sink::build_kafka(sink_id, &connection, connection_context).await,
+            mz_storage_client::sink::build_kafka(sink_id, &connection, storage_configuration).await,
             None,
         )
         .await;
 
-        let progress_topic = connection.progress_topic(connection_context).into_owned();
+        let progress_topic = connection
+            .progress_topic(&storage_configuration.connection_context)
+            .into_owned();
         (
             KafkaSinkState {
                 name: sink_name,
@@ -853,7 +855,7 @@ fn kafka<G>(
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &StorageMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
-    connection_context: ConnectionContext,
+    storage_configuration: &StorageConfiguration,
 ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -871,7 +873,7 @@ where
         Rc::clone(&shared_gate_ts),
         &name,
         connection.clone(),
-        connection_context.clone(),
+        storage_configuration.clone(),
         envelope,
     );
 
@@ -885,7 +887,7 @@ where
         write_frontier,
         metrics,
         sink_statistics,
-        connection_context,
+        storage_configuration.clone(),
     );
 
     (
@@ -915,7 +917,7 @@ fn produce_to_kafka<G>(
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &StorageMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
-    connection_context: ConnectionContext,
+    storage_configuration: StorageConfiguration,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -956,7 +958,7 @@ where
             worker_id,
             write_frontier,
             &metrics,
-            &connection_context,
+            &storage_configuration,
             Rc::clone(&shared_gate_ts),
             HealthOutputHandle {
                 health_cap,
@@ -1185,7 +1187,7 @@ fn encode_stream<G>(
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     name_prefix: &str,
     connection: KafkaSinkConnection,
-    connection_cx: ConnectionContext,
+    storage_configuration: StorageConfiguration,
     envelope: SinkEnvelope,
 ) -> (
     Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>,
@@ -1249,7 +1251,7 @@ where
                 let (key_schema_id, value_schema_id) = halt_on_err(
                     &healthchecker,
                     async {
-                        let ccsr = csr_connection.connect(&connection_cx).await?;
+                        let ccsr = csr_connection.connect(&storage_configuration).await?;
                         let ids = mz_storage_client::sink::publish_kafka_schemas(
                             &ccsr,
                             &connection.topic,

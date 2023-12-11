@@ -17,7 +17,6 @@ use std::fmt::Debug;
 
 use differential_dataflow::Collection;
 use mz_repr::{Diff, Row};
-use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::PressOnDropButton;
@@ -64,7 +63,6 @@ pub trait SourceRender {
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        connection_context: ConnectionContext,
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (

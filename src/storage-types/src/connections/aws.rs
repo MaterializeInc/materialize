@@ -17,7 +17,7 @@ use mz_secrets::SecretsReader;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::connections::{ConnectionContext, StringOrSecret};
+use crate::{configuration::StorageConfiguration, connections::StringOrSecret};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -185,7 +185,7 @@ impl AwsConfig {
     pub(crate) async fn validate(
         &self,
         _id: GlobalId,
-        _connection_context: &ConnectionContext,
+        _storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         Err(anyhow!("Validating SSH connections is not supported yet"))
     }

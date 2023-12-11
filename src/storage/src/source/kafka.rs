@@ -29,7 +29,7 @@ use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
-use mz_storage_types::connections::{ConnectionContext, StringOrSecret};
+use mz_storage_types::connections::StringOrSecret;
 use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::{
     KafkaMetadataKind, KafkaSourceConnection, MzOffset, SourceTimestamp,
@@ -139,7 +139,6 @@ impl SourceRender for KafkaSourceConnection {
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        connection_context: ConnectionContext,
         resume_uppers: impl futures::Stream<Item = Antichain<Partitioned<PartitionId, MzOffset>>>
             + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
@@ -213,7 +212,7 @@ impl SourceRender for KafkaSourceConnection {
                 "instantiating Kafka source reader at offsets {start_offsets:?}"
             );
 
-            let group_id = self.group_id(&connection_context, config.id);
+            let group_id = self.group_id(&config.config.connection_context, config.id);
             let KafkaSourceConnection {
                 connection, topic, ..
             } = self;
@@ -222,7 +221,7 @@ impl SourceRender for KafkaSourceConnection {
             let notificator = Arc::new(Notify::new());
             let consumer: Result<BaseConsumer<_>, _> = connection
                 .create_with_context(
-                    &connection_context,
+                    &config.config,
                     GlueConsumerContext {
                         notificator: Arc::clone(&notificator),
                         stats_tx,

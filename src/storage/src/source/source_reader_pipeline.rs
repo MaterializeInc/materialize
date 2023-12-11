@@ -50,7 +50,7 @@ use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
-use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::SourceError;
 use mz_storage_types::sources::encoding::SourceDataEncoding;
@@ -129,7 +129,7 @@ pub struct RawSourceCreationConfig {
     /// Enables reporting the remap operator's write frontier.
     pub shared_remap_upper: Rc<RefCell<Antichain<mz_repr::Timestamp>>>,
     /// Configuration parameters, possibly from LaunchDarkly
-    pub params: SourceCreationParams,
+    pub config: StorageConfiguration,
     /// The ID of this source remap/progress collection.
     pub remap_collection_id: GlobalId,
 }
@@ -145,13 +145,6 @@ impl RawSourceCreationConfig {
     pub fn responsible_for<P: Hash>(&self, partition: P) -> bool {
         self.responsible_worker(partition) == self.worker_id
     }
-}
-
-#[derive(Clone)]
-pub struct SourceCreationParams {
-    /// Sets timeouts specific to PG replication streams
-    pub pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
-    pub pg_source_snapshot_statement_timeout: Duration,
 }
 
 /// Creates a source dataflow operator graph from a source connection. The type of SourceConnection
@@ -171,7 +164,6 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     config: RawSourceCreationConfig,
     source_connection: C,
-    connection_context: ConnectionContext,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     Vec<(
@@ -215,7 +207,6 @@ where
                 scope,
                 config.clone(),
                 source_connection,
-                connection_context,
                 reclocked_resume_stream,
                 start_signal,
             );
@@ -248,7 +239,6 @@ fn source_render_operator<G, C>(
     scope: &mut G,
     config: RawSourceCreationConfig,
     source_connection: C,
-    connection_context: ConnectionContext,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
@@ -277,13 +267,8 @@ where
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
-    let (data, progress, health, tokens) = source_connection.render(
-        scope,
-        config,
-        connection_context,
-        resume_uppers,
-        start_signal,
-    );
+    let (data, progress, health, tokens) =
+        source_connection.render(scope, config, resume_uppers, start_signal);
 
     let name = format!("SourceStats({})", source_id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
@@ -432,7 +417,7 @@ where
         persist_clients,
         source_statistics: _,
         shared_remap_upper,
-        params: _,
+        config: _,
         remap_collection_id,
     } = config;
 
@@ -591,7 +576,7 @@ where
         persist_clients: _,
         source_statistics: _,
         shared_remap_upper: _,
-        params: _,
+        config: _,
         remap_collection_id: _,
     } = config;
 

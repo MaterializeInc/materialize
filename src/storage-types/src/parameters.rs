@@ -146,6 +146,9 @@ impl RustType<ProtoUpsertAutoSpillConfig> for UpsertAutoSpillConfig {
 
 impl StorageParameters {
     /// Update the parameter values with the set ones from `other`.
+    ///
+    /// NOTE that this does not necessarily update all global state related
+    /// to these parameters, like persist parameters.
     pub fn update(
         &mut self,
         StorageParameters {

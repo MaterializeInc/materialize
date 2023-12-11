@@ -125,6 +125,8 @@ use mz_storage_client::controller::{
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
+use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{
     CollectionMetadata, DurableCollectionMetadata, PersistTxnTablesImpl, StorageError, TxnsCodecRow,
 };
@@ -370,8 +372,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     replicas: BTreeMap<StorageInstanceId, ReplicaId>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
-    /// Storage configuration to apply to newly provisioned instances.
-    config: StorageParameters,
+    /// Storage configuration to apply to newly provisioned instances, and use during purification.
+    config: StorageConfiguration,
     /// Mechanism for returning frontier advancement for tables.
     internal_response_queue: tokio::sync::mpsc::UnboundedReceiver<StorageResponse<T>>,
     /// The persist location where all storage collections are being written to
@@ -423,13 +425,18 @@ where
         }
     }
 
-    fn update_configuration(&mut self, config_params: StorageParameters) {
+    fn update_parameters(&mut self, config_params: StorageParameters) {
         config_params.persist.apply(self.persist.cfg());
 
         for client in self.clients.values_mut() {
             client.send(StorageCommand::UpdateConfiguration(config_params.clone()));
         }
         self.config.update(config_params);
+    }
+
+    /// Get the current configuration
+    fn config(&self) -> &StorageConfiguration {
+        &self.config
     }
 
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError> {
@@ -458,13 +465,15 @@ where
             self.build_info,
             self.metrics.for_instance(id),
             self.envd_epoch,
-            self.config.grpc_client.clone(),
+            self.config.parameters.grpc_client.clone(),
             self.now.clone(),
         );
         if self.initialized {
             client.send(StorageCommand::InitializationComplete);
         }
-        client.send(StorageCommand::UpdateConfiguration(self.config.clone()));
+        client.send(StorageCommand::UpdateConfiguration(
+            self.config.parameters.clone(),
+        ));
         let old_client = self.clients.insert(id, client);
         assert!(old_client.is_none(), "storage instance {id} already exists");
     }
@@ -1771,7 +1780,7 @@ where
                     .await
                     .expect("stash operation must succeed");
 
-                if self.config.finalize_shards {
+                if self.config.parameters.finalize_shards {
                     info!("triggering shard finalization due to dropped storage object");
                     self.finalize_shards().await;
                 } else {
@@ -2248,6 +2257,7 @@ where
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
         persist_txn_tables: PersistTxnTablesImpl,
+        connection_context: ConnectionContext,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -2421,7 +2431,7 @@ where
             clients: BTreeMap::new(),
             replicas: BTreeMap::new(),
             initialized: false,
-            config: StorageParameters::default(),
+            config: StorageConfiguration::new(connection_context),
             internal_response_sender: tx,
             internal_response_queue: rx,
             persist_location,
@@ -2694,7 +2704,7 @@ where
     ) -> Option<BTreeMap<GlobalId, Row>> {
         let (keep_n, occurred_at_col, id_col) = match collection {
             IntrospectionType::SourceStatusHistory => (
-                self.config.keep_n_source_status_history_entries,
+                self.config.parameters.keep_n_source_status_history_entries,
                 healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
@@ -2705,7 +2715,7 @@ where
                     .0,
             ),
             IntrospectionType::SinkStatusHistory => (
-                self.config.keep_n_sink_status_history_entries,
+                self.config.parameters.keep_n_sink_status_history_entries,
                 healthcheck::MZ_SINK_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
@@ -2716,7 +2726,9 @@ where
                     .0,
             ),
             IntrospectionType::PrivatelinkConnectionStatusHistory => (
-                self.config.keep_n_privatelink_status_history_entries,
+                self.config
+                    .parameters
+                    .keep_n_privatelink_status_history_entries,
                 healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")

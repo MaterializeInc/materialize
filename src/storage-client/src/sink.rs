@@ -19,7 +19,7 @@ use mz_kafka_util::client::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
-use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt};
 use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkConnectionRetention};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
@@ -312,17 +312,19 @@ pub async fn publish_kafka_schemas(
 pub async fn build_kafka(
     sink_id: mz_repr::GlobalId,
     connection: &KafkaSinkConnection,
-    connection_cx: &ConnectionContext,
+    storage_configuration: &StorageConfiguration,
 ) -> Result<Option<Timestamp>, ContextCreationError> {
     // Fetch the progress of the last incarnation of the sink, if any.
-    let progress_topic = connection.progress_topic(connection_cx).into_owned();
+    let progress_topic = connection
+        .progress_topic(&storage_configuration.connection_context)
+        .into_owned();
     // For details about the two clients constructed here, see
     // `determine_latest_progress_record`.
     let make_progress_client = |isolation_level: &'static str| async {
         connection
             .connection
             .create_with_context(
-                connection_cx,
+                storage_configuration,
                 MzClientContext::default(),
                 &btreemap! {
                     "group.id" => SinkGroupId::new(sink_id),
@@ -349,7 +351,11 @@ pub async fn build_kafka(
 
     let admin_client: AdminClient<_> = connection
         .connection
-        .create_with_context(connection_cx, MzClientContext::default(), &BTreeMap::new())
+        .create_with_context(
+            storage_configuration,
+            MzClientContext::default(),
+            &BTreeMap::new(),
+        )
         .await
         .add_context("creating admin client failed")?;
 

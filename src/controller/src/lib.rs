@@ -120,6 +120,7 @@ use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::StorageController;
+use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use serde::{Deserialize, Serialize};
@@ -161,7 +162,7 @@ pub struct ControllerConfig {
     pub persist_pubsub_url: String,
     /// Arguments for secrets readers.
     pub secrets_args: SecretsReaderCliArgs,
-    /// The connection context, to thread through to clusterd.
+    /// The connection context, to thread through to clusterd, with cli flags.
     pub connection_context: ConnectionContext,
 }
 
@@ -239,8 +240,6 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
-    /// The connection context, to thread through to clusterd.
-    connection_context: ConnectionContext,
 }
 
 impl<T> Controller<T> {
@@ -256,6 +255,20 @@ impl<T> Controller<T> {
     pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
         self.compute
             .set_default_arrangement_exert_proportionality(value);
+    }
+
+    /// Returns the connection context installed in the controller.
+    ///
+    /// This is purely a helper, and can be obtained from `self.storage`.
+    pub fn connection_context(&self) -> &ConnectionContext {
+        &self.storage.config().connection_context
+    }
+
+    /// Returns the storage configuration installed in the storage controller.
+    ///
+    /// This is purely a helper, and can be obtained from `self.storage`.
+    pub fn storage_configuration(&self) -> &StorageConfiguration {
+        self.storage.config()
     }
 }
 
@@ -398,6 +411,7 @@ where
             envd_epoch,
             config.metrics_registry.clone(),
             persist_txn_tables,
+            config.connection_context,
         )
         .await;
 
@@ -425,12 +439,6 @@ where
             persist_pubsub_url: config.persist_pubsub_url,
             persist_txn_tables,
             secrets_args: config.secrets_args,
-            connection_context: config.connection_context,
         }
-    }
-
-    /// Returns the connection context installed in the controller.
-    pub fn connection_context(&self) -> &ConnectionContext {
-        &self.connection_context
     }
 }

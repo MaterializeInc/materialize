@@ -12,7 +12,6 @@ use std::convert::Infallible;
 use differential_dataflow::{AsCollection, Collection};
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Diff, Row};
-use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::{MzOffset, TestScriptSourceConnection};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use timely::dataflow::operators::ToStream;
@@ -52,7 +51,6 @@ impl SourceRender for TestScriptSourceConnection {
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        _connection_context: ConnectionContext,
         _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (

@@ -96,6 +96,7 @@ use mz_storage_client::client::{
     RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StatusUpdate,
     StorageCommand, StorageResponse,
 };
+use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
@@ -211,7 +212,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
             now,
             timely_worker_index: timely_worker.index(),
             timely_worker_peers: timely_worker.peers(),
-            connection_context,
             instance_context,
             persist_clients,
             sink_tokens: BTreeMap::new(),
@@ -223,6 +223,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             object_status_updates: Default::default(),
             internal_cmd_tx: command_sequencer,
             async_worker,
+            storage_configuration: StorageConfiguration::new(connection_context),
             dataflow_parameters: DataflowParameters::new(
                 shared_rocksdb_write_buffer_manager,
                 cluster_memory_limit,
@@ -271,8 +272,6 @@ pub struct StorageState {
     pub timely_worker_index: usize,
     /// Peers in the associated timely dataflow worker.
     pub timely_worker_peers: usize,
-    /// Configuration for source and sink connections.
-    pub connection_context: ConnectionContext,
     /// Other configuration for sources and sinks.
     pub instance_context: StorageInstanceContext,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
@@ -315,7 +314,10 @@ pub struct StorageState {
     /// the timely main loop cannot do.
     pub async_worker: Rc<RefCell<AsyncStorageWorker<mz_repr::Timestamp>>>,
 
+    /// Configuration for source and sink connections.
+    pub storage_configuration: StorageConfiguration,
     /// Dynamically configurable parameters that control how dataflows are rendered.
+    /// NOTE(guswynn): we should consider moving these into `storage_configuration`.
     pub dataflow_parameters: DataflowParameters,
 
     /// A process-global handle to tracing configuration.
@@ -863,25 +865,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.storage_state.sink_statistics.remove(id);
                 }
             }
-            InternalStorageCommand::UpdateConfiguration {
-                pg_source_tcp_timeouts,
-                pg_source_snapshot_statement_timeout,
-                rocksdb,
-                storage_dataflow_max_inflight_bytes_config,
-                auto_spill_config,
-                delay_sources_past_rehydration,
-                shrink_upsert_unused_buffers_by_ratio,
-                record_namespaced_errors,
-            } => self.storage_state.dataflow_parameters.update(
-                pg_source_tcp_timeouts,
-                pg_source_snapshot_statement_timeout,
-                rocksdb,
-                auto_spill_config,
-                storage_dataflow_max_inflight_bytes_config,
-                delay_sources_past_rehydration,
-                shrink_upsert_unused_buffers_by_ratio,
-                record_namespaced_errors,
-            ),
+            InternalStorageCommand::UpdateConfiguration { storage_parameters } => {
+                self.storage_state
+                    .dataflow_parameters
+                    .update(storage_parameters.clone());
+                self.storage_state
+                    .storage_configuration
+                    .update(storage_parameters);
+            }
         }
     }
 
@@ -1208,12 +1199,15 @@ impl StorageState {
             StorageCommand::CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             StorageCommand::InitializationComplete => (),
             StorageCommand::UpdateConfiguration(params) => {
+                // These can be done from all workers safely.
                 tracing::info!("Applying configuration update: {params:?}");
                 params.persist.apply(self.persist_clients.cfg());
                 params.tracing.apply(self.tracing_handle.as_ref());
 
                 if let Some(log_filter) = &params.tracing.log_filter {
-                    self.connection_context.librdkafka_log_level =
+                    self.storage_configuration
+                        .connection_context
+                        .librdkafka_log_level =
                         mz_ore::tracing::crate_level(&log_filter.clone().into(), "librdkafka");
                 }
 
@@ -1222,17 +1216,7 @@ impl StorageState {
                 // ordering of dataflow rendering across all workers.
                 if worker_index == 0 {
                     internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
-                        pg_source_tcp_timeouts: params.pg_source_tcp_timeouts,
-                        pg_source_snapshot_statement_timeout: params
-                            .pg_source_snapshot_statement_timeout,
-                        rocksdb: params.upsert_rocksdb_tuning_config,
-                        storage_dataflow_max_inflight_bytes_config: params
-                            .storage_dataflow_max_inflight_bytes_config,
-                        auto_spill_config: params.upsert_auto_spill_config,
-                        delay_sources_past_rehydration: params.delay_sources_past_rehydration,
-                        shrink_upsert_unused_buffers_by_ratio: params
-                            .shrink_upsert_unused_buffers_by_ratio,
-                        record_namespaced_errors: params.record_namespaced_errors,
+                        storage_parameters: params,
                     })
                 }
             }

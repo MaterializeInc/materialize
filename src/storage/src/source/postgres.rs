@@ -90,7 +90,6 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{simple_query_opt, PostgresError};
 use mz_repr::{Datum, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
 use mz_timely_util::builder_async::PressOnDropButton;
@@ -122,7 +121,6 @@ impl SourceRender for PostgresSourceConnection {
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        context: ConnectionContext,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
@@ -168,7 +166,6 @@ impl SourceRender for PostgresSourceConnection {
             scope.clone(),
             config.clone(),
             self.clone(),
-            context.clone(),
             subsource_resume_uppers.clone(),
             table_info.clone(),
         );
@@ -177,7 +174,6 @@ impl SourceRender for PostgresSourceConnection {
             scope.clone(),
             config,
             self,
-            context,
             subsource_resume_uppers,
             table_info,
             &rewinds,

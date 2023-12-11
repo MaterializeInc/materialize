@@ -38,6 +38,4 @@ pub mod testscript;
 pub mod types;
 
 pub use kafka::KafkaSourceReader;
-pub use source_reader_pipeline::{
-    create_raw_source, RawSourceCreationConfig, SourceCreationParams, SourceStatistics,
-};
+pub use source_reader_pipeline::{create_raw_source, RawSourceCreationConfig, SourceStatistics};

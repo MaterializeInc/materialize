@@ -154,7 +154,6 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::simple_query_opt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -171,7 +170,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     mut scope: G,
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
-    context: ConnectionContext,
     subsource_resume_uppers: BTreeMap<GlobalId, Antichain<MzOffset>>,
     table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<MirScalarExpr>)>,
 ) -> (
@@ -249,14 +247,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let connection_config = connection
                 .connection
-                .config(&*context.secrets_reader)
-                .await?
-                .tcp_timeouts(config.params.pg_source_tcp_timeouts.clone());
+                .config(&*config.config.connection_context.secrets_reader, &config.config)
+                .await?;
             let task_name = format!("timely-{worker_id} PG snapshotter");
 
             let client = if is_snapshot_leader {
                 let client = connection_config.connect_replication(
-                    &context.ssh_tunnel_manager,
+                    &config.config.connection_context.ssh_tunnel_manager,
                 ).await?;
                 // The main slot must be created *before* we start snapshotting so that we can be
                 // certain that the temporarly slot created for the snapshot start at an LSN that
@@ -272,7 +269,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 // Only the snapshot leader needs a replication connection.
                 connection_config.connect(
                     &task_name,
-                    &context.ssh_tunnel_manager,
+                    &config.config.connection_context.ssh_tunnel_manager,
                 ).await?
             };
 
@@ -283,7 +280,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // Value is known to accept milliseconds w/o units.
             // https://www.postgresql.org/docs/current/runtime-config-client.html
             client.simple_query(
-                &format!("SET statement_timeout = {}", config.params.pg_source_snapshot_statement_timeout.as_millis())
+                &format!("SET statement_timeout = {}", config.config.parameters.pg_source_snapshot_statement_timeout.as_millis())
             ).await?;
 
             mz_ore::soft_assert_no_log!{{
@@ -298,7 +295,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     .map(|i| i.duration())
                     .unwrap()
                     .unwrap()
-                    == config.params.pg_source_snapshot_statement_timeout
+                    == config.config.parameters.pg_source_snapshot_statement_timeout
             }, "SET statement_timeout in PG snapshot did not take effect"};
 
             let (snapshot, snapshot_lsn) = loop {
@@ -323,7 +320,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             *rewind_cap_set = CapabilitySet::new();
 
             let upstream_info = match mz_postgres_util::publication_info(
-                &context.ssh_tunnel_manager,
+                &config.config.connection_context.ssh_tunnel_manager,
                 &connection_config,
                 &connection.publication,
                 None,

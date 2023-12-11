@@ -33,6 +33,7 @@ use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
+use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
@@ -209,8 +210,11 @@ pub trait StorageController: Debug {
     /// This method can be invoked immediately, at the potential expense of performance.
     fn initialization_complete(&mut self);
 
-    /// Update storage configuration.
-    fn update_configuration(&mut self, config_params: StorageParameters);
+    /// Update storage configuration with new parameters.
+    fn update_parameters(&mut self, config_params: StorageParameters);
+
+    /// Get the current configuration, including parameters updated with `update_parameters`.
+    fn config(&self) -> &StorageConfiguration;
 
     /// Acquire an immutable reference to the collection state, should it exist.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
