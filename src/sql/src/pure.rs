@@ -737,6 +737,13 @@ async fn purify_create_source(
             *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
             subsources.extend(new_subsources);
 
+            // Record the active replication timeline_id to allow detection of a future upstream
+            // point-in-time-recovery that will put the source into an error state.
+            let replication_client = config
+                .connect_replication(&connection_context.ssh_tunnel_manager)
+                .await?;
+            let timeline_id = mz_postgres_util::get_timeline_id(&replication_client).await?;
+
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
             let details = PostgresSourcePublicationDetails {
@@ -745,6 +752,7 @@ async fn purify_create_source(
                     "materialize_{}",
                     Uuid::new_v4().to_string().replace('-', "")
                 ),
+                timeline_id: Some(timeline_id),
             };
             options.push(PgConfigOption {
                 name: PgConfigOptionName::Details,
@@ -1125,10 +1133,22 @@ async fn purify_alter_source(
         }
     }
 
-    // TODO: Options
+    let timeline_id = match pg_source_connection.publication_details.timeline_id {
+        None => {
+            // If we had not yet been able to fill in the source's timeline ID, fill it in now.
+            let replication_client = config
+                .connect_replication(&connection_context.ssh_tunnel_manager)
+                .await?;
+            let timeline_id = mz_postgres_util::get_timeline_id(&replication_client).await?;
+            Some(timeline_id)
+        }
+        timeline_id => timeline_id,
+    };
+
     let new_details = PostgresSourcePublicationDetails {
         tables: publication_tables,
         slot: pg_source_connection.publication_details.slot.clone(),
+        timeline_id,
     };
 
     *details = Some(WithOptionValue::Value(Value::String(hex::encode(

@@ -92,7 +92,8 @@ macro_rules! bail_generic {
 pub mod replication;
 #[cfg(feature = "replication")]
 pub use replication::{
-    available_replication_slots, drop_replication_slots, get_max_wal_senders, get_wal_level,
+    available_replication_slots, drop_replication_slots, get_max_wal_senders, get_timeline_id,
+    get_wal_level,
 };
 #[cfg(feature = "schemas")]
 pub mod desc;
@@ -108,6 +109,9 @@ pub use tunnel::{
     DEFAULT_KEEPALIVE_INTERVAL, DEFAULT_KEEPALIVE_RETRIES, DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT,
     DEFAULT_TCP_USER_TIMEOUT,
 };
+
+pub mod query;
+pub use query::simple_query_opt;
 
 /// An error representing pg, ssh, ssl, and other failures.
 #[derive(Debug, thiserror::Error)]
@@ -128,4 +132,6 @@ pub enum PostgresError {
     /// Error setting up postgres ssl.
     #[error(transparent)]
     PostgresSsl(#[from] openssl::error::ErrorStack),
+    #[error("query returned more rows than expected")]
+    UnexpectedRow,
 }

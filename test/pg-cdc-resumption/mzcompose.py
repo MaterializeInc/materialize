@@ -11,12 +11,14 @@ import os
 import time
 
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.alpine import Alpine
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
+    Alpine(),
     Materialized(),
     Postgres(),
     Toxiproxy(),
@@ -65,6 +67,21 @@ def workflow_default(c: Composition) -> None:
             initialize(c)
             scenario(c)
             end(c)
+
+
+def workflow_backup_restore(c: Composition) -> None:
+    with c.override(
+        Materialized(sanity_restart=False),
+        Alpine(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
+        Postgres(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
+    ):
+        for scenario in [
+            backup_restore_pg,
+        ]:
+            print(f"--- Running scenario {scenario.__name__}")
+            initialize(c)
+            scenario(c)
+            # No end confirmation here, since we expect the source to be in a bad state
 
 
 def initialize(c: Composition) -> None:
@@ -216,3 +233,57 @@ def pg_out_of_disk_space(c: Composition) -> None:
     c.exec("postgres", "bash", "-c", f"rm {fill_file}")
 
     c.run("testdrive", "delete-rows-t2.td", "alter-table.td", "alter-mz.td")
+
+
+def backup_restore_pg(c: Composition) -> None:
+    c.exec(
+        "postgres",
+        "bash",
+        "-c",
+        "echo 'local replication all trust\n' >> /share/conf/pg_hba.conf",
+    )
+    # Tell postgres to reload config
+    c.kill("postgres", signal="HUP", wait=False)
+
+    # Backup postgres, wait for completion
+    backup_dir = "/scratch/backup"
+    c.exec(
+        "postgres",
+        "bash",
+        "-c",
+        f"mkdir {backup_dir} && chown -R postgres:postgres {backup_dir}",
+    )
+    c.exec(
+        "postgres",
+        "pg_basebackup",
+        "-U",
+        "postgres",
+        "-X",
+        "stream",
+        "-c",
+        "fast",
+        "-D",
+        backup_dir,
+    )
+    c.run("testdrive", "delete-rows-t1.td")
+
+    # Stop postgres service
+    c.stop("postgres")
+
+    # Perform a point-in-time recovery from the backup to postgres
+    c.run("alpine", "/bin/sh", "-c", "rm -rf /var/lib/postgresql/data/*")
+    c.run("alpine", "/bin/sh", "-c", f"cp -r {backup_dir}/* /var/lib/postgresql/data/")
+    c.run("alpine", "/bin/sh", "-c", "touch /var/lib/postgresql/data/recovery.signal")
+    c.run(
+        "alpine",
+        "/bin/sh",
+        "-c",
+        "echo \"restore_command 'cp /var/lib/postgresql/data/pg_wal/%f %p'\n\" >> /var/lib/postgresql/data/postgresql.conf",
+    )
+
+    # Wait for postgres to become usable again
+    c.up("postgres")
+    c.run("testdrive", "verify-postgres-select.td")
+
+    # Check state of the postgres source
+    c.run("testdrive", "verify-source-failed.td")
