@@ -332,7 +332,10 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     command_tx: Rc::clone(&storage_state.internal_cmd_tx),
                     updates: Rc::clone(&storage_state.object_status_updates),
                 },
-                storage_state.dataflow_parameters.record_namespaced_errors,
+                storage_state
+                    .storage_configuration
+                    .parameters
+                    .record_namespaced_errors,
             );
             tokens.push(health_token);
 
@@ -390,7 +393,10 @@ pub fn build_export_dataflow<A: Allocate>(
                     command_tx: Rc::clone(&storage_state.internal_cmd_tx),
                     updates: Rc::clone(&storage_state.object_status_updates),
                 },
-                storage_state.dataflow_parameters.record_namespaced_errors,
+                storage_state
+                    .storage_configuration
+                    .parameters
+                    .record_namespaced_errors,
             );
             tokens.push(health_token);
 

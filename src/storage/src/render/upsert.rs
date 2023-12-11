@@ -23,6 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_operators::metrics::BackpressureMetrics;
+use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_types::sources::UpsertEnvelope;
 use mz_timely_util::builder_async::{
@@ -189,6 +190,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::RawSourceCreationConfig,
     instance_context: &StorageInstanceContext,
+    storage_configuration: &StorageConfiguration,
     dataflow_paramters: &crate::internal_control::DataflowParameters,
     backpressure_metrics: Option<BackpressureMetrics>,
 ) -> (
@@ -207,24 +209,31 @@ where
 
     // If we are configured to delay raw sources till we rehydrate, we do so. Otherwise, skip
     // this, to prevent unnecessary work.
-    let wait_for_input_resumption = dataflow_paramters.delay_sources_past_rehydration;
+    let wait_for_input_resumption = storage_configuration
+        .parameters
+        .delay_sources_past_rehydration;
     let upsert_config = UpsertConfig {
         wait_for_input_resumption,
-        shrink_upsert_unused_buffers_by_ratio: dataflow_paramters
+        shrink_upsert_unused_buffers_by_ratio: storage_configuration
+            .parameters
             .shrink_upsert_unused_buffers_by_ratio,
     };
 
     if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
         let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
 
-        let allow_auto_spill = dataflow_paramters.auto_spill_config.allow_spilling_to_disk;
-        let spill_threshold = dataflow_paramters
-            .auto_spill_config
+        let allow_auto_spill = storage_configuration
+            .parameters
+            .upsert_auto_spill_config
+            .allow_spilling_to_disk;
+        let spill_threshold = storage_configuration
+            .parameters
+            .upsert_auto_spill_config
             .spill_to_disk_threshold_bytes;
 
         tracing::info!(
             ?tuning,
-            ?dataflow_paramters.auto_spill_config,
+            ?storage_configuration.parameters.upsert_auto_spill_config,
             "timely-{} rendering {} with rocksdb-backed upsert state",
             source_config.worker_id,
             source_config.id

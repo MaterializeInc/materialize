@@ -42,7 +42,7 @@ use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::render::upsert::UpsertKey;
 use crate::source::types::{DecodeResult, SourceOutput};
-use crate::source::{self, RawSourceCreationConfig, SourceCreationParams};
+use crate::source::{self, RawSourceCreationConfig};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -100,16 +100,6 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     let connection = description.desc.connection.clone();
     let source_name = format!("{}-{}", connection.name(), id);
 
-    let params = SourceCreationParams {
-        pg_source_tcp_timeouts: storage_state
-            .dataflow_parameters
-            .pg_source_tcp_timeouts
-            .clone(),
-        pg_source_snapshot_statement_timeout: storage_state
-            .dataflow_parameters
-            .pg_source_snapshot_statement_timeout,
-    };
-
     let base_source_config = RawSourceCreationConfig {
         name: source_name,
         id,
@@ -133,7 +123,8 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         shared_remap_upper: Rc::clone(
             &storage_state.source_uppers[&description.remap_collection_id],
         ),
-        params,
+        // This might quite a large clone, but its just during rendering
+        config: storage_state.storage_configuration.clone(),
         remap_collection_id: description.remap_collection_id.clone(),
     };
 
@@ -157,7 +148,6 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 resume_stream,
                 base_source_config.clone(),
                 connection,
-                storage_state.connection_context.clone(),
                 start_signal,
             );
             let streams: Vec<_> = streams
@@ -172,7 +162,6 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 resume_stream,
                 base_source_config.clone(),
                 connection,
-                storage_state.connection_context.clone(),
                 start_signal,
             );
             let streams: Vec<_> = streams
@@ -187,7 +176,6 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 resume_stream,
                 base_source_config.clone(),
                 connection,
-                storage_state.connection_context.clone(),
                 start_signal,
             );
             let streams: Vec<_> = streams
@@ -202,7 +190,6 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 resume_stream,
                 base_source_config.clone(),
                 connection,
-                storage_state.connection_context.clone(),
                 start_signal,
             );
             let streams: Vec<_> = streams
@@ -298,11 +285,11 @@ where
 
             // TODO(petrosagg): this should move to the envelope section below and
             // made to work with a stream of Rows instead of decoding Avro directly
-            let connection_context = storage_state.connection_context.clone();
+            let config = storage_state.storage_configuration.clone();
             let (oks, token) = render_decode_cdcv2(
                 &ok_source,
                 schema,
-                connection_context,
+                config,
                 csr_connection,
                 confluent_wire_format,
             );
@@ -319,7 +306,7 @@ where
                     value_encoding,
                     dataflow_debug_name.clone(),
                     storage_state.metrics.decode_defs.clone(),
-                    storage_state.connection_context.clone(),
+                    storage_state.storage_configuration.clone(),
                 ),
                 SourceType::Row(source) => (
                     source.map(|r| DecodeResult {
@@ -389,7 +376,8 @@ where
                                     let backpressure_max_inflight_bytes =
                                         get_backpressure_max_inflight_bytes(
                                             &storage_state
-                                                .dataflow_parameters
+                                                .storage_configuration
+                                                .parameters
                                                 .storage_dataflow_max_inflight_bytes_config,
                                             &storage_state.instance_context.cluster_memory_limit,
                                         );
@@ -405,7 +393,8 @@ where
                                                 id
                                             );
                                             if !storage_state
-                                                .dataflow_parameters
+                                                .storage_configuration
+                                                .parameters
                                                 .storage_dataflow_max_inflight_bytes_config
                                                 .disk_only
                                                 || storage_state
@@ -470,6 +459,7 @@ where
                                 previous_token,
                                 base_source_config.clone(),
                                 &storage_state.instance_context,
+                                &storage_state.storage_configuration,
                                 &storage_state.dataflow_parameters,
                                 backpressure_metrics,
                             );
@@ -493,7 +483,8 @@ where
                             // source. Otherwise, drop the token, unblocking the sources at the
                             // end rendering.
                             if storage_state
-                                .dataflow_parameters
+                                .storage_configuration
+                                .parameters
                                 .delay_sources_past_rehydration
                             {
                                 crate::render::upsert::rehydration_finished(

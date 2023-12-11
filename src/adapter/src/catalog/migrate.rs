@@ -15,6 +15,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Raw;
+use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::GenericSourceConnection;
 use semver::Version;
@@ -97,7 +98,8 @@ pub(crate) async fn migrate(
     // input and stages arbitrary transformations to the catalog on `tx`.
 
     // This function blocks for at most 1 second per PG source.
-    ast_rewrite_postgres_source_timeline_id_0_80_0(tx, &conn_cat, connection_context).await?;
+    ast_rewrite_postgres_source_timeline_id_0_80_0(tx, &conn_cat, connection_context.clone())
+        .await?;
 
     info!(
         "migration from catalog version {:?} complete",
@@ -121,7 +123,7 @@ pub(crate) async fn migrate(
 async fn ast_rewrite_postgres_source_timeline_id_0_80_0(
     txn: &mut Transaction<'_>,
     conn_catalog: &ConnCatalog<'_>,
-    connection_context: &ConnectionContext,
+    connection_context: ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     use mz_postgres_util::PostgresError;
     use mz_proto::RustType;
@@ -133,6 +135,13 @@ async fn ast_rewrite_postgres_source_timeline_id_0_80_0(
         PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails,
     };
     use prost::Message;
+
+    // This cannot be bootstrapped with the correct LD-controlled parameters
+    // until AFTER migrations have run and we have bootstrapped the entire coordinator.
+    //
+    // This means we are forced to use the default pg timeouts and other configurations,
+    // which is fine as we are already making connections best-effort.
+    let storage_configuration = StorageConfiguration::new(connection_context);
 
     let mut updated_items = BTreeMap::new();
     for mut item in txn.loaded_items() {
@@ -181,15 +190,20 @@ async fn ast_rewrite_postgres_source_timeline_id_0_80_0(
             }
 
             async fn get_timeline(
-                connection_context: &ConnectionContext,
+                storage_configuration: &StorageConfiguration,
                 connection: PostgresConnection,
             ) -> Result<u64, PostgresError> {
                 let config = connection
-                    .config(&*connection_context.secrets_reader)
+                    .config(
+                        &*storage_configuration.connection_context.secrets_reader,
+                        storage_configuration,
+                    )
                     .await?;
 
                 let replication_client = config
-                    .connect_replication(&connection_context.ssh_tunnel_manager)
+                    .connect_replication(
+                        &storage_configuration.connection_context.ssh_tunnel_manager,
+                    )
                     .await?;
 
                 mz_postgres_util::get_timeline_id(&replication_client).await
@@ -198,7 +212,7 @@ async fn ast_rewrite_postgres_source_timeline_id_0_80_0(
             let result: Result<Result<u64, PostgresError>, tokio::time::error::Elapsed> =
                 tokio::time::timeout(
                     std::time::Duration::from_secs(1),
-                    get_timeline(connection_context, pg_conn.connection),
+                    get_timeline(&storage_configuration, pg_conn.connection),
                 )
                 .await;
 

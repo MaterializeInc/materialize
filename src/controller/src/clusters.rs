@@ -585,8 +585,8 @@ where
             ClusterRole::System => "system",
             ClusterRole::User => "user",
         };
-        let environment_id = self.connection_context.environment_id.clone();
-        let aws_external_id_prefix = self.connection_context.aws_external_id_prefix.clone();
+        let environment_id = self.connection_context().environment_id.clone();
+        let aws_external_id_prefix = self.connection_context().aws_external_id_prefix.clone();
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let persist_txn_tables = self.persist_txn_tables;
         let secrets_args = self.secrets_args.to_flags();

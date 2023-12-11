@@ -24,7 +24,8 @@ use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use mz_interchange::avro::ConfluentAvroResolver;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, Diff, Row, Timestamp};
-use mz_storage_types::connections::{ConnectionContext, CsrConnection};
+use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::CsrConnection;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
@@ -58,7 +59,7 @@ mod protobuf;
 pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>,
     schema: String,
-    connection_context: ConnectionContext,
+    storage_configuration: StorageConfiguration,
     csr_connection: Option<CsrConnection>,
     confluent_wire_format: bool,
 ) -> (Collection<G, Row, Diff>, PressOnDropButton) {
@@ -80,7 +81,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
             Some(conn) => Some(
                 // This also panics on connections errors. cdc_v2 is unused so we don't handle
                 // errors right now.
-                conn.connect(&connection_context)
+                conn.connect(&storage_configuration)
                     .await
                     .expect("CSR connection unexpectedly missing secrets"),
             ),
@@ -296,7 +297,7 @@ async fn get_decoder(
     // `None`.
     is_connection_delimited: bool,
     metrics: DecodeMetricDefs,
-    connection_context: &ConnectionContext,
+    storage_configuration: &StorageConfiguration,
 ) -> Result<DataDecoder, CsrConnectError> {
     let decoder = match encoding.inner {
         DataEncodingInner::Avro(AvroEncoding {
@@ -306,7 +307,7 @@ async fn get_decoder(
         }) => {
             let csr_client = match csr_connection {
                 None => None,
-                Some(csr_connection) => Some(csr_connection.connect(connection_context).await?),
+                Some(csr_connection) => Some(csr_connection.connect(storage_configuration).await?),
             };
             let state = avro::AvroDecoderState::new(
                 &schema,
@@ -411,7 +412,7 @@ pub fn render_decode_delimited<G>(
     value_encoding: DataEncoding,
     debug_name: String,
     metrics: DecodeMetricDefs,
-    connection_context: ConnectionContext,
+    storage_configuration: StorageConfiguration,
 ) -> (
     Collection<G, DecodeResult, Diff>,
     Stream<G, HealthStatusMessage>,
@@ -446,7 +447,7 @@ where
                         &debug_name,
                         true,
                         metrics.clone(),
-                        &connection_context,
+                        &storage_configuration,
                     )
                     .await?,
                 ),
@@ -458,7 +459,7 @@ where
                 &debug_name,
                 true,
                 metrics,
-                &connection_context,
+                &storage_configuration,
             )
             .await?;
 

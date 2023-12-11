@@ -363,7 +363,6 @@ impl Coordinator {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             let transient_revision = self.catalog().transient_revision();
             let conn_id = ctx.session().conn_id().clone();
-            let connection_context = self.connection_context().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
 
@@ -373,9 +372,10 @@ impl Coordinator {
                 .clone()
                 .into_inline_connection(self.catalog().state());
 
+            let current_storage_parameters = self.controller.storage.config().clone();
             task::spawn(|| format!("validate_connection:{conn_id}"), async move {
                 let result = match connection
-                    .validate(connection_gid, &connection_context)
+                    .validate(connection_gid, &current_storage_parameters)
                     .await
                 {
                     Ok(()) => Ok(plan),
@@ -4868,15 +4868,15 @@ impl Coordinator {
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             let transient_revision = self.catalog().transient_revision();
             let conn_id = ctx.session().conn_id().clone();
-            let connection_context = self.connection_context().clone();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
+            let current_storage_parameters = self.controller.storage.config().clone();
 
             task::spawn(
                 || format!("validate_alter_connection:{conn_id}"),
                 async move {
                     let dependency_ids = conn.resolved_ids.0.clone();
-                    let result = match connection.validate(id, &connection_context).await {
+                    let result = match connection.validate(id, &current_storage_parameters).await {
                         Ok(()) => Ok(conn),
                         Err(err) => Err(err.into()),
                     };

@@ -101,7 +101,6 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
-use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -142,7 +141,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     scope: G,
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
-    context: ConnectionContext,
     subsource_resume_uppers: BTreeMap<GlobalId, Antichain<MzOffset>>,
     table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<MirScalarExpr>)>,
     rewind_stream: &Stream<G, RewindRequest>,
@@ -178,13 +176,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // Determine the slot lsn.
             let connection_config = connection
                 .connection
-                .config(&*context.secrets_reader)
-                .await?
-                .tcp_timeouts(config.params.pg_source_tcp_timeouts.clone());
+                .config(&*config.config.connection_context.secrets_reader, &config.config)
+                .await?;
 
             let slot = &connection.publication_details.slot;
             let replication_client = connection_config.connect_replication(
-                &context.ssh_tunnel_manager,
+                &config.config.connection_context.ssh_tunnel_manager,
             ).await?;
             super::ensure_replication_slot(&replication_client, slot).await?;
             let slot_lsn = super::fetch_slot_resume_lsn(&replication_client, slot).await?;
@@ -224,7 +221,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let client = connection_config.connect(
                 "replication metadata",
-                &context.ssh_tunnel_manager,
+                &config.config.connection_context.ssh_tunnel_manager,
             ).await?;
 
             let stream_result = raw_stream(
@@ -273,7 +270,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 commit_lsn,
                                 &table_info,
                                 &connection_config,
-                                &context.ssh_tunnel_manager,
+                                &config.config.connection_context.ssh_tunnel_manager,
                                 &metrics,
                                 &connection.publication,
                                 &mut errored

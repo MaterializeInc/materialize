@@ -241,7 +241,10 @@ impl Coordinator {
                                             .into_inline_connection(self.catalog().state());
                                         let config = conn
                                             .connection
-                                            .config(self.secrets_reader())
+                                            .config(
+                                                self.secrets_reader(),
+                                                self.controller.storage.config(),
+                                            )
                                             .await
                                             .map_err(|e| {
                                                 AdapterError::Storage(StorageError::Generic(
@@ -836,7 +839,7 @@ impl Coordinator {
 
     fn update_storage_config(&mut self) {
         let config_params = flags::storage_config(self.catalog().system_config());
-        self.controller.storage.update_configuration(config_params);
+        self.controller.storage.update_parameters(config_params);
     }
 
     fn update_metrics_retention(&mut self) {

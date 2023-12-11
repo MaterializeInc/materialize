@@ -13,7 +13,6 @@ use std::time::Duration;
 use differential_dataflow::{AsCollection, Collection};
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Diff, Row};
-use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::{
     Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset, SourceTimestamp,
 };
@@ -78,7 +77,6 @@ impl SourceRender for LoadGeneratorSourceConnection {
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        _connection_context: ConnectionContext,
         _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (

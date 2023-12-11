@@ -578,12 +578,15 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::ValidateConnection(plan) => {
-                    let connection_context = self.connection_context().clone();
                     let connection = plan
                         .connection
                         .into_inline_connection(self.catalog().state());
+                    let current_storage_configuration = self.controller.storage.config().clone();
                     mz_ore::task::spawn(|| "coord::validate_connection", async move {
-                        let res = match connection.validate(plan.id, &connection_context).await {
+                        let res = match connection
+                            .validate(plan.id, &current_storage_configuration)
+                            .await
+                        {
                             Ok(()) => Ok(ExecuteResponse::ValidatedConnection),
                             Err(err) => Err(err.into()),
                         };

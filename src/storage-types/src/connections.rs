@@ -43,6 +43,7 @@ use tokio::runtime::Handle;
 use tokio_postgres::config::SslMode;
 use url::Url;
 
+use crate::configuration::StorageConfiguration;
 use crate::connections::aws::AwsConfig;
 use crate::errors::{ContextCreationError, CsrConnectError};
 
@@ -223,15 +224,15 @@ impl Connection<InlinedConnection> {
     pub async fn validate(
         &self,
         id: GlobalId,
-        connection_context: &ConnectionContext,
+        storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         match self {
-            Connection::Kafka(conn) => conn.validate(id, connection_context).await,
-            Connection::Csr(conn) => conn.validate(id, connection_context).await,
-            Connection::Postgres(conn) => conn.validate(id, connection_context).await,
-            Connection::Ssh(conn) => conn.validate(id, connection_context).await,
-            Connection::Aws(conn) => conn.validate(id, connection_context).await,
-            Connection::AwsPrivatelink(conn) => conn.validate(id, connection_context).await,
+            Connection::Kafka(conn) => conn.validate(id, storage_configuration).await,
+            Connection::Csr(conn) => conn.validate(id, storage_configuration).await,
+            Connection::Postgres(conn) => conn.validate(id, storage_configuration).await,
+            Connection::Ssh(conn) => conn.validate(id, storage_configuration).await,
+            Connection::Aws(conn) => conn.validate(id, storage_configuration).await,
+            Connection::AwsPrivatelink(conn) => conn.validate(id, storage_configuration).await,
         }
     }
 
@@ -412,7 +413,7 @@ impl KafkaConnection {
     /// Creates a Kafka client for the connection.
     pub async fn create_with_context<C, T>(
         &self,
-        connection_context: &ConnectionContext,
+        storage_configuration: &StorageConfiguration,
         context: C,
         extra_options: &BTreeMap<&str, String>,
     ) -> Result<T, ContextCreationError>
@@ -463,12 +464,14 @@ impl KafkaConnection {
         options.insert("socket.keepalive.enable".into(), "true".into());
 
         let mut config = mz_kafka_util::client::create_new_client_config(
-            connection_context.librdkafka_log_level,
+            storage_configuration
+                .connection_context
+                .librdkafka_log_level,
         );
         for (k, v) in options {
             config.set(
                 k,
-                v.get_string(&*connection_context.secrets_reader)
+                v.get_string(&*storage_configuration.connection_context.secrets_reader)
                     .await
                     .context("reading kafka secret")?,
             );
@@ -480,7 +483,10 @@ impl KafkaConnection {
         let mut context = TunnelingClientContext::new(
             context,
             Handle::current(),
-            connection_context.ssh_tunnel_manager.clone(),
+            storage_configuration
+                .connection_context
+                .ssh_tunnel_manager
+                .clone(),
         );
 
         match &self.default_tunnel {
@@ -491,7 +497,8 @@ impl KafkaConnection {
                 unreachable!("top-level AwsPrivatelink tunnels are not supported yet")
             }
             Tunnel::Ssh(ssh_tunnel) => {
-                let secret = connection_context
+                let secret = storage_configuration
+                    .connection_context
                     .secrets_reader
                     .read(ssh_tunnel.connection_id)
                     .await?;
@@ -550,7 +557,8 @@ impl KafkaConnection {
                                 port: ssh_tunnel.connection.port,
                                 user: ssh_tunnel.connection.user.clone(),
                                 key_pair: SshKeyPair::from_bytes(
-                                    &connection_context
+                                    &storage_configuration
+                                        .connection_context
                                         .secrets_reader
                                         .read(ssh_tunnel.connection_id)
                                         .await?,
@@ -569,11 +577,11 @@ impl KafkaConnection {
     async fn validate(
         &self,
         _id: GlobalId,
-        connection_context: &ConnectionContext,
+        storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let (context, error_rx) = MzClientContext::with_errors();
         let consumer: BaseConsumer<_> = self
-            .create_with_context(connection_context, context, &BTreeMap::new())
+            .create_with_context(storage_configuration, context, &BTreeMap::new())
             .await?;
 
         // librdkafka doesn't expose an API for determining whether a connection to
@@ -734,25 +742,26 @@ impl CsrConnection {
     /// Constructs a schema registry client from the connection.
     pub async fn connect(
         &self,
-        connection_context: &ConnectionContext,
+        storage_configuration: &StorageConfiguration,
     ) -> Result<mz_ccsr::Client, CsrConnectError> {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
             let root_cert = root_cert
-                .get_string(&*connection_context.secrets_reader)
+                .get_string(&*storage_configuration.connection_context.secrets_reader)
                 .await?;
             let root_cert = Certificate::from_pem(root_cert.as_bytes())?;
             client_config = client_config.add_root_certificate(root_cert);
         }
 
         if let Some(tls_identity) = &self.tls_identity {
-            let key = &connection_context
+            let key = &storage_configuration
+                .connection_context
                 .secrets_reader
                 .read_string(tls_identity.key)
                 .await?;
             let cert = tls_identity
                 .cert
-                .get_string(&*connection_context.secrets_reader)
+                .get_string(&*storage_configuration.connection_context.secrets_reader)
                 .await?;
             // `reqwest` expects identity `pem` files to contain one key and
             // at least one certificate.
@@ -767,12 +776,13 @@ impl CsrConnection {
         if let Some(http_auth) = &self.http_auth {
             let username = http_auth
                 .username
-                .get_string(&*connection_context.secrets_reader)
+                .get_string(&*storage_configuration.connection_context.secrets_reader)
                 .await?;
             let password = match http_auth.password {
                 None => None,
                 Some(password) => Some(
-                    connection_context
+                    storage_configuration
+                        .connection_context
                         .secrets_reader
                         .read_string(password)
                         .await?,
@@ -798,7 +808,7 @@ impl CsrConnection {
 
                 let ssh_tunnel = ssh_tunnel
                     .connect(
-                        connection_context,
+                        storage_configuration,
                         host,
                         // Default to the default http port, but this
                         // could default to 8081...
@@ -868,9 +878,9 @@ impl CsrConnection {
     async fn validate(
         &self,
         _id: GlobalId,
-        connection_context: &ConnectionContext,
+        storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
-        let client = self.connect(connection_context).await?;
+        let client = self.connect(storage_configuration).await?;
         client.list_subjects().await?;
         Ok(())
     }
@@ -1042,6 +1052,7 @@ impl PostgresConnection<InlinedConnection> {
     pub async fn config(
         &self,
         secrets_reader: &dyn mz_secrets::SecretsReader,
+        _storage_configuration: &StorageConfiguration,
     ) -> Result<mz_postgres_util::Config, anyhow::Error> {
         let mut config = tokio_postgres::Config::new();
         config
@@ -1095,13 +1106,18 @@ impl PostgresConnection<InlinedConnection> {
     async fn validate(
         &self,
         _id: GlobalId,
-        connection_context: &ConnectionContext,
+        storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
-        let config = self.config(&*connection_context.secrets_reader).await?;
+        let config = self
+            .config(
+                &*storage_configuration.connection_context.secrets_reader,
+                storage_configuration,
+            )
+            .await?;
         config
             .connect(
                 "connection validation",
-                &connection_context.ssh_tunnel_manager,
+                &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
         Ok(())
@@ -1362,11 +1378,12 @@ impl SshTunnel<InlinedConnection> {
     /// secret.
     async fn connect(
         &self,
-        connection_context: &ConnectionContext,
+        storage_configuration: &StorageConfiguration,
         remote_host: &str,
         remote_port: u16,
     ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
-        connection_context
+        storage_configuration
+            .connection_context
             .ssh_tunnel_manager
             .connect(
                 SshTunnelConfig {
@@ -1374,7 +1391,8 @@ impl SshTunnel<InlinedConnection> {
                     port: self.connection.port,
                     user: self.connection.user.clone(),
                     key_pair: SshKeyPair::from_bytes(
-                        &connection_context
+                        &storage_configuration
+                            .connection_context
                             .secrets_reader
                             .read(self.connection_id)
                             .await?,
@@ -1391,9 +1409,13 @@ impl SshConnection {
     async fn validate(
         &self,
         id: GlobalId,
-        connection_context: &ConnectionContext,
+        storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
-        let secret = connection_context.secrets_reader.read(id).await?;
+        let secret = storage_configuration
+            .connection_context
+            .secrets_reader
+            .read(id)
+            .await?;
         let key_pair = SshKeyPair::from_bytes(&secret)?;
         let config = SshTunnelConfig {
             host: self.host.clone(),
@@ -1414,9 +1436,12 @@ impl AwsPrivatelinkConnection {
     async fn validate(
         &self,
         id: GlobalId,
-        connection_context: &ConnectionContext,
+        storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
-        let Some(ref cloud_resource_reader) = connection_context.cloud_resource_reader else {
+        let Some(ref cloud_resource_reader) = storage_configuration
+            .connection_context
+            .cloud_resource_reader
+        else {
             return Err(anyhow!("AWS PrivateLink connections are unsupported"));
         };
 
