@@ -94,7 +94,7 @@ class MaterializeConnectionManager(PostgresConnectionManager):
             "mz_version"
         )  # e.g. v0.79.0-dev (937dfde5e)
         mz_version = mz_version.split()[0]  # e.g. v0.79.0-dev
-        mz_version = mz_version.removeprefix("v")  # e.g. 0.79.0-dev
+        mz_version = mz_version[1:]  # e.g. 0.79.0-dev
         if not versions_compatible(mz_version, SUPPORTED_MATERIALIZE_VERSIONS):
             raise dbt.exceptions.DbtRuntimeError(
                 f"Detected unsupported Materialize version {mz_version}\n"
