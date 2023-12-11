@@ -13,13 +13,20 @@ menu:
     weight: 15
 ---
 
-Change Data Capture (CDC) allows you to track and propagate changes in a SQL Server database to downstream consumers. In this guide, we’ll cover how to use Materialize to create and efficiently maintain real-time materialized views on top of CDC data.
+Change Data Capture (CDC) allows you to track and propagate changes in a SQL
+Server database to downstream consumers. In this guide, we’ll cover how to use
+Materialize to create and efficiently maintain real-time materialized views on
+top of CDC data.
 
 ## Kafka + Debezium
 
-Use [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/kafka/#using-debezium) to propagate CDC data from SQL Server to Materialize. Debezium captures row-level changes resulting from `INSERT`, `UPDATE`, and `DELETE` operations in the upstream database and publishes them as events to Kafka using Kafka Connect-compatible connectors.
+Use [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/kafka/#using-debezium)
+to propagate CDC data from SQL Server to Materialize. Debezium captures
+row-level changes resulting from `INSERT`, `UPDATE`, and `DELETE` operations in
+the upstream database and publishes them as events to Kafka using Kafka
+Connect-compatible connectors.
 
-### Database Setup
+### Database setup
 
 Before deploying a Debezium connector, ensure that the upstream database is configured to support CDC.
 
@@ -129,7 +136,7 @@ Debezium is deployed as a set of Kafka Connect-compatible connectors. First, def
 
 Now, Debezium will capture changes from the SQL Server database and publish them to Kafka.
 
-### Create a Source
+### Create a source
 
 Debezium emits change events using an envelope that contains detailed information about upstream database operations, like the `before` and `after` values for each record. To create a source that interprets the [Debezium envelope](/sql/create-source/kafka/#using-debezium) in Materialize:
 
@@ -140,11 +147,11 @@ CREATE SOURCE kafka_repl
     ENVELOPE DEBEZIUM;
 ```
 
-#### Transaction Support
+#### Transaction support
 
 Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/sqlserver.html#sqlserver-transaction-metadata) that can be used to preserve transactional boundaries downstream. Work is in progress to utilize this topic to support transaction-aware processing in Materialize ([#7537](https://github.com/MaterializeInc/materialize/issues/7537))!
 
-### Create a Materialized View
+### Create a materialized view
 
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, resulting from `INSERT`, `UPDATE`, and `DELETE` operations in the original SQL Server database.
 
@@ -156,23 +163,23 @@ CREATE MATERIALIZED VIEW cnt_table AS
     GROUP BY field1;
 ```
 
-## Known Limitations
+## Known limitations
 
-The integration of Debezium with Microsoft SQL Server and Materialize presents a few known bugs that may affect the replication and processing of data. The tracking issue for these bugs is [#8054](https://github.com/MaterializeInc/materialize/issues/8054).
+The official Microsoft [documentation for SQL Server CDC](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/known-issues-and-errors-change-data-capture?view=sql-server-ver16)
+lists a number of known limitations that we recommend carefully reading through.
+In addition to those listed, please also consider:
 
-1.  **Incorrect Data Types Replication:**
+##### Debezium delivery guarantees
 
-    -   `DATETIMEOFFSET` values from SQL Server are replicated as `TEXT` in Materialize ([#8017](https://github.com/MaterializeInc/materialize/issues/8017)).
-    -   `DATETIME2` values from SQL Server are replicated as `BIGINT` in Materialize ([#8041](https://github.com/MaterializeInc/materialize/issues/8041)).
+Due to an upstream bug in Debezium affecting snapshot isolation ([DBZ-3915](https://issues.redhat.com/browse/DBZ-3915)),
+it is possible that rows inserted close to the initial snapshot time are
+reflected twice in the downstream Kafka topic. This will lead to a `rows didn't
+match` error in Materialize.
 
-1.  **Upstream Bug (DBZ-3915):**
+To work around this limitation, we recommend halting any updates to the tables
+marked for replication until the Debezium connector is fully configured and the
+initial snapshot for all tables has been completed.
 
-    -   An upstream bug identified as [DBZ-3915](https://issues.redhat.com/browse/DBZ-3915) on RedHat’s issue tracker presents additional challenges.
+##### Supported types
 
-1.  **Configuration Limitation:**
-
-    -   An operational issue exists which requires halting all updates to the tables intended for replication to Materialize until Debezium is completely configured, all snapshots have been taken, and an additional duration of 10 seconds has elapsed post-configuration. This limitation is significant and may influence the decision to utilize SQL Server and Debezium for this purpose.
-
-1. **Known Microsoft issues and errors with CDC**
-
-    - The official Microsoft documentation for CDC in SQL Server lists a number of [known issues and errors](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/known-issues-and-errors-change-data-capture?view=sql-server-ver16) that may affect the replication of data.
+`DATETIMEOFFSET` columns are replicated as `text` {{% gh 8017 %}}, and `DATETIME2` columns are replicated as `bigint` {{% gh 8041 %}} in Materialize.
