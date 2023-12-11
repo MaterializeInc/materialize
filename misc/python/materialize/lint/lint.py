@@ -21,6 +21,7 @@ CHECK_BEFORE_PATH = MAIN_PATH / "before"
 CHECK_AFTER_PATH = MAIN_PATH / "after"
 
 PRINT_DURATION = False
+OMIT_OUTPUT_OF_SUCCESSFUL_CHECK = True
 
 
 def main() -> int:
@@ -90,7 +91,9 @@ def run_and_validate(checks_path: Path) -> list[str]:
             print(f"+++ {thread.name} (FAILED{formatted_duration})")
             failed_checks.append(thread.name)
 
-        if thread.has_output():
+        if thread.has_output() and (
+            not thread.success or not OMIT_OUTPUT_OF_SUCCESSFUL_CHECK
+        ):
             print(thread.output)
 
     return failed_checks
