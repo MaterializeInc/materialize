@@ -90,8 +90,12 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(inner: tokio_postgres::Config, tunnel: TunnelConfig) -> Result<Self, PostgresError> {
-        let config = Self { inner, tunnel }.tcp_timeouts(TcpTimeoutConfig::default());
+    pub fn new(
+        inner: tokio_postgres::Config,
+        tunnel: TunnelConfig,
+        tcp_timeouts: TcpTimeoutConfig,
+    ) -> Result<Self, PostgresError> {
+        let config = Self { inner, tunnel }.tcp_timeouts(tcp_timeouts);
 
         // Early validate that the configuration contains only a single TCP
         // server.
@@ -100,7 +104,7 @@ impl Config {
         Ok(config)
     }
 
-    pub fn tcp_timeouts(mut self, tcp_timeouts: TcpTimeoutConfig) -> Config {
+    fn tcp_timeouts(mut self, tcp_timeouts: TcpTimeoutConfig) -> Config {
         if let Some(connect_timeout) = tcp_timeouts.connect_timeout {
             self.inner.connect_timeout(connect_timeout);
         }

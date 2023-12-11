@@ -1052,7 +1052,7 @@ impl PostgresConnection<InlinedConnection> {
     pub async fn config(
         &self,
         secrets_reader: &dyn mz_secrets::SecretsReader,
-        _storage_configuration: &StorageConfiguration,
+        storage_configuration: &StorageConfiguration,
     ) -> Result<mz_postgres_util::Config, anyhow::Error> {
         let mut config = tokio_postgres::Config::new();
         config
@@ -1100,7 +1100,14 @@ impl PostgresConnection<InlinedConnection> {
             }
         };
 
-        Ok(mz_postgres_util::Config::new(config, tunnel)?)
+        Ok(mz_postgres_util::Config::new(
+            config,
+            tunnel,
+            storage_configuration
+                .parameters
+                .pg_source_tcp_timeouts
+                .clone(),
+        )?)
     }
 
     async fn validate(
