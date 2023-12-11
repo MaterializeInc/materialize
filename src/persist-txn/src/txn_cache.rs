@@ -9,7 +9,7 @@
 
 //! A cache of the txn shard contents.
 
-use std::cmp::Reverse;
+use std::cmp::{min, Reverse};
 use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
@@ -75,7 +75,8 @@ use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 #[derive(Debug)]
 pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     txns_id: ShardId,
-    // Invariant: <= the minimum unapplied batch.
+    /// Invariant: <= the minimum unapplied batch.
+    /// Invariant: <= the minimum unapplied register.
     since_ts: T,
     pub(crate) progress_exclusive: T,
 
@@ -91,6 +92,10 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     batch_idx: HashMap<Vec<u8>, usize>,
     /// The times at which each data shard has been written.
     pub(crate) datas: BTreeMap<ShardId, DataTimes<T>>,
+    /// The registers needing application as of the current progress.
+    ///
+    /// Invariant: Values are sorted by timestamp.
+    pub(crate) unapplied_registers: VecDeque<(ShardId, T)>,
 
     /// Invariant: Contains the minimum write time (if any) for each value in
     /// `self.datas`.
@@ -123,6 +128,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             unapplied_batches: BTreeMap::new(),
             batch_idx: HashMap::new(),
             datas: BTreeMap::new(),
+            unapplied_registers: VecDeque::new(),
             datas_min_write_ts: BinaryHeap::new(),
             only_data_id,
         }
@@ -291,19 +297,26 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         assert_eq!(self.only_data_id, None);
         // We maintain an invariant that the values in the unapplied_batches map
         // are sorted by timestamp, thus the first one must be the minimum.
-        self.unapplied_batches
+        let min_batch_ts = self
+            .unapplied_batches
             .first_key_value()
             .map(|(_, (_, _, ts))| ts)
             // If we don't have any known unapplied batches, then the next
             // timestamp that could be written must potentially have an
             // unapplied batch.
-            .unwrap_or(&self.progress_exclusive)
+            .unwrap_or(&self.progress_exclusive);
+        let min_register_ts = self
+            .unapplied_registers
+            .front()
+            .map(|(_, ts)| ts)
+            .unwrap_or(&self.progress_exclusive);
+        min(min_batch_ts, min_register_ts)
     }
 
-    /// Returns the batches needing application as of the current progress.
-    pub(crate) fn unapplied_batches(&self) -> impl Iterator<Item = &(ShardId, Vec<u8>, T)> {
+    /// Returns the operations needing application as of the current progress.
+    pub(crate) fn unapplied(&self) -> impl Iterator<Item = (&ShardId, Unapplied, &T)> {
         assert_eq!(self.only_data_id, None);
-        self.unapplied_batches.values()
+        UnappliedIter::new(&self.unapplied_batches, &self.unapplied_registers)
     }
 
     /// Filters out retractions known to have made it into the txns shard.
@@ -359,16 +372,16 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         // registering and committing to a data shard at the same
         // timestamp, this will also have to sort registrations first.
         entries.sort_by(|(a, _, _), (b, _, _)| a.ts::<T>().cmp(&b.ts::<T>()));
-        for (e, _t, d) in entries {
+        for (e, t, d) in entries {
             match e {
                 TxnsEntry::Register(data_id, ts) => {
                     let ts = T::decode(ts);
-                    debug_assert!(ts <= _t);
-                    self.push_register(data_id, ts, d);
+                    debug_assert!(ts <= t);
+                    self.push_register(data_id, ts, d, t);
                 }
                 TxnsEntry::Append(data_id, ts, batch) => {
                     let ts = T::decode(ts);
-                    debug_assert!(ts <= _t);
+                    debug_assert!(ts <= t);
                     self.push_append(data_id, batch, ts, d)
                 }
             }
@@ -376,7 +389,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         self.progress_exclusive = progress;
     }
 
-    fn push_register(&mut self, data_id: ShardId, ts: T, diff: i64) {
+    fn push_register(&mut self, data_id: ShardId, ts: T, diff: i64, compacted_ts: T) {
         self.assert_only_data_id(&data_id);
         // Since we keep the original non-advanced timestamp around, retractions
         // necessarily might be for times in the past, so `|| diff < 0`.
@@ -398,6 +411,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             // it off.
             if let Some(last_reg) = entry.registered.back() {
                 assert!(last_reg.forget_ts.is_some())
+            }
+            // The shard has not compacted past the register ts, so it may not have been applied.
+            if ts == compacted_ts {
+                self.unapplied_registers.push_back((data_id, ts.clone()));
             }
             entry.registered.push_back(DataRegistered {
                 register_ts: ts,
@@ -600,7 +617,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             ));
         }
 
-        let mut prev_ts = T::minimum();
+        let mut prev_batch_ts = T::minimum();
         for (idx, (_, batch, ts)) in self.unapplied_batches.iter() {
             if self.batch_idx.get(batch) != Some(idx) {
                 return Err(format!(
@@ -609,13 +626,24 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                     self.batch_idx.get(batch)
                 ));
             }
-            if ts < &prev_ts {
+            if ts < &prev_batch_ts {
                 return Err(format!(
-                    "unapplied timestamp {:?} out of order after {:?}",
-                    ts, prev_ts
+                    "unapplied batch timestamp {:?} out of order after {:?}",
+                    ts, prev_batch_ts
                 ));
             }
-            prev_ts = ts.clone();
+            prev_batch_ts = ts.clone();
+        }
+
+        let mut prev_register_ts = T::minimum();
+        for (_, ts) in self.unapplied_registers.iter() {
+            if ts < &prev_register_ts {
+                return Err(format!(
+                    "unapplied register timestamp {:?} out of order after {:?}",
+                    ts, prev_register_ts
+                ));
+            }
+            prev_register_ts = ts.clone();
         }
 
         for (data_id, data_times) in self.datas.iter() {
@@ -940,6 +968,71 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum Unapplied<'a> {
+    Batch(&'a Vec<u8>),
+    Register,
+}
+
+struct UnappliedIter<'a, T>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+{
+    batches: Vec<&'a (ShardId, Vec<u8>, T)>,
+    batches_idx: usize,
+    registers: &'a VecDeque<(ShardId, T)>,
+    register_idx: usize,
+}
+
+impl<'a, T> UnappliedIter<'a, T>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+{
+    fn new(
+        batches: &'a BTreeMap<usize, (ShardId, Vec<u8>, T)>,
+        registers: &'a VecDeque<(ShardId, T)>,
+    ) -> UnappliedIter<'a, T> {
+        UnappliedIter {
+            batches: batches.values().collect(),
+            batches_idx: 0,
+            registers,
+            register_idx: 0,
+        }
+    }
+}
+
+impl<'a, T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> Iterator
+    for UnappliedIter<'a, T>
+{
+    type Item = (&'a ShardId, Unapplied<'a>, &'a T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match (
+            self.batches.get(self.batches_idx),
+            self.registers.get(self.register_idx),
+        ) {
+            (Some((batch_id, batch, batch_ts)), Some((register_id, register_ts))) => {
+                if register_ts <= batch_ts {
+                    self.register_idx += 1;
+                    Some((register_id, Unapplied::Register, register_ts))
+                } else {
+                    self.batches_idx += 1;
+                    Some((batch_id, Unapplied::Batch(batch), batch_ts))
+                }
+            }
+            (Some((batch_id, batch, batch_ts)), None) => {
+                self.batches_idx += 1;
+                Some((batch_id, Unapplied::Batch(batch), batch_ts))
+            }
+            (None, Some((register_id, register_ts))) => {
+                self.register_idx += 1;
+                Some((register_id, Unapplied::Register, register_ts))
+            }
+            (None, None) => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mz_persist_client::{PersistClient, ShardIdSchema};
@@ -1030,7 +1123,7 @@ mod tests {
 
         // Register a data shard. We're able to read before and at the register
         // ts.
-        cache.push_register(d0, 4, 1);
+        cache.push_register(d0, 4, 1, 4);
         cache.progress_exclusive = 5;
         assert_eq!(cache.data_snapshot(d0, 3), ds(d0, None, 3, 5));
         assert_eq!(cache.data_snapshot(d0, 4), ds(d0, None, 4, 5));
@@ -1049,7 +1142,7 @@ mod tests {
         // An unrelated batch doesn't change the answer. Neither does retracting
         // the batch.
         let other = ShardId::new();
-        cache.push_register(other, 7, 1);
+        cache.push_register(other, 7, 1, 7);
         cache.push_append(other, vec![0xB0], 7, 1);
         cache.push_append(d0, vec![0xA0], 7, -1);
         cache.progress_exclusive = 8;
@@ -1083,7 +1176,7 @@ mod tests {
 
         // Register a data shard. The paired snapshot would advance the physical
         // upper, so we're able to read at the register ts.
-        cache.push_register(d0, 4, 1);
+        cache.push_register(d0, 4, 1, 4);
         cache.progress_exclusive = 5;
         // assert_eq!(cache.data_listen_next(&d0, 4), ReadDataTo(5));
         // assert_eq!(cache.data_listen_next(&d0, 5), WaitForTxnsProgress);
@@ -1103,7 +1196,7 @@ mod tests {
         // An unrelated batch is another empty space guarantee. Ditto retracting
         // the batch.
         let other = ShardId::new();
-        cache.push_register(other, 7, 1);
+        cache.push_register(other, 7, 1, 7);
         cache.push_append(other, vec![0xB0], 7, 1);
         cache.push_append(d0, vec![0xA0], 7, -1);
         cache.progress_exclusive = 8;
