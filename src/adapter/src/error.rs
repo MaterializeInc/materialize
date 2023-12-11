@@ -22,7 +22,7 @@ use mz_ore::str::StrExt;
 use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
-use mz_repr::NotNullViolation;
+use mz_repr::{NotNullViolation, Timestamp};
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
@@ -215,6 +215,10 @@ pub enum AdapterError {
     InvalidAlter(&'static str, PlanError),
     /// An error occurred while validating a connection.
     ConnectionValidation(ConnectionValidationError),
+    /// We refuse to create the materialized view, because it would never be refreshed, so it would
+    /// never be queryable. This can happen when the only specified refreshes are further back in
+    /// the past than the initial compaction window of the materialized view.
+    MaterializedViewWouldNeverRefresh(Timestamp, Timestamp),
 }
 
 impl AdapterError {
@@ -301,6 +305,14 @@ impl AdapterError {
             AdapterError::InvalidAlter(_, e) => e.detail(),
             AdapterError::Optimizer(e) => e.detail(),
             AdapterError::ConnectionValidation(e) => e.detail(),
+            AdapterError::MaterializedViewWouldNeverRefresh(last_refresh, earliest_possible) => {
+                Some(format!(
+                    "The specified last refresh is at {}, while the earliest possible time to compute the materialized \
+                    view is {}.",
+                    last_refresh,
+                    earliest_possible,
+                ))
+            }
             _ => None,
         }
     }
@@ -476,6 +488,8 @@ impl AdapterError {
             AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
             AdapterError::InvalidAlter(_, _) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ConnectionValidation(_) => SqlState::SYSTEM_ERROR,
+            // `DATA_EXCEPTION`, similarly to `AbsurdSubscribeBounds`.
+            AdapterError::MaterializedViewWouldNeverRefresh(_, _) => SqlState::DATA_EXCEPTION,
         }
     }
 
@@ -689,6 +703,13 @@ impl fmt::Display for AdapterError {
                 write!(f, "invalid ALTER {t}: {e}")
             }
             AdapterError::ConnectionValidation(e) => e.fmt(f),
+            AdapterError::MaterializedViewWouldNeverRefresh(_, _) => {
+                write!(
+                    f,
+                    "all the specified refreshes of the materialized view would be too far in the past, and thus they \
+                    would never happen"
+                )
+            }
         }
     }
 }

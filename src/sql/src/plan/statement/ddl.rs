@@ -2141,6 +2141,10 @@ pub fn plan_create_materialized_view(
                         // See `Timestamp::round_up`.
                         sql_bail!("REFRESH interval must not involve units larger than days");
                     }
+                    let interval = interval.duration()?;
+                    if u64::try_from(interval.as_millis()).is_err() {
+                        sql_bail!("REFRESH interval too large");
+                    }
 
                     let mut aligned_to = match aligned_to {
                         Some(aligned_to) => aligned_to,
@@ -2178,7 +2182,7 @@ pub fn plan_create_materialized_view(
                         .ok_or_else(|| PlanError::InvalidRefreshEveryAlignedTo)?;
 
                     refresh_schedule.everies.push(RefreshEvery {
-                        interval: interval.duration()?,
+                        interval,
                         aligned_to: aligned_to_const,
                     });
                 }

@@ -191,6 +191,8 @@ where
 /// This struct is created by [`VecExt::drain_filter_swapping`].
 /// See its documentation for more.
 ///
+/// Warning: The vector is modified only if the iterator is consumed!
+///
 /// # Example
 ///
 /// ```
