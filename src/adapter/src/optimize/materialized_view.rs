@@ -30,6 +30,7 @@ use std::sync::Arc;
 use mz_compute_types::dataflows::BuildDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
@@ -65,6 +66,8 @@ pub struct Optimizer {
     /// Output columns that are asserted to be not null in the `CREATE VIEW`
     /// statement.
     non_null_assertions: Vec<usize>,
+    /// Refresh schedule, e.g., `REFRESH EVERY '1 day'`
+    refresh_schedule: Option<RefreshSchedule>,
     /// A human-readable name exposed internally (useful for debugging).
     debug_name: String,
     // Optimizer config.
@@ -79,6 +82,7 @@ impl Optimizer {
         internal_view_id: GlobalId,
         column_names: Vec<ColumnName>,
         non_null_assertions: Vec<usize>,
+        refresh_schedule: Option<RefreshSchedule>,
         debug_name: String,
         config: OptimizerConfig,
     ) -> Self {
@@ -90,6 +94,7 @@ impl Optimizer {
             internal_view_id,
             column_names,
             non_null_assertions,
+            refresh_schedule,
             debug_name,
             config,
         }
@@ -218,6 +223,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
             with_snapshot: true,
             up_to: Antichain::default(),
             non_null_assertions: self.non_null_assertions.clone(),
+            refresh_schedule: self.refresh_schedule.clone(),
         };
 
         let df_meta = df_builder.build_sink_dataflow_into(
