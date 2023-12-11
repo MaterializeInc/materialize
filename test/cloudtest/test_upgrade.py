@@ -14,6 +14,11 @@ import pytest
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.all_checks import *  # noqa: F401 F403
+from materialize.checks.all_checks.alter_connection import (
+    AlterConnectionHost,
+    AlterConnectionToNonSsh,
+    AlterConnectionToSsh,
+)
 from materialize.checks.all_checks.kafka_protocols import KafkaProtocols
 from materialize.checks.all_checks.ssh import SshKafka, SshPg
 from materialize.checks.checks import Check
@@ -67,8 +72,18 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
     )
 
     executor = CloudtestExecutor(application=mz, version=last_released_version)
-    # SshPg, SshKafka: No SSH bastion host
+    # SshPg, SshKafka, alter connection tests: No SSH bastion host
     # KafkaProtocols: No shared secrets directory
-    checks = list(all_subclasses(Check) - {SshPg, SshKafka, KafkaProtocols})
+    checks = list(
+        all_subclasses(Check)
+        - {
+            SshPg,
+            SshKafka,
+            KafkaProtocols,
+            AlterConnectionToSsh,
+            AlterConnectionToNonSsh,
+            AlterConnectionHost,
+        }
+    )
     scenario = CloudtestUpgrade(checks=checks, executor=executor)
     scenario.run()

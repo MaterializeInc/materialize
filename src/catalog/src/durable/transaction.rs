@@ -18,7 +18,8 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId};
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, ObjectType, RoleAttributes, RoleMembership, RoleVars,
+    CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
+    RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
@@ -109,7 +110,13 @@ impl<'a> Transaction<'a> {
                 a.database_id == b.database_id && a.name == b.name
             })?,
             items: TableTransaction::new(items, |a: &ItemValue, b| {
-                a.schema_id == b.schema_id && a.name == b.name
+                let a_type = a.item_type();
+                let b_type = b.item_type();
+                a.schema_id == b.schema_id
+                    && a.name == b.name
+                    && ((a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
+                        || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
+                        || (b_type == CatalogItemType::Type && a_type.conflicts_with_type()))
             })?,
             comments: TableTransaction::new(comments, |_a, _b| false)?,
             roles: TableTransaction::new(roles, |a: &RoleValue, b| a.name == b.name)?,

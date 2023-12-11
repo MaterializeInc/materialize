@@ -27,10 +27,10 @@ CREATE TYPE custom AS MAP (VALUE TYPE = bool)
 query error Expected one of KEY or VALUE, found identifier "extra_type"
 CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool, extra_type=customthing)
 
-query error KEY TYPE must be of class type, but received pg_catalog.pg_enum which is of class view
+query error type "pg_enum" does not exist
 CREATE TYPE tbl_map AS MAP (KEY TYPE = pg_enum, VALUE TYPE = text)
 
-query error VALUE TYPE must be of class type, but received pg_catalog.pg_enum which is of class view
+query error type "pg_enum" does not exist
 CREATE TYPE tbl_map AS MAP (KEY TYPE = text, VALUE TYPE = pg_enum)
 
 query error CREATE TYPE ... AS MAP option VALUE TYPE can only use named data types, but found unnamed data type pg_catalog.int4 list. Use CREATE TYPE to create a named type first

@@ -954,16 +954,32 @@ impl IndexPeek {
         let oks = self.trace_bundle.oks_mut();
         match oks {
             SpecializedTraceHandle::RowUnit(oks_handle) => {
-                Self::collect_ok_finished_data(peek, oks_handle, None, Some(&[]), max_result_size)
+                // Explicit types required due to Rust type inference limitations.
+                use crate::typedefs::RowSpine;
+                Self::collect_ok_finished_data::<RowSpine<_, _>>(
+                    peek,
+                    oks_handle,
+                    None,
+                    Some(&[]),
+                    max_result_size,
+                )
             }
             SpecializedTraceHandle::RowRow(oks_handle) => {
-                Self::collect_ok_finished_data(peek, oks_handle, None, None, max_result_size)
+                // Explicit types required due to Rust type inference limitations.
+                use crate::typedefs::RowRowSpine;
+                Self::collect_ok_finished_data::<RowRowSpine<_, _>>(
+                    peek,
+                    oks_handle,
+                    None,
+                    None,
+                    max_result_size,
+                )
             }
         }
     }
 
     /// Collects data for a known-complete peek from the ok stream.
-    fn collect_ok_finished_data<Tr, K, V>(
+    fn collect_ok_finished_data<Tr>(
         peek: &mut Peek<Timestamp>,
         oks_handle: &mut TraceAgent<Tr>,
         key_types: Option<&[ColumnType]>,
@@ -971,14 +987,9 @@ impl IndexPeek {
         max_result_size: u32,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
-        Tr: for<'a> TraceReader<
-            Key<'a> = &'a K,
-            KeyOwned = K,
-            Val<'a> = &'a V,
-            ValOwned = V,
-            Time = Timestamp,
-            Diff = Diff,
-        >,
+        Tr: TraceReader<Time = Timestamp, Diff = Diff>,
+        for<'a> Tr::Key<'a>: IntoRowByTypes,
+        for<'a> Tr::Val<'a>: IntoRowByTypes,
         Tr::KeyOwned: Columnation + Data + FromRowByTypes + IntoRowByTypes,
         Tr::ValOwned: Columnation + Data + IntoRowByTypes,
     {
@@ -1004,7 +1015,7 @@ impl IndexPeek {
         let mut datum_vec = DatumVec::new();
         let mut l_datum_vec = DatumVec::new();
         let mut r_datum_vec = DatumVec::new();
-        let mut key_buf = K::default();
+        let mut key_buf = Tr::KeyOwned::default();
 
         // We have to sort the literal constraints because cursor.seek_key can seek only forward.
         peek.literal_constraints
@@ -1027,11 +1038,12 @@ impl IndexPeek {
                             // since we only perform as many of them as there are literals.
                             let current_literal =
                                 key_buf.from_row(current_literal.clone(), key_types);
-                            cursor.seek_key(&storage, &current_literal);
+                            cursor.seek_key_owned(&storage, &current_literal);
                             if !cursor.key_valid(&storage) {
                                 return Ok(results);
                             }
-                            if *cursor.get_key(&storage).unwrap() == current_literal {
+                            use differential_dataflow::trace::cursor::MyTrait;
+                            if cursor.get_key(&storage).unwrap().equals(&current_literal) {
                                 // The cursor found a record whose key matches the current literal.
                                 // We break from the inner loop, and process this key.
                                 break;
@@ -1051,8 +1063,10 @@ impl IndexPeek {
                 // from a performance perspective.
                 let arena = RowArena::new();
 
-                let key = cursor.key(&storage).into_datum_iter(key_types);
-                let row = cursor.val(&storage).into_datum_iter(val_types);
+                let key_item = cursor.key(&storage);
+                let key = key_item.into_datum_iter(key_types);
+                let row_item = cursor.val(&storage);
+                let row = row_item.into_datum_iter(val_types);
 
                 let mut borrow = datum_vec.borrow();
                 borrow.extend(key);

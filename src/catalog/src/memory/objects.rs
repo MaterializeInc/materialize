@@ -91,6 +91,7 @@ pub struct Schema {
     pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
     pub functions: BTreeMap<String, GlobalId>,
+    pub types: BTreeMap<String, GlobalId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
@@ -1846,8 +1847,14 @@ impl mz_sql::catalog::CatalogSchema for Schema {
         !self.items.is_empty()
     }
 
-    fn item_ids(&self) -> &BTreeMap<String, GlobalId> {
-        &self.items
+    fn item_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
+        Box::new(
+            self.items
+                .values()
+                .chain(self.functions.values())
+                .chain(self.types.values())
+                .copied(),
+        )
     }
 
     fn owner_id(&self) -> RoleId {
