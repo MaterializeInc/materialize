@@ -71,6 +71,10 @@ function debounce(callback, wait) {
     }
 }
 
+function camelToSnakeCase(s) {
+    return s.split(/(?=[A-Z])/).map(word => word.toLowerCase()).join("_");
+}
+
 /* JSON Parsing and SQL conversion */
 
 const errorSpan = $("#error_span");
@@ -147,7 +151,7 @@ function formSql(selectItems, viewName, sourceName, objectType) {
 
     let selects = selectItems.map(([name, wrapping_function, cast, parents]) => {
         // Note: The first "parent" is the JSON column.
-        const formattedName = [...parents.slice(1), name].join("_").toLowerCase();
+        const formattedName = [...parents.slice(1), name].map(camelToSnakeCase).join("_");
 
         const parentPath = [parents[0], ...parents.slice(1).map((p) => `'${p}'`)].join("->");
         const formattedPath = parentPath.concat(`->>'${name}'`);
