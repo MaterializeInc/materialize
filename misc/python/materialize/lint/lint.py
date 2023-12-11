@@ -109,19 +109,13 @@ class LintingThread(threading.Thread):
 
         try:
             # Note that coloring gets lost (e.g., in git diff)
-            result = subprocess.run(
-                directory_path / file_name,
-                # TODO syserr
-                # stderr=subprocess.STDOUT,
-                capture_output=True,
-                check=True,
+            stdout_pipe = subprocess.PIPE
+            proc = subprocess.Popen(
+                directory_path / file_name, stdout=stdout_pipe, stderr=stdout_pipe
             )
-
-            self.capture_output(result.stdout)
-            self.success = True
-        except subprocess.CalledProcessError as e:
-            self.capture_output(e.stdout)
-            self.success = False
+            stdout, _ = proc.communicate()
+            self.success = proc.returncode == 0
+            self.capture_output(stdout)
         except Exception as e:
             print(f"Error: {e}")
             self.success = False
