@@ -791,22 +791,27 @@ impl CatalogState {
                 );
             }
         }
-        let mut row = Row::default();
-        let mut row_packer = row.packer();
-        row_packer.push(Datum::String(&connection_id.to_string()));
-        row_packer.push(Datum::from(aws_config.endpoint.as_deref()));
-        row_packer.push(Datum::from(aws_config.region.as_deref()));
-        row_packer.push(Datum::from(access_key_id));
-        row_packer.push(Datum::from(access_key_id_secret_id.as_deref()));
-        row_packer.push(Datum::from(assume_role_arn));
-        row_packer.push(Datum::from(assume_role_session_name));
-        row_packer.push(Datum::from(principal));
-        row_packer.push(Datum::from(external_id.as_deref()));
-        if let Some(policy) = example_trust_policy {
-            row_packer.push(policy.into_row().into_element())
-        } else {
-            row_packer.push(Datum::Null)
-        }
+
+        // An allocation free stack location to avoid borrow-checker errors
+        // in the `example_trust_policy` closure. `let trust_row;` doesn't
+        // work because its used in a closure so we must provide
+        // a default value.
+        let mut trust_row = Default::default();
+        let row = Row::pack_slice(&[
+            Datum::String(&connection_id.to_string()),
+            Datum::from(aws_config.endpoint.as_deref()),
+            Datum::from(aws_config.region.as_deref()),
+            Datum::from(access_key_id),
+            Datum::from(access_key_id_secret_id.as_deref()),
+            Datum::from(assume_role_arn),
+            Datum::from(assume_role_session_name),
+            Datum::from(principal),
+            Datum::from(external_id.as_deref()),
+            Datum::from(example_trust_policy.map(|p| {
+                trust_row = p.into_row();
+                trust_row.into_element()
+            })),
+        ]);
 
         Ok(BuiltinTableUpdate { id, row, diff })
     }
