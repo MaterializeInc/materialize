@@ -188,15 +188,16 @@ where
             })
     }
 
-    /// A point-in-time read of `is_tombstone` from the current state.
+    /// A point-in-time read from the current state. (We declare a shard 'finalized' if it's
+    /// both become an unreadable tombstone and the state itself is has been emptied out.)
     ///
     /// Due to sharing state with other handles, successive reads to this fn or any other may
     /// see a different version of state, even if this Applier has not explicitly fetched and
     /// updated to the latest state. Once this fn returns true, it will always return true.
-    pub fn is_tombstone(&self) -> bool {
+    pub fn is_finalized(&self) -> bool {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
-                state.collections.is_tombstone()
+                state.collections.is_tombstone() && state.collections.is_single_empty_batch()
             })
     }
 
