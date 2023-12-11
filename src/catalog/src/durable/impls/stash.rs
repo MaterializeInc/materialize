@@ -34,7 +34,8 @@ use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{Collection, CollectionTrace, Trace};
 use crate::durable::initialize::{
-    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
+    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, TOMBSTONE_KEY,
+    USER_VERSION_KEY,
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
@@ -249,6 +250,10 @@ impl OpenableDurableCatalogState for OpenableConnection {
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_config(DEPLOY_GENERATION.into()).await
+    }
+
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        Ok(self.get_config(TOMBSTONE_KEY.into()).await?.map(|v| v > 0))
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -614,6 +619,12 @@ impl ReadOnlyDurableCatalogState for Connection {
             .await?
             .map(|value| value > 0)
             .unwrap_or(false))
+    }
+
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        Ok(get_config(&mut self.stash, TOMBSTONE_KEY.into())
+            .await?
+            .map(|value| value > 0))
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1161,6 +1172,10 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.openable_connection.get_deployment_generation().await
+    }
+
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        self.openable_connection.get_tombstone().await
     }
 
     async fn trace(&mut self) -> Result<Trace, CatalogError> {

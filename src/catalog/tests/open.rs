@@ -81,7 +81,7 @@ use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
     shadow_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
     test_persist_backed_catalog_state, test_stash_backed_catalog_state, CatalogError,
-    DurableCatalogError, Epoch, OpenableDurableCatalogState, StashConfig,
+    DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState, StashConfig,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
@@ -739,6 +739,96 @@ async fn test_unopened_fencing(
         matches!(err, CatalogError::Durable(DurableCatalogError::Fence(_))),
         "unexpected err: {err:?}"
     );
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_tombstone() {
+    let (debug_factory, stash_config) = stash_config().await;
+    let openable_state1 = stash_backed_catalog_state(stash_config.clone());
+    let openable_state2 =
+        std::future::ready(stash_backed_catalog_state(stash_config.clone())).boxed();
+    test_tombstone(openable_state1, openable_state2).await;
+    debug_factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_debug_stash_tombstone() {
+    let debug_factory = DebugStashFactory::new().await;
+    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state2 =
+        std::future::ready(test_stash_backed_catalog_state(&debug_factory)).boxed();
+    test_tombstone(debug_openable_state1, debug_openable_state2).await;
+    debug_factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[should_panic]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_tombstone() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let persist_openable_state1 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let persist_openable_state2 =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).boxed();
+    test_tombstone(persist_openable_state1, persist_openable_state2).await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[should_panic]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_shadow_tombstone() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let (debug_factory, stash_config) = stash_config().await;
+
+    let shadow_openable_state1 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state2 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .boxed();
+    test_tombstone(shadow_openable_state1, shadow_openable_state2).await;
+    debug_factory.drop().await;
+}
+
+async fn test_tombstone(
+    mut openable_state1: impl OpenableDurableCatalogState,
+    openable_state2: BoxFuture<'_, impl OpenableDurableCatalogState>,
+) {
+    async fn set_tombstone(state: &mut Box<dyn DurableCatalogState>, value: bool) {
+        let mut txn = state.transaction().await.unwrap();
+        txn.set_tombstone(value).unwrap();
+        txn.commit().await.unwrap();
+    }
+
+    assert_eq!(openable_state1.get_tombstone().await.unwrap(), None);
+
+    let mut state = Box::new(openable_state1)
+        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
+        .open(NOW_ZERO(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+    assert_eq!(state.get_tombstone().await.unwrap(), None);
+
+    set_tombstone(&mut state, false).await;
+    assert_eq!(state.get_tombstone().await.unwrap(), Some(false));
+
+    let mut openable_state2 = openable_state2.await;
+    assert_eq!(openable_state2.get_tombstone().await.unwrap(), Some(false));
+
+    set_tombstone(&mut state, true).await;
+    assert_eq!(state.get_tombstone().await.unwrap(), Some(true));
+
+    assert_eq!(openable_state2.get_tombstone().await.unwrap(), Some(true));
 }
 
 async fn stash_config() -> (DebugStashFactory, StashConfig) {

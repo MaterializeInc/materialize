@@ -130,6 +130,9 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Get the deployment generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError>;
 
+    /// Get the tombstone value of this instance.
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError>;
+
     /// Generate an unconsolidated [`Trace`] of catalog contents.
     async fn trace(&mut self) -> Result<Trace, CatalogError>;
 
@@ -188,6 +191,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     async fn get_persist_txn_tables(
         &mut self,
     ) -> Result<Option<PersistTxnTablesImpl>, CatalogError>;
+
+    /// Get the tombstone value of this instance.
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError>;
 
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;

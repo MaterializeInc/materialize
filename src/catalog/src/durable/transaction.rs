@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::builtin::BuiltinLog;
-use crate::durable::initialize::{PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY};
+use crate::durable::initialize::{PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, TOMBSTONE_KEY};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
@@ -1062,6 +1062,12 @@ impl<'a> Transaction<'a> {
     /// Updates the catalog `system_config_synced` "config" value to true.
     pub fn set_system_config_synced_once(&mut self) -> Result<(), CatalogError> {
         self.set_config(SYSTEM_CONFIG_SYNCED_KEY.into(), 1)
+    }
+
+    /// Updates the catalog `tombstone` "config" value.
+    pub fn set_tombstone(&mut self, value: bool) -> Result<(), CatalogError> {
+        self.set_config(TOMBSTONE_KEY.into(), if value { 1 } else { 0 })?;
+        Ok(())
     }
 
     pub fn update_comment(

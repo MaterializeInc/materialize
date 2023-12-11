@@ -41,7 +41,7 @@ use crate::durable::{
 pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
 /// The key within the "config" Collection that stores the version of the catalog.
 pub(crate) const USER_VERSION_KEY: &str = "user_version";
-/// The key within the "config" Collection that stores whether the remote configuration was
+/// The key within the "config" collection that stores whether the remote configuration was
 /// synchronized at least once.
 pub(crate) const SYSTEM_CONFIG_SYNCED_KEY: &str = "system_config_synced";
 
@@ -50,6 +50,10 @@ pub(crate) const SYSTEM_CONFIG_SYNCED_KEY: &str = "system_config_synced";
 /// can toggle the flag with Launch Darkly, but use it in boot before Launch
 /// Darkly is available.
 pub(crate) const PERSIST_TXN_TABLES: &str = "persist_txn_tables";
+
+/// The key within the "config" collection that stores whether the current durable store is actively
+/// being used for the catalog. This is used to implement migrations/rollbacks to/from persist.
+pub(crate) const TOMBSTONE_KEY: &str = "tombstone";
 
 const USER_ID_ALLOC_KEY: &str = "user";
 const SYSTEM_ID_ALLOC_KEY: &str = "system";

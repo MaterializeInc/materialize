@@ -529,6 +529,10 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         self.get_current_config(DEPLOY_GENERATION).await
     }
 
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        panic!("Persist implementation does not have a tombstone")
+    }
+
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
@@ -908,6 +912,10 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
                     .into()
             })
+    }
+
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        panic!("Persist implementation does not have a tombstone")
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
