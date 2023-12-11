@@ -191,10 +191,6 @@ where
                     snapshot2_processed = true;
                 }
 
-                // Droppable handles to shared trace data structures.
-                let mut trace1_option = Some(trace1);
-                let mut trace2_option = Some(trace2);
-
                 // Swappable buffers for input extraction.
                 let mut input1_buffer = Vec::new();
                 let mut input2_buffer = Vec::new();
@@ -212,10 +208,6 @@ where
                         // Discard queued work.
                         todo1 = Default::default();
                         todo2 = Default::default();
-
-                        // Stop holding on to input traces.
-                        trace1_option = None;
-                        trace2_option = None;
 
                         return;
                     }
@@ -266,10 +258,6 @@ where
                             break;
                         };
                         if !batch1.is_empty() {
-                            let trace2 = trace2_option
-                                .as_mut()
-                                .expect("we only drop a trace in response to the other input emptying");
-
                             // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
                             // at start-up, and have held back physical compaction ever since.
                             let (trace2_cursor, trace2_storage) =
@@ -302,10 +290,6 @@ where
                             break;
                         };
                         if !batch2.is_empty() {
-                            let trace1 = trace1_option
-                                .as_mut()
-                                .expect("we only drop a trace in response to the other input emptying");
-
                             // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
                             // at start-up, and have held back physical compaction ever since.
                             let (trace1_cursor, trace1_storage) =
@@ -330,12 +314,8 @@ where
                     }
 
                     // Advance acknowledged frontiers through any empty regions that we may not receive as batches.
-                    if let Some(trace1) = trace1_option.as_mut() {
-                        trace1.advance_upper(&mut acknowledged1);
-                    }
-                    if let Some(trace2) = trace2_option.as_mut() {
-                        trace2.advance_upper(&mut acknowledged2);
-                    }
+                    trace1.advance_upper(&mut acknowledged1);
+                    trace2.advance_upper(&mut acknowledged2);
 
                     // 2. Join computation.
                     //
@@ -392,36 +372,24 @@ where
                     // compaction of `trace1`.
 
                     // Maintain `trace1`. Drop if `input2` is empty, or advance based on future needs.
-                    if let Some(trace1) = trace1_option.as_mut() {
-                        if input2.frontier().is_empty() {
-                            trace1_option = None;
-                        } else {
-                            // Allow `trace1` to compact logically up to the frontier we may yet receive,
-                            // in the opposing input (`input2`). All `input2` times will be beyond this
-                            // frontier, and joined times only need to be accurate when advanced to it.
-                            trace1.set_logical_compaction(input2.frontier().frontier());
-                            // Allow `trace1` to compact physically up to the upper bound of batches we
-                            // have received in its input (`input1`). We will not require a cursor that
-                            // is not beyond this bound.
-                            trace1.set_physical_compaction(acknowledged1.borrow());
-                        }
-                    }
+                    // Allow `trace1` to compact logically up to the frontier we may yet receive,
+                    // in the opposing input (`input2`). All `input2` times will be beyond this
+                    // frontier, and joined times only need to be accurate when advanced to it.
+                    trace1.set_logical_compaction(input2.frontier().frontier());
+                    // Allow `trace1` to compact physically up to the upper bound of batches we
+                    // have received in its input (`input1`). We will not require a cursor that
+                    // is not beyond this bound.
+                    trace1.set_physical_compaction(acknowledged1.borrow());
 
                     // Maintain `trace2`. Drop if `input1` is empty, or advance based on future needs.
-                    if let Some(trace2) = trace2_option.as_mut() {
-                        if input1.frontier().is_empty() {
-                            trace2_option = None;
-                        } else {
-                            // Allow `trace2` to compact logically up to the frontier we may yet receive,
-                            // in the opposing input (`input1`). All `input1` times will be beyond this
-                            // frontier, and joined times only need to be accurate when advanced to it.
-                            trace2.set_logical_compaction(input1.frontier().frontier());
-                            // Allow `trace2` to compact physically up to the upper bound of batches we
-                            // have received in its input (`input2`). We will not require a cursor that
-                            // is not beyond this bound.
-                            trace2.set_physical_compaction(acknowledged2.borrow());
-                        }
-                    }
+                    // Allow `trace2` to compact logically up to the frontier we may yet receive,
+                    // in the opposing input (`input1`). All `input1` times will be beyond this
+                    // frontier, and joined times only need to be accurate when advanced to it.
+                    trace2.set_logical_compaction(input1.frontier().frontier());
+                    // Allow `trace2` to compact physically up to the upper bound of batches we
+                    // have received in its input (`input2`). We will not require a cursor that
+                    // is not beyond this bound.
+                    trace2.set_physical_compaction(acknowledged2.borrow());
                 }
             },
         )
