@@ -61,6 +61,11 @@ pub struct Batch<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
+    // Some randomness added to guarantee that every Batch's transmittable
+    // format is unique, which is necessary for persist-txn. Never used
+    // otherwise.
+    pub(crate) batch_id: Bytes,
+
     pub(crate) batch_delete_enabled: bool,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_id: ShardId,
@@ -114,6 +119,7 @@ where
         batch: HollowBatch<T>,
     ) -> Self {
         Self {
+            batch_id: Bytes::copy_from_slice(&uuid::Uuid::new_v4().into_bytes()),
             batch_delete_enabled,
             metrics,
             shard_id,
@@ -190,6 +196,7 @@ where
     /// [`WriteHandle::batch_from_transmittable_batch`](crate::write::WriteHandle::batch_from_transmittable_batch).
     pub fn into_transmittable_batch(mut self) -> ProtoBatch {
         let ret = ProtoBatch {
+            batch_id: Bytes::clone(&self.batch_id),
             shard_id: self.shard_id.into_proto(),
             version: self.version.to_string(),
             batch: Some(self.batch.into_proto()),
@@ -950,9 +957,11 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
 
 #[cfg(test)]
 mod tests {
+    use prost::Message;
+
     use crate::cache::PersistClientCache;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
-    use crate::tests::{all_ok, CodecProduct};
+    use crate::tests::{all_ok, new_test_client, CodecProduct};
     use crate::PersistLocation;
 
     use super::*;
@@ -1160,5 +1169,29 @@ mod tests {
         assert!(untrimmable.should_retain("ijk_xyZ"));
         assert!(untrimmable.should_retain("ww-XYZ"));
         assert!(!untrimmable.should_retain("xya"));
+    }
+
+    /// Test for a requirement imposed by persist-txn, which is that a Batch's
+    /// transmittable representation is guaranteed to be unique.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn batch_unique_serialization() {
+        let client = new_test_client().await;
+        let (mut write, _) = client
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        let empty: &[((&String, &String), u64, i64)] = &[];
+        let lower = Antichain::from_elem(0);
+        let upper = Antichain::from_elem(1);
+        let b0 = write
+            .batch(empty, lower.clone(), upper.clone())
+            .await
+            .unwrap();
+        let b1 = write.batch(empty, lower, upper).await.unwrap();
+
+        let b0 = b0.into_transmittable_batch().encode_to_vec();
+        let b1 = b1.into_transmittable_batch().encode_to_vec();
+        assert!(b0 != b1);
     }
 }

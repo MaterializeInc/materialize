@@ -536,6 +536,7 @@ where
     /// to append it to this shard.
     pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
         let ret = Batch {
+            batch_id: batch.batch_id,
             batch_delete_enabled: self
                 .cfg
                 .dynamic

@@ -113,6 +113,7 @@ fn main() {
         .type_attribute(".", "#[allow(missing_docs)]")
         .btree_map(["."])
         .bytes([
+            ".mz_persist_client.batch.ProtoBatch",
             ".mz_persist_client.internal.diff.ProtoStateFieldDiffs",
             ".mz_persist_client.internal.state.ProtoHollowBatchPart",
             ".mz_persist_client.internal.state.ProtoVersionedData",

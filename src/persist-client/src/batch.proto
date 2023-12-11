@@ -14,6 +14,7 @@ import "persist-client/src/internal/state.proto";
 package mz_persist_client.batch;
 
 message ProtoBatch {
+    bytes batch_id = 4;
     string shard_id = 1;
     string version = 2;
     mz_persist_client.internal.state.ProtoHollowBatch batch = 3;
