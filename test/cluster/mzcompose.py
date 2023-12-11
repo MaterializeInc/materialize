@@ -2891,3 +2891,26 @@ def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -
         # panicking.
         c.kill("materialized")
         c.up("materialized")
+
+
+def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Statement logging test needs to run with 100% logging of tests (as opposed to the default 1% )"""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Materialized(),
+    ):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+        """,
+            port=6877,
+            user="mz_system",
+        )
+
+        c.run("testdrive", "statement-logging/statement-logging.td")
