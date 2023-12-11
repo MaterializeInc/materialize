@@ -11,7 +11,8 @@
 //! all oracle operations are self-sufficiently linearized, without requiring
 //! any external precautions/machinery.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
@@ -67,34 +68,8 @@ pub struct PostgresTimestampOracleConfig {
     url: String,
     metrics: Arc<Metrics>,
 
-    /// The maximum size of the connection pool to Postgres/CRDB.
-    pub connection_pool_max_size: usize,
-
-    /// The maximum time to wait when attempting to obtain a connection from the pool.
-    pub connection_pool_max_wait: Option<Duration>,
-
-    /// The minimum TTL of a connection to Postgres/CRDB before it is
-    /// proactively terminated. Connections are routinely culled to balance load
-    /// against the downstream database.
-    pub connection_pool_ttl: Duration,
-
-    /// The minimum time between TTLing connections to Postgres/CRDB. This delay
-    /// is used to stagger reconnections to avoid stampedes and high tail
-    /// latencies. This value should be much less than `connection_pool_ttl` so
-    /// that reconnections are biased towards terminating the oldest connections
-    /// first. A value of `connection_pool_ttl / connection_pool_max_size` is
-    /// likely a good place to start so that all connections are rotated when
-    /// the pool is fully used.
-    pub connection_pool_ttl_stagger: Duration,
-
-    /// The duration to wait for a Postgres/CRDB connection to be made before
-    /// retrying.
-    pub connect_timeout: Duration,
-
-    /// The TCP user timeout for a Postgres/CRDB connection. Specifies the
-    /// amount of time that transmitted data may remain unacknowledged before
-    /// the TCP connection is forcibly closed.
-    pub tcp_user_timout: Duration,
+    /// Configurations that can be dynamically updated.
+    pub dynamic: Arc<DynamicConfig>,
 }
 
 impl From<PostgresTimestampOracleConfig> for PostgresClientConfig {
@@ -109,20 +84,24 @@ impl PostgresTimestampOracleConfig {
 
     /// Returns a new instance of [`PostgresTimestampOracleConfig`] with default tuning.
     pub fn new(url: &str, metrics: Arc<Metrics>) -> Self {
-        PostgresTimestampOracleConfig {
-            url: url.to_string(),
-            metrics,
+        let dynamic = DynamicConfig {
             // TODO(aljoscha): These defaults are taken as is from the persist
             // Consensus tuning. Once we're sufficiently advanced we might want
             // to a) make some of these configurable dynamically, as they are in
             // persist, and b) pick defaults that are different from the persist
             // defaults.
-            connection_pool_max_size: 50,
-            connection_pool_max_wait: Some(Duration::from_secs(60)),
-            connection_pool_ttl: Duration::from_secs(300),
-            connection_pool_ttl_stagger: Duration::from_secs(6),
-            connect_timeout: Duration::from_secs(5),
-            tcp_user_timout: Duration::from_secs(30),
+            pg_connection_pool_max_size: AtomicUsize::new(50),
+            pg_connection_pool_max_wait: RwLock::new(Some(Duration::from_secs(60))),
+            pg_connection_pool_ttl: RwLock::new(Duration::from_secs(300)),
+            pg_connection_pool_ttl_stagger: RwLock::new(Duration::from_secs(6)),
+            pg_connection_pool_connect_timeout: RwLock::new(Duration::from_secs(5)),
+            pg_connection_pool_tcp_user_timeout: RwLock::new(Duration::from_secs(30)),
+        };
+
+        PostgresTimestampOracleConfig {
+            url: url.to_string(),
+            metrics,
+            dynamic: Arc::new(dynamic),
         }
     }
 
@@ -145,44 +124,135 @@ impl PostgresTimestampOracleConfig {
             }
         };
 
+        let dynamic = DynamicConfig {
+            pg_connection_pool_max_size: AtomicUsize::new(2),
+            pg_connection_pool_max_wait: RwLock::new(None),
+            pg_connection_pool_ttl: RwLock::new(Duration::MAX),
+            pg_connection_pool_ttl_stagger: RwLock::new(Duration::MAX),
+            pg_connection_pool_connect_timeout: RwLock::new(Duration::MAX),
+            pg_connection_pool_tcp_user_timeout: RwLock::new(Duration::ZERO),
+        };
+
         let config = PostgresTimestampOracleConfig {
             url: url.to_string(),
             metrics: Arc::new(Metrics::new(&MetricsRegistry::new())),
-            connection_pool_max_size: 2,
-            connection_pool_max_wait: None,
-            connection_pool_ttl: Duration::MAX,
-            connection_pool_ttl_stagger: Duration::MAX,
-            connect_timeout: Duration::MAX,
-            tcp_user_timout: Duration::ZERO,
+            dynamic: Arc::new(dynamic),
         };
 
         Some(config)
     }
 }
 
-impl PostgresClientKnobs for PostgresTimestampOracleConfig {
+/// Part of [`PostgresClient`] configuration for the Postgres timestamp oracle
+/// that can be dynamically updated.
+///
+/// The timestamp oracle is expected to react to each of these such that
+/// updating the value returned by the function takes effect (i.e. no caching
+/// it). This should happen "as promptly as reasonably possible" where that's
+/// defined by the tradeoffs of complexity vs promptness.
+///
+/// These are hooked up to LaunchDarkly. Specifically, LaunchDarkly configs are
+/// serialized into a [TimestampOracleParameters]. In environmentd, these are applied
+/// directly via [TimestampOracleParameters::apply] to the
+/// [PostgresTimestampOracleConfig].
+#[derive(Debug)]
+pub struct DynamicConfig {
+    /// The maximum size of the connection pool to Postgres/CRDB.
+    pg_connection_pool_max_size: AtomicUsize,
+
+    /// The maximum time to wait when attempting to obtain a connection from the pool.
+    pg_connection_pool_max_wait: RwLock<Option<Duration>>,
+
+    /// The minimum TTL of a connection to Postgres/CRDB before it is
+    /// proactively terminated. Connections are routinely culled to balance load
+    /// against the downstream database.
+    pg_connection_pool_ttl: RwLock<Duration>,
+
+    /// The minimum time between TTLing connections to Postgres/CRDB. This delay
+    /// is used to stagger reconnections to avoid stampedes and high tail
+    /// latencies. This value should be much less than `connection_pool_ttl` so
+    /// that reconnections are biased towards terminating the oldest connections
+    /// first. A value of `connection_pool_ttl / connection_pool_max_size` is
+    /// likely a good place to start so that all connections are rotated when
+    /// the pool is fully used.
+    pg_connection_pool_ttl_stagger: RwLock<Duration>,
+
+    /// The duration to wait for a Postgres/CRDB connection to be made before
+    /// retrying.
+    pg_connection_pool_connect_timeout: RwLock<Duration>,
+
+    /// The TCP user timeout for a Postgres/CRDB connection. Specifies the
+    /// amount of time that transmitted data may remain unacknowledged before
+    /// the TCP connection is forcibly closed.
+    pg_connection_pool_tcp_user_timeout: RwLock<Duration>,
+}
+
+impl DynamicConfig {
+    // TODO: Decide if we can relax these.
+    const LOAD_ORDERING: Ordering = Ordering::SeqCst;
+    #[allow(dead_code)]
+    const STORE_ORDERING: Ordering = Ordering::SeqCst;
+
     fn connection_pool_max_size(&self) -> usize {
-        self.connection_pool_max_size
+        self.pg_connection_pool_max_size.load(Self::LOAD_ORDERING)
     }
 
     fn connection_pool_max_wait(&self) -> Option<Duration> {
-        self.connection_pool_max_wait.clone()
+        *self
+            .pg_connection_pool_max_wait
+            .read()
+            .expect("lock poisoned")
     }
 
     fn connection_pool_ttl(&self) -> Duration {
-        self.connection_pool_ttl.clone()
+        *self.pg_connection_pool_ttl.read().expect("lock poisoned")
     }
 
     fn connection_pool_ttl_stagger(&self) -> Duration {
-        self.connection_pool_ttl_stagger.clone()
+        *self
+            .pg_connection_pool_ttl_stagger
+            .read()
+            .expect("lock poisoned")
     }
 
     fn connect_timeout(&self) -> Duration {
-        self.connect_timeout.clone()
+        *self
+            .pg_connection_pool_connect_timeout
+            .read()
+            .expect("lock poisoned")
     }
 
     fn tcp_user_timeout(&self) -> Duration {
-        self.tcp_user_timout.clone()
+        *self
+            .pg_connection_pool_tcp_user_timeout
+            .read()
+            .expect("lock poisoned")
+    }
+}
+
+impl PostgresClientKnobs for PostgresTimestampOracleConfig {
+    fn connection_pool_max_size(&self) -> usize {
+        self.dynamic.connection_pool_max_size()
+    }
+
+    fn connection_pool_max_wait(&self) -> Option<Duration> {
+        self.dynamic.connection_pool_max_wait()
+    }
+
+    fn connection_pool_ttl(&self) -> Duration {
+        self.dynamic.connection_pool_ttl()
+    }
+
+    fn connection_pool_ttl_stagger(&self) -> Duration {
+        self.dynamic.connection_pool_ttl_stagger()
+    }
+
+    fn connect_timeout(&self) -> Duration {
+        self.dynamic.connect_timeout()
+    }
+
+    fn tcp_user_timeout(&self) -> Duration {
+        self.dynamic.tcp_user_timeout()
     }
 }
 
