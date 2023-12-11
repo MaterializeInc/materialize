@@ -153,6 +153,10 @@ where
         compare_and_return_async!(self, get_deployment_generation)
     }
 
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        compare_and_return_async!(self, get_tombstone)
+    }
+
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         panic!("ShadowCatalog is not used for catalog-debug tool");
     }
@@ -344,6 +348,10 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
 
     async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
         compare_and_return_async!(self, has_system_config_synced_once)
+    }
+
+    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
+        compare_and_return_async!(self, get_tombstone)
     }
 
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
