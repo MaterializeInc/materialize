@@ -19,8 +19,8 @@ from typing import Optional
 
 import psycopg2
 
-import dbt.exceptions
 import dbt.adapters.postgres.connections
+import dbt.exceptions
 from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
 from dbt.events import AdapterLogger
 from dbt.semver import versions_compatible
@@ -49,6 +49,7 @@ def connect(**kwargs):
     ]
     kwargs["options"] = " ".join(options)
     return _connect(**kwargs)
+
 
 _connect = psycopg2.connect
 psycopg2.connect = connect
@@ -89,9 +90,11 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         # More info: https://www.psycopg.org/docs/usage.html#transactions-control
         connection.handle.autocommit = True
 
-        mz_version = connection.handle.info.parameter_status("mz_version")  # e.g. v0.79.0-dev (937dfde5e)
-        mz_version = mz_version.split()[0]                                  # e.g. v0.79.0-dev
-        mz_version = mz_version.removeprefix("v")                           # e.g. 0.79.0-dev
+        mz_version = connection.handle.info.parameter_status(
+            "mz_version"
+        )  # e.g. v0.79.0-dev (937dfde5e)
+        mz_version = mz_version.split()[0]  # e.g. v0.79.0-dev
+        mz_version = mz_version.removeprefix("v")  # e.g. 0.79.0-dev
         if not versions_compatible(mz_version, SUPPORTED_MATERIALIZE_VERSIONS):
             raise dbt.exceptions.DbtRuntimeError(
                 f"Detected unsupported Materialize version {mz_version}\n"

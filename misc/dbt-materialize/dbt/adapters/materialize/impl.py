@@ -217,7 +217,9 @@ class MaterializeAdapter(PostgresAdapter):
             f"""select c.name, c.type_oid
             from mz_columns c
             join mz_relations r ON c.id = r.id
-            where r.schema_id = '0' AND r.name = '{view_name}'""", fetch=True)
+            where r.schema_id = '0' AND r.name = '{view_name}'""",
+            fetch=True,
+        )
         columns = [
             self.Column.create(
                 column_name, self.connections.data_type_code_to_name(column_type_code)
