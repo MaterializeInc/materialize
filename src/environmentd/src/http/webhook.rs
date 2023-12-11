@@ -9,11 +9,11 @@
 
 //! Helpers for handling events from a Webhook source.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use http::header::RETRY_AFTER;
 use mz_adapter::{AdapterError, AppendWebhookError, AppendWebhookResponse};
+use mz_ore::collections::HashSet;
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::{ColumnType, Datum, Row, ScalarType};
@@ -37,19 +37,15 @@ pub async fn handle_webhook(
     let received_at = client.now();
     let conn_id = client.new_conn_id().context("allocate connection id")?;
 
-    // Collect headers into a map, while converting them into strings.
-    let mut headers_s = BTreeMap::new();
-    for (name, val) in headers.iter() {
-        if let Ok(val_s) = val.to_str().map(|s| s.to_string()) {
-            // If a header is included more than once, bail returning an error to the user.
-            let existing = headers_s.insert(name.as_str().to_string(), val_s);
-            if existing.is_some() {
-                let msg = format!("{} provided more than once", name.as_str());
-                return Err(WebhookError::InvalidHeaders(msg));
-            }
+    // Check if a header was provided twice, if so, return an error.
+    let mut seen_set = HashSet::with_capacity(headers.keys_len());
+    for (name, _val) in headers.iter() {
+        if !seen_set.insert(name) {
+            let msg = format!("{} provided more than once", name.as_str());
+            return Err(WebhookError::InvalidHeaders(msg));
         }
     }
-    let headers = Arc::new(headers_s);
+    let headers = Arc::new(headers);
 
     // Get an appender for the provided object, if that object exists.
     let AppendWebhookResponse {
@@ -84,16 +80,27 @@ pub async fn handle_webhook(
 /// Given the body and headers of a request, pack them into a [`Row`].
 fn pack_row(
     body: Bytes,
-    headers: &BTreeMap<String, String>,
+    headers: &http::HeaderMap,
     body_ty: ColumnType,
     header_tys: WebhookHeaders,
 ) -> Result<Row, WebhookError> {
+    // Try to estimate how many bytes it will take to store headers, within some bounds.
+    const BYTES_PER_HEADER: usize = 16;
+    const MAX_HEADER_ESTIMATE: usize = 1 * 1024;
+
     // 1 column for the body plus however many are needed for the headers.
     let num_cols = 1 + header_tys.num_columns();
     let mut num_cols_written = 0;
 
-    // Pack our row.
-    let mut row = Row::with_capacity(body.len());
+    // Pack our row, trying to estimate how many bytes we'll need.
+    let estimate_header_bytes = header_tys
+        .header_column
+        .as_ref()
+        .map(|_| headers.len().saturating_mul(BYTES_PER_HEADER))
+        .unwrap_or(0);
+    let estimate_header_bytes = estimate_header_bytes.min(MAX_HEADER_ESTIMATE);
+
+    let mut row = Row::with_capacity(body.len().saturating_add(estimate_header_bytes));
     let mut packer = row.packer();
 
     // Pack our body into a row.
@@ -140,7 +147,13 @@ fn pack_row(
         let header = headers.get(header_name);
         let datum = match header {
             Some(h) if *use_bytes => Datum::Bytes(h.as_bytes()),
-            Some(h) => Datum::String(h),
+            Some(h) => match h.to_str() {
+                Ok(s) => Datum::String(s),
+                Err(err) => {
+                    tracing::debug!(?err, "Mapped header is non UTF-8");
+                    Datum::Null
+                }
+            },
             None => Datum::Null,
         };
         packer.push(datum);
@@ -150,20 +163,24 @@ fn pack_row(
 }
 
 fn filter_headers<'a: 'b, 'b>(
-    headers: &'a BTreeMap<String, String>,
+    headers: &'a http::HeaderMap,
     filters: &'b WebhookHeaderFilters,
 ) -> impl Iterator<Item = (&'a str, &'a str)> + 'b {
     headers
         .iter()
         .filter(|(header_name, _val)| {
             // If our block list is empty, then don't filter anything.
-            filters.block.is_empty() || !filters.block.contains(*header_name)
+            filters.block.is_empty() || !filters.block.contains(header_name.as_str())
         })
         .filter(|(header_name, _val)| {
             // If our allow list is empty, then don't filter anything.
-            filters.allow.is_empty() || filters.allow.contains(*header_name)
+            filters.allow.is_empty() || filters.allow.contains(header_name.as_str())
         })
-        .map(|(key, val)| (key.as_str(), val.as_str()))
+        .filter_map(|(header_name, header_val)| {
+            // Note: we skip values that are not valid UTF-8.
+            let header_val = header_val.to_str().ok()?;
+            Some((header_name.as_str(), header_val))
+        })
 }
 
 /// Errors we can encounter when appending data to a Webhook Source.
@@ -292,7 +309,7 @@ mod tests {
 
     use axum::response::IntoResponse;
     use bytes::Bytes;
-    use http::StatusCode;
+    use http::{HeaderMap, StatusCode};
     use mz_adapter::AdapterError;
     use mz_repr::{ColumnType, GlobalId, ScalarType};
     use mz_sql::plan::{WebhookHeaderFilters, WebhookHeaders};
@@ -331,7 +348,7 @@ mod tests {
     #[mz_ore::test]
     fn test_pack_invalid_column_type() {
         let body = Bytes::from(vec![42, 42, 42, 42]);
-        let headers = BTreeMap::default();
+        let headers = HeaderMap::default();
 
         // Int64 is an invalid column type for a webhook source.
         let body_ty = ColumnType {
@@ -346,11 +363,11 @@ mod tests {
         let block = BTreeSet::from(["foo".to_string()]);
         let allow = BTreeSet::from(["bar".to_string()]);
 
-        let headers = BTreeMap::from([
-            ("foo".to_string(), "1".to_string()),
-            ("bar".to_string(), "2".to_string()),
-            ("baz".to_string(), "3".to_string()),
-        ]);
+        let mut headers = HeaderMap::default();
+        headers.insert("foo", "1".parse().unwrap());
+        headers.insert("bar", "2".parse().unwrap());
+        headers.insert("baz", "3".parse().unwrap());
+
         let mut filters = WebhookHeaderFilters::default();
         filters.block = block.clone();
 
@@ -380,11 +397,10 @@ mod tests {
         let block = BTreeSet::from(["foo".to_string()]);
         let allow = block.clone();
 
-        let headers = BTreeMap::from([
-            ("foo".to_string(), "1".to_string()),
-            ("bar".to_string(), "2".to_string()),
-            ("baz".to_string(), "3".to_string()),
-        ]);
+        let mut headers = HeaderMap::default();
+        headers.insert("foo", "1".parse().unwrap());
+        headers.insert("bar", "2".parse().unwrap());
+        headers.insert("baz", "3".parse().unwrap());
         let filters = WebhookHeaderFilters { block, allow };
 
         // We should yield nothing since we block the only thing we allow.
@@ -424,6 +440,15 @@ mod tests {
                 mapped_headers,
             };
 
+            let headers: HeaderMap = headers
+                .into_iter()
+                .filter_map(|(name, val)| {
+                    let name = http::HeaderName::try_from(name).ok()?;
+                    let value = http::HeaderValue::try_from(val).ok()?;
+                    Some((name, value))
+                })
+                .collect();
+
             // Call this method to make sure it doesn't panic.
             let _ = pack_row(body, &headers, body_ty, header_tys);
         }
@@ -435,6 +460,14 @@ mod tests {
             include_headers: bool,
         ) {
             let body = Bytes::from(body);
+            let headers: HeaderMap = headers
+                .into_iter()
+                .filter_map(|(name, val)| {
+                    let name = http::HeaderName::try_from(name).ok()?;
+                    let value = http::HeaderValue::try_from(val).ok()?;
+                    Some((name, value))
+                })
+                .collect();
 
             let body_ty = ColumnType { scalar_type: ScalarType::Bytes, nullable: false };
             let mut header_tys = WebhookHeaders::default();
@@ -450,6 +483,14 @@ mod tests {
             include_headers: bool,
         ) {
             let body = Bytes::from(body);
+            let headers: HeaderMap = headers
+                .into_iter()
+                .filter_map(|(name, val)| {
+                    let name = http::HeaderName::try_from(name).ok()?;
+                    let value = http::HeaderValue::try_from(val).ok()?;
+                    Some((name, value))
+                })
+                .collect();
 
             let body_ty = ColumnType { scalar_type: ScalarType::String, nullable: false };
             let mut header_tys = WebhookHeaders::default();
@@ -490,6 +531,15 @@ mod tests {
                 header_column: include_headers.then_some(filters),
                 mapped_headers,
             };
+
+            let headers: HeaderMap = headers
+                .into_iter()
+                .filter_map(|(name, val)| {
+                    let name = http::HeaderName::try_from(name).ok()?;
+                    let value = http::HeaderValue::try_from(val).ok()?;
+                    Some((name, value))
+                })
+                .collect();
 
             prop_assert!(pack_row(body, &headers, body_ty, header_tys).is_ok());
         }

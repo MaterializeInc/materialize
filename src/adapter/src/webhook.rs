@@ -61,7 +61,7 @@ impl AppendWebhookValidator {
     pub async fn eval(
         self,
         body: bytes::Bytes,
-        headers: Arc<BTreeMap<String, String>>,
+        headers: Arc<http::HeaderMap>,
         received_at: DateTime<Utc>,
     ) -> Result<bool, AppendWebhookError> {
         let AppendWebhookValidator {
@@ -131,7 +131,6 @@ impl AppendWebhookValidator {
             }
 
             // Append all of our header columns, re-using Row packings.
-            //
             let headers_byte = std::cell::OnceCell::new();
             let headers_text = std::cell::OnceCell::new();
             for (column_idx, use_bytes) in header_columns {
@@ -139,7 +138,7 @@ impl AppendWebhookValidator {
 
                 let row = if use_bytes {
                     headers_byte.get_or_init(|| {
-                        let mut row = Row::with_capacity(1);
+                        let mut row = Row::with_capacity(128);
                         let mut packer = row.packer();
                         packer.push_dict(
                             headers
@@ -150,13 +149,13 @@ impl AppendWebhookValidator {
                     })
                 } else {
                     headers_text.get_or_init(|| {
-                        let mut row = Row::with_capacity(1);
+                        let mut row = Row::with_capacity(128);
                         let mut packer = row.packer();
-                        packer.push_dict(
-                            headers
-                                .iter()
-                                .map(|(name, val)| (name.as_str(), Datum::String(val))),
-                        );
+                        packer.push_dict(headers.iter().filter_map(|(name, val)| {
+                            // Note: we skip values that are not valid UTF-8.
+                            let header_val = val.to_str().ok()?;
+                            Some((name.as_str(), Datum::String(header_val)))
+                        }));
                         row
                     })
                 };
