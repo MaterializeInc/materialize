@@ -892,7 +892,7 @@ where
                 .machine
                 .heartbeat_leased_reader(&self.reader_id, heartbeat_ts)
                 .await;
-            if !existed && !self.machine.applier.is_tombstone() {
+            if !existed && !self.machine.applier.is_finalized() {
                 // It's probably surprising to the caller that the shard
                 // becoming a tombstone expired this reader. Possibly the right
                 // thing to do here is pass up a bool to the caller indicating
