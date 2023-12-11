@@ -2357,11 +2357,8 @@ pub fn serve(
         // use the same impl!
         let timestamp_oracle_impl = catalog.system_config().timestamp_oracle_impl();
 
-        let timestamp_oracle_metrics =
-            Arc::new(timestamp_oracle::metrics::Metrics::new(&metrics_registry));
-        let pg_timestamp_oracle_config = timestamp_oracle_url.map(|pg_url| {
-            PostgresTimestampOracleConfig::new(&pg_url, Arc::clone(&timestamp_oracle_metrics))
-        });
+        let pg_timestamp_oracle_config = timestamp_oracle_url
+            .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
 
         let initial_timestamps =
             get_initial_oracle_timestamps(&catalog, &pg_timestamp_oracle_config).await?;

@@ -29,7 +29,9 @@ use tracing::{debug, info};
 use crate::coord::timeline::WriteTimestamp;
 use crate::coord::timestamp_oracle::metrics::{Metrics, RetryMetrics};
 use crate::coord::timestamp_oracle::retry::Retry;
-use crate::coord::timestamp_oracle::{GenericNowFn, ShareableTimestampOracle, TimestampOracle};
+use crate::coord::timestamp_oracle::{
+    self, GenericNowFn, ShareableTimestampOracle, TimestampOracle,
+};
 
 // The timestamp columns are a `DECIMAL` that is big enough to hold
 // `18446744073709551615`, the maximum value of `u64` which is our underlying
@@ -84,7 +86,9 @@ impl PostgresTimestampOracleConfig {
     pub(crate) const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "COCKROACH_URL";
 
     /// Returns a new instance of [`PostgresTimestampOracleConfig`] with default tuning.
-    pub fn new(url: &str, metrics: Arc<Metrics>) -> Self {
+    pub fn new(url: &str, metrics_registry: &MetricsRegistry) -> Self {
+        let metrics = Arc::new(timestamp_oracle::metrics::Metrics::new(metrics_registry));
+
         let dynamic = DynamicConfig {
             // TODO(aljoscha): These defaults are taken as is from the persist
             // Consensus tuning. Once we're sufficiently advanced we might want
