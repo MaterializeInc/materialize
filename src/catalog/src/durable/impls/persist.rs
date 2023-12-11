@@ -916,7 +916,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn full_snapshot(
+    async fn whole_migration_snapshot(
         &mut self,
     ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
         self.sync_to_current_upper().await?;
@@ -957,11 +957,11 @@ impl DurableCatalogState for PersistCatalogState {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn full_transaction(
+    async fn whole_migration_transaction(
         &mut self,
     ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
         self.metrics.transactions_started.inc();
-        let (snapshot, audit_events, storage_usages) = self.full_snapshot().await?;
+        let (snapshot, audit_events, storage_usages) = self.whole_migration_snapshot().await?;
         let transaction = Transaction::new(self, snapshot)?;
         Ok((transaction, audit_events, storage_usages))
     }

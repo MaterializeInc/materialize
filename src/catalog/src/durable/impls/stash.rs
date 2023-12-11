@@ -709,7 +709,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn full_snapshot(
+    async fn whole_migration_snapshot(
         &mut self,
     ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
         let (
@@ -837,10 +837,10 @@ impl DurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn full_transaction(
+    async fn whole_migration_transaction(
         &mut self,
     ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
-        let (snapshot, audit_events, storage_usages) = self.full_snapshot().await?;
+        let (snapshot, audit_events, storage_usages) = self.whole_migration_snapshot().await?;
         let transaction = Transaction::new(self, snapshot)?;
         Ok((transaction, audit_events, storage_usages))
     }

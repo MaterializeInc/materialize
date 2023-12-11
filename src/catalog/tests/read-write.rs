@@ -555,7 +555,8 @@ async fn test_set_catalog(openable_state: impl OpenableDurableCatalogState) {
     txn.commit().await.unwrap();
 
     // Set the contents of the catalog.
-    let (mut txn, old_audit_logs, old_storage_usages) = state.full_transaction().await.unwrap();
+    let (mut txn, old_audit_logs, old_storage_usages) =
+        state.whole_migration_transaction().await.unwrap();
     txn.set_catalog(
         new_snapshot.clone(),
         old_audit_logs,
@@ -567,7 +568,8 @@ async fn test_set_catalog(openable_state: impl OpenableDurableCatalogState) {
     txn.commit().await.unwrap();
 
     // Check the current state of the catalog.
-    let (mut snapshot, audit_logs, storage_usages) = state.full_snapshot().await.unwrap();
+    let (mut snapshot, audit_logs, storage_usages) =
+        state.whole_migration_snapshot().await.unwrap();
     let items = std::mem::take(&mut snapshot.items);
     assert_eq!(items, new_items);
     assert_eq!(audit_logs, new_audit_logs);
