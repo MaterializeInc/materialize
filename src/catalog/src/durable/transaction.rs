@@ -13,7 +13,7 @@ use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert;
-use mz_proto::RustType;
+use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId};
@@ -143,13 +143,28 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn insert_audit_log_event(&mut self, event: VersionedEvent) {
-        self.audit_log_updates
-            .push((AuditLogKey { event }.into_proto(), (), 1));
+        self.insert_audit_log_events([event]);
+    }
+
+    pub fn insert_audit_log_events(&mut self, events: impl IntoIterator<Item = VersionedEvent>) {
+        let events = events
+            .into_iter()
+            .map(|event| (AuditLogKey { event }.into_proto(), (), 1));
+        self.audit_log_updates.extend(events);
     }
 
     pub fn insert_storage_usage_event(&mut self, metric: VersionedStorageUsage) {
-        self.storage_usage_updates
-            .push((StorageUsageKey { metric }.into_proto(), (), 1));
+        self.insert_storage_usage_events([metric]);
+    }
+
+    pub fn insert_storage_usage_events(
+        &mut self,
+        metrics: impl IntoIterator<Item = VersionedStorageUsage>,
+    ) {
+        let metrics = metrics
+            .into_iter()
+            .map(|metric| (StorageUsageKey { metric }.into_proto(), (), 1));
+        self.storage_usage_updates.extend(metrics);
     }
 
     pub fn insert_user_database(
@@ -1237,6 +1252,138 @@ impl<'a> Transaction<'a> {
 
     pub fn set_connection_timeout(&mut self, timeout: Duration) {
         self.connection_timeout = Some(timeout);
+    }
+
+    /// Delete all values in the catalog.
+    fn clear(
+        &mut self,
+        audit_logs: Vec<VersionedEvent>,
+        storage_usages: Vec<VersionedStorageUsage>,
+    ) {
+        let Transaction {
+            durable_catalog: _,
+            databases,
+            schemas,
+            items,
+            comments,
+            roles,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+            audit_log_updates,
+            storage_usage_updates,
+            connection_timeout: _,
+        } = self;
+        databases.clear();
+        schemas.clear();
+        items.clear();
+        comments.clear();
+        roles.clear();
+        clusters.clear();
+        cluster_replicas.clear();
+        introspection_sources.clear();
+        id_allocator.clear();
+        configs.clear();
+        settings.clear();
+        timestamps.clear();
+        system_gid_mapping.clear();
+        system_configurations.clear();
+        default_privileges.clear();
+        system_privileges.clear();
+
+        let audit_log_retractions = audit_logs.into_iter().map(|event| {
+            let key = AuditLogKey { event }.into_proto();
+            (key, (), -1)
+        });
+        audit_log_updates.extend(audit_log_retractions);
+
+        let storage_usage_retractions = storage_usages.into_iter().map(|metric| {
+            let key = StorageUsageKey { metric }.into_proto();
+            (key, (), -1)
+        });
+        storage_usage_updates.extend(storage_usage_retractions);
+    }
+
+    /// Clears out the entire contents of the catalog and replaces it with the provided snapshot,
+    /// `new_audit_logs` and `new_storage_usages`. Existing audit logs and storage usages are
+    /// assumed to be equal to `old_audit_logs` and `new_storage_usages`.
+    pub fn set_catalog(
+        &mut self,
+        Snapshot {
+            databases,
+            schemas,
+            roles,
+            items,
+            comments,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_object_mappings,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+        }: Snapshot,
+        old_audit_logs: Vec<VersionedEvent>,
+        old_storage_usages: Vec<VersionedStorageUsage>,
+        new_audit_logs: Vec<VersionedEvent>,
+        new_storage_usages: Vec<VersionedStorageUsage>,
+    ) -> Result<(), CatalogError> {
+        fn set_collection<K, V, PK, PV>(
+            table_txn: &mut TableTransaction<K, V>,
+            values: BTreeMap<PK, PV>,
+        ) -> Result<(), CatalogError>
+        where
+            K: Ord + Eq + Clone,
+            V: Ord + Clone,
+            PK: ProtoType<K>,
+            PV: ProtoType<V>,
+        {
+            let mut value_options = BTreeMap::new();
+            for (key, value) in values.into_iter() {
+                let key = key.into_rust()?;
+                let value = value.into_rust()?;
+                value_options.insert(key, Some(value));
+            }
+            table_txn.set_many(value_options)?;
+
+            Ok(())
+        }
+
+        self.clear(old_audit_logs, old_storage_usages);
+
+        set_collection(&mut self.databases, databases)?;
+        set_collection(&mut self.schemas, schemas)?;
+        set_collection(&mut self.roles, roles)?;
+        set_collection(&mut self.items, items)?;
+        set_collection(&mut self.comments, comments)?;
+        set_collection(&mut self.clusters, clusters)?;
+        set_collection(&mut self.cluster_replicas, cluster_replicas)?;
+        set_collection(&mut self.introspection_sources, introspection_sources)?;
+        set_collection(&mut self.id_allocator, id_allocator)?;
+        set_collection(&mut self.configs, configs)?;
+        set_collection(&mut self.settings, settings)?;
+        set_collection(&mut self.timestamps, timestamps)?;
+        set_collection(&mut self.system_gid_mapping, system_object_mappings)?;
+        set_collection(&mut self.system_configurations, system_configurations)?;
+        set_collection(&mut self.default_privileges, default_privileges)?;
+        set_collection(&mut self.system_privileges, system_privileges)?;
+
+        self.insert_audit_log_events(new_audit_logs);
+        self.insert_storage_usage_events(new_storage_usages);
+
+        Ok(())
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {

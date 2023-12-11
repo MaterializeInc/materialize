@@ -80,7 +80,7 @@ use mz_audit_log::{
     CreateClusterReplicaV1, EventDetails, EventType, EventV1, IdNameV1, StorageUsageV1,
     VersionedEvent, VersionedStorageUsage,
 };
-use mz_catalog::durable::objects::{DurableType, IdAlloc};
+use mz_catalog::durable::objects::{DurableType, IdAlloc, Snapshot};
 use mz_catalog::durable::{
     test_bootstrap_args, test_persist_backed_catalog_state, test_stash_backed_catalog_state,
     CatalogError, DurableCatalogError, Item, OpenableDurableCatalogState, TimelineTimestamp,
@@ -95,6 +95,7 @@ use mz_repr::GlobalId;
 use mz_sql::names::SchemaId;
 use mz_stash::DebugStashFactory;
 use mz_storage_types::sources::Timeline;
+use std::collections::BTreeMap;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -451,5 +452,127 @@ async fn test_items(openable_state: impl OpenableDurableCatalogState) {
     for item in &items {
         assert!(snapshot_items.contains(item));
     }
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_set_catalog() {
+    let debug_factory = DebugStashFactory::new().await;
+    let openable_state = test_stash_backed_catalog_state(&debug_factory);
+    test_set_catalog(openable_state).await;
+    debug_factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_set_catalog() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    test_set_catalog(openable_state).await;
+}
+
+async fn test_set_catalog(openable_state: impl OpenableDurableCatalogState) {
+    let old_items = [
+        Item {
+            id: GlobalId::User(100),
+            schema_id: SchemaId::User(1),
+            name: "foo".to_string(),
+            create_sql: "CREATE VIEW v AS SELECT 1".to_string(),
+            owner_id: RoleId::User(1),
+            privileges: vec![],
+        },
+        Item {
+            id: GlobalId::User(200),
+            schema_id: SchemaId::User(1),
+            name: "bar".to_string(),
+            create_sql: "CREATE MATERIALIZED VIEW mv AS SELECT 2".to_string(),
+            owner_id: RoleId::User(2),
+            privileges: vec![],
+        },
+    ];
+    let new_items: BTreeMap<_, _> = [
+        Item {
+            id: GlobalId::User(300),
+            schema_id: SchemaId::User(1),
+            name: "fooooo".to_string(),
+            create_sql: "CREATE VIEW v4 AS SELECT 10".to_string(),
+            owner_id: RoleId::User(1),
+            privileges: vec![],
+        },
+        Item {
+            id: GlobalId::User(400),
+            schema_id: SchemaId::User(1),
+            name: "barrrrr".to_string(),
+            create_sql: "CREATE MATERIALIZED VIEW mv4 AS SELECT 20".to_string(),
+            owner_id: RoleId::User(2),
+            privileges: vec![],
+        },
+    ]
+    .into_iter()
+    .map(|item| item.into_key_value())
+    .map(|(key, value)| (key.into_proto(), value.into_proto()))
+    .collect();
+    let mut new_snapshot = Snapshot::empty();
+    new_snapshot.items = new_items.clone();
+    let new_audit_logs = vec![VersionedEvent::V1(EventV1 {
+        id: 1,
+        event_type: EventType::Create,
+        object_type: mz_audit_log::ObjectType::Cluster,
+        details: EventDetails::IdNameV1(IdNameV1 {
+            id: "a".to_string(),
+            name: "b".to_string(),
+        }),
+        user: None,
+        occurred_at: 0,
+    })];
+    let new_storage_usages = vec![VersionedStorageUsage::V1(StorageUsageV1 {
+        id: 1,
+        shard_id: None,
+        size_bytes: 2,
+        collection_timestamp: 3,
+    })];
+
+    // Open state and insert some initial items into it.
+    let mut state = Box::new(openable_state)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+    let mut txn = state.transaction().await.unwrap();
+    for item in &old_items {
+        txn.insert_item(
+            item.id,
+            item.schema_id,
+            &item.name,
+            item.create_sql.clone(),
+            item.owner_id,
+            item.privileges.clone(),
+        )
+        .unwrap();
+    }
+    txn.commit().await.unwrap();
+
+    // Set the contents of the catalog.
+    let (mut txn, old_audit_logs, old_storage_usages) = state.full_transaction().await.unwrap();
+    txn.set_catalog(
+        new_snapshot.clone(),
+        old_audit_logs,
+        old_storage_usages,
+        new_audit_logs.clone(),
+        new_storage_usages.clone(),
+    )
+    .unwrap();
+    txn.commit().await.unwrap();
+
+    // Check the current state of the catalog.
+    let (mut snapshot, audit_logs, storage_usages) = state.full_snapshot().await.unwrap();
+    let items = std::mem::take(&mut snapshot.items);
+    assert_eq!(items, new_items);
+    assert_eq!(audit_logs, new_audit_logs);
+    assert_eq!(storage_usages, new_storage_usages);
+    assert_eq!(snapshot, Snapshot::empty());
+
     Box::new(state).expire().await;
 }

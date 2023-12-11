@@ -893,4 +893,12 @@ where
         soft_assert!(self.verify().is_ok());
         deleted
     }
+
+    /// Deletes all items.
+    pub fn clear(&mut self) {
+        self.for_values_mut(|p, k, _v| {
+            p.insert(k.clone(), None);
+        });
+        soft_assert!(self.verify().is_ok());
+    }
 }
