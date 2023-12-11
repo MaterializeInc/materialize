@@ -172,6 +172,8 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         if db_function.function_name_in_lower_case in [
             "length",
             "bit_length",
+            "char_length",
+            "octet_length",
         ] and expression.matches(
             partial(
                 involves_data_type_category, data_type_category=DataTypeCategory.JSONB
