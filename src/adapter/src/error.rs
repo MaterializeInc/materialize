@@ -215,6 +215,10 @@ pub enum AdapterError {
     InvalidAlter(&'static str, PlanError),
     /// An error occurred while validating a connection.
     ConnectionValidation(ConnectionValidationError),
+    /// We refuse to create the materialized view, because it would never be refreshed, so it would
+    /// never be queryable. This can happen when the only specified refreshes are further back in
+    /// the past than the initial compaction window of the materialized view.
+    MaterializedViewWouldNeverRefresh(String),
 }
 
 impl AdapterError {
@@ -476,6 +480,8 @@ impl AdapterError {
             AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
             AdapterError::InvalidAlter(_, _) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ConnectionValidation(_) => SqlState::SYSTEM_ERROR,
+            // `DATA_EXCEPTION`, similarly to `AbsurdSubscribeBounds`.
+            AdapterError::MaterializedViewWouldNeverRefresh(_) => SqlState::DATA_EXCEPTION,
         }
     }
 
@@ -689,6 +695,14 @@ impl fmt::Display for AdapterError {
                 write!(f, "invalid ALTER {t}: {e}")
             }
             AdapterError::ConnectionValidation(e) => e.fmt(f),
+            AdapterError::MaterializedViewWouldNeverRefresh(name) => {
+                write!(
+                    f,
+                    "Error when creating materialized view {}: All the specified refreshes \
+                    would be too far in the past, and thus they would never happen",
+                    name
+                )
+            }
         }
     }
 }

@@ -3098,7 +3098,7 @@ impl Coordinator {
         target_cluster_id: ClusterId,
         broken: bool,
         non_null_assertions: Vec<usize>,
-        _refresh_schedule: Option<RefreshSchedule>,
+        refresh_schedule: Option<RefreshSchedule>,
         explain_config: &mz_repr::explain::ExplainConfig,
         _root_dispatch: tracing::Dispatch,
     ) -> Result<
@@ -3139,6 +3139,7 @@ impl Coordinator {
             internal_view_id,
             column_names.clone(),
             non_null_assertions,
+            refresh_schedule,
             debug_name,
             optimizer_config,
         );

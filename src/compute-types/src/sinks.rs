@@ -9,39 +9,57 @@
 
 //! Types for describing dataflow sinks.
 
+use mz_expr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use timely::progress::Antichain;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_types.sinks.rs"));
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ComputeSinkDesc<S: 'static = (), T = mz_repr::Timestamp> {
+pub struct ComputeSinkDesc<S: 'static = (), T = Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: ComputeSinkConnection<S>,
     pub with_snapshot: bool,
     pub up_to: Antichain<T>,
     pub non_null_assertions: Vec<usize>,
+    pub refresh_schedule: Option<RefreshSchedule>,
 }
 
-impl Arbitrary for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
+impl Arbitrary for ComputeSinkDesc<CollectionMetadata, Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        let refresh_schedule_strategy: BoxedStrategy<RefreshSchedule> = (
+            any::<Duration>(),
+            any::<Timestamp>(),
+            proptest::collection::vec(any::<Timestamp>(), 1..4),
+        )
+            .prop_map(|(interval, aligned_to, ats)| RefreshSchedule {
+                everies: vec![RefreshEvery {
+                    interval,
+                    aligned_to,
+                }],
+                ats,
+            })
+            .boxed();
+
         (
             any::<GlobalId>(),
             any::<RelationDesc>(),
             any::<ComputeSinkConnection<CollectionMetadata>>(),
             any::<bool>(),
-            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
+            proptest::collection::vec(any::<Timestamp>(), 1..4),
             proptest::collection::vec(any::<usize>(), 0..4),
+            proptest::option::of(refresh_schedule_strategy),
         )
             .prop_map(
                 |(
@@ -51,6 +69,7 @@ impl Arbitrary for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
                     with_snapshot,
                     up_to_frontier,
                     non_null_assertions,
+                    refresh_schedule,
                 )| {
                     ComputeSinkDesc {
                         from,
@@ -59,6 +78,7 @@ impl Arbitrary for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
                         with_snapshot,
                         up_to: Antichain::from(up_to_frontier),
                         non_null_assertions,
+                        refresh_schedule,
                     }
                 },
             )
@@ -66,7 +86,7 @@ impl Arbitrary for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     }
 }
 
-impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
+impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, Timestamp> {
     fn into_proto(&self) -> ProtoComputeSinkDesc {
         ProtoComputeSinkDesc {
             connection: Some(self.connection.into_proto()),
@@ -75,6 +95,7 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
             with_snapshot: self.with_snapshot,
             up_to: Some(self.up_to.into_proto()),
             non_null_assertions: self.non_null_assertions.into_proto(),
+            refresh_schedule: self.refresh_schedule.into_proto(),
         }
     }
 
@@ -92,6 +113,7 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
                 .up_to
                 .into_rust_if_some("ProtoComputeSinkDesc::up_to")?,
             non_null_assertions: proto.non_null_assertions.into_rust()?,
+            refresh_schedule: proto.refresh_schedule.into_rust()?,
         })
     }
 }

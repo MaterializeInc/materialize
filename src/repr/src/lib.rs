@@ -96,7 +96,6 @@ mod relation;
 mod relation_and_scalar;
 mod row;
 mod scalar;
-mod timestamp;
 
 pub mod adt;
 pub mod antichain;
@@ -107,6 +106,7 @@ pub mod namespaces;
 pub mod role_id;
 pub mod stats;
 pub mod strconv;
+pub mod timestamp;
 pub mod url;
 pub mod user;
 

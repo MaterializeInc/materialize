@@ -1932,6 +1932,7 @@ impl Coordinator {
                         internal_view_id,
                         mv.desc.iter_names().cloned().collect(),
                         mv.non_null_assertions.clone(),
+                        mv.refresh_schedule.clone(),
                         debug_name,
                         optimizer_config.clone(),
                     );

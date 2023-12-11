@@ -751,12 +751,6 @@ query error Expected literal string, found ASSERT
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY ASSERT NOT NULL x) AS SELECT * FROM t2;
 
 # Test that we call `transform_ast::transform`. (This has an `Expr::Nested`, which needs to be desugared, or we panic.)
-query error db error: ERROR: REFRESH options other than ON COMMIT are not supported
-CREATE MATERIALIZED VIEW mv_desugar1 WITH (REFRESH AT (mz_now())) AS SELECT * FROM t2;
-
-# Same with ALIGNED TO
-query error db error: ERROR: REFRESH options other than ON COMMIT are not supported
-CREATE MATERIALIZED VIEW mv_desugar2 WITH (REFRESH EVERY '1 day' ALIGNED TO (mz_now())) AS SELECT * FROM t2;
 
 statement ok
 CREATE MATERIALIZED VIEW mv_on_commit WITH (REFRESH ON COMMIT) AS SELECT * FROM t2;
@@ -768,3 +762,247 @@ FROM mv_on_commit;
 7000  8000  NULL
 4000  NULL  6000
 1000  2000  3000
+
+statement ok
+CREATE MATERIALIZED VIEW mv_desugar1 WITH (REFRESH AT (mz_now())) AS SELECT * FROM t2;
+
+# Same with ALIGNED TO
+statement ok
+CREATE MATERIALIZED VIEW mv_desugar2 WITH (REFRESH EVERY '1 day' ALIGNED TO (mz_now())) AS SELECT * FROM t2;
+
+## REFRESH options together with ASSERT NOT NULL options
+
+statement ok
+INSERT INTO t2 VALUES (10, 11, 12);
+
+statement ok
+CREATE MATERIALIZED VIEW mv_assertion_plus_refresh_every WITH (ASSERT NOT NULL x, REFRESH EVERY '8 seconds') AS SELECT * FROM t2;
+
+# There should be a refresh immediately when creating the MV. This refresh should already see what we just inserted.
+query III
+SELECT * FROM mv_assertion_plus_refresh_every ORDER BY x;
+----
+1  2  3
+4  NULL  6
+7  8  NULL
+10  11  12
+
+statement ok
+INSERT INTO t2 VALUES (NULL, -1, -2);
+
+# This insert shouldn't be visible yet.
+query III
+SELECT * FROM mv_assertion_plus_refresh_every ORDER BY x;
+----
+1  2  3
+4  NULL  6
+7  8  NULL
+10  11  12
+
+# Sleep for the refresh interval, so that we get a refresh.
+# Actually, we sleep one more second than the refresh interval, because we don't have real-time recency guarantees:
+# When we query the MV at a particular wall clock time time `t`, there is not guarantee that we see a refresh that
+# happened at, say, `t - 1ms`. Note that the test was actually failing sometimes when it was sleeping for only 8s.
+# A proper solution might be to add `AS OF now()` to this SELECT, but calling `now()` seems to not be currently allowed
+# in `AS OF`.
+statement ok
+SELECT mz_unsafe.mz_sleep(8+1);
+
+# Now we should see the NULL that should error out the MV.
+query error db error: ERROR: Evaluation error: column "x" must not be null
+SELECT * FROM mv_assertion_plus_refresh_every ORDER BY x;
+
+## Check `REFRESH AT greatest(<past time>, mz_now())`, because this is an idiom that we are recommending to users.
+# Insert something into the underlying table.
+statement ok
+INSERT INTO t2 VALUES (30, 30, 30);
+
+statement ok
+CREATE MATERIALIZED VIEW mv_greatest
+WITH (REFRESH AT greatest('1990-01-04 11:00', mz_now()))
+AS SELECT * FROM t2;
+
+query III
+SELECT * FROM mv_greatest;
+----
+NULL  -1  -2
+4  NULL  6
+7  8  NULL
+1  2  3
+10  11  12
+30  30  30
+
+## If there is no creation refresh, then a query should block until the first refresh.
+
+# Save the current time.
+statement ok
+CREATE TABLE start_time(t timestamp);
+
+statement ok
+INSERT INTO start_time VALUES (now());
+
+# Create an MV whose first refresh is 5 sec after its creation.
+statement ok
+CREATE MATERIALIZED VIEW mv_no_creation_refresh
+WITH (REFRESH EVERY '100000 sec' ALIGNED TO mz_now()::string::int8 + 5000)
+AS SELECT * FROM t2;
+
+# Insert something into the underlying table.
+statement ok
+INSERT INTO t2 VALUES (100, 100, 100);
+
+# Query it.
+# - The query should block until the first refresh.
+# - The newly inserted stuff should be visible.
+query III
+SELECT * FROM mv_no_creation_refresh;
+----
+NULL  -1  -2
+4  NULL  6
+7  8  NULL
+1  2  3
+10  11  12
+30  30  30
+100  100  100
+
+# Verify that at least 5 seconds have passed.
+query B
+SELECT now() - (SELECT * from start_time) >= INTERVAL '5 sec';
+----
+true
+
+## Check ALIGNED TO in the far past
+
+# Save the current time.
+statement ok
+DELETE FROM start_time;
+
+statement ok
+INSERT INTO start_time VALUES (now());
+
+statement ok
+CREATE MATERIALIZED VIEW mv_aligned_to_past
+WITH (REFRESH EVERY '10000 ms' ALIGNED TO mz_now()::text::int8 - 10*10000 + 3000)
+AS SELECT * FROM t2;
+
+query III
+SELECT * FROM mv_aligned_to_past;
+----
+NULL  -1  -2
+4  NULL  6
+7  8  NULL
+1  2  3
+10  11  12
+30  30  30
+100  100  100
+
+# Verify that at least 3 seconds have passed.
+query B
+SELECT now() - (SELECT * from start_time) >= INTERVAL '3 sec';
+----
+true
+
+## Check ALIGNED TO in the far future
+
+# Save the current time.
+statement ok
+DELETE FROM start_time;
+
+statement ok
+INSERT INTO start_time VALUES (now());
+
+statement ok
+CREATE MATERIALIZED VIEW mv_aligned_to_future
+WITH (REFRESH EVERY '10000 ms' ALIGNED TO mz_now()::text::int8 + 10*10000 + 3000)
+AS SELECT * FROM t2;
+
+query III
+SELECT * FROM mv_aligned_to_future;
+----
+NULL  -1  -2
+4  NULL  6
+7  8  NULL
+1  2  3
+10  11  12
+30  30  30
+100  100  100
+
+# Verify that at least 3 seconds have passed.
+query B
+SELECT now() - (SELECT * from start_time) >= INTERVAL '3 sec';
+----
+true
+
+## Constant query in an MV with REFRESH options
+statement ok
+CREATE MATERIALIZED VIEW const_mv
+WITH (REFRESH EVERY '1 day')
+AS SELECT 1;
+
+query I
+SELECT * FROM const_mv
+----
+1
+
+## We should be able to immediately query a constant MV even if the first refresh is in the future
+statement ok
+CREATE MATERIALIZED VIEW const_mv2
+WITH (REFRESH AT '3000-01-01 23:59')
+AS SELECT 2;
+
+query I
+SELECT * FROM const_mv2
+----
+2
+
+## MV that has refreshes only in the past
+query error db error: ERROR: Error when creating materialized view mv_no_refresh: All the specified refreshes would be too far in the past, and thus they would never happen
+CREATE MATERIALIZED VIEW mv_no_refresh
+WITH (REFRESH AT '2000-01-01 10:00')
+AS SELECT * FROM t2;
+
+## Query MV after the last refresh
+statement ok
+CREATE MATERIALIZED VIEW mv3
+WITH (REFRESH AT mz_now()::text::int8 + 2000, REFRESH AT mz_now()::text::int8 + 4000)
+AS SELECT * FROM t2;
+
+# Wait until the first refresh
+query III
+SELECT * FROM mv3;
+----
+NULL  -1  -2
+4  NULL  6
+7  8  NULL
+1  2  3
+10  11  12
+30  30  30
+100  100  100
+
+# Wait until the second refresh, which is the last one
+query III
+SELECT * FROM mv3;
+----
+NULL  -1  -2
+4  NULL  6
+7  8  NULL
+1  2  3
+10  11  12
+30  30  30
+100  100  100
+
+# This insert will happen after the last refresh.
+statement ok
+INSERT INTO t2 VALUES (70, 70, 70);
+
+# We should be able to query the MV after the last refresh, and the newly inserted data shouldn't be visible.
+query III
+SELECT * FROM mv3;
+----
+NULL  -1  -2
+4  NULL  6
+7  8  NULL
+1  2  3
+10  11  12
+30  30  30
+100  100  100

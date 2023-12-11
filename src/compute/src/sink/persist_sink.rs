@@ -15,10 +15,11 @@ use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{Collection, Hashable};
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashMap;
+use mz_ore::collections::{CollectionExt, HashMap};
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
@@ -32,6 +33,7 @@ use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
 };
@@ -59,7 +61,13 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        let desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
+        let mut desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
+
+        // If any non-trivial `REFRESH` options were specified, round up timestamps.
+        if let Some(refresh_schedule) = &sink.refresh_schedule {
+            desired_collection = round_up(desired_collection, refresh_schedule.clone());
+        }
+
         if sink.up_to != Antichain::default() {
             unimplemented!(
                 "UP TO is not supported for persist sinks yet, and shouldn't have been accepted during parsing/planning"
@@ -102,7 +110,6 @@ where
         None,             // no MFP
         None,             // no flow control
     );
-    use differential_dataflow::AsCollection;
     let persist_collection = ok_stream
         .as_collection()
         .map(Ok)
@@ -1208,4 +1215,85 @@ where
 
     let token = Rc::new(shutdown_button.press_on_drop());
     (output_stream, token)
+}
+
+/// This is for REFRESH options on materialized views. It adds an operator that rounds up the
+/// timestamps of data and frontiers to the time of the next refresh. See
+/// `doc/developer/design/20231027_refresh_every_mv.md`.
+///
+/// Note that this currently only works with 1-dim timestamps. (This is not an issue for WMR,
+/// because iteration numbers should disappear by the time the data gets to the Persist sink.)
+fn round_up<G>(
+    coll: Collection<G, Result<Row, DataflowError>, Diff>,
+    refresh_schedule: RefreshSchedule,
+) -> Collection<G, Result<Row, DataflowError>, Diff>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let mut builder = OperatorBuilder::new("round_up".to_string(), coll.scope());
+    let (mut output_buf, output_stream) = builder.new_output();
+    let mut input = builder.new_input_connection(&coll.inner, Pipeline, vec![Antichain::new()]);
+    builder.build(move |capabilities| {
+        let mut capability = Some(capabilities.into_element());
+        let mut buffer = Vec::new();
+        move |frontiers| {
+            let ac = frontiers.into_element();
+            match ac.frontier().to_owned().into_option() {
+                Some(ts) => {
+                    match refresh_schedule.round_up_timestamp(ts) {
+                        Some(rounded_up_ts) => {
+                            capability.as_mut().unwrap().downgrade(&rounded_up_ts);
+                        }
+                        None => {
+                            // We are past the last refresh. Drop the capability to signal that we
+                            // are done.
+                            capability = None;
+                        }
+                    }
+                }
+                None => {
+                    capability = None;
+                }
+            }
+            if let Some(capability) = &capability {
+                input.for_each(|_cap, data| {
+                    data.swap(&mut buffer);
+                    let mut cached_ts: Option<Timestamp> = None;
+                    let mut cached_rounded_up_ts = None;
+                    buffer.retain_mut(|(_d, ts, _r)| {
+                        let rounded_up_ts = {
+                            // We cache the rounded up timestamp for the last seen timestamp,
+                            // because the rounding up has a non-negligible cost. Caching for
+                            // just the 1 last timestamp helps already, because in some common
+                            // cases, we'll be seeing a lot of identical timestamps, e.g.,
+                            // during a rehydration, or when we have much more than 1000 records
+                            // during a single second.
+                            let some_ts_clone = Some(ts.clone());
+                            if cached_ts != some_ts_clone {
+                                cached_ts = some_ts_clone;
+                                cached_rounded_up_ts = refresh_schedule.round_up_timestamp(*ts);
+                            }
+                            cached_rounded_up_ts
+                        };
+                        match rounded_up_ts {
+                            Some(rounded_up_ts) => {
+                                *ts = rounded_up_ts;
+                                true
+                            }
+                            None => {
+                                // This record is after the last refresh, so drop it.
+                                false
+                            }
+                        }
+                    });
+                    output_buf
+                        .activate()
+                        .session(&capability)
+                        .give_container(&mut buffer);
+                });
+            }
+        }
+    });
+
+    output_stream.as_collection()
 }
