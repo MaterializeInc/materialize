@@ -11,4 +11,4 @@
 #
 # gen-lints -- regenerates lint annotations on all root Rust files.
 
-exec "$(dirname "$0")"/pyactivate -m materialize.cli.gen-lints "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.gen-lints --extra-dirs=misc/wasm
