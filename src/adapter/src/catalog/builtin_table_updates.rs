@@ -1069,7 +1069,7 @@ impl CatalogState {
             let arg_type_ids = func_impl_details
                 .arg_typs
                 .iter()
-                .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+                .map(|typ| self.get_system_type(typ).id().to_string())
                 .collect::<Vec<_>>();
 
             let mut row = Row::default();
@@ -1097,13 +1097,13 @@ impl CatalogState {
                     Datum::from(
                         func_impl_details
                             .variadic_typ
-                            .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+                            .map(|typ| self.get_system_type(typ).id().to_string())
                             .as_deref(),
                     ),
                     Datum::from(
                         func_impl_details
                             .return_typ
-                            .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+                            .map(|typ| self.get_system_type(typ).id().to_string())
                             .as_deref(),
                     ),
                     func_impl_details.return_is_set.into(),
@@ -1137,7 +1137,7 @@ impl CatalogState {
         let arg_type_ids = func_impl_details
             .arg_typs
             .iter()
-            .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+            .map(|typ| self.get_system_type(typ).id().to_string())
             .collect::<Vec<_>>();
 
         let mut row = Row::default();
@@ -1161,7 +1161,7 @@ impl CatalogState {
                 Datum::from(
                     func_impl_details
                         .return_typ
-                        .map(|typ| self.get_entry_in_system_schemas(typ).id().to_string())
+                        .map(|typ| self.get_system_type(typ).id().to_string())
                         .as_deref(),
                 ),
             ]),

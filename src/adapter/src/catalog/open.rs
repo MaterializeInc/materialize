@@ -373,6 +373,7 @@ impl Catalog {
                         oid,
                         items: BTreeMap::new(),
                         functions: BTreeMap::new(),
+                        types: BTreeMap::new(),
                         owner_id,
                         privileges: PrivilegeMap::from_mz_acl_items(privileges),
                     },
@@ -950,6 +951,9 @@ impl Catalog {
                 for (_item_name, function_id) in &schema.functions {
                     builtin_table_updates.extend(catalog.state.pack_item_update(*function_id, 1));
                 }
+                for (_item_name, type_id) in &schema.types {
+                    builtin_table_updates.extend(catalog.state.pack_item_update(*type_id, 1));
+                }
             }
             for (_id, db) in &catalog.state.database_by_id {
                 builtin_table_updates.push(catalog.state.pack_database_update(db, 1));
@@ -963,6 +967,9 @@ impl Catalog {
                     for (_item_name, function_id) in &schema.functions {
                         builtin_table_updates
                             .extend(catalog.state.pack_item_update(*function_id, 1));
+                    }
+                    for (_item_name, type_id) in &schema.types {
+                        builtin_table_updates.extend(catalog.state.pack_item_update(*type_id, 1));
                     }
                 }
             }

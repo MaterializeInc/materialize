@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -781,6 +782,18 @@ impl Catalog {
             .resolve_function(current_database, search_path, name, conn_id)
     }
 
+    /// Resolves `name` to a type [`CatalogEntry`].
+    pub fn resolve_type(
+        &self,
+        current_database: Option<&DatabaseId>,
+        search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
+        name: &PartialItemName,
+        conn_id: &ConnectionId,
+    ) -> Result<&CatalogEntry, SqlCatalogError> {
+        self.state
+            .resolve_type(current_database, search_path, name, conn_id)
+    }
+
     pub fn resolve_cluster(&self, name: &str) -> Result<&Cluster, SqlCatalogError> {
         self.state.resolve_cluster(name)
     }
@@ -861,19 +874,6 @@ impl Catalog {
         conn_id: Option<&ConnectionId>,
     ) -> FullItemName {
         self.state.resolve_full_name(name, conn_id)
-    }
-
-    /// Returns the named catalog item, if it exists.
-    pub fn try_get_entry_in_schema(
-        &self,
-        name: &QualifiedItemName,
-        conn_id: &ConnectionId,
-    ) -> Option<&CatalogEntry> {
-        self.state.try_get_entry_in_schema(name, conn_id)
-    }
-
-    pub fn item_exists(&self, name: &QualifiedItemName, conn_id: &ConnectionId) -> bool {
-        self.state.item_exists(name, conn_id)
     }
 
     pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
@@ -3327,6 +3327,7 @@ impl Catalog {
                 oid,
                 items: BTreeMap::new(),
                 functions: BTreeMap::new(),
+                types: BTreeMap::new(),
                 owner_id,
                 privileges,
             },
@@ -3851,11 +3852,19 @@ impl ConnCatalog<'_> {
     ) -> Result<&QualifiedItemName, SqlCatalogError> {
         self.resolve_item(name).map(|entry| entry.name())
     }
+
     fn resolve_function_name(
         &self,
         name: &PartialItemName,
     ) -> Result<&QualifiedItemName, SqlCatalogError> {
         self.resolve_function(name).map(|entry| entry.name())
+    }
+
+    fn resolve_type_name(
+        &self,
+        name: &PartialItemName,
+    ) -> Result<&QualifiedItemName, SqlCatalogError> {
+        self.resolve_type(name).map(|entry| entry.name())
     }
 }
 
@@ -4173,6 +4182,26 @@ impl SessionCatalog for ConnCatalog<'_> {
         }
     }
 
+    fn resolve_type(
+        &self,
+        name: &PartialItemName,
+    ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
+        let r = self.state.resolve_type(
+            self.database.as_ref(),
+            &self.effective_search_path(false),
+            name,
+            &self.conn_id,
+        )?;
+
+        if self.unresolvable_ids.contains(&r.id()) {
+            Err(SqlCatalogError::UnknownType {
+                name: name.to_string(),
+            })
+        } else {
+            Ok(r)
+        }
+    }
+
     fn try_get_item(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
         Some(self.state.try_get_entry(id)?)
     }
@@ -4184,26 +4213,32 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn get_items(&self) -> Vec<&dyn mz_sql::catalog::CatalogItem> {
         self.get_schemas()
             .into_iter()
-            .flat_map(|schema| schema.item_ids().into_iter())
-            .map(|(_, global_id)| self.get_item(global_id))
+            .flat_map(|schema| schema.item_ids())
+            .map(|id| self.get_item(&id))
             .collect()
     }
 
-    fn item_exists(&self, name: &QualifiedItemName) -> bool {
-        self.state.item_exists(name, &self.conn_id)
+    fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<&dyn SqlCatalogItem> {
+        self.state
+            .get_item_by_name(name, &self.conn_id)
+            .map(|item| convert::identity::<&dyn SqlCatalogItem>(item))
+    }
+
+    fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<&dyn SqlCatalogItem> {
+        self.state
+            .get_type_by_name(name, &self.conn_id)
+            .map(|item| convert::identity::<&dyn SqlCatalogItem>(item))
     }
 
     fn get_cluster(&self, id: ClusterId) -> &dyn mz_sql::catalog::CatalogCluster {
         &self.state.clusters_by_id[&id]
     }
 
-    // `as` is ok to use to cast to a trait object.
-    #[allow(clippy::as_conversions)]
     fn get_clusters(&self) -> Vec<&dyn mz_sql::catalog::CatalogCluster> {
         self.state
             .clusters_by_id
             .values()
-            .map(|cluster| cluster as &dyn mz_sql::catalog::CatalogCluster)
+            .map(|cluster| convert::identity::<&dyn mz_sql::catalog::CatalogCluster>(cluster))
             .collect()
     }
 
@@ -4337,6 +4372,11 @@ impl SessionCatalog for ConnCatalog<'_> {
                 schema: None,
                 item: qualified_name.item.clone(),
             }) == Ok(qualified_name)
+            || self.resolve_type_name(&PartialItemName {
+                database: None,
+                schema: None,
+                item: qualified_name.item.clone(),
+            }) == Ok(qualified_name)
         {
             None
         } else {
@@ -4358,6 +4398,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         assert!(
             self.resolve_item_name(&res) == Ok(qualified_name)
                 || self.resolve_function_name(&res) == Ok(qualified_name)
+                || self.resolve_type_name(&res) == Ok(qualified_name)
         );
         res
     }
@@ -5033,7 +5074,7 @@ mod tests {
             let conn_catalog = catalog.for_system_session();
             let resolve_type_oid = |item: &str| {
                 conn_catalog
-                    .resolve_item(&PartialItemName {
+                    .resolve_type(&PartialItemName {
                         database: None,
                         // All functions we check exist in PG, so the types must, as
                         // well
@@ -5186,7 +5227,7 @@ mod tests {
                             )
                             .expect("unable to resolve schema");
                         let allocated_type = catalog
-                            .resolve_entry(
+                            .resolve_type(
                                 None,
                                 &vec![(ResolvedDatabaseSpecifier::Ambient, schema.id().clone())],
                                 &PartialItemName {
@@ -5331,7 +5372,7 @@ mod tests {
 
             let resolve_type_oid = |item: &str| {
                 conn_catalog
-                    .resolve_item(&PartialItemName {
+                    .resolve_type(&PartialItemName {
                         database: None,
                         schema: Some(PG_CATALOG_SCHEMA.into()),
                         item: item.to_string(),

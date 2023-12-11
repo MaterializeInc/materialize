@@ -16,7 +16,7 @@
 97
 
 ! SELECT 'a'::"char(5)"
-contains: unknown catalog item 'char(5)'
+contains:type "char(5)" does not exist
 
 ! SELECT 'a'::"char"(5)
 contains: pg_catalog.char does not support type modifiers

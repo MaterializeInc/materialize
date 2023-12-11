@@ -4117,7 +4117,7 @@ pub enum CommentObjectType<T: AstInfo> {
     Index { name: T::ItemName },
     Func { name: T::ItemName },
     Connection { name: T::ItemName },
-    Type { name: T::ItemName },
+    Type { ty: T::DataType },
     Secret { name: T::ItemName },
     Role { name: T::RoleName },
     Database { name: T::DatabaseName },
@@ -4167,9 +4167,9 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
                 f.write_str("CONNECTION ");
                 f.write_node(name);
             }
-            Type { name } => {
+            Type { ty } => {
                 f.write_str("TYPE ");
-                f.write_node(name);
+                f.write_node(ty);
             }
             Secret { name } => {
                 f.write_str("SECRET ");
