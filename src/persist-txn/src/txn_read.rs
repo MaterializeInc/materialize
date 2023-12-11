@@ -342,8 +342,8 @@ where
                     let _ = tx.send(res);
                 }
                 TxnsReadCmd::Wait { ts, tx } => {
-                    // TODO(txn): This could be arbitrarily far in the future.
-                    // Don't block other commands on this.
+                    // TODO(txn-lazy): This could be arbitrarily far in the
+                    // future. Don't block other commands on this.
                     let res = match &ts {
                         WaitTs::GreaterEqual(ts) => self.cache.update_ge(ts).await,
                         WaitTs::GreaterThan(ts) => self.cache.update_gt(ts).await,

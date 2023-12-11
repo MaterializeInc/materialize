@@ -548,8 +548,9 @@ async fn apply_caa<K, V, T, D>(
             upper,
             commit_ts.step_forward(),
         );
-        // TODO(txn): We need to do all the batches for a given `(shard, ts)` at
-        // once.
+        // If we both spill to s3 in `Txn::write`` _and_ add the ability to
+        // merge two `Txn`s and then commit them together, then we need to do
+        // all the batches for a given `(shard, ts)` at once.
         let res = data_write
             .compare_and_append_batch(
                 &mut [&mut batch],
