@@ -387,6 +387,47 @@ SCENARIOS = [
         materialized_memory="10Gb",
         clusterd_memory="3.5Gb",
     ),
+    Scenario(
+        name="accumulate-reductions",
+        pre_restart=dedent(
+            """
+            > DROP TABLE IF EXISTS t CASCADE;
+            > CREATE TABLE t (a int, b int, c int, d int);
+
+            > CREATE MATERIALIZED VIEW data AS
+              SELECT a, a AS b FROM generate_series(1, 10000000) AS a
+              UNION ALL
+              SELECT a, b FROM t;
+
+            > INSERT INTO t (a, b) VALUES (1, 1);
+            > INSERT INTO t (a, b) VALUES (0, 0);
+
+            > DROP CLUSTER IF EXISTS idx_cluster CASCADE;
+            > CREATE CLUSTER idx_cluster SIZE '1-8G', REPLICATION FACTOR 1;
+
+            > CREATE VIEW accumulable AS
+              SELECT
+                a,
+                sum(a) AS sum_a, count(a) as cnt_a,
+                sum(b) AS sum_b, count(b) as cnt_b
+              FROM data
+              GROUP BY a;
+
+            > CREATE INDEX i_accumulable IN CLUSTER idx_cluster ON accumulable(a);
+
+            > SELECT count(*) FROM accumulable;
+            10000001
+            """
+        ),
+        post_restart=dedent(
+            """
+            > SELECT count(*) FROM accumulable;
+            10000001
+            """
+        ),
+        materialized_memory="4.5Gb",
+        clusterd_memory="3.5Gb",
+    ),
     KafkaScenario(
         name="upsert-index-hydration",
         pre_restart=KafkaScenario.SCHEMAS
