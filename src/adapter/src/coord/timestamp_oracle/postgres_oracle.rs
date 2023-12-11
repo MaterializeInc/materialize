@@ -66,7 +66,7 @@ where
 #[derive(Clone, Debug)]
 pub struct PostgresTimestampOracleConfig {
     url: String,
-    metrics: Arc<Metrics>,
+    pub metrics: Arc<Metrics>,
 
     /// Configurations that can be dynamically updated.
     pub dynamic: Arc<DynamicConfig>,
