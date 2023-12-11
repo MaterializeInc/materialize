@@ -82,6 +82,7 @@
 use mz_adapter_types::connection::ConnectionId;
 
 pub mod builtin;
+pub mod config;
 pub mod durable;
 pub mod memory;
 

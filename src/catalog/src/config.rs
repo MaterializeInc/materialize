@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use bytesize::ByteSize;
 use mz_build_info::BuildInfo;
-use mz_catalog;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
 use mz_orchestrator::MemoryLimit;
@@ -25,13 +24,13 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput};
 use serde::{Deserialize, Serialize};
 
-// DO NOT add any more imports from `crate` outside of `crate::catalog`.
+use crate::durable::DurableCatalogState;
 
 /// Configures a catalog.
 #[derive(Debug)]
 pub struct Config<'a> {
     /// The connection to the catalog storage.
-    pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    pub storage: Box<dyn DurableCatalogState>,
     /// The registry that catalog uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
     /// How long to retain storage usage records

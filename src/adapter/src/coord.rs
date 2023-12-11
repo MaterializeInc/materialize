@@ -84,6 +84,7 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
+use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::memory::objects::{CatalogEntry, CatalogItem, Connection, DataSourceDesc, Source};
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_types::dataflows::DataflowDescription;
@@ -129,10 +130,7 @@ use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
-use crate::catalog::{
-    self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
-    ClusterReplicaSizeMap,
-};
+use crate::catalog::{BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog};
 use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
@@ -2313,11 +2311,11 @@ pub fn serve(
         let remote_system_parameters =
             load_remote_system_parameters(&mut storage, system_parameter_sync_config).await?;
         let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
-            Catalog::open(catalog::Config {
+            Catalog::open(mz_catalog::config::Config {
                 storage,
                 metrics_registry: &metrics_registry,
                 storage_usage_retention_period,
-                state: catalog::StateConfig {
+                state: mz_catalog::config::StateConfig {
                     unsafe_mode,
                     all_features,
                     build_info,
