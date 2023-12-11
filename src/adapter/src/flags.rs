@@ -22,6 +22,8 @@ use mz_storage_types::parameters::{
 };
 use mz_tracing::params::TracingParameters;
 
+use crate::coord::timestamp_oracle::postgres_oracle::PostgresTimestampOracleParameters;
+
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
     let linear_join_yielding = config.linear_join_yielding();
@@ -213,6 +215,22 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
         pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
         rollup_threshold: Some(config.persist_rollup_threshold()),
         feature_flags: config.persist_flags(),
+    }
+}
+
+pub fn pg_timstamp_oracle_config(config: &SystemVars) -> PostgresTimestampOracleParameters {
+    PostgresTimestampOracleParameters {
+        pg_connection_pool_max_size: Some(config.pg_timestamp_oracle_connection_pool_max_size()),
+        pg_connection_pool_max_wait: Some(config.pg_timestamp_oracle_connection_pool_max_wait()),
+        pg_connection_pool_ttl: Some(config.pg_timestamp_oracle_connection_pool_ttl()),
+        pg_connection_pool_ttl_stagger: Some(
+            config.pg_timestamp_oracle_connection_pool_ttl_stagger(),
+        ),
+        // We use a shared set of crdb flags for the basics, but the above flags
+        // for the connection pool are specific to the postgres/crdb timestamp
+        // oracle.
+        pg_connection_pool_connect_timeout: Some(config.crdb_connect_timeout()),
+        pg_connection_pool_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
     }
 }
 

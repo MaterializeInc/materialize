@@ -23,6 +23,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_pgrepr::Numeric;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 use mz_repr::Timestamp;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use crate::coord::timeline::WriteTimestamp;
@@ -143,8 +144,7 @@ impl PostgresTimestampOracleConfig {
     }
 }
 
-/// Part of [`PostgresClient`] configuration for the Postgres timestamp oracle
-/// that can be dynamically updated.
+/// Part of [`PostgresTimestampOracleConfig`] that can be dynamically updated.
 ///
 /// The timestamp oracle is expected to react to each of these such that
 /// updating the value returned by the function takes effect (i.e. no caching
@@ -152,9 +152,9 @@ impl PostgresTimestampOracleConfig {
 /// defined by the tradeoffs of complexity vs promptness.
 ///
 /// These are hooked up to LaunchDarkly. Specifically, LaunchDarkly configs are
-/// serialized into a [TimestampOracleParameters]. In environmentd, these are applied
-/// directly via [TimestampOracleParameters::apply] to the
-/// [PostgresTimestampOracleConfig].
+/// serialized into a [`PostgresTimestampOracleParameters`]. In environmentd,
+/// these are applied directly via [`PostgresTimestampOracleParameters::apply`]
+/// to the [`PostgresTimestampOracleConfig`].
 #[derive(Debug)]
 pub struct DynamicConfig {
     /// The maximum size of the connection pool to Postgres/CRDB.
@@ -190,7 +190,6 @@ pub struct DynamicConfig {
 impl DynamicConfig {
     // TODO: Decide if we can relax these.
     const LOAD_ORDERING: Ordering = Ordering::SeqCst;
-    #[allow(dead_code)]
     const STORE_ORDERING: Ordering = Ordering::SeqCst;
 
     fn connection_pool_max_size(&self) -> usize {
@@ -253,6 +252,141 @@ impl PostgresClientKnobs for PostgresTimestampOracleConfig {
 
     fn tcp_user_timeout(&self) -> Duration {
         self.dynamic.tcp_user_timeout()
+    }
+}
+
+/// Updates to values in [`PostgresTimestampOracleConfig`].
+///
+/// These reflect updates made to LaunchDarkly.
+///
+/// Parameters can be set (`Some`) or unset (`None`). Unset parameters should be
+/// interpreted to mean "use the previous value".
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostgresTimestampOracleParameters {
+    /// Configures [`DynamicConfig::pg_connection_pool_max_size`].
+    pub pg_connection_pool_max_size: Option<usize>,
+    /// Configures [`DynamicConfig::pg_connection_pool_max_wait`].
+    ///
+    /// NOTE: Yes, this is an `Option<Option<...>>`. Fields in this struct are
+    /// all `Option` to signal the presence or absence of a system var
+    /// configuration. A `Some(None)` value in this field signals the desire to
+    /// have no `max_wait`. This is different from `None`, which signals that
+    /// there is no actively set system var, although this case is not currently
+    /// possible with how the code around this works.
+    pub pg_connection_pool_max_wait: Option<Option<Duration>>,
+    /// Configures [`DynamicConfig::pg_connection_pool_ttl`].
+    pub pg_connection_pool_ttl: Option<Duration>,
+    /// Configures [`DynamicConfig::pg_connection_pool_ttl_stagger`].
+    pub pg_connection_pool_ttl_stagger: Option<Duration>,
+    /// Configures [`DynamicConfig::pg_connection_pool_connect_timeout`].
+    pub pg_connection_pool_connect_timeout: Option<Duration>,
+    /// Configures [`DynamicConfig::pg_connection_pool_tcp_user_timeout`].
+    pub pg_connection_pool_tcp_user_timeout: Option<Duration>,
+}
+
+impl PostgresTimestampOracleParameters {
+    /// Update the parameter values with the set ones from `other`.
+    pub fn update(&mut self, other: PostgresTimestampOracleParameters) {
+        // Deconstruct self and other so we get a compile failure if new fields
+        // are added.
+        let Self {
+            pg_connection_pool_max_size: self_pg_connection_pool_max_size,
+            pg_connection_pool_max_wait: self_pg_connection_pool_max_wait,
+            pg_connection_pool_ttl: self_pg_connection_pool_ttl,
+            pg_connection_pool_ttl_stagger: self_pg_connection_pool_ttl_stagger,
+            pg_connection_pool_connect_timeout: self_pg_connection_pool_connect_timeout,
+            pg_connection_pool_tcp_user_timeout: self_pg_connection_pool_tcp_user_timeout,
+        } = self;
+        let Self {
+            pg_connection_pool_max_size: other_pg_connection_pool_max_size,
+            pg_connection_pool_max_wait: other_pg_connection_pool_max_wait,
+            pg_connection_pool_ttl: other_pg_connection_pool_ttl,
+            pg_connection_pool_ttl_stagger: other_pg_connection_pool_ttl_stagger,
+            pg_connection_pool_connect_timeout: other_pg_connection_pool_connect_timeout,
+            pg_connection_pool_tcp_user_timeout: other_pg_connection_pool_tcp_user_timeout,
+        } = other;
+        if let Some(v) = other_pg_connection_pool_max_size {
+            *self_pg_connection_pool_max_size = Some(v);
+        }
+        if let Some(v) = other_pg_connection_pool_max_wait {
+            *self_pg_connection_pool_max_wait = Some(v);
+        }
+        if let Some(v) = other_pg_connection_pool_ttl {
+            *self_pg_connection_pool_ttl = Some(v);
+        }
+        if let Some(v) = other_pg_connection_pool_ttl_stagger {
+            *self_pg_connection_pool_ttl_stagger = Some(v);
+        }
+        if let Some(v) = other_pg_connection_pool_connect_timeout {
+            *self_pg_connection_pool_connect_timeout = Some(v);
+        }
+        if let Some(v) = other_pg_connection_pool_tcp_user_timeout {
+            *self_pg_connection_pool_tcp_user_timeout = Some(v);
+        }
+    }
+
+    /// Applies the parameter values to the given in-memory config object.
+    ///
+    /// Note that these overrides are not all applied atomically: i.e. it's
+    /// possible for the timestamp oracle/postgres client to race with this and
+    /// see some but not all of the parameters applied.
+    pub fn apply(&self, cfg: &PostgresTimestampOracleConfig) {
+        info!(params = ?self, "Applying configuration update!");
+
+        // Deconstruct self so we get a compile failure if new fields are added.
+        let Self {
+            pg_connection_pool_max_size,
+            pg_connection_pool_max_wait,
+            pg_connection_pool_ttl,
+            pg_connection_pool_ttl_stagger,
+            pg_connection_pool_connect_timeout,
+            pg_connection_pool_tcp_user_timeout,
+        } = self;
+        if let Some(pg_connection_pool_max_size) = pg_connection_pool_max_size {
+            cfg.dynamic
+                .pg_connection_pool_max_size
+                .store(*pg_connection_pool_max_size, DynamicConfig::STORE_ORDERING);
+        }
+        if let Some(pg_connection_pool_max_wait) = pg_connection_pool_max_wait {
+            let mut max_wait = cfg
+                .dynamic
+                .pg_connection_pool_max_wait
+                .write()
+                .expect("lock poisoned");
+            *max_wait = *pg_connection_pool_max_wait;
+        }
+        if let Some(pg_connection_pool_ttl) = pg_connection_pool_ttl {
+            let mut ttl = cfg
+                .dynamic
+                .pg_connection_pool_ttl
+                .write()
+                .expect("lock poisoned");
+            *ttl = *pg_connection_pool_ttl;
+        }
+        if let Some(pg_connection_pool_ttl_stagger) = pg_connection_pool_ttl_stagger {
+            let mut ttl_stagger = cfg
+                .dynamic
+                .pg_connection_pool_ttl_stagger
+                .write()
+                .expect("lock poisoned");
+            *ttl_stagger = *pg_connection_pool_ttl_stagger;
+        }
+        if let Some(pg_connection_pool_connect_timeout) = pg_connection_pool_connect_timeout {
+            let mut timeout = cfg
+                .dynamic
+                .pg_connection_pool_connect_timeout
+                .write()
+                .expect("lock poisoned");
+            *timeout = *pg_connection_pool_connect_timeout;
+        }
+        if let Some(pg_connection_pool_tcp_user_timeout) = pg_connection_pool_tcp_user_timeout {
+            let mut timeout = cfg
+                .dynamic
+                .pg_connection_pool_tcp_user_timeout
+                .write()
+                .expect("lock poisoned");
+            *timeout = *pg_connection_pool_tcp_user_timeout;
+        }
     }
 }
 
