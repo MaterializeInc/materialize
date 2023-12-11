@@ -20,7 +20,6 @@ from materialize.checks.all_checks.alter_connection import (
     AlterConnectionToSsh,
 )
 from materialize.checks.all_checks.kafka_protocols import KafkaProtocols
-from materialize.checks.all_checks.ssh import SshKafka, SshPg
 from materialize.checks.checks import Check
 from materialize.checks.cloudtest_actions import (
     ReplaceEnvironmentdStatefulSet,
@@ -77,13 +76,11 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
     )
 
     executor = CloudtestExecutor(application=mz, version=last_released_version)
-    # SshPg, SshKafka, alter connection tests: No SSH bastion host
     # KafkaProtocols: No shared secrets directory
+    # AlterConnection*: No second SSH host (other_ssh_bastion) set up
     checks = list(
         all_subclasses(Check)
         - {
-            SshPg,
-            SshKafka,
             KafkaProtocols,
             AlterConnectionToSsh,
             AlterConnectionToNonSsh,
