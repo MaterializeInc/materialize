@@ -124,20 +124,20 @@ CREATE VIEW parse_segment AS SELECT
     body->>'anonymousId' AS anonymousId,
     body->>'channel' AS channel,
     body->'context'->>'ip' AS context_ip,
-    body->'context'->>'userAgent' AS context_userAgent,
-    (body->'integrations'->>'All')::bool AS integrations_All,
-    (body->'integrations'->>'Mixpanel')::bool AS integrations_Mixpanel,
-    (body->'integrations'->>'Salesforce')::bool AS integrations_Salesforce,
+    body->'context'->>'userAgent' AS context_user_agent,
+    (body->'integrations'->>'All')::bool AS integrations_all,
+    (body->'integrations'->>'Mixpanel')::bool AS integrations_mixpanel,
+    (body->'integrations'->>'Salesforce')::bool AS integrations_salesforce,
     body->>'messageId' AS messageId,
     body->>'name' AS name,
     body->'properties'->>'title' AS properties_title,
     body->'properties'->>'url' AS properties_url,
-    (body->>'receivedAt')::timestamp AS receivedAt,
-    (body->>'sentAt')::timestamp AS sentAt,
-    (body->>'timestamp')::timestamp AS timestamp,
+    try_parse_monotonic_iso8601_timestamp(body->>'receivedAt') AS received_at,
+    try_parse_monotonic_iso8601_timestamp(body->>'sentAt') AS sent_at,
+    try_parse_monotonic_iso8601_timestamp(body->>'timestamp') AS timestamp,
     body->>'type' AS type,
-    body->>'userId' AS userId,
-    (body->>'version')::timestamp AS version
+    body->>'userId' AS user_id,
+    try_parse_monotonic_iso8601_timestamp(body->>'version') AS version
 FROM my_segment_source;
 ```
 {{< /tab >}}
@@ -146,9 +146,9 @@ FROM my_segment_source;
 
 ```sql
 CREATE VIEW parse_segment AS SELECT
-    body->>'anonymousId' AS anonymousId,
+    body->>'anonymousId' AS anonymous_id,
     body->'context'->'library'->>'name' AS context_library_name,
-    (body->'context'->'library'->>'version')::timestamp AS context_library_version,
+    (body->'context'->'library'->>'version') AS context_library_version,
     body->'context'->'page'->>'path' AS context_page_path,
     body->'context'->'page'->>'referrer' AS context_page_referrer,
     body->'context'->'page'->>'search' AS context_page_search,
@@ -157,14 +157,14 @@ CREATE VIEW parse_segment AS SELECT
     body->'context'->>'userAgent' AS context_userAgent,
     body->'context'->>'ip' AS context_ip,
     body->>'event' AS event,
-    body->>'messageId' AS messageId,
+    body->>'messageId' AS message_id,
     body->'properties'->>'title' AS properties_title,
-    (body->>'receivedAt')::timestamp AS receivedAt,
-    (body->>'sentAt')::timestamp AS sentAt,
-    (body->>'timestamp')::timestamp AS timestamp,
+    try_parse_monotonic_iso8601_timestamp(body->>'receivedAt') AS received_at,
+    try_parse_monotonic_iso8601_timestamp(body->>'sentAt') AS sent_at,
+    try_parse_monotonic_iso8601_timestamp(body->>'timestamp') AS timestamp,
     body->>'type' AS type,
-    body->>'userId' AS userId,
-    (body->>'originalTimestamp')::timestamp AS originalTimestamp
+    body->>'userId' AS user_id,
+    try_parse_monotonic_iso8601_timestamp(body->>'originalTimestamp') AS original_timestamp
 FROM my_segment_source;
 ```
 
@@ -173,17 +173,17 @@ FROM my_segment_source;
 {{< tab "Identity">}}
 ```sql
 CREATE VIEW parse_segment AS SELECT
-    body->>'anonymousId' AS anonymousId,
+    body->>'anonymousId' AS anonymous_id,
     body->>'channel' AS channel,
     body->'context'->>'ip' AS context_ip,
-    body->'context'->>'userAgent' AS context_userAgent,
-    (body->'integrations'->>'All')::bool AS integrations_All,
-    (body->'integrations'->>'Mixpanel')::bool AS integrations_Mixpanel,
-    (body->'integrations'->>'Salesforce')::bool AS integrations_Salesforce,
+    body->'context'->>'userAgent' AS context_user_agent,
+    (body->'integrations'->>'All')::bool AS integrations_all,
+    (body->'integrations'->>'Mixpanel')::bool AS integrations_mixpanel,
+    (body->'integrations'->>'Salesforce')::bool AS integrations_salesforce,
     body->>'messageId' AS messageId,
-    (body->>'receivedAt')::timestamp AS receivedAt,
-    (body->>'sentAt')::timestamp AS sentAt,
-    (body->>'timestamp')::timestamp AS timestamp,
+    try_parse_monotonic_iso8601_timestamp(body->>'receivedAt') AS received_at,
+    try_parse_monotonic_iso8601_timestamp(body->>'sentAt') AS sent_at,
+    try_parse_monotonic_iso8601_timestamp(body->>'timestamp') AS timestamp,
     body->'traits'->>'name' AS traits_name,
     body->'traits'->>'email' AS traits_email,
     body->'traits'->>'plan' AS traits_plan,
@@ -191,18 +191,20 @@ CREATE VIEW parse_segment AS SELECT
     body->'traits'->'address'->>'street' AS traits_address_street,
     body->'traits'->'address'->>'city' AS traits_address_city,
     body->'traits'->'address'->>'state' AS traits_address_state,
-    (body->'traits'->'address'->>'postalCode')::timestamp AS traits_address_postalCode,
+    (body->'traits'->'address'->>'postalCode') AS traits_address_postalCode,
     body->'traits'->'address'->>'country' AS traits_address_country,
     body->>'type' AS type,
-    body->>'userId' AS userId,
-    (body->>'version')::timestamp AS version
+    body->>'userId' AS user_id,
+    (body->>'version') AS version
 FROM my_segment_source;
 ```
 {{< /tab >}}
 {{< /tabs >}}
 
 
-This view parses the incoming data, transforming the nested JSON structure into discernible columns, such as `type` or `userId`.
+This view parses the incoming data, transforming the nested JSON structure into discernible columns, such as `type` or `userId`. It uses
+the [`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/) function when parsing timestamps, to enable
+[temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 Furthermore, with the vast amount of data processed and potential network issues, it's not uncommon to receive duplicate records. You can use the
 `DISTINCT` clause to remove duplicates, for more details, refer to the webhook source [documentation](/sql/create-source/webhook/#handling-duplicated-and-partial-events).

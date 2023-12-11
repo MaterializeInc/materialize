@@ -105,6 +105,7 @@ function expandObject(object, parents, columns) {
         const columnName = escapeIdent(name);
 
         let cast = "";
+        let wrapping_function = "";
         switch (typeof value) {
             case "boolean":
                 cast = "::bool";
@@ -114,7 +115,7 @@ function expandObject(object, parents, columns) {
                 break;
             case "string":
                 if (Date.parse(value)) {
-                    cast = "::timestamp";
+                    wrapping_function = "try_parse_monotonic_iso8601_timestamp"
                 }
                 break;
             case "object":
@@ -124,7 +125,7 @@ function expandObject(object, parents, columns) {
                 continue;
         }
 
-        columns.push([name, cast, clone(parents)]);
+        columns.push([name, wrapping_function, cast, clone(parents)]);
     }
 }
 
@@ -144,7 +145,7 @@ function formSql(selectItems, viewName, sourceName, objectType) {
         type = "MATERIALIZED VIEW";
     }
 
-    let selects = selectItems.map(([name, cast, parents]) => {
+    let selects = selectItems.map(([name, wrapping_function, cast, parents]) => {
         // Note: The first "parent" is the JSON column.
         const formattedName = [...parents.slice(1), name].join("_").toLowerCase();
 
@@ -152,8 +153,14 @@ function formSql(selectItems, viewName, sourceName, objectType) {
         const formattedPath = parentPath.concat(`->>'${name}'`);
 
         let item = formattedPath;
+        if (cast || wrapping_function) {
+            item = `(${item})`;
+        }
         if (cast) {
-            item = `(${item})${cast}`;
+            item = `${item}${cast}`;
+        }
+        if (wrapping_function) {
+            item = `${wrapping_function}${item}`;
         }
 
         return `${item} AS ${formattedName}`;
