@@ -22,6 +22,7 @@ members = [
     "src/compute-types",
     "src/controller",
     "src/controller-types",
+    "src/datadog-client",
     "src/environmentd",
     "src/expr",
     "src/expr-parser",
