@@ -124,19 +124,19 @@ CREATE VIEW parse_segment AS SELECT
     body->>'anonymousId' AS anonymousId,
     body->>'channel' AS channel,
     body->'context'->>'ip' AS context_ip,
-    body->'context'->>'userAgent' AS context_userAgent,
-    (body->'integrations'->>'All')::bool AS integrations_All,
-    (body->'integrations'->>'Mixpanel')::bool AS integrations_Mixpanel,
-    (body->'integrations'->>'Salesforce')::bool AS integrations_Salesforce,
+    body->'context'->>'userAgent' AS context_user_agent,
+    (body->'integrations'->>'All')::bool AS integrations_all,
+    (body->'integrations'->>'Mixpanel')::bool AS integrations_mixpanel,
+    (body->'integrations'->>'Salesforce')::bool AS integrations_salesforce,
     body->>'messageId' AS messageId,
     body->>'name' AS name,
     body->'properties'->>'title' AS properties_title,
     body->'properties'->>'url' AS properties_url,
-    try_parse_monotonic_iso8601_timestamp(body->>'receivedAt') AS receivedAt,
-    try_parse_monotonic_iso8601_timestamp(body->>'sentAt') AS sentAt,
+    try_parse_monotonic_iso8601_timestamp(body->>'receivedAt') AS received_at,
+    try_parse_monotonic_iso8601_timestamp(body->>'sentAt') AS sent_at,
     try_parse_monotonic_iso8601_timestamp(body->>'timestamp') AS timestamp,
     body->>'type' AS type,
-    body->>'userId' AS userId,
+    body->>'userId' AS user_id,
     try_parse_monotonic_iso8601_timestamp(body->>'version') AS version
 FROM my_segment_source;
 ```
@@ -146,7 +146,7 @@ FROM my_segment_source;
 
 ```sql
 CREATE VIEW parse_segment AS SELECT
-    body->>'anonymousId' AS anonymousId,
+    body->>'anonymousId' AS anonymous_id,
     body->'context'->'library'->>'name' AS context_library_name,
     (body->'context'->'library'->>'version') AS context_library_version,
     body->'context'->'page'->>'path' AS context_page_path,
@@ -157,14 +157,14 @@ CREATE VIEW parse_segment AS SELECT
     body->'context'->>'userAgent' AS context_userAgent,
     body->'context'->>'ip' AS context_ip,
     body->>'event' AS event,
-    body->>'messageId' AS messageId,
+    body->>'messageId' AS message_id,
     body->'properties'->>'title' AS properties_title,
-    try_parse_monotonic_iso8601_timestamp(body->>'receivedAt') AS receivedAt,
-    try_parse_monotonic_iso8601_timestamp(body->>'sentAt') AS sentAt,
+    try_parse_monotonic_iso8601_timestamp(body->>'receivedAt') AS received_at,
+    try_parse_monotonic_iso8601_timestamp(body->>'sentAt') AS sent_at,
     try_parse_monotonic_iso8601_timestamp(body->>'timestamp') AS timestamp,
     body->>'type' AS type,
-    body->>'userId' AS userId,
-    try_parse_monotonic_iso8601_timestamp(body->>'originalTimestamp') AS originalTimestamp
+    body->>'userId' AS user_id,
+    try_parse_monotonic_iso8601_timestamp(body->>'originalTimestamp') AS original_timestamp
 FROM my_segment_source;
 ```
 
@@ -173,16 +173,16 @@ FROM my_segment_source;
 {{< tab "Identity">}}
 ```sql
 CREATE VIEW parse_segment AS SELECT
-    body->>'anonymousId' AS anonymousId,
+    body->>'anonymousId' AS anonymous_id,
     body->>'channel' AS channel,
     body->'context'->>'ip' AS context_ip,
-    body->'context'->>'userAgent' AS context_userAgent,
-    (body->'integrations'->>'All')::bool AS integrations_All,
-    (body->'integrations'->>'Mixpanel')::bool AS integrations_Mixpanel,
-    (body->'integrations'->>'Salesforce')::bool AS integrations_Salesforce,
+    body->'context'->>'userAgent' AS context_user_agent,
+    (body->'integrations'->>'All')::bool AS integrations_all,
+    (body->'integrations'->>'Mixpanel')::bool AS integrations_mixpanel,
+    (body->'integrations'->>'Salesforce')::bool AS integrations_salesforce,
     body->>'messageId' AS messageId,
-    try_parse_monotonic_iso8601_timestamp(body->>'receivedAt') AS receivedAt,
-    try_parse_monotonic_iso8601_timestamp(body->>'sentAt') AS sentAt,
+    try_parse_monotonic_iso8601_timestamp(body->>'receivedAt') AS received_at,
+    try_parse_monotonic_iso8601_timestamp(body->>'sentAt') AS sent_at,
     try_parse_monotonic_iso8601_timestamp(body->>'timestamp') AS timestamp,
     body->'traits'->>'name' AS traits_name,
     body->'traits'->>'email' AS traits_email,
@@ -194,7 +194,7 @@ CREATE VIEW parse_segment AS SELECT
     (body->'traits'->'address'->>'postalCode') AS traits_address_postalCode,
     body->'traits'->'address'->>'country' AS traits_address_country,
     body->>'type' AS type,
-    body->>'userId' AS userId,
+    body->>'userId' AS user_id,
     (body->>'version') AS version
 FROM my_segment_source;
 ```
