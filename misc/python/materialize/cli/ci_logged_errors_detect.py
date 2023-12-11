@@ -93,7 +93,7 @@ IGNORE_RE = re.compile(
     # Old versions won't support new parameters
     | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     # For platform-checks upgrade tests
-    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage\ name=enable_dangerous_functions
+    | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?\ name=enable_dangerous_functions
     )
     """,
     re.VERBOSE | re.MULTILINE,
