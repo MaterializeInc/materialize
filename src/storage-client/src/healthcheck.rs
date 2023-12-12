@@ -10,8 +10,8 @@
 use mz_repr::{RelationDesc, ScalarType};
 use once_cell::sync::Lazy;
 
-// NOTE: Update the views `mz_statement_execution_history_redacted`
-// and `mz_activity_log`, and `mz_activity_log_redacted` whenever this
+// NOTE: Update the views `mz_prepared_statement_history_redacted`,
+// `mz_activity_log`, and `mz_activity_log_redacted` whenever this
 // is updated, to include the new columns where appropriate.
 //
 // The `redacted` views should contain only those columns that should
@@ -27,6 +27,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(||
             "prepared_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
         )
+        .with_column("statement_kind", ScalarType::String.nullable(true))
 });
 
 pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {

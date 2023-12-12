@@ -37,7 +37,7 @@ pub use mz_sql::session::vars::{
 };
 use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_sql_parser::ast::{StatementKind, TransactionIsolationLevel};
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
 use rand::Rng;
@@ -127,6 +127,7 @@ impl<T: TimestampManipulation> Session<T> {
         sql: String,
         redacted_sql: String,
         now: EpochMillis,
+        kind: Option<StatementKind>,
     ) -> Arc<QCell<PreparedStatementLoggingInfo>> {
         Arc::new(QCell::new(
             &self.qcell_owner,
@@ -137,6 +138,7 @@ impl<T: TimestampManipulation> Session<T> {
                 prepared_at: now,
                 name: "".to_string(),
                 accounted: false,
+                kind,
             },
         ))
     }
@@ -499,6 +501,7 @@ impl<T: TimestampManipulation> Session<T> {
             .as_ref()
             .map(|stmt| stmt.to_ast_string_redacted())
             .unwrap_or(String::default());
+        let kind = stmt.as_ref().map(|stmt| StatementKind::from(stmt));
         let statement = PreparedStatement {
             stmt,
             desc,
@@ -512,6 +515,7 @@ impl<T: TimestampManipulation> Session<T> {
                     prepared_at: now,
                     session_id: self.uuid,
                     accounted: false,
+                    kind,
                 },
             )),
         };

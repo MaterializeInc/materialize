@@ -18,6 +18,7 @@ use mz_ore::{cast::CastFrom, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::plan::Params;
+use mz_sql_parser::ast::{statement_kind_label_value, StatementKind};
 use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
@@ -57,6 +58,8 @@ pub enum PreparedStatementLoggingInfo {
         session_id: Uuid,
         /// Whether we have already recorded this in the "would have logged" metric
         accounted: bool,
+        /// The top-level kind of the statement (e.g., `Select`), or `None` for an empty statement
+        kind: Option<StatementKind>,
     },
 }
 
@@ -166,6 +169,7 @@ impl Coordinator {
                 name,
                 session_id,
                 accounted,
+                kind,
             } => {
                 assert!(
                     *accounted,
@@ -179,6 +183,7 @@ impl Coordinator {
                     name: std::mem::take(name),
                     session_id: *session_id,
                     prepared_at: *prepared_at,
+                    kind: *kind,
                 });
 
                 *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
@@ -317,6 +322,7 @@ impl Coordinator {
             sql,
             redacted_sql,
             prepared_at,
+            kind,
         } = record;
         let row = Row::pack_slice(&[
             Datum::Uuid(*id),
@@ -325,6 +331,7 @@ impl Coordinator {
             Datum::String(sql.as_str()),
             Datum::String(redacted_sql.as_str()),
             Datum::TimestampTz(to_datetime(*prepared_at).try_into().expect("must fit")),
+            kind.map(|kind| statement_kind_label_value(kind)).into(),
         ]);
         row
     }

@@ -11,6 +11,7 @@ use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::StatementKind;
 use uuid::Uuid;
 
 use crate::session::TransactionId;
@@ -90,6 +91,7 @@ pub struct StatementPreparedRecord {
     pub name: String,
     pub session_id: Uuid,
     pub prepared_at: EpochMillis,
+    pub kind: Option<StatementKind>,
 }
 
 #[derive(Clone, Debug)]
