@@ -14,8 +14,8 @@ use std::fmt;
 use mz_ore::str::{Indent, IndentLike};
 
 use crate::explain::{
-    CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, ScalarOps, UnsupportedFormat,
-    UsedIndexes,
+    CompactScalarSeq, CompactScalars, ExprHumanizer, IndexUsageType, Indices, ScalarOps,
+    UnsupportedFormat, UsedIndexes,
 };
 use crate::Row;
 
@@ -147,6 +147,105 @@ where
                 slice = &slice[1..];
             }
         }
+        Ok(())
+    }
+}
+
+impl<T, I> fmt::Display for CompactScalars<T, I>
+where
+    T: ScalarOps + fmt::Display,
+    I: Iterator<Item = T> + Clone,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        enum State<T> {
+            Start,
+            FoundOne(T, usize),    // (x, x_col)
+            FoundTwo(T, T, usize), // (x, y, y_col)
+            FoundRun(T, T, usize), // (x, y, y_col)
+        }
+
+        let mut state = State::Start;
+
+        let mut is_first = false;
+        let mut prefix = || {
+            if !std::mem::replace(&mut is_first, true) {
+                ""
+            } else {
+                ", "
+            }
+        };
+
+        for n in self.0.clone() {
+            state = match state {
+                State::Start => match n.match_col_ref() {
+                    Some(n_col) => {
+                        State::FoundOne(n, n_col) // Next state
+                    }
+                    None => {
+                        write!(f, "{}{n}", prefix())?;
+                        State::Start
+                    }
+                },
+                State::FoundOne(x, x_col) => match n.match_col_ref() {
+                    Some(n_col) => {
+                        if x_col + 1 == n_col {
+                            State::FoundTwo(x, n, n_col) // Advance run
+                        } else {
+                            write!(f, "{}{x}", prefix())?;
+                            State::FoundOne(n, n_col)
+                        }
+                    }
+                    None => {
+                        write!(f, "{}{x}, {n}", prefix())?;
+                        State::Start
+                    }
+                },
+                State::FoundTwo(x, y, y_col) => match n.match_col_ref() {
+                    Some(n_col) => {
+                        if y_col + 1 == n_col {
+                            State::FoundRun(x, n, n_col) // Advance run
+                        } else {
+                            write!(f, "{}{x}, {y}", prefix())?;
+                            State::FoundOne(n, n_col)
+                        }
+                    }
+                    None => {
+                        write!(f, "{}{x}, {y}, {n}", prefix())?;
+                        State::Start
+                    }
+                },
+                State::FoundRun(x, y, y_col) => match n.match_col_ref() {
+                    Some(n_col) => {
+                        if y_col + 1 == n_col {
+                            State::FoundRun(x, n, n_col) // Advance run
+                        } else {
+                            write!(f, "{}{x}..={y}", prefix())?;
+                            State::FoundOne(n, n_col)
+                        }
+                    }
+                    None => {
+                        write!(f, "{}{x}..={y}, {n}", prefix())?;
+                        State::Start
+                    }
+                },
+            };
+        }
+
+        match state {
+            State::Start => {
+                // Do nothing
+            }
+            State::FoundOne(x, _) => {
+                write!(f, "{}{x}", prefix())?;
+            }
+            State::FoundTwo(x, y, _) => {
+                write!(f, "{}{x}, {y}", prefix())?;
+            }
+            State::FoundRun(x, y, _) => {
+                write!(f, "{}{x}..={y}", prefix())?;
+            }
+        }
+
         Ok(())
     }
 }
