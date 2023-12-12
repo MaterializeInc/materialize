@@ -20,13 +20,16 @@ use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_secrets::InMemorySecretsController;
 use mz_storage_types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
 use serde::Serialize;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_catalog::builtin::{Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable};
+use mz_catalog::builtin::{
+    Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
+};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
@@ -44,6 +47,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
 use mz_ore::soft_assert_no_log;
+use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
@@ -54,7 +58,7 @@ use mz_repr::{GlobalId, RelationDesc};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole,
-    CatalogSchema, CatalogTypeDetails, EnvironmentId, IdReference, SessionCatalog,
+    CatalogSchema, CatalogTypeDetails, EnvironmentId, IdReference, NameReference, SessionCatalog,
     SystemObjectType, TypeReference,
 };
 use mz_sql::names::{
@@ -1852,14 +1856,37 @@ impl CatalogState {
         name: &PartialItemName,
         conn_id: &ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
-        self.resolve(
+        static NON_PG_CATALOG_TYPES: Lazy<
+            BTreeMap<&'static str, &'static BuiltinType<NameReference>>,
+        > = Lazy::new(|| {
+            BUILTINS::types()
+                .filter(|typ| typ.schema != PG_CATALOG_SCHEMA)
+                .map(|typ| (typ.name, typ))
+                .collect()
+        });
+
+        let entry = self.resolve(
             |schema| &schema.types,
             current_database,
             search_path,
             name,
             conn_id,
             |name| SqlCatalogError::UnknownType { name },
-        )
+        )?;
+
+        if conn_id != &SYSTEM_CONN_ID && name.schema.as_deref() == Some(PG_CATALOG_SCHEMA) {
+            if let Some(typ) = NON_PG_CATALOG_TYPES.get(entry.name().item.as_str()) {
+                warn!(
+                    "user specified an incorrect schema of {} for the type {}, which should be in \
+                    the {} schema. This works now due to a bug but will be fixed in a later release.",
+                    PG_CATALOG_SCHEMA.quoted(),
+                    typ.name.quoted(),
+                    typ.schema.quoted(),
+                )
+            }
+        }
+
+        Ok(entry)
     }
 
     /// For an [`ObjectId`] gets the corresponding [`CommentObjectId`].
