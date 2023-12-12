@@ -60,23 +60,10 @@ impl OpenableDurableCatalogState for CatalogMigrator {
 
     async fn open_read_only(
         self: Box<Self>,
-        boot_ts: EpochMillis,
-        bootstrap_args: &BootstrapArgs,
+        _boot_ts: EpochMillis,
+        _bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        let mut stash = self
-            .openable_stash
-            .open_read_only(boot_ts.clone(), bootstrap_args)
-            .await?;
-        let persist = self
-            .openable_persist
-            .open_read_only(boot_ts, bootstrap_args)
-            .await?;
-        let tombstone = stash.get_tombstone().await?;
-        if tombstone == Some(true) {
-            Ok(persist)
-        } else {
-            Ok(stash)
-        }
+        panic!("cannot use a read only catalog with the migrate implementation")
     }
 
     async fn open(
