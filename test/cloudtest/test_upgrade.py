@@ -22,7 +22,10 @@ from materialize.checks.all_checks.alter_connection import (
 from materialize.checks.all_checks.kafka_protocols import KafkaProtocols
 from materialize.checks.all_checks.ssh import SshKafka, SshPg
 from materialize.checks.checks import Check
-from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
+from materialize.checks.cloudtest_actions import (
+    ReplaceEnvironmentdStatefulSet,
+    SetupSshTunnels,
+)
 from materialize.checks.executors import CloudtestExecutor
 from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
@@ -42,6 +45,7 @@ class CloudtestUpgrade(Scenario):
 
     def actions(self) -> list[Action]:
         return [
+            SetupSshTunnels(self.executor.cloudtest_application()),
             Initialize(self),
             Manipulate(self, phase=1),
             ReplaceEnvironmentdStatefulSet(new_tag=None),
@@ -65,6 +69,7 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
         log_filter=log_filter,
         release_mode=(not dev),
     )
+
     wait(
         condition="condition=Ready",
         resource="pod",
