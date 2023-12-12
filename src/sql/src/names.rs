@@ -1178,10 +1178,20 @@ pub enum CommentObjectId {
     ClusterReplica((ClusterId, ReplicaId)),
 }
 
+/// Whether to resolve an name in the types namespace, the functions namespace,
+/// or the relations namespace. It is possible to resolve name in multiple
+/// namespaces, in which case types are preferred to functions are preferred to
+/// relations.
+// NOTE(benesch,sploiselle): The fact that some names are looked up in multiple
+// namespaces is a bit dubious, and stems from the fact that we don't
+// automatically create types for relations (see #23789). It's possible that we
+// don't allow names to be looked up in multiple namespaces (i.e., this becomes
+// `enum ItemResolutionNamespace`), but it's also possible that the design of
+// the `DOC ON TYPE` option means we're forever stuck with this complexity.
 #[derive(Debug, Clone, Copy)]
 struct ItemResolutionConfig {
-    functions: bool,
     types: bool,
+    functions: bool,
     relations: bool,
 }
 
@@ -1956,8 +1966,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             DocOnIdentifier::Column(name) => DocOnIdentifier::Column(self.fold_column_name(name)),
             DocOnIdentifier::Type(name) => DocOnIdentifier::Type(self.resolve_item_name(
                 name,
-                // In `DOC ON TYPE ...`, the type can refer to either a type
-                // or a relation.
+                // In `DOC ON TYPE ...`, the type can refer to either a type or
+                // a relation.
+                //
+                // It's possible this will get simpler once #23789 is fixed. See
+                // the comment on `ItemResolutionConfig` for details.
                 ItemResolutionConfig {
                     functions: false,
                     types: true,
