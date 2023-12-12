@@ -78,6 +78,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use differential_dataflow::{AsCollection, Collection};
 use futures::{future, future::select, FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
+use mz_postgres_util::PostgresError;
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
@@ -548,7 +549,8 @@ fn extract_transaction<'a>(
                             publication,
                             Some(rel_id),
                         )
-                        .await?;
+                        .await
+                        .map_err(PostgresError::from)?;
                         let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
                         if let Err(err) = verify_schema(rel_id, expected_desc, &upstream_info) {

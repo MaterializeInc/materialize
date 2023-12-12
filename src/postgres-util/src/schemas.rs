@@ -34,6 +34,31 @@ pub async fn get_schemas(
         .collect::<Vec<_>>())
 }
 
+/// Structured error to differentiate errors that can occur while fetching a
+/// publication.
+///
+/// If the receiver of this error doesn't differentiate between different error
+/// types in this context, `PublicationInfoError` implements
+/// `Into<PostgresError>`, which can automatically be returned in more contexts.
+#[derive(Debug, thiserror::Error)]
+pub enum PublicationInfoError {
+    #[error("publication {0} does not exist")]
+    PublicationMissing(String),
+    #[error(transparent)]
+    PostgresError(#[from] PostgresError),
+}
+
+impl From<PublicationInfoError> for PostgresError {
+    fn from(value: PublicationInfoError) -> Self {
+        match value {
+            PublicationInfoError::PublicationMissing(_) => {
+                anyhow::anyhow!(value.to_string()).into()
+            }
+            PublicationInfoError::PostgresError(e) => e,
+        }
+    }
+}
+
 /// Fetches table schema information from an upstream Postgres source for
 /// tables that are part of a publication, given a connection string and the
 /// publication name.
@@ -50,7 +75,7 @@ pub async fn publication_info(
     config: &Config,
     publication: &str,
     oid_filter: Option<u32>,
-) -> Result<Vec<PostgresTableDesc>, PostgresError> {
+) -> Result<Vec<PostgresTableDesc>, PublicationInfoError> {
     let client = config
         .connect("postgres_publication_info", ssh_tunnel_manager)
         .await?;
@@ -60,9 +85,10 @@ pub async fn publication_info(
             "SELECT oid FROM pg_publication WHERE pubname = $1",
             &[&publication],
         )
-        .await?
+        .await
+        .map_err(PostgresError::from)?
         .get(0)
-        .ok_or_else(|| anyhow::anyhow!("publication {:?} does not exist", publication))?;
+        .ok_or_else(|| PublicationInfoError::PublicationMissing(publication.to_string()))?;
 
     let tables = client
         .query(
@@ -78,7 +104,8 @@ pub async fn publication_info(
                 AND ($2::oid IS NULL OR c.oid = $2::oid)",
             &[&publication, &oid_filter],
         )
-        .await?;
+        .await
+        .map_err(PostgresError::from)?;
 
     let mut table_infos = vec![];
     for row in tables {
@@ -104,7 +131,8 @@ pub async fn publication_info(
                     ORDER BY a.attnum",
                 &[&oid],
             )
-            .await?
+            .await
+            .map_err(PostgresError::from)?
             .into_iter()
             .map(|row| {
                 let name: String = row.get("name");
@@ -167,9 +195,9 @@ pub async fn publication_info(
                 if e.to_string()
                     == "db error: ERROR: column pg_index.indnullsnotdistinct does not exist" =>
             {
-                client.query(pg_14_minus_keys, &[&oid]).await?
+                client.query(pg_14_minus_keys, &[&oid]).await.map_err(PostgresError::from)?
             }
-            e => e?,
+            e => e.map_err(PostgresError::from)?,
         };
 
         let keys = keys
