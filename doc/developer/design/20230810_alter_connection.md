@@ -1,7 +1,7 @@
 # `ALTER CONNECTION`
 
-- Associated:
-    - https://github.com/MaterializeInc/materialize/issues/17620
+-   Associated:
+    -   https://github.com/MaterializeInc/materialize/issues/17620
 
 ## Context
 
@@ -35,6 +35,7 @@ updated state throughout the system.
     1. Check if `AS` clause matches existing connection type.
     1. Perform connection validation using same logic as `CREATE CONNECTION`.
 1. During sequencing:
+
     1. Load the connection in memory. Update its values.
     1. Re-plan the value to get its updated `CREATE CONNECTION` string, just as
        we do for `ALTER SOURCE`.
@@ -46,18 +47,40 @@ updated state throughout the system.
     1. To the storage controller, send a `RunIngestion` command with the new,
        in-memory representation of the ingestion.
 
-       This will restart all of the sources with the new connection state.
+        This will restart all of the sources with the new connection state.
 
 ## Alternatives
 
-- `ALTER SOURCE...SET CONNECTION` would let us swap out one connection object
-  for another. This would let users create new connections, validate that they
-  work, and then swap them over one-by-one.
+-   `ALTER SOURCE...SET CONNECTION` would let us swap out one connection object
+    for another. This would let users create new connections, validate that they
+    work, and then swap them over one-by-one.
 
-  The advantage here is being able to more meticulously control the state
-  changes sources encounter. The downside is that it has to be done
-  meticulously, source-by-source and cannot change all sources using this
-  connection at once.
+    The advantage here is being able to more meticulously control the state
+    changes sources encounter. The downside is that it has to be done
+    meticulously, source-by-source and cannot change all sources using this
+    connection at once.
+
+## Unexpected corners + derivations from original design
+
+The original design overlooked that:
+
+-   Connection states were stored in memory and updating them would be
+    challenging. To handle this, we only place the connection states in memory
+    when they are about to be shipped off to storage. In the code, this is
+    `into_inline_connection`.
+-   Sinks would need to be restarted, which was not something we had done before.
+-   We had to resolve #20019 before we could restart sinks.
+
+Derivations:
+
+-   We decided to allow users to type `ALTER CONNECTION` with specifying the
+    source type, which meant that we had to associate connection settings with
+    source types in planning rather than in the parser.
+-   Users might want to change multiple settings transactionally, so we also
+    added the `DROP` and `RESET` options, as well as let users provide a list of
+    changes.
+-   We needed to surround the options names and new values in parens for
+    syntactic similarity with other option-handling statements.
 
 ## Open questions
 
