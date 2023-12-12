@@ -29,10 +29,12 @@ use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::str::{separated, Indent, StrExt};
+use mz_ore::str::{separated, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
-use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, UsedIndexes};
+use mz_repr::explain::{
+    CompactScalarSeq, IndexUsageType, Indices, PlanRenderingContext, UsedIndexes,
+};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -109,15 +111,16 @@ pub enum FastPathPlan {
     PeekPersist(GlobalId, mz_expr::SafeMfpPlan),
 }
 
-impl<'a, C> DisplayText<C> for FastPathPlan
-where
-    C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
-{
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'a, T>,
+    ) -> fmt::Result {
         match self {
             FastPathPlan::Constant(Ok(rows), _) => {
                 if !rows.is_empty() {
-                    writeln!(f, "{}Constant", ctx.as_mut())?;
+                    writeln!(f, "{}Constant", ctx.indent)?;
                     *ctx.as_mut() += 1;
                     fmt_text_constant_rows(
                         f,
@@ -186,7 +189,7 @@ where
                     *ctx.as_mut() += 1;
                 }
                 let human_id = ctx
-                    .as_ref()
+                    .humanizer
                     .humanize_id(*gid)
                     .unwrap_or_else(|| gid.to_string());
                 writeln!(f, "{}PeekPersist {human_id}", ctx.as_mut())?;
@@ -725,7 +728,7 @@ mod tests {
     use mz_expr::{MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;
     use mz_repr::explain::text::text_string_at;
-    use mz_repr::explain::{DummyHumanizer, RenderingContext};
+    use mz_repr::explain::{DummyHumanizer, ExplainConfig, PlanRenderingContext};
     use mz_repr::{ColumnType, Datum, ScalarType};
 
     use super::*;
@@ -765,7 +768,14 @@ mod tests {
         );
 
         let humanizer = DummyHumanizer;
-        let ctx_gen = || RenderingContext::new(Indent::default(), &humanizer);
+        let config = ExplainConfig {
+            ..Default::default()
+        };
+        let ctx_gen = || {
+            let indent = Indent::default();
+            let annotations = BTreeMap::new();
+            PlanRenderingContext::<FastPathPlan>::new(indent, &humanizer, annotations, &config)
+        };
 
         let constant_err_exp = "Error \"division by zero\"\n";
         let no_lookup_exp =

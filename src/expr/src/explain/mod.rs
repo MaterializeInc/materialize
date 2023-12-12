@@ -69,12 +69,6 @@ pub struct PushdownInfo<'a> {
     pub pushdown: Vec<&'a MirScalarExpr>,
 }
 
-impl<'a, C: AsMut<Indent>> DisplayText<C> for PushdownInfo<'a> {
-    fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
-        HumanizedExplain::new(self, None).fmt_text(f, ctx)
-    }
-}
-
 impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, PushdownInfo<'a>, M>
 where
     C: AsMut<Indent>,
@@ -127,15 +121,6 @@ impl<'a> ExplainSource<'a> {
     #[inline]
     pub fn is_identity(&self) -> bool {
         self.op.is_identity()
-    }
-}
-
-impl<'a, 'h, C> DisplayText<C> for ExplainSource<'a>
-where
-    C: AsMut<Indent> + AsRef<&'h dyn ExprHumanizer>,
-{
-    fn fmt_text(&self, f: &mut std::fmt::Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
-        HumanizedExplain::new(self, None).fmt_text(f, ctx)
     }
 }
 
