@@ -15,7 +15,7 @@ impl<'a> Client<'a> {
     /// Validates that the provided set of key(s) is valid.
     pub async fn validate(&self) -> Result<(), Error> {
         // Send request to the subdomain
-        let req = self.build_request(Method::GET, ["v1", "validate"]).await?;
+        let req = self.build_request(Method::GET, ["v1", "validate"])?;
         self.send_request::<()>(req).await
     }
 }

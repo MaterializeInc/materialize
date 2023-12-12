@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use reqwest::Method;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
 use crate::error::Error;
@@ -57,7 +57,7 @@ pub struct Point {
 #[derive(Serialize)]
 pub struct Metadata {
     /// Metric origin information
-    origin: Origin
+    origin: Origin,
 }
 
 /// Represents metric's origin.
@@ -96,20 +96,19 @@ pub enum MetricType {
 
 impl<'a> Default for Series<'a> {
     fn default() -> Self {
-      Self {
-        interval: None,
-        metadata: None,
-        resources: None,
-        tags: None,
-        unit: None,
-        source_type_name: "default",
-        metric: "default",
-        points: vec![],
-        typ: MetricType::Gauge,
-      }
+        Self {
+            interval: None,
+            metadata: None,
+            resources: None,
+            tags: None,
+            unit: None,
+            source_type_name: "default",
+            metric: "default",
+            points: vec![],
+            typ: MetricType::Gauge,
+        }
     }
-  }
-
+}
 
 /// Represents Datadog response
 ///
@@ -133,7 +132,7 @@ impl<'a> Default for Series<'a> {
 #[derive(Deserialize)]
 pub struct SubmitMetricsResponse {
     /// Errors returned by Datadog.
-    pub errors: Vec<String>
+    pub errors: Vec<String>,
 }
 
 impl<'a> Client<'a> {
@@ -154,10 +153,13 @@ impl<'a> Client<'a> {
     ///
     /// - The full payload is approximately 100 bytes.
     ///
-    pub async fn submit_metric(&self, params: SubmitMetricsParams<'a>) -> Result<SubmitMetricsResponse, Error> {
-        let req = self.build_request(Method::GET, ["v2", "series"]).await?;
+    pub async fn submit_metric(
+        &self,
+        params: SubmitMetricsParams<'a>,
+    ) -> Result<SubmitMetricsResponse, Error> {
+        let req = self.build_request(Method::GET, ["v2", "series"])?;
         let req = req.json(&params);
 
-        Ok(self.send_request(req).await?)
+        self.send_request(req).await
     }
 }

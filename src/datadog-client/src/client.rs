@@ -37,7 +37,7 @@ pub mod validation;
 
 impl<'a> Client<'a> {
     /// Builds a request towards the `Client`'s endpoint
-    async fn build_request<P>(&self, method: Method, path: P) -> Result<RequestBuilder, Error>
+    fn build_request<P>(&self, method: Method, path: P) -> Result<RequestBuilder, Error>
     where
         P: IntoIterator,
         P::Item: AsRef<str>,
@@ -76,12 +76,10 @@ impl<'a> Client<'a> {
             Ok(res.json().await?)
         } else {
             match res.json::<ErrorResponse>().await {
-                Ok(e) => {
-                    Err(Error::Api(ApiError {
-                        status_code,
-                        errors: e.errors,
-                    }))
-                }
+                Ok(e) => Err(Error::Api(ApiError {
+                    status_code,
+                    errors: e.errors,
+                })),
                 Err(_) => Err(Error::Api(ApiError {
                     status_code,
                     errors: vec!["unable to decode error details".into()],

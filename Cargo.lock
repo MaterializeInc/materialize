@@ -5588,7 +5588,6 @@ dependencies = [
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-cluster",
- "mz-datadog-client",
  "mz-expr",
  "mz-http-util",
  "mz-interchange",

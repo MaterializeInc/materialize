@@ -37,12 +37,7 @@ pub struct ApiError {
 
 impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{} (status {})",
-            self.errors.join(","),
-            self.status_code
-        )
+        write!(f, "{} (status {})", self.errors.join(","), self.status_code)
     }
 }
 
