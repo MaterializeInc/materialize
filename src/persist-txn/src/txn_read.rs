@@ -16,7 +16,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::task::AbortOnDropHandle;
-use mz_persist_client::read::{Cursor, ReadHandle, Since};
+use mz_persist_client::read::{Cursor, LazyPartStats, ReadHandle, Since};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, ShardId};
 use mz_persist_types::{Codec, Codec64, StepForward};
@@ -152,6 +152,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     pub async fn snapshot_cursor<K, V, D>(
         &self,
         data_read: &mut ReadHandle<K, V, T, D>,
+        should_fetch_part: impl for<'a> Fn(&'a Option<LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>>
     where
         K: Debug + Codec + Ord,
@@ -161,7 +162,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
         data_read
-            .snapshot_cursor(Antichain::from_elem(self.as_of.clone()), |_| true)
+            .snapshot_cursor(Antichain::from_elem(self.as_of.clone()), should_fetch_part)
             .await
     }
 

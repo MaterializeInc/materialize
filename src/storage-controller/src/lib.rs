@@ -1483,7 +1483,7 @@ where
                     .await;
                 let mut handle = self.read_handle_for_snapshot(id).await?;
                 let cursor = data_snapshot
-                    .snapshot_cursor(&mut handle)
+                    .snapshot_cursor(&mut handle, |_| true)
                     .await
                     .map_err(|_| StorageError::ReadBeforeSince(id))?;
                 SnapshotCursor {
