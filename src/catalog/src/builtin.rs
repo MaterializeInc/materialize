@@ -2501,7 +2501,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_REDACTED: BuiltinView = BuiltinView {
     column_defs: None,
     // everything but "sql"
     sql: "
-SELECT id, session_id, name, redacted_sql, prepared_at
+SELECT id, session_id, name, redacted_sql, prepared_at, statement_kind
 FROM mz_internal.mz_prepared_statement_history",
     sensitivity: DataSensitivity::SuperuserAndSupport,
 };
@@ -2524,7 +2524,7 @@ SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, clust
 transaction_isolation, execution_timestamp, transient_index_id, params, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql, mpsh.name AS prepared_statement_name,
-session_id, redacted_sql, prepared_at
+session_id, redacted_sql, prepared_at, statement_kind
 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh
 WHERE mseh.prepared_statement_id = mpsh.id",
     sensitivity: DataSensitivity::Superuser,
@@ -2538,7 +2538,7 @@ pub static MZ_ACTIVITY_LOG_REDACTED: BuiltinView = BuiltinView {
 SELECT execution_id, sample_rate, cluster_id, application_name, cluster_name,
 transaction_isolation, execution_timestamp, transient_index_id, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy, transaction_id, prepared_statement_id,
-prepared_statement_name, session_id, redacted_sql, prepared_at
+prepared_statement_name, session_id, redacted_sql, prepared_at, statement_kind
 FROM mz_internal.mz_activity_log",
     sensitivity: DataSensitivity::SuperuserAndSupport,
 };

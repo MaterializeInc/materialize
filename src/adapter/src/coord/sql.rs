@@ -16,7 +16,7 @@ use mz_repr::{GlobalId, ScalarType};
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{Params, StatementDesc};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{Raw, Statement};
+use mz_sql_parser::ast::{Raw, Statement, StatementKind};
 
 use crate::catalog::Catalog;
 use crate::coord::appends::BuiltinTableAppendNotify;
@@ -76,7 +76,8 @@ impl Coordinator {
         let params = params.datums.into_iter().zip(params.types).collect();
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let redacted_sql = stmt.to_ast_string_redacted();
-        let logging = session.mint_logging(sql, redacted_sql, now);
+        let logging =
+            session.mint_logging(sql, redacted_sql, now, Some(StatementKind::from(&stmt)));
         session.set_portal(
             name,
             desc,

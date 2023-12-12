@@ -54,6 +54,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 20  session_id  uuid
 21  redacted_sql  text
 22  prepared_at  timestamp␠with␠time␠zone
+23  statement_kind  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
