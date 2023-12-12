@@ -1132,6 +1132,10 @@ impl CatalogState {
                 .remove(&metadata.name().item)
                 .expect("catalog out of sync");
         } else {
+            // Functions would need special handling, but we don't yet support
+            // dropping functions.
+            assert_ne!(metadata.item_type(), CatalogItemType::Func);
+
             schema
                 .items
                 .remove(&metadata.name().item)
