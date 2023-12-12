@@ -4263,106 +4263,6 @@ WHERE worker_id = 0",
     sensitivity: DataSensitivity::Public,
 };
 
-pub const MZ_ARRANGEMENT_BATCHER_RECORDS_PER_WORKER: BuiltinView = BuiltinView {
-    name: "mz_arrangement_batcher_records_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    sql: "
-SELECT
-    operator_id,
-    worker_id,
-    pg_catalog.count(*) AS count
-FROM mz_internal.mz_arrangement_batcher_records_raw
-GROUP BY operator_id, worker_id",
-    sensitivity: DataSensitivity::Public,
-};
-
-pub const MZ_ARRANGEMENT_BATCHER_RECORDS: BuiltinView = BuiltinView {
-    name: "mz_arrangement_batcher_records",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    sql: "
-SELECT operator_id, sum(count)
-FROM mz_internal.mz_arrangement_batcher_records_per_worker
-GROUP BY operator_id",
-    sensitivity: DataSensitivity::Public,
-};
-
-pub const MZ_ARRANGEMENT_BATCHER_SIZE_PER_WORKER: BuiltinView = BuiltinView {
-    name: "mz_arrangement_batcher_size_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    sql: "
-SELECT
-    operator_id,
-    worker_id,
-    pg_catalog.count(*) AS count
-FROM mz_internal.mz_arrangement_batcher_size_raw
-GROUP BY operator_id, worker_id",
-    sensitivity: DataSensitivity::Public,
-};
-
-pub const MZ_ARRANGEMENT_BATCHER_SIZE: BuiltinView = BuiltinView {
-    name: "mz_arrangement_batcher_size",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    sql: "
-SELECT operator_id, sum(count)
-FROM mz_internal.mz_arrangement_batcher_size_per_worker
-GROUP BY operator_id",
-    sensitivity: DataSensitivity::Public,
-};
-
-pub const MZ_ARRANGEMENT_BATCHER_CAPACITY_PER_WORKER: BuiltinView = BuiltinView {
-    name: "mz_arrangement_batcher_capacity_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    sql: "
-SELECT
-    operator_id,
-    worker_id,
-    pg_catalog.count(*) AS count
-FROM mz_internal.mz_arrangement_batcher_capacity_raw
-GROUP BY operator_id, worker_id",
-    sensitivity: DataSensitivity::Public,
-};
-
-pub const MZ_ARRANGEMENT_BATCHER_CAPACITY: BuiltinView = BuiltinView {
-    name: "mz_arrangement_batcher_capacity",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    sql: "
-SELECT operator_id, sum(count)
-FROM mz_internal.mz_arrangement_batcher_capacity_per_worker
-GROUP BY operator_id",
-    sensitivity: DataSensitivity::Public,
-};
-
-pub const MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_PER_WORKER: BuiltinView = BuiltinView {
-    name: "mz_arrangement_batcher_allocations_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    sql: "
-SELECT
-    operator_id,
-    worker_id,
-    pg_catalog.count(*) AS count
-FROM mz_internal.mz_arrangement_batcher_allocations_raw
-GROUP BY operator_id, worker_id",
-    sensitivity: DataSensitivity::Public,
-};
-
-pub const MZ_ARRANGEMENT_BATCHER_ALLOCATIONS: BuiltinView = BuiltinView {
-    name: "mz_arrangement_batcher_allocations",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    sql: "
-SELECT operator_id, sum(count)
-FROM mz_internal.mz_arrangement_batcher_allocations_per_worker
-GROUP BY operator_id",
-    sensitivity: DataSensitivity::Public,
-};
-
 pub const MZ_CLUSTER_REPLICA_UTILIZATION: BuiltinView = BuiltinView {
     name: "mz_cluster_replica_utilization",
     schema: MZ_INTERNAL_SCHEMA,
@@ -6299,14 +6199,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SIZES),
-        Builtin::View(&MZ_ARRANGEMENT_BATCHER_RECORDS_PER_WORKER),
-        Builtin::View(&MZ_ARRANGEMENT_BATCHER_RECORDS),
-        Builtin::View(&MZ_ARRANGEMENT_BATCHER_SIZE_PER_WORKER),
-        Builtin::View(&MZ_ARRANGEMENT_BATCHER_SIZE),
-        Builtin::View(&MZ_ARRANGEMENT_BATCHER_CAPACITY_PER_WORKER),
-        Builtin::View(&MZ_ARRANGEMENT_BATCHER_CAPACITY),
-        Builtin::View(&MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_PER_WORKER),
-        Builtin::View(&MZ_ARRANGEMENT_BATCHER_ALLOCATIONS),
         Builtin::View(&MZ_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_ADDRESSES),

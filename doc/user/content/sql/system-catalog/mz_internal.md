@@ -871,17 +871,9 @@ Specifically, reductions can use more memory than we show here.
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_sizes_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_records_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_allocations_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_allocations_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_allocations -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_capacity_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_capacity_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_capacity -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_records_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_records_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_records -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_size_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_size_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batcher_size -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batches_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_allocations_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_capacity_raw -->
