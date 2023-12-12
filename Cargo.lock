@@ -4803,6 +4803,7 @@ dependencies = [
 name = "mz-persist-txn"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "crossbeam-channel",
  "differential-dataflow",
  "futures",
@@ -4813,11 +4814,14 @@ dependencies = [
  "mz-timely-util",
  "prometheus",
  "prost",
+ "prost-build",
+ "protobuf-src",
  "rand",
  "serde",
  "timely",
  "tokio",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 

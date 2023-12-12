@@ -26,6 +26,7 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, instrument};
 
+use crate::proto::ProtoIdBatch;
 use crate::txns::{Tidy, TxnsHandle};
 use crate::{TxnsCodec, TxnsEntry};
 
@@ -139,7 +140,18 @@ where
                             .await
                             .expect("valid usage");
                         let batch = batch.into_transmittable_batch();
-                        let batch_raw = batch.encode_to_vec();
+                        // The code to handle retracting applied batches assumes
+                        // that the encoded representation of each is unique (it
+                        // works by retracting and cancelling out the raw
+                        // bytes). It's possible to make that code handle any
+                        // diff value but the complexity isn't worth it.
+                        //
+                        // So ensure that every committed batch has a unique
+                        // serialization. Technically, I'm pretty sure that
+                        // they're naturally unique but the justification is
+                        // long, subtle, and brittle. Instead, just slap a
+                        // random uuid on it.
+                        let batch_raw = ProtoIdBatch::new(batch.clone()).encode_to_vec();
                         debug!(
                             "wrote {:.9} batch {} len={}",
                             data_id.to_string(),
