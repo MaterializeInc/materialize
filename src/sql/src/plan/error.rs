@@ -164,7 +164,6 @@ pub enum PlanError {
         option_name: String,
         err: Box<PlanError>,
     },
-    ConnectionParsingError(ConnectionParsingError),
     UnexpectedDuplicateReference {
         name: UnresolvedItemName,
     },
@@ -231,23 +230,6 @@ pub enum PlanError {
     MissingName(CatalogItemType),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
-}
-#[derive(Clone, Debug)]
-pub enum ConnectionParsingError {
-    MissingAwsCredentials,
-    MissingAssumeRoleArn,
-    ConflictingOptions,
-    MissingRequiredOptions,
-}
-impl fmt::Display for ConnectionParsingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingAwsCredentials => f.write_str("invalid CONNECTION: must specify both ACCESS KEY ID and SECRET ACCESS KEY with optional TOKEN"),
-            Self::MissingAssumeRoleArn => f.write_str("invalid CONNECTION: must specify ASSUME ROLE ARN with optional ASSUME ROLE SESSION NAME"),
-            Self::ConflictingOptions => f.write_str("invalid CONNECTION: ASSUME ROLE ARN cannot be provided simultaneously with ACCESS KEY ID and SECRET ACCESS KEY"),
-            Self::MissingRequiredOptions => f.write_str("invalid CONNECTION: must specify either ASSUME ROLE ARN or both ACCESS KEY ID and SECRET ACCESS KEY"),
-        }
-    }
 }
 
 impl PlanError {
@@ -616,9 +598,6 @@ impl fmt::Display for PlanError {
             }
             Self::MissingName(item_type) => {
                 write!(f, "unspecified name for {item_type}")
-            }
-            Self::ConnectionParsingError (connection_parsing_error) => {
-                write!(f, "{connection_parsing_error}")
             }
         }
     }
