@@ -80,8 +80,8 @@ use futures::FutureExt;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
     shadow_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
-    test_persist_backed_catalog_state, test_stash_backed_catalog_state, CatalogError,
-    DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState, StashConfig,
+    test_persist_backed_catalog_state, test_stash_backed_catalog_state, test_stash_config,
+    CatalogError, DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
@@ -94,7 +94,7 @@ use uuid::Uuid;
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_is_initialized() {
-    let (debug_factory, stash_config) = stash_config().await;
+    let (debug_factory, stash_config) = test_stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
     let openable_state2 = std::future::ready(stash_backed_catalog_state(stash_config)).boxed();
     test_is_initialized(openable_state1, openable_state2).await;
@@ -154,7 +154,7 @@ async fn test_is_initialized(
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_get_deployment_generation() {
-    let (debug_factory, stash_config) = stash_config().await;
+    let (debug_factory, stash_config) = test_stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
     let openable_state2 = std::future::ready(stash_backed_catalog_state(stash_config)).boxed();
     test_get_deployment_generation(openable_state1, openable_state2).await;
@@ -217,7 +217,7 @@ async fn test_get_deployment_generation(
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_open_savepoint() {
-    let (debug_factory, stash_config) = stash_config().await;
+    let (debug_factory, stash_config) = test_stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
     let openable_state2 = stash_backed_catalog_state(stash_config.clone());
     let openable_state3 = stash_backed_catalog_state(stash_config.clone());
@@ -347,7 +347,7 @@ async fn test_open_savepoint(
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_open_read_only() {
-    let (debug_factory, stash_config) = stash_config().await;
+    let (debug_factory, stash_config) = test_stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
     let openable_state2 = stash_backed_catalog_state(stash_config.clone());
     let openable_state3 = stash_backed_catalog_state(stash_config);
@@ -395,7 +395,7 @@ async fn test_persist_open_read_only() {
 async fn test_shadow_read_only_open() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let (debug_factory, stash_config) = stash_config().await;
+    let (debug_factory, stash_config) = test_stash_config().await;
 
     let shadow_openable_state1 = shadow_catalog_state(
         stash_config.clone(),
@@ -488,7 +488,7 @@ async fn test_open_read_only(
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_open() {
-    let (debug_factory, stash_config) = stash_config().await;
+    let (debug_factory, stash_config) = test_stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
     let openable_state2 = stash_backed_catalog_state(stash_config.clone());
     let openable_state3 = stash_backed_catalog_state(stash_config);
@@ -536,7 +536,7 @@ async fn test_persist_open() {
 async fn test_shadow_open() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let (debug_factory, stash_config) = stash_config().await;
+    let (debug_factory, stash_config) = test_stash_config().await;
 
     let shadow_openable_state1 = shadow_catalog_state(
         stash_config.clone(),
@@ -611,7 +611,7 @@ async fn test_open(
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_unopened_fencing() {
-    let (debug_factory, stash_config) = stash_config().await;
+    let (debug_factory, stash_config) = test_stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
     let openable_state2 =
         std::future::ready(stash_backed_catalog_state(stash_config.clone())).boxed();
@@ -661,7 +661,7 @@ async fn test_persist_unopened_fencing() {
 async fn test_shadow_unopened_fencing() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let (debug_factory, stash_config) = stash_config().await;
+    let (debug_factory, stash_config) = test_stash_config().await;
 
     let shadow_openable_state1 = shadow_catalog_state(
         stash_config.clone(),
@@ -744,7 +744,7 @@ async fn test_unopened_fencing(
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_tombstone() {
-    let (debug_factory, stash_config) = stash_config().await;
+    let (debug_factory, stash_config) = test_stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
     let openable_state2 =
         std::future::ready(stash_backed_catalog_state(stash_config.clone())).boxed();
@@ -782,7 +782,7 @@ async fn test_persist_tombstone() {
 async fn test_shadow_tombstone() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let (debug_factory, stash_config) = stash_config().await;
+    let (debug_factory, stash_config) = test_stash_config().await;
 
     let shadow_openable_state1 = shadow_catalog_state(
         stash_config.clone(),
@@ -829,17 +829,4 @@ async fn test_tombstone(
     assert_eq!(state.get_tombstone().await.unwrap(), Some(true));
 
     assert_eq!(openable_state2.get_tombstone().await.unwrap(), Some(true));
-}
-
-async fn stash_config() -> (DebugStashFactory, StashConfig) {
-    // Creating a debug stash factory does a lot of nice stuff like creating a random schema for us.
-    // Dropping the factory will drop the schema.
-    let debug_stash_factory = DebugStashFactory::new().await;
-    let config = StashConfig {
-        stash_factory: debug_stash_factory.stash_factory().clone(),
-        stash_url: debug_stash_factory.url().to_string(),
-        schema: Some(debug_stash_factory.schema().to_string()),
-        tls: debug_stash_factory.tls().clone(),
-    };
-    (debug_stash_factory, config)
 }
