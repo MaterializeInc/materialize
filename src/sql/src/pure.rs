@@ -23,6 +23,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::replication::WalLevel;
+use mz_postgres_util::PostgresError;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -611,7 +612,8 @@ async fn purify_create_source(
                 &publication,
                 None,
             )
-            .await?;
+            .await
+            .map_err(PostgresError::from)?;
 
             if publication_tables.is_empty() {
                 Err(PgSourcePurificationError::EmptyPublication(
@@ -1014,7 +1016,8 @@ async fn purify_alter_source(
         &pg_source_connection.publication,
         None,
     )
-    .await?;
+    .await
+    .map_err(PostgresError::from)?;
 
     if publication_tables.is_empty() {
         Err(PgSourcePurificationError::EmptyPublication(

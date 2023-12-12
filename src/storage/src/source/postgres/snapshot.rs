@@ -139,6 +139,7 @@ use std::str::FromStr;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
+use mz_postgres_util::schemas::PublicationInfoError;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, Stream};
@@ -331,12 +332,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             {
                 // If the replication stream cannot be obtained in a definite way there is
                 // nothing else to do. These errors are not retractable.
-                Err(err)
-                    if err.to_string()
-                        == DefiniteError::PublicationDropped(connection.publication.to_string())
-                            .to_string() =>
+                Err(PublicationInfoError::PublicationMissing(publication)) =>
                 {
-                    let err = DefiniteError::PublicationDropped(connection.publication.to_string());
+                    let err = DefiniteError::PublicationDropped(publication);
                     for oid in reader_snapshot_table_info.keys() {
                         // Produce a definite error here and then exit to ensure
                         // a missing publication doesn't generate a transient
@@ -351,7 +349,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                     return Ok(());
                 }
-                o => o?,
+                Err(PublicationInfoError::PostgresError(e)) => Err(e)?,
+                Ok(i) => i,
             };
 
             let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
