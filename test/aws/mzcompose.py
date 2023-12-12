@@ -28,7 +28,7 @@ ENVIRONMENT_NAME = f"environment-{DEFAULT_ORG_ID}-{DEFAULT_ORDINAL}"
 NAMESPACE = ENVIRONMENT_NAME
 SERVICE_ACCOUNT_NAME = ENVIRONMENT_NAME
 OIDC_SUB = f"system:serviceaccount:{NAMESPACE}:{SERVICE_ACCOUNT_NAME}"
-PURPOSE = "Customer Secrets"
+PURPOSE = "test-aws"
 STACK = "mzcompose"
 KMS_KEY_ALIAS_NAME = f"alias/customer_key_{DEFAULT_MZ_ENVIRONMENT_ID}"
 AWS_CONNECTION_ROLE_ARN = "arn:aws:iam::123456789000:role/MaterializeConnection"
@@ -45,8 +45,6 @@ SERVICES = [
             "AWS_ENDPOINT_URL=http://localstack:4566",
             f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}",
             f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_ACCESS_KEY}",
-            f"MZ_AWS_CONNECTION_ROLE_ARN={AWS_CONNECTION_ROLE_ARN}",
-            f"MZ_AWS_EXTERNAL_ID_PREFIX={AWS_EXTERNAL_ID_PREFIX}",
         ],
         options=[
             "--secrets-controller=aws-secrets-manager",
@@ -54,16 +52,16 @@ SERVICES = [
             f"--aws-secrets-controller-tags=Environment={ENVIRONMENT_NAME}",
             f"--aws-secrets-controller-tags=Purpose={PURPOSE}",
             f"--aws-secrets-controller-tags=Stack={STACK}",
+            f"--aws-connection-role-arn={AWS_CONNECTION_ROLE_ARN}",
+            f"--aws-external-id-prefix={AWS_EXTERNAL_ID_PREFIX}",
         ],
     ),
-    Testdrive(),
+    Testdrive(default_timeout="5s"),
 ]
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
-        if name == "default":
-            continue
+    for name in ["secrets-manager", "aws-connection"]:
         with c.test_case(name):
             c.workflow(name)
 
@@ -206,5 +204,5 @@ def workflow_secrets_manager(c: Composition) -> None:
 
 
 def workflow_aws_connection(c: Composition) -> None:
-    c.up("materialized")
+    c.up("localstack", "materialized")
     c.run("testdrive", "aws-connection/aws-connection.td")

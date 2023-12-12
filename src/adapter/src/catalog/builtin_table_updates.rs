@@ -47,7 +47,7 @@ use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogTyp
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_types::connections::aws::{AwsAssumeRole, AwsAuth, AwsConfig};
+use mz_storage_types::connections::aws::{AwsAuth, AwsConnection};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{KafkaConnection, StringOrSecret};
 use mz_storage_types::sinks::{KafkaSinkConnection, StorageSinkConnection};
@@ -638,24 +638,31 @@ impl CatalogState {
                         diff,
                     ));
                 } else {
-                    tracing::error!("does this even happen?");
+                    tracing::error!(%id, "missing SSH public key; cannot write row to mz_ssh_connections table");
                 }
             }
             mz_storage_types::connections::Connection::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
             }
             mz_storage_types::connections::Connection::Aws(ref aws_config) => {
-                updates.extend(self.pack_aws_connection_update(id, aws_config, diff));
+                match self.pack_aws_connection_update(id, aws_config, diff) {
+                    Ok(update) => {
+                        updates.push(update);
+                    }
+                    Err(e) => {
+                        tracing::error!(%id, %e, "failed writing row to mz_aws_connections table");
+                    }
+                }
             }
             mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
                 if let Some(aws_principal_context) = self.aws_principal_context.as_ref() {
-                    updates.extend(self.pack_aws_privatelink_connection_update(
+                    updates.push(self.pack_aws_privatelink_connection_update(
                         id,
                         aws_principal_context,
                         diff,
                     ));
                 } else {
-                    tracing::error!("Missing AWS principal context, cannot write to mz_aws_privatelink_connections table");
+                    tracing::error!(%id, "missing AWS principal context; cannot write row to mz_aws_privatelink_connections table");
                 }
             }
             mz_storage_types::connections::Connection::Csr(_)
@@ -718,85 +725,56 @@ impl CatalogState {
         connection_id: GlobalId,
         aws_principal_context: &AwsPrincipalContext,
         diff: Diff,
-    ) -> Result<BuiltinTableUpdate, Error> {
+    ) -> BuiltinTableUpdate {
         let id = self.resolve_builtin_table(&MZ_AWS_PRIVATELINK_CONNECTIONS);
         let row = Row::pack_slice(&[
             Datum::String(&connection_id.to_string()),
             Datum::String(&aws_principal_context.to_principal_string(connection_id)),
         ]);
-        Ok(BuiltinTableUpdate { id, row, diff })
+        BuiltinTableUpdate { id, row, diff }
     }
 
     pub fn pack_aws_connection_update(
         &self,
         connection_id: GlobalId,
-        aws_config: &AwsConfig,
+        aws_config: &AwsConnection,
         diff: Diff,
-    ) -> Result<BuiltinTableUpdate, Error> {
+    ) -> Result<BuiltinTableUpdate, anyhow::Error> {
         let id = self.resolve_builtin_table(&MZ_AWS_CONNECTIONS);
 
-        let mut access_key_id: Option<&str> = None;
+        let mut access_key_id = None;
         let mut access_key_id_secret_id = None;
-        let mut assume_role_arn: Option<&str> = None;
-        let mut assume_role_session_name: Option<&str> = None;
-        let mut principal: Option<&str> = None;
+        let mut assume_role_arn = None;
+        let mut assume_role_session_name = None;
+        let mut principal = None;
         let mut external_id = None;
         let mut example_trust_policy = None;
-
         match &aws_config.auth {
             AwsAuth::Credentials(credentials) => match &credentials.access_key_id {
-                StringOrSecret::String(access_key) => access_key_id = Some(access_key),
+                StringOrSecret::String(access_key) => access_key_id = Some(access_key.as_str()),
                 StringOrSecret::Secret(secret_id) => {
                     access_key_id_secret_id = Some(secret_id.to_string())
                 }
             },
             AwsAuth::AssumeRole(assume_role) => {
-                assume_role_arn = Some(&assume_role.arn);
+                assume_role_arn = Some(assume_role.arn.as_str());
                 assume_role_session_name = assume_role.session_name.as_deref();
-
-                let aws_connection_role_arn = self
+                principal = self
                     .config
                     .connection_context
                     .aws_connection_role_arn
-                    .as_ref()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::Unstructured(
-                            "internal error: could not find aws_connection_role_arn".to_string(),
-                        ))
-                    })?;
-                principal = Some(aws_connection_role_arn);
-
-                let external_id_prefix = self
-                    .config
-                    .connection_context
-                    .aws_external_id_prefix
-                    .as_ref()
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::Unstructured(
-                            "internal error: could not find aws_external_id_prefix".to_string(),
-                        ))
-                    })?;
-
-                external_id = Some(AwsAssumeRole::get_external_id(
-                    external_id_prefix,
-                    &connection_id,
-                ));
-                example_trust_policy = Some(
-                    Jsonb::from_serde_json(AwsAssumeRole::get_example_trust_policy(
-                        aws_connection_role_arn,
-                        external_id_prefix,
-                        &connection_id,
-                    ))
-                    .expect("valid json expected"),
-                );
+                    .as_deref();
+                external_id =
+                    Some(assume_role.external_id(&self.config.connection_context, connection_id)?);
+                example_trust_policy = {
+                    let policy = assume_role
+                        .example_trust_policy(&self.config.connection_context, connection_id)?;
+                    let policy = Jsonb::from_serde_json(policy).expect("valid json");
+                    Some(policy.into_row())
+                };
             }
         }
 
-        // An allocation free stack location to avoid borrow-checker errors
-        // in the `example_trust_policy` closure. `let trust_row;` doesn't
-        // work because its used in a closure so we must provide
-        // a default value.
-        let mut trust_row = Default::default();
         let row = Row::pack_slice(&[
             Datum::String(&connection_id.to_string()),
             Datum::from(aws_config.endpoint.as_deref()),
@@ -807,10 +785,7 @@ impl CatalogState {
             Datum::from(assume_role_session_name),
             Datum::from(principal),
             Datum::from(external_id.as_deref()),
-            Datum::from(example_trust_policy.map(|p| {
-                trust_row = p.into_row();
-                trust_row.into_element()
-            })),
+            Datum::from(example_trust_policy.as_ref().map(|p| p.into_element())),
         ]);
 
         Ok(BuiltinTableUpdate { id, row, diff })

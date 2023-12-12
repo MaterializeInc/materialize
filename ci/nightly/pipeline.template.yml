@@ -381,18 +381,18 @@ steps:
               composition: zippy
               args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
 
-  - group: Secrets
-    key: secrets
+  - group: AWS
+    key: aws
     steps:
-      - id: secrets-aws-secrets-manager
-        label: "Secrets AWS"
+      - id: aws
+        label: AWS
         timeout_in_minutes: 30
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
-              composition: secrets-aws-secrets-manager
+              composition: aws
 
       - id: secrets-local-file
         label: "Secrets Local File"

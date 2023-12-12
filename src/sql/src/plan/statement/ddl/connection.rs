@@ -20,7 +20,7 @@ use mz_sql_parser::ast::{
     ConnectionOption, ConnectionOptionName, CreateConnectionType, KafkaBroker,
     KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
 };
-use mz_storage_types::connections::aws::{AwsAssumeRole, AwsAuth, AwsConfig, AwsCredentials};
+use mz_storage_types::connections::aws::{AwsAssumeRole, AwsAuth, AwsConnection, AwsCredentials};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
@@ -29,7 +29,6 @@ use mz_storage_types::connections::{
 };
 
 use crate::names::Aug;
-use crate::plan::error::ConnectionParsingError;
 use crate::plan::statement::{Connection, ResolvedItemName};
 use crate::plan::with_options::{self, TryFromValue};
 use crate::plan::{PlanError, StatementContext};
@@ -169,44 +168,39 @@ impl ConnectionOptionExtracted {
             CreateConnectionType::Aws => {
                 let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
                     (Some(access_key_id), Some(secret_access_key), session_token) => {
-                        Some(AwsAuth::Credentials(AwsCredentials {
+                        Some(AwsCredentials {
                             access_key_id,
                             secret_access_key: secret_access_key.into(),
                             session_token,
-                        }))
+                        })
                     }
                     (None, None, None) => None,
                     _ => {
-                        return Err(PlanError::ConnectionParsingError(
-                            ConnectionParsingError::MissingAwsCredentials,
-                        ))
+                        sql_bail!("must specify both ACCESS KEY ID and SECRET ACCESS KEY with optional SESSION TOKEN");
                     }
                 };
 
                 let assume_role = match (self.assume_role_arn, self.assume_role_session_name) {
-                    (Some(arn), session_name) => {
-                        Some(AwsAuth::AssumeRole(AwsAssumeRole { arn, session_name }))
-                    }
+                    (Some(arn), session_name) => Some(AwsAssumeRole { arn, session_name }),
                     (None, Some(_)) => {
-                        return Err(PlanError::ConnectionParsingError(
-                            ConnectionParsingError::MissingAssumeRoleArn,
-                        ))
+                        sql_bail!(
+                            "must specify ASSUME ROLE ARN with optional ASSUME ROLE SESSION NAME"
+                        );
                     }
                     _ => None,
                 };
 
-                if credentials.is_some() && assume_role.is_some() {
-                    return Err(PlanError::ConnectionParsingError(
-                        ConnectionParsingError::ConflictingOptions,
-                    ));
-                }
+                let auth = match (credentials, assume_role) {
+                    (None, None) => sql_bail!("must specify either ASSUME ROLE ARN or ACCESS KEY ID and SECRET ACCESS KEY"),
+                    (Some(credentials), None) => AwsAuth::Credentials(credentials),
+                    (None, Some(assume_role)) => AwsAuth::AssumeRole(assume_role),
+                    (Some(_), Some(_)) => {
+                        sql_bail!("cannot specify both ACCESS KEY ID and ASSUME ROLE ARN");
+                    }
+                };
 
-                Connection::Aws(AwsConfig {
-                    auth: credentials.or(assume_role).ok_or_else(|| {
-                        PlanError::ConnectionParsingError(
-                            ConnectionParsingError::MissingRequiredOptions,
-                        )
-                    })?,
+                Connection::Aws(AwsConnection {
+                    auth,
                     endpoint: match self.endpoint {
                         // TODO(benesch): this should not treat an empty endpoint as equivalent to a `NULL`
                         // endpoint, but making that change now would break testdrive. AWS connections are

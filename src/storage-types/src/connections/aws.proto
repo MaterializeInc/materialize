@@ -18,7 +18,7 @@ import "storage-types/src/connections.proto";
 
 package mz_storage_types.connections.aws;
 
-message ProtoAwsConfig {
+message ProtoAwsConnection {
     oneof auth {
         ProtoAwsCredentials credentials = 1;
         ProtoAwsAssumeRole assume_role = 3;
@@ -31,11 +31,6 @@ message ProtoAwsCredentials {
     mz_storage_types.connections.ProtoStringOrSecret access_key_id = 1;
     mz_repr.global_id.ProtoGlobalId secret_access_key = 2;
     optional mz_storage_types.connections.ProtoStringOrSecret session_token = 3;
-}
-
-message ProtoMaterializePrincipal {
-    string arn = 1;
-    string external_id_prefix = 2;
 }
 
 message ProtoAwsAssumeRole {

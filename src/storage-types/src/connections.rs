@@ -44,7 +44,7 @@ use tokio_postgres::config::SslMode;
 use url::Url;
 
 use crate::configuration::StorageConfiguration;
-use crate::connections::aws::AwsConfig;
+use crate::connections::aws::AwsConnection;
 use crate::errors::{ContextCreationError, CsrConnectError};
 
 pub mod aws;
@@ -192,7 +192,7 @@ pub enum Connection<C: ConnectionAccess = InlinedConnection> {
     Csr(CsrConnection<C>),
     Postgres(PostgresConnection<C>),
     Ssh(SshConnection),
-    Aws(AwsConfig),
+    Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
 }
 
