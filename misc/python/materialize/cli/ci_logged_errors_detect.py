@@ -91,7 +91,7 @@ IGNORE_RE = re.compile(
     # redpanda INFO logging
     | larger\ sizes\ prevent\ running\ out\ of\ memory
     # Old versions won't support new parameters
-    | (platform-checks|legacy-upgrade|upgrade-matrix)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
+    | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     # For platform-checks upgrade tests
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage\ name=enable_dangerous_functions
     )
