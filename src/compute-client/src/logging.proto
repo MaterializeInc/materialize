@@ -43,6 +43,10 @@ message ProtoDifferentialLog {
         google.protobuf.Empty arrangement_batches = 1;
         google.protobuf.Empty arrangement_records = 2;
         google.protobuf.Empty sharing = 3;
+        google.protobuf.Empty batcher_records = 4;
+        google.protobuf.Empty batcher_size = 5;
+        google.protobuf.Empty batcher_capacity = 6;
+        google.protobuf.Empty batcher_allocations = 7;
     }
 }
 

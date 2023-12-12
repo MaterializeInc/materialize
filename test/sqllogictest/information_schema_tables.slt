@@ -261,6 +261,22 @@ mz_aggregates
 BASE TABLE
 materialize
 mz_internal
+mz_arrangement_batcher_allocations_raw
+SOURCE
+materialize
+mz_internal
+mz_arrangement_batcher_capacity_raw
+SOURCE
+materialize
+mz_internal
+mz_arrangement_batcher_records_raw
+SOURCE
+materialize
+mz_internal
+mz_arrangement_batcher_size_raw
+SOURCE
+materialize
+mz_internal
 mz_arrangement_batches_raw
 SOURCE
 materialize
