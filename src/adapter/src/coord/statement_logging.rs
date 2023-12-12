@@ -331,7 +331,7 @@ impl Coordinator {
             Datum::String(sql.as_str()),
             Datum::String(redacted_sql.as_str()),
             Datum::TimestampTz(to_datetime(*prepared_at).try_into().expect("must fit")),
-            kind.map(|kind| statement_kind_label_value(kind)).into(),
+            kind.map(statement_kind_label_value).into(),
         ]);
         row
     }

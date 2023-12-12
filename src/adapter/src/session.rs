@@ -501,7 +501,7 @@ impl<T: TimestampManipulation> Session<T> {
             .as_ref()
             .map(|stmt| stmt.to_ast_string_redacted())
             .unwrap_or(String::default());
-        let kind = stmt.as_ref().map(|stmt| StatementKind::from(stmt));
+        let kind = stmt.as_ref().map(StatementKind::from);
         let statement = PreparedStatement {
             stmt,
             desc,
