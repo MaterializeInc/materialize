@@ -94,7 +94,6 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
     txns_id: ShardId,
     data_id: ShardId,
     as_of: T,
-    // TODO(txn): Get rid of these when we have a schemaless WriteHandle.
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
 ) -> (Stream<G, P>, Vec<PressOnDropButton>)
@@ -206,7 +205,6 @@ fn txns_progress_frontiers<K, V, T, D, P, C, G>(
     txns_id: ShardId,
     data_id: ShardId,
     as_of: T,
-    // TODO(txn): Get rid of these when we have a schemaless WriteHandle.
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
 ) -> (Stream<G, P>, PressOnDropButton)
@@ -263,12 +261,14 @@ where
         let mut read_data_to = empty_to;
         let mut output_progress_exclusive = T::minimum();
         loop {
-            // TODO(txn): Do something more specific when the input returns None
-            // (is shut down). I _think_ we'll always return before this happens
-            // because we'll get a Progress event with an empty frontier, and so
-            // we could assert on this, but I want to be more sure before making
-            // that change.
-            while let Some(event) = passthrough_input.next_mut().await {
+            loop {
+                // This only returns None when there are no more data left. Turn
+                // it into an empty frontier progress so we can re-use the
+                // shutdown code below.
+                let event = passthrough_input
+                    .next_mut()
+                    .await
+                    .unwrap_or_else(|| Event::Progress(Antichain::new()));
                 match event {
                     // NB: Ignore the data_cap because this input is
                     // disconnected.

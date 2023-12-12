@@ -1420,13 +1420,6 @@ where
                 // - This branch allows it to handle that advancing the physical upper of Table A to
                 //   10 (NB but only once we see it get past the write at 5!)
                 // - Then we can read it normally.
-                //
-                // TODO(txn): We do a series of snapshots at boot and then never again. It's
-                // wasteful to create this TxnsCache and then throw it away for each of them, but
-                // it's better than the alternative of keeping it alive for snapshot calls that will
-                // never come (worse, it's tricky to keep it making progress, which results in a
-                // stuck since). Replace this with the shared TxnsCache thing we'll have to do
-                // anyway for the dataflow operators.
                 let txns_read = self.txns.expect_enabled_lazy(txns_id);
                 txns_read.update_gt(as_of.clone()).await;
                 let data_snapshot = txns_read
@@ -1499,7 +1492,7 @@ where
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
     ) -> Result<SnapshotStats<Self::Timestamp>, StorageError> {
-        // TODO(txn): Fix stats for persist-txn shards.
+        // TODO(txn-lazy): Fix stats for persist-txn shards.
         self.persist_read_handles.snapshot_stats(id, as_of).await
     }
 

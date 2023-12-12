@@ -156,8 +156,8 @@ where
         let txns_since = client
             .open_critical_since(
                 txns_id,
-                // TODO(txn): We likely need to use a different critical reader
-                // id for this if we want to be able to introspect it via SQL.
+                // TODO: We likely need to use a different critical reader id
+                // for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
                 Diagnostics {
                     shard_name: "txns".to_owned(),

@@ -134,8 +134,8 @@ impl Transactor {
                         debug!("read ts {}", read_ts);
                         write_ts = self.oracle.write_ts();
                         debug!("write ts {}", write_ts);
-                        // TODO(txn): Read this incrementally between the old
-                        // and new read timestamps, instead.
+                        // TODO: Read this incrementally between the old and new
+                        // read timestamps, instead.
                         reads = self.read_at(read_ts, read_ids.iter()).await;
                         continue;
                     }

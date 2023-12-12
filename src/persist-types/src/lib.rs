@@ -171,9 +171,8 @@ pub trait Opaque: PartialEq + Clone + Sized + 'static {
 /// Advance a timestamp by the least amount possible such that
 /// `ts.less_than(ts.step_forward())` is true.
 ///
-/// TODO(txn): Unify this with repr's TimestampManipulation. Or, ideally, get
-/// rid of it entirely by making persist-txn methods take an `advance_to`
-/// argument.
+/// TODO: Unify this with repr's TimestampManipulation. Or, ideally, get rid of
+/// it entirely by making persist-txn methods take an `advance_to` argument.
 pub trait StepForward {
     /// Advance a timestamp by the least amount possible such that
     /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
