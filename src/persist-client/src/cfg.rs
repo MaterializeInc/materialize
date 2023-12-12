@@ -159,6 +159,9 @@ pub struct PersistConfig {
     pub pubsub_state_cache_shard_ref_channel_size: usize,
     /// Backoff after an established connection to Persist PubSub service fails.
     pub pubsub_reconnect_backoff: Duration,
+
+    // WIP hacks for experimentation
+    pub compaction_bytes_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl PersistConfig {
@@ -241,8 +244,13 @@ impl PersistConfig {
             // options, where the first is always provided and the second is
             // conditionally enabled by the process orchestrator.
             hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned()),
+            compaction_bytes_semaphore: Arc::new(tokio::sync::Semaphore::new(
+                Self::COMPACTION_MAX_CONCURRENT_BYTES,
+            )),
         }
     }
+
+    const COMPACTION_MAX_CONCURRENT_BYTES: usize = 1024 * 1024 * 1024;
 
     /// The minimum number of updates that justify writing out a batch in `persist_sink`'s
     /// `write_batches` operator. (If there are fewer than this minimum number of updates,

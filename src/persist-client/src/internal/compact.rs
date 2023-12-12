@@ -144,9 +144,11 @@ where
             Machine<K, V, T, D>,
             oneshot::Sender<Result<ApplyMergeResult, anyhow::Error>>,
         )>(cfg.compaction_queue_size);
-        let concurrency_limit = Arc::new(tokio::sync::Semaphore::new(
-            cfg.compaction_concurrency_limit,
-        ));
+        // let concurrency_limit = Arc::new(tokio::sync::Semaphore::new(
+        //     cfg.compaction_concurrency_limit,
+        // ));
+        let compaction_bytes_semaphore = Arc::clone(&cfg.compaction_bytes_semaphore);
+        let compaction_memory_bound_bytes = cfg.dynamic.compaction_memory_bound_bytes();
 
         // spin off a single task responsible for executing compaction requests.
         // work is enqueued into the task through a channel
@@ -158,15 +160,27 @@ where
                 let metrics = Arc::clone(&machine.applier.metrics);
 
                 let permit = {
-                    let inner = Arc::clone(&concurrency_limit);
+                    // Figure out how much memory we expect this compaction
+                    // request to use. But cap it at the max mem an individual
+                    // compaction request might take.
+                    let bytes = req
+                        .inputs
+                        .iter()
+                        .flat_map(|x| x.parts.iter())
+                        .map(|x| x.encoded_size_bytes)
+                        .sum::<usize>();
+                    let bytes = std::cmp::min(bytes, compaction_memory_bound_bytes);
+                    let bytes = u32::try_from(bytes).expect("WIP");
+
+                    let inner = Arc::clone(&compaction_bytes_semaphore);
                     // perform a non-blocking attempt to acquire a permit so we can
                     // record how often we're ever blocked on the concurrency limit
-                    match inner.try_acquire_owned() {
+                    match inner.try_acquire_many_owned(bytes) {
                         Ok(permit) => permit,
                         Err(TryAcquireError::NoPermits) => {
                             metrics.compaction.concurrency_waits.inc();
-                            Arc::clone(&concurrency_limit)
-                                .acquire_owned()
+                            Arc::clone(&compaction_bytes_semaphore)
+                                .acquire_many_owned(bytes)
                                 .await
                                 .expect("semaphore is never closed")
                         }
