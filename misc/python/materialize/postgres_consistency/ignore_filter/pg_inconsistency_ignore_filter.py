@@ -174,6 +174,9 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             "bit_length",
             "char_length",
             "octet_length",
+            "left",
+            "right",
+            "substring",
         ] and expression.matches(
             partial(
                 involves_data_type_category, data_type_category=DataTypeCategory.JSONB
@@ -212,6 +215,14 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             == DataTypeCategory.JSONB
         ):
             return YesIgnore("#23578: empty result in || with simple values")
+
+        if db_operation.pattern in ["position($ IN $)",] and expression.matches(
+            partial(
+                involves_data_type_category, data_type_category=DataTypeCategory.JSONB
+            ),
+            True,
+        ):
+            return YesIgnore("Consequence of #23571")
 
         return NoIgnore()
 
