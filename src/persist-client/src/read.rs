@@ -198,7 +198,6 @@ where
     pub fn return_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
         self.listen.handle.process_returned_leased_part(leased_part)
     }
-}
 
     /// Politely expires this subscribe, releasing its lease.
     ///
