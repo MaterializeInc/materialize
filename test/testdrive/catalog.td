@@ -718,7 +718,16 @@ $ psql-execute command="\dt *.test_table"
 type1
 
 $ psql-execute command="\dT"
-\      List of data types
- Schema | Name  | Description
---------+-------+-------------
- public | type1 |
+\              List of data types
+   Schema   |       Name        | Description
+------------+-------------------+-------------
+ mz_catalog | anycompatiblelist |
+ mz_catalog | anycompatiblemap  |
+ mz_catalog | list              |
+ mz_catalog | map               |
+ mz_catalog | mz_aclitem        |
+ mz_catalog | mz_timestamp      |
+ mz_catalog | uint2             |
+ mz_catalog | uint4             |
+ mz_catalog | uint8             |
+ public     | type1             |

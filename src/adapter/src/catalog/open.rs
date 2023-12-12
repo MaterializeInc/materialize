@@ -1190,7 +1190,6 @@ impl Catalog {
                 _ => {}
             }
         }
-        let pg_catalog_schema_id = state.get_pg_catalog_schema_id().clone();
         for typ in &mut builtin_types {
             let element_id = name_to_id_map[typ.name];
             typ.details.array_id = element_id_to_array_id.get(&element_id).map(|id| id.clone());
@@ -1206,13 +1205,15 @@ impl Catalog {
             let desc = None;
             assert!(!matches!(typ.details.typ, CatalogType::Record { .. }));
 
+            let schema_id = state.resolve_system_schema(typ.schema);
+
             state.insert_item(
                 element_id,
                 typ.oid,
                 QualifiedItemName {
                     qualifiers: ItemQualifiers {
                         database_spec: ResolvedDatabaseSpecifier::Ambient,
-                        schema_spec: SchemaSpecifier::Id(pg_catalog_schema_id),
+                        schema_spec: SchemaSpecifier::Id(schema_id),
                     },
                     item: typ.name.to_owned(),
                 },

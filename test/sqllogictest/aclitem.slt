@@ -309,7 +309,7 @@ SELECT mz_internal.mz_aclexplode(ARRAY[mz_internal.make_mz_aclitem('u1', 'u2', '
 (u2,u1,SELECT,f)
 
 query error MZ_ACL arrays must not contain null values
-SELECT mz_internal.mz_aclexplode(array[null]::mz_aclitem[]);
+SELECT mz_internal.mz_aclexplode(array[null]::mz_catalog.mz_aclitem[]);
 
 # Test casting to/from aclitem and mz_aclitem
 
@@ -324,12 +324,12 @@ SELECT mz_internal.make_mz_aclitem('p', 'u2', 'CREATE, USAGE')::aclitem = makeac
 true
 
 query B
-SELECT makeaclitem((SELECT oid FROM mz_roles WHERE name = 'materialize'), (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE, USAGE', false)::mz_aclitem = mz_internal.make_mz_aclitem('u1', 'u2', 'CREATE, USAGE')
+SELECT makeaclitem((SELECT oid FROM mz_roles WHERE name = 'materialize'), (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE, USAGE', false)::mz_catalog.mz_aclitem = mz_internal.make_mz_aclitem('u1', 'u2', 'CREATE, USAGE')
 ----
 true
 
 query B
-SELECT makeaclitem(0, (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE, USAGE', false)::mz_aclitem = mz_internal.make_mz_aclitem('p', 'u2', 'CREATE, USAGE')
+SELECT makeaclitem(0, (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE, USAGE', false)::mz_catalog.mz_aclitem = mz_internal.make_mz_aclitem('p', 'u2', 'CREATE, USAGE')
 ----
 true
 
@@ -349,17 +349,17 @@ SELECT mz_internal.make_mz_aclitem('u3251', 's345', 'CREATE')::aclitem::text
 NULL
 
 query T
-SELECT makeaclitem(99991, (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE', false)::mz_aclitem
+SELECT makeaclitem(99991, (SELECT oid FROM mz_roles WHERE name = 'test_role'), 'CREATE', false)::mz_catalog.mz_aclitem
 ----
 NULL
 
 query T
-SELECT makeaclitem((SELECT oid FROM mz_roles WHERE name = 'materialize'), 87398, 'CREATE', false)::mz_aclitem
+SELECT makeaclitem((SELECT oid FROM mz_roles WHERE name = 'materialize'), 87398, 'CREATE', false)::mz_catalog.mz_aclitem
 ----
 NULL
 
 query T
-SELECT makeaclitem(3251, 345, 'CREATE', false)::mz_aclitem
+SELECT makeaclitem(3251, 345, 'CREATE', false)::mz_catalog.mz_aclitem
 ----
 NULL
 
