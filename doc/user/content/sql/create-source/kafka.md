@@ -282,7 +282,7 @@ CREATE SOURCE kafka_offset
 Note that:
 
 - If fewer offsets than partitions are provided, the remaining partitions will start at offset 0. This is true if you provide `START OFFSET (1)` or `START OFFSET (1, ...)`.
-- If more offsets than partitions are provided, then any partitions added later will incorrectly be read from that offset. So, if you have a single partition, but you provide `START OFFSET (1, 2)`, when you add the second partition you will miss the first 2 records of data.
+- Providing more offsets than partitions is not supported.
 
 #### Time-based offsets
 
