@@ -2296,7 +2296,8 @@ impl RustType<ProtoColumnOrder> for ColumnOrder {
 
 impl fmt::Display for ColumnOrder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        HumanizedExplain::new(self, None).fmt(f)
+        let mode = HumanizedExplain::default();
+        mode.expr(self, None).fmt(f)
     }
 }
 
@@ -3515,7 +3516,10 @@ mod tests {
             project: vec![1, 3, 4, 5],
         };
 
-        let act = text_string_at(&finishing, mz_ore::str::Indent::default);
+        let mode = HumanizedExplain::new(false);
+        let expr = mode.expr(&finishing, None);
+
+        let act = text_string_at(&expr, mz_ore::str::Indent::default);
 
         let exp = {
             use mz_ore::fmt::FormatBuffer;

@@ -13,7 +13,7 @@ use std::fmt::{self, Error, Write};
 
 use itertools::zip_eq;
 
-use mz_expr::explain::{display_singleton_row, HumanizedNotice, HumanizerMode};
+use mz_expr::explain::{HumanizedNotice, HumanizerMode};
 use mz_expr::MirScalarExpr;
 use mz_ore::str::separated;
 use mz_repr::explain::ExprHumanizer;
@@ -149,55 +149,45 @@ impl<'a> fmt::Display for HumanizedNoticeMsg<'a> {
                     .humanize_id_unqualified(*index_on_id)
                     .unwrap_or_else(|| index_on_id.to_string());
 
-                let index_key = separated(", ", HumanizedNotice::seq(index_key, col_names));
+                let mode = HumanizedNotice::default();
 
-                write!(f, "Index {index_name} on {index_on_id_name}({index_key}) is too wide to use for literal equalities `")?;
+                let index_key = separated(", ", mode.seq(index_key, col_names));
+                write!(
+                    f,
+                    "Index {index_name} on {index_on_id_name}({index_key}) \
+                     is too wide to use for literal equalities "
+                )?;
+
+                write!(f, "`")?;
                 {
                     if usable_subset.len() == 1 {
+                        let exprs = mode.expr(&usable_subset[0], col_names);
+                        let lits = literal_values
+                            .iter()
+                            .map(|l| l.unpack_first())
+                            .collect::<Vec<_>>();
+                        let mut lits = mode.seq(&lits, col_names);
                         if literal_values.len() == 1 {
-                            write!(
-                                f,
-                                "{} = {}",
-                                HumanizedNotice::new(&usable_subset[0], col_names),
-                                display_singleton_row(literal_values[0].clone())
-                            )?;
+                            write!(f, "{} = {}", exprs, lits.next().unwrap())?;
                         } else {
-                            write!(
-                                f,
-                                "{} IN ({})",
-                                HumanizedNotice::new(&usable_subset[0], col_names),
-                                separated(
-                                    ", ",
-                                    literal_values
-                                        .iter()
-                                        .map(|r| display_singleton_row(r.clone()))
-                                )
-                            )?;
+                            write!(f, "{} IN ({})", exprs, separated(", ", lits))?;
                         }
                     } else {
                         if literal_values.len() == 1 {
-                            write!(
-                                f,
-                                "{}",
-                                separated(
-                                    " AND ",
-                                    zip_eq(
-                                        usable_subset.into_iter(),
-                                        literal_values[0].into_iter()
-                                    )
-                                    .map(
-                                        |(key_field, value)| {
-                                            format!("{} = {}", key_field, value)
-                                        }
-                                    )
-                                )
-                            )?;
+                            let exprs = mode.seq(usable_subset, col_names);
+                            let lits = literal_values[0].unpack();
+                            let lits = mode.seq(&lits, col_names);
+                            let eqs = zip_eq(exprs, lits)
+                                .map(|(expr, lit)| format!("{} = {}", expr, lit));
+                            write!(f, "{}", separated(" AND ", eqs))?;
                         } else {
+                            let exprs = mode.seq(usable_subset, col_names);
+                            let lits = mode.seq(literal_values, col_names);
                             write!(
                                 f,
                                 "({}) IN ({})",
-                                separated(", ", HumanizedNotice::seq(usable_subset, col_names)),
-                                separated(", ", literal_values)
+                                separated(", ", exprs),
+                                separated(", ", lits)
                             )?;
                         }
                     };
@@ -205,7 +195,12 @@ impl<'a> fmt::Display for HumanizedNoticeMsg<'a> {
                 write!(f, "`.")
             }
             OptimizerNotice::IndexKeyEmpty => {
-                write!(f, "Empty index key. The index will be completely skewed to one worker thread, which can lead to performance problems.")
+                write!(
+                    f,
+                    "Empty index key. \
+                    The index will be completely skewed to one worker thread, \
+                    which can lead to performance problems."
+                )
             }
         }
     }
@@ -235,21 +230,27 @@ impl<'a> fmt::Display for HumanizedNoticeHint<'a> {
             ) => {
                 let col_names = self.humanizer.column_names_for_id(*index_on_id);
                 let col_names = col_names.as_ref();
-                let recommended_key = {
-                    separated(
-                        ", ",
-                        recommended_key
-                            .iter()
-                            .map(|expr| HumanizedNotice::new(expr, col_names)),
-                    )
-                };
+
+                let mode = HumanizedNotice::default();
+
+                let recommended_key = mode.seq(recommended_key, col_names);
+                let recommended_key = separated(", ", recommended_key);
 
                 // TODO: Also print whether the index is used elsewhere (for something that is not a
                 // full scan), so that the user knows whether to delete the old index.
-                write!(f, "If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: ({recommended_key}).")
+                write!(
+                    f,
+                    "If your literal equalities filter out many rows, \
+                     create an index whose key exactly matches your literal equalities: \
+                     ({recommended_key})."
+                )
             }
             OptimizerNotice::IndexKeyEmpty => {
-                write!(f, "CREATE DEFAULT INDEX is almost always better than an index with an empty key. (Except for cross joins with big inputs, which are better to avoid anyway.)")
+                write!(
+                    f,
+                    "CREATE DEFAULT INDEX is almost always better than an index with an empty key. \
+                    (Except for cross joins with big inputs, which are better to avoid anyway.)"
+                )
             }
         }
     }
