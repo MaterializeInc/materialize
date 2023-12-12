@@ -2359,6 +2359,13 @@ pub fn serve(
 
         let pg_timestamp_oracle_config = timestamp_oracle_url
             .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
+        if let Some(config) = pg_timestamp_oracle_config.as_ref() {
+            // Apply settings from system vars as early as possible because some
+            // of them are locked in right when an oracle is first opened!
+            let pg_timestamp_oracle_params =
+                flags::pg_timstamp_oracle_config(catalog.system_config());
+            pg_timestamp_oracle_params.apply(config);
+        }
 
         let initial_timestamps =
             get_initial_oracle_timestamps(&catalog, &pg_timestamp_oracle_config).await?;
