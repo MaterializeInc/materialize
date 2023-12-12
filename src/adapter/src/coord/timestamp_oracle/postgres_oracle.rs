@@ -407,7 +407,7 @@ where
         initially: Timestamp,
         next: N,
     ) -> Self {
-        info!(url = ?config.url, "opening PostgresTimestampOracle");
+        info!(config = ?config, "opening PostgresTimestampOracle");
 
         let fallible = || async {
             let metrics = Arc::clone(&config.metrics);
