@@ -1454,6 +1454,7 @@ where
                                 "Net-zero records with non-zero accumulation in ReduceAccumulable",
                                 &format!("aggr={aggr:?}, accum={accum:?}"),
                             );
+                            let key = key.into_owned();
                             let message = format!(
                                 "Invalid data in source, saw net-zero records for key {key} \
                                  with non-zero accumulation in accumulable aggregate"
@@ -1469,6 +1470,7 @@ where
                                     "Invalid negative unsigned aggregation in ReduceAccumulable",
                                     &format!("aggr={aggr:?}, accum={accum:?}"),
                                 );
+                                    let key = key.into_owned();
                                     let message = format!(
                                         "Invalid data in source, saw negative accumulation with \
                                          unsigned type for key {key}"

@@ -678,7 +678,7 @@ pub(super) fn read_time(data: &[u8], offset: &mut usize) -> NaiveTime {
 ///
 /// This function is safe if a `Datum` was previously written at this offset by `push_datum`.
 /// Otherwise it could return invalid values, which is Undefined Behavior.
-unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
+pub unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
     let tag = Tag::try_from_primitive(read_byte(data, offset)).expect("unknown row tag");
     match tag {
         Tag::Null => Datum::Null,

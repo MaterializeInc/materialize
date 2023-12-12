@@ -84,6 +84,7 @@ pub(crate) mod extensions;
 pub(crate) mod logging;
 pub(crate) mod metrics;
 pub(crate) mod render;
+pub(crate) mod row_spine;
 pub mod server;
 pub(crate) mod sink;
 mod typedefs;
