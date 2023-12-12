@@ -19,7 +19,7 @@ use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{
     CompactScalarSeq, ExprHumanizer, HumanizedAttributes, IndexUsageType, Indices,
-    PlanRenderingContext, RenderingContext,
+    PlanRenderingContext, RenderingContext, ScalarOps,
 };
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql_parser::ast::Ident;
@@ -1203,6 +1203,16 @@ where
                 write!(f, "#{}", self.expr)
             }
         }
+    }
+}
+
+impl<'a, M> ScalarOps for HumanizedExpr<'a, MirScalarExpr, M> {
+    fn match_col_ref(&self) -> Option<usize> {
+        self.expr.match_col_ref()
+    }
+
+    fn references(&self, col_ref: usize) -> bool {
+        self.expr.references(col_ref)
     }
 }
 

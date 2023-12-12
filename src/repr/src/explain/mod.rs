@@ -429,6 +429,7 @@ impl<'a> AsRef<&'a dyn ExprHumanizer> for RenderingContext<'a> {
         &self.humanizer
     }
 }
+
 #[allow(missing_debug_implementations)]
 pub struct PlanRenderingContext<'a, T> {
     pub indent: Indent,
@@ -611,7 +612,17 @@ pub struct Indices<'a>(pub &'a [usize]);
 ///
 /// Interval expressions are used only for runs of three or more elements.
 #[derive(Debug)]
-pub struct CompactScalarSeq<'a, T: ScalarOps>(pub &'a [T]);
+pub struct CompactScalarSeq<'a, T: ScalarOps>(pub &'a [T]); // TODO(cloud#8196) remove this
+
+/// Pretty-prints a list of scalar expressions that may have runs of column
+/// indices as a comma-separated list interleaved with interval expressions.
+///
+/// Interval expressions are used only for runs of three or more elements.
+#[derive(Debug)]
+pub struct CompactScalars<T, I>(pub I)
+where
+    T: ScalarOps,
+    I: Iterator<Item = T> + Clone;
 
 pub trait ScalarOps {
     fn match_col_ref(&self) -> Option<usize>;
