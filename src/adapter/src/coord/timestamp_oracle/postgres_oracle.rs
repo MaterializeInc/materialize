@@ -18,6 +18,11 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use deadpool_postgres::{Object, PoolError};
 use dec::Decimal;
+use mz_adapter_types::timestamp_oracle::{
+    DEFAULT_PG_TIMESTAMP_ORACLE_CONNECT_TIMEOUT, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE,
+    DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL,
+    DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER, DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT,
+};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_pgrepr::Numeric;
@@ -92,15 +97,23 @@ impl PostgresTimestampOracleConfig {
         let dynamic = DynamicConfig {
             // TODO(aljoscha): These defaults are taken as is from the persist
             // Consensus tuning. Once we're sufficiently advanced we might want
-            // to a) make some of these configurable dynamically, as they are in
-            // persist, and b) pick defaults that are different from the persist
-            // defaults.
-            pg_connection_pool_max_size: AtomicUsize::new(50),
-            pg_connection_pool_max_wait: RwLock::new(Some(Duration::from_secs(60))),
-            pg_connection_pool_ttl: RwLock::new(Duration::from_secs(300)),
-            pg_connection_pool_ttl_stagger: RwLock::new(Duration::from_secs(6)),
-            pg_connection_pool_connect_timeout: RwLock::new(Duration::from_secs(5)),
-            pg_connection_pool_tcp_user_timeout: RwLock::new(Duration::from_secs(30)),
+            // to pick defaults that are different from the persist defaults.
+            pg_connection_pool_max_size: AtomicUsize::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE,
+            ),
+            pg_connection_pool_max_wait: RwLock::new(Some(
+                DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
+            )),
+            pg_connection_pool_ttl: RwLock::new(DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL),
+            pg_connection_pool_ttl_stagger: RwLock::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
+            ),
+            pg_connection_pool_connect_timeout: RwLock::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_CONNECT_TIMEOUT,
+            ),
+            pg_connection_pool_tcp_user_timeout: RwLock::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT,
+            ),
         };
 
         PostgresTimestampOracleConfig {
