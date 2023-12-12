@@ -11,8 +11,9 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::marker::PhantomData;
+use std::sync::atomic::Ordering;
 
+use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
@@ -20,13 +21,13 @@ use mz_repr::explain::{
     CompactScalarSeq, ExprHumanizer, HumanizedAttributes, IndexUsageType, Indices,
     PlanRenderingContext, RenderingContext,
 };
-use mz_repr::{GlobalId, Row};
+use mz_repr::{Datum, GlobalId, Row};
 use mz_sql_parser::ast::Ident;
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
 use crate::{
-    AccessStrategy, AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, LocalId,
-    MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
+    AccessStrategy, AggregateExpr, EvalError, Id, JoinImplementation, JoinInputCharacteristics,
+    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
 
 impl<'a, T: 'a> DisplayText for ExplainSinglePlan<'a, T>
@@ -1026,39 +1027,80 @@ impl fmt::Display for MirScalarExpr {
 }
 
 #[derive(Debug, Clone)]
-pub struct HumanizedExpr<'a, T, Mode = HumanizedExplain> {
+pub struct HumanizedExpr<'a, T, M = HumanizedExplain> {
     pub(crate) expr: &'a T,
     pub(crate) cols: Option<&'a Vec<String>>,
-    pub(crate) mode: PhantomData<Mode>,
+    pub mode: M,
 }
 
-impl<'a, T, M> HumanizedExpr<'a, T, M> {
+impl<'a, T, M: HumanizerMode> HumanizedExpr<'a, T, M> {
     pub(crate) fn child<U>(&self, expr: &'a U) -> HumanizedExpr<'a, U, M> {
         HumanizedExpr {
             expr,
             cols: self.cols,
-            mode: PhantomData::<M>,
+            mode: self.mode.clone(),
         }
     }
 }
 
 /// A trait that abstracts the various ways in which we humanize expressions.
-pub trait HumanizerMode: Sized {
+pub trait HumanizerMode: Sized + Clone {
+    fn new(redacted: bool) -> Self;
+
+    fn redacted(&self) -> bool;
+
     fn humanize_ident(col: usize, ident: Ident, f: &mut fmt::Formatter<'_>) -> fmt::Result;
 
-    fn new<'a, T>(expr: &'a T, cols: Option<&'a Vec<String>>) -> HumanizedExpr<'a, T, Self> {
+    fn default() -> Self {
+        // Don't redact in debug builds and in CI. TODO(8196)
+        let redacted = !SOFT_ASSERTIONS.load(Ordering::Relaxed);
+        Self::new(redacted)
+    }
+
+    fn humanize_literal(
+        &self,
+        row: &Result<Row, EvalError>,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        match row {
+            Ok(row) => self.humanize_datum(row.unpack_first(), f),
+            Err(err) => {
+                if self.redacted() {
+                    write!(f, "error(█)")
+                } else {
+                    write!(f, "error({})", err.to_string().quoted())
+                }
+            }
+        }
+    }
+
+    fn humanize_datum(&self, datum: Datum<'_>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.redacted() {
+            write!(f, "█")
+        } else {
+            write!(f, "{}", datum)
+        }
+    }
+
+    fn expr<'a, T>(
+        &self,
+        expr: &'a T,
+        cols: Option<&'a Vec<String>>,
+    ) -> HumanizedExpr<'a, T, Self> {
         HumanizedExpr {
             expr,
             cols,
-            mode: PhantomData::<Self>,
+            mode: self.clone(),
         }
     }
 }
 
 /// A [`HumanizerMode`] that is ambigous but allows us to print valid SQL
 /// stataments, so it should be used in optimizer notices.
-#[allow(missing_debug_implementations)]
-pub struct HumanizedNotice;
+///
+/// The inner parameter is `true` iff literals should be redacted.
+#[derive(Debug, Clone)]
+pub struct HumanizedNotice(bool);
 
 impl HumanizedNotice {
     // TODO: move to `HumanizerMode` once we start using a Rust version with the
@@ -1066,14 +1108,24 @@ impl HumanizedNotice {
     //
     // https://github.com/rust-lang/rust/pull/115822
     pub fn seq<'i, T>(
+        &self,
         exprs: &'i [T],
         cols: Option<&'i Vec<String>>,
     ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
-        exprs.iter().map(move |expr| Self::new(expr, cols))
+        let mode = self.clone();
+        exprs.iter().map(move |expr| mode.expr(expr, cols))
     }
 }
 
 impl HumanizerMode for HumanizedNotice {
+    fn new(redacted: bool) -> Self {
+        Self(redacted)
+    }
+
+    fn redacted(&self) -> bool {
+        self.0
+    }
+
     /// Write `ident`.
     fn humanize_ident(_col: usize, ident: Ident, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{ident}")
@@ -1081,8 +1133,10 @@ impl HumanizerMode for HumanizedNotice {
 }
 
 /// A [`HumanizerMode`] that is unambiguous and should be used in `EXPLAIN` output.
-#[allow(missing_debug_implementations)]
-pub struct HumanizedExplain;
+///
+/// The inner parameter is `true` iff literals should be redacted.
+#[derive(Debug, Clone)]
+pub struct HumanizedExplain(bool);
 
 impl HumanizedExplain {
     // TODO: move to `HumanizerMode` once we start using a Rust version with the
@@ -1090,14 +1144,24 @@ impl HumanizedExplain {
     //
     // https://github.com/rust-lang/rust/pull/115822
     pub fn seq<'i, T>(
+        &self,
         exprs: &'i [T],
         cols: Option<&'i Vec<String>>,
     ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
-        exprs.iter().map(move |expr| Self::new(expr, cols))
+        let mode = self.clone();
+        exprs.iter().map(move |expr| mode.expr(expr, cols))
     }
 }
 
 impl HumanizerMode for HumanizedExplain {
+    fn new(redacted: bool) -> Self {
+        Self(redacted)
+    }
+
+    fn redacted(&self) -> bool {
+        self.0
+    }
+
     /// Write `#c{ident}`.
     fn humanize_ident(col: usize, ident: Ident, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "#{col}{{{ident}}}")
@@ -1235,17 +1299,29 @@ where
     }
 }
 
-/// Displays a `Row` of which the caller knows to contain exactly 1 field. This is to avoid printing
-/// an extra pair of parenthesis that wrap `Row`s in the normal Display.
-pub fn display_singleton_row(r: Row) -> impl fmt::Display {
-    struct SingletonRow(Row);
-    impl fmt::Display for SingletonRow {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            let mut iter = self.0.into_iter();
-            let d = iter.next().unwrap();
-            assert!(matches!(iter.next(), None));
-            write!(f, "{}", d)
-        }
+impl<'a, M> fmt::Display for HumanizedExpr<'a, Datum<'a>, M>
+where
+    M: HumanizerMode,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.mode.humanize_datum(*self.expr, f)
     }
-    SingletonRow(r)
+}
+
+impl<'a, M> fmt::Display for HumanizedExpr<'a, Row, M>
+where
+    M: HumanizerMode,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("(")?;
+        for (i, d) in self.expr.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", {}", self.child(&d))?;
+            } else {
+                write!(f, "{}", self.child(&d))?;
+            }
+        }
+        f.write_str(")")?;
+        Ok(())
+    }
 }
