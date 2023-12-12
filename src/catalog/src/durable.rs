@@ -197,6 +197,12 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
 
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
+
+    /// Get a full snapshot of all data in the catalog. This includes all audit logs and storage
+    /// usages that isn't included in [`Self::snapshot`].
+    async fn whole_migration_snapshot(
+        &mut self,
+    ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError>;
 }
 
 /// A read-write API for the durable catalog state.
@@ -207,6 +213,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
+
+    /// Creates a new durable catalog state transaction. Also returns all the audit logs and storage
+    /// usages that exist at the start of the transaction, which isn't included in
+    /// [`Self::transaction`].
+    async fn whole_migration_transaction(
+        &mut self,
+    ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError>;
 
     /// Commits a durable catalog state transaction.
     async fn commit_transaction(&mut self, txn_batch: TransactionBatch)

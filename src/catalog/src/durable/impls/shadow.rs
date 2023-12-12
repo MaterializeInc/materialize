@@ -444,6 +444,12 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
             compare_and_return_async!(self, snapshot)
         }
     }
+
+    async fn whole_migration_snapshot(
+        &mut self,
+    ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
+        panic!("Shadow catalog should never get a full snapshot")
+    }
 }
 
 #[async_trait]
@@ -479,6 +485,12 @@ impl DurableCatalogState for ShadowCatalogState {
         // both implementations.
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
+    }
+
+    async fn whole_migration_transaction(
+        &mut self,
+    ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
+        panic!("Shadow catalog should never get a full transaction")
     }
 
     async fn commit_transaction(
