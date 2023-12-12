@@ -16,7 +16,7 @@ individual fields mapped to columns.
 <div class="json_widget">
     <div class="json">
         <textarea title="JSON Sample" id="json_sample" placeholder="JSON Sample">
-            { "payload": "materialize", "event": { "kind": 1, "success": true }, "ts": "2023-02-01T17:00:00.000Z" }
+            { "payload": "materialize", "event": { "kind": 1, "success": true, "createdAt": "2023-02-01T17:00:00.000Z" }, "ts": "2023-02-01T17:00:00.000Z" }
         </textarea>
         <div id="error_span" class="error">
             <p id="error_text"></p>
@@ -131,7 +131,7 @@ function formSql(selectItems, viewName, sourceName, objectType) {
 
     let selects = selectItems.map(([name, wrapping_function, cast, parents]) => {
         // Note: The first "parent" is the JSON column.
-        const formattedName = [...parents.slice(1), name].join("_").toLowerCase();
+        const formattedName = [...parents.slice(1), _.snakeCase(name)].join("_").toLowerCase();
 
         const parentPath = [parents[0], ...parents.slice(1).map((p) => `'${p}'`)].join("->");
         const formattedPath = parentPath.concat(`->>'${name}'`);
