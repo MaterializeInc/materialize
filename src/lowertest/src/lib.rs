@@ -732,9 +732,6 @@ where
     C: TestDeserializeContext,
 {
     let (type_name, option_found) = normalize_type_name(type_name);
-    if let Some(result) = ctx.reverse_syntax_override(json, &type_name) {
-        return result;
-    }
     // If type is `Option<T>`, convert the value to "null" if it is null,
     // otherwise, try to convert it to a spec corresponding to an object of
     // type `T`.
@@ -742,6 +739,9 @@ where
         if let Value::Null = json {
             return "null".to_string();
         }
+    }
+    if let Some(result) = ctx.reverse_syntax_override(json, &type_name) {
+        return result;
     }
     if let Some((names, types)) = rti.struct_dict.get(&type_name[..]) {
         if types.is_empty() {

@@ -42,7 +42,9 @@ use itertools::Itertools;
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LetRecLimit, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
+use mz_ore::num::NonNeg;
 use mz_ore::option::FallibleMapExt;
+use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
 use mz_repr::adt::char::CharLength;
@@ -91,10 +93,10 @@ use crate::plan::{
     transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
     WebhookValidationSecret,
 };
-use crate::session::vars::FeatureFlag;
+use crate::session::vars::{self, FeatureFlag};
 
 #[derive(Debug)]
-pub struct PlannedQuery<E> {
+pub struct PlannedRootQuery<E> {
     pub expr: E,
     pub desc: RelationDesc,
     pub finishing: RowSetFinishing,
@@ -114,10 +116,43 @@ pub fn plan_root_query(
     scx: &StatementContext,
     mut query: Query<Aug>,
     lifetime: QueryLifetime,
-) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
+) -> Result<PlannedRootQuery<HirRelationExpr>, PlanError> {
     transform_ast::transform(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
-    let (mut expr, scope, mut finishing, group_size_hints) = plan_query(&mut qcx, &query)?;
+    let PlannedQuery {
+        mut expr,
+        scope,
+        order_by,
+        limit,
+        offset,
+        project,
+        group_size_hints,
+    } = plan_query(&mut qcx, &query)?;
+
+    // A top-level limit cannot be data dependent so eagerly evaluate it.
+    let limit = match limit {
+        None => None,
+        Some(limit) => {
+            let Some(limit) = limit.as_literal() else {
+                sql_bail!("Top-level LIMIT must be a constant expression")
+            };
+            match limit {
+                Datum::Null => None,
+                Datum::Int64(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
+                _ => {
+                    soft_panic_or_log!("Valid literal limit must be asserted in `plan_query`");
+                    sql_bail!("LIMIT must be a non negative INT or NULL")
+                }
+            }
+        }
+    };
+
+    let mut finishing = RowSetFinishing {
+        limit,
+        offset,
+        project,
+        order_by,
+    };
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -140,7 +175,7 @@ pub fn plan_root_query(
     );
     let desc = RelationDesc::new(typ, scope.column_names());
 
-    Ok(PlannedQuery {
+    Ok(PlannedRootQuery {
         expr,
         desc,
         finishing,
@@ -188,7 +223,14 @@ pub fn plan_insert_query(
     columns: Vec<Ident>,
     source: InsertSource<Aug>,
     returning: Vec<SelectItem<Aug>>,
-) -> Result<(GlobalId, HirRelationExpr, PlannedQuery<Vec<HirScalarExpr>>), PlanError> {
+) -> Result<
+    (
+        GlobalId,
+        HirRelationExpr,
+        PlannedRootQuery<Vec<HirScalarExpr>>,
+    ),
+    PlanError,
+> {
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let table = scx.get_item_by_resolved_name(&table_name)?;
 
@@ -368,7 +410,7 @@ pub fn plan_insert_query(
         }
         let desc = RelationDesc::new(new_type, output_columns);
         let desc_arity = desc.arity();
-        PlannedQuery {
+        PlannedRootQuery {
             expr: new_exprs,
             desc,
             finishing: RowSetFinishing {
@@ -1207,17 +1249,21 @@ fn check_col_index(name: &str, e: &Expr<Aug>, max: usize) -> Result<Option<usize
     }
 }
 
-fn plan_query(
-    qcx: &mut QueryContext,
-    q: &Query<Aug>,
-) -> Result<(HirRelationExpr, Scope, RowSetFinishing, GroupSizeHints), PlanError> {
+struct PlannedQuery {
+    expr: HirRelationExpr,
+    scope: Scope,
+    order_by: Vec<ColumnOrder>,
+    limit: Option<HirScalarExpr>,
+    offset: usize,
+    project: Vec<usize>,
+    group_size_hints: GroupSizeHints,
+}
+
+fn plan_query(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQuery, PlanError> {
     qcx.checked_recur_mut(|qcx| plan_query_inner(qcx, q))
 }
 
-fn plan_query_inner(
-    qcx: &mut QueryContext,
-    q: &Query<Aug>,
-) -> Result<(HirRelationExpr, Scope, RowSetFinishing, GroupSizeHints), PlanError> {
+fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQuery, PlanError> {
     // Plan CTEs and introduce bindings to `qcx.ctes`. Returns shadowed bindings
     // for the identifiers, so that they can be re-installed before returning.
     let cte_bindings = plan_ctes(qcx, q)?;
@@ -1225,17 +1271,45 @@ fn plan_query_inner(
     let limit = match &q.limit {
         None => None,
         Some(Limit {
-            quantity: Expr::Value(Value::Number(x)),
+            quantity,
             with_ties: false,
-        }) => Some(x.parse()?),
+        }) => {
+            let ecx = &ExprContext {
+                qcx,
+                name: "LIMIT",
+                scope: &Scope::empty(),
+                relation_type: &RelationType::empty(),
+                allow_aggregates: false,
+                allow_subqueries: true,
+                allow_parameters: true,
+                allow_windows: false,
+            };
+            let limit = plan_expr(ecx, quantity)?;
+            let limit = limit.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?;
+
+            let limit = if limit.is_constant() {
+                let arena = RowArena::new();
+                let limit = limit.lower_uncorrelated()?;
+
+                match limit.eval(&[], &arena)? {
+                    d @ Datum::Int64(v) if v >= 0 => HirScalarExpr::literal(d, ScalarType::Int64),
+                    d @ Datum::Null => HirScalarExpr::literal(d, ScalarType::Int64),
+                    Datum::Int64(_) => sql_bail!("LIMIT must not be negative"),
+                    _ => sql_bail!("constant LIMIT expression must reduce to an INT or NULL value"),
+                }
+            } else {
+                // Gate non-constant LIMIT expressions behind a feature flag
+                qcx.scx
+                    .require_feature_flag(&vars::ENABLE_EXPRESSIONS_IN_LIMIT_SYNTAX)?;
+                limit
+            };
+
+            Some(limit)
+        }
         Some(Limit {
             quantity: _,
             with_ties: true,
         }) => bail_unsupported!("FETCH ... WITH TIES"),
-        Some(Limit {
-            quantity: _,
-            with_ties: _,
-        }) => sql_bail!("LIMIT must be an integer constant"),
     };
     let offset = match &q.offset {
         None => 0,
@@ -1243,20 +1317,22 @@ fn plan_query_inner(
         _ => sql_bail!("OFFSET must be an integer constant"),
     };
 
-    let (mut result, scope, finishing, group_size_hints) = match &q.body {
+    let mut planned_query = match &q.body {
         SetExpr::Select(s) => {
             // Extract query options.
             let select_option_extracted = SelectOptionExtracted::try_from(s.options.clone())?;
             let group_size_hints = GroupSizeHints::try_from(select_option_extracted)?;
 
             let plan = plan_view_select(qcx, *s.clone(), q.order_by.clone())?;
-            let finishing = RowSetFinishing {
+            PlannedQuery {
+                expr: plan.expr,
+                scope: plan.scope,
                 order_by: plan.order_by,
                 project: plan.project,
                 limit,
                 offset,
-            };
-            Ok::<_, PlanError>((plan.expr, plan.scope, finishing, group_size_hints))
+                group_size_hints,
+            }
         }
         _ => {
             let (expr, scope) = plan_set_expr(qcx, &q.body)?;
@@ -1272,31 +1348,29 @@ fn plan_query_inner(
             };
             let output_columns: Vec<_> = scope.column_names().enumerate().collect();
             let (order_by, map_exprs) = plan_order_by_exprs(ecx, &q.order_by, &output_columns)?;
-            let finishing = RowSetFinishing {
+            let project = (0..ecx.relation_type.arity()).collect();
+            PlannedQuery {
+                expr: expr.map(map_exprs),
+                scope,
                 order_by,
                 limit,
-                project: (0..ecx.relation_type.arity()).collect(),
+                project,
                 offset,
-            };
-            Ok((
-                expr.map(map_exprs),
-                scope,
-                finishing,
-                GroupSizeHints::default(),
-            ))
+                group_size_hints: GroupSizeHints::default(),
+            }
         }
-    }?;
+    };
 
     // Both introduce `Let` bindings atop `result` and re-install shadowed bindings.
     match &q.ctes {
         CteBlock::Simple(_) => {
             for (id, value, shadowed_val) in cte_bindings.into_iter().rev() {
                 if let Some(cte) = qcx.ctes.remove(&id) {
-                    result = HirRelationExpr::Let {
+                    planned_query.expr = HirRelationExpr::Let {
                         name: cte.name,
                         id: id.clone(),
                         value: Box::new(value),
-                        body: Box::new(result),
+                        body: Box::new(planned_query.expr),
                     };
                 }
                 if let Some(shadowed_val) = shadowed_val {
@@ -1334,16 +1408,16 @@ fn plan_query_inner(
                 }
             }
             if !bindings.is_empty() {
-                result = HirRelationExpr::LetRec {
+                planned_query.expr = HirRelationExpr::LetRec {
                     limit,
                     bindings,
-                    body: Box::new(result),
+                    body: Box::new(planned_query.expr),
                 }
             }
         }
     }
 
-    Ok((result, scope, finishing, group_size_hints))
+    Ok(planned_query)
 }
 
 generate_extracted_config!(
@@ -1499,19 +1573,26 @@ pub fn plan_nested_query(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let (mut expr, scope, finishing, group_size_hints) =
-        qcx.checked_recur_mut(|qcx| plan_query(qcx, q))?;
-    if finishing.limit.is_some() || finishing.offset > 0 {
+    let PlannedQuery {
+        mut expr,
+        scope,
+        order_by,
+        limit,
+        offset,
+        project,
+        group_size_hints,
+    } = qcx.checked_recur_mut(|qcx| plan_query(qcx, q))?;
+    if limit.is_some() || offset > 0 {
         expr = HirRelationExpr::TopK {
             input: Box::new(expr),
             group_key: vec![],
-            order_key: finishing.order_by,
-            limit: finishing.limit,
-            offset: finishing.offset,
+            order_key: order_by,
+            limit,
+            offset,
             expected_group_size: group_size_hints.limit_input_group_size,
         };
     }
-    Ok((expr.project(finishing.project), scope))
+    Ok((expr.project(project), scope))
 }
 
 fn plan_set_expr(
@@ -2378,7 +2459,7 @@ fn plan_view_select(
                     input: Box::new(relation_expr.map(map_exprs)),
                     order_key: order_by.iter().skip(distinct_key.len()).cloned().collect(),
                     group_key: distinct_key,
-                    limit: Some(1),
+                    limit: Some(HirScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)),
                     offset: 0,
                     expected_group_size: group_size_hints.distinct_on_input_group_size,
                 }
@@ -4216,28 +4297,28 @@ where
     }
 
     let mut qcx = ecx.derived_query_context();
-    let (mut expr, _scope, finishing, group_size_hints) = plan_query(&mut qcx, query)?;
-    if finishing.limit.is_some() || finishing.offset > 0 {
-        expr = HirRelationExpr::TopK {
-            input: Box::new(expr),
+    let mut planned_query = plan_query(&mut qcx, query)?;
+    if planned_query.limit.is_some() || planned_query.offset > 0 {
+        planned_query.expr = HirRelationExpr::TopK {
+            input: Box::new(planned_query.expr),
             group_key: vec![],
-            order_key: finishing.order_by.clone(),
-            limit: finishing.limit,
-            offset: finishing.offset,
-            expected_group_size: group_size_hints.limit_input_group_size,
+            order_key: planned_query.order_by.clone(),
+            limit: planned_query.limit,
+            offset: planned_query.offset,
+            expected_group_size: planned_query.group_size_hints.limit_input_group_size,
         };
     }
 
-    if finishing.project.len() != 1 {
+    if planned_query.project.len() != 1 {
         sql_bail!(
             "Expected subselect to return 1 column, got {} columns",
-            finishing.project.len()
+            planned_query.project.len()
         );
     }
 
-    let project_column = *finishing.project.get(0).unwrap();
+    let project_column = *planned_query.project.get(0).unwrap();
     let elem_type = qcx
-        .relation_type(&expr)
+        .relation_type(&planned_query.expr)
         .column_types
         .get(project_column)
         .cloned()
@@ -4259,7 +4340,7 @@ where
         exprs: vec![HirScalarExpr::column(project_column)],
     })
     .chain(
-        finishing
+        planned_query
             .order_by
             .iter()
             .map(|co| HirScalarExpr::column(co.column)),
@@ -4270,14 +4351,15 @@ where
     // are with reference to the `exprs` of the aggregation expression.  Here that is
     // `aggregation_exprs`.
     let aggregation_projection = vec![0];
-    let aggregation_order_by = finishing
+    let aggregation_order_by = planned_query
         .order_by
         .into_iter()
         .enumerate()
         .map(|(i, order)| ColumnOrder { column: i, ..order })
         .collect();
 
-    let reduced_expr = expr
+    let reduced_expr = planned_query
+        .expr
         .reduce(
             vec![],
             vec![AggregateExpr {

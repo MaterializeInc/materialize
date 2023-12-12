@@ -96,12 +96,12 @@ Reduce group_by=[#2, #1] aggregates=[sum(#2), max((#1 + #2))]
 
 # Case: `TopK`
 apply pipeline=projection_lifting
-TopK group_by=[#2, #1] order_by=[#1 asc nulls_last] monotonic
+TopK group_by=[#2, #1] order_by=[#1 asc nulls_last] limit=(#1 + 7) monotonic
   Project (#0, #2, #1, #2)
     Get t1
 ----
 Project (#0, #2, #1, #2)
-  TopK group_by=[#1, #2] order_by=[#2 asc nulls_last]
+  TopK group_by=[#1, #2] order_by=[#2 asc nulls_last] limit=(#2 + 7)
     Get t1
 
 

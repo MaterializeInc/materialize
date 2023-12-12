@@ -828,5 +828,6 @@ message ProtoEvalError {
         google.protobuf.Empty mz_acl_array_null_element = 76;
         string invalid_iana_timezone_id = 77;
         string pretty_error = 78;
+        google.protobuf.Empty neg_limit = 79;
     }
 }

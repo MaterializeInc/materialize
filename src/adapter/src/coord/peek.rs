@@ -284,7 +284,11 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             (None, _) => true,
                             (Some(..), None) => false,
                             (Some(topk_limit), Some(finishing_limit)) => {
-                                *topk_limit >= finishing_limit
+                                if let Some(l) = topk_limit.as_literal_int64() {
+                                    l >= *finishing_limit
+                                } else {
+                                    false
+                                }
                             }
                         };
                         if finishing_limits_at_least_as_topk {
@@ -326,7 +330,9 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             ..
                         }) => {
                             order_by.is_empty()
-                                && limit.iter().any(|l| *l + *offset < persist_fast_path_limit)
+                                && limit.iter().any(|l| {
+                                    usize::cast_from(*l) + *offset < persist_fast_path_limit
+                                })
                         }
                     };
                     if filters.is_empty() && small_finish {

@@ -79,9 +79,12 @@
 
 use std::char::CharTryFromError;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::num::{NonZeroU64, TryFromIntError};
 
 use mz_ore::cast::CastFrom;
+use mz_ore::num::{NonNeg, NonNegError};
+use num::Signed;
 use proptest::prelude::Strategy;
 use uuid::Uuid;
 
@@ -99,6 +102,8 @@ include!(concat!(env!("OUT_DIR"), "/mz_proto.rs"));
 pub enum TryFromProtoError {
     /// A wrapped [`TryFromIntError`] due to failed integer downcast.
     TryFromIntError(TryFromIntError),
+    /// A wrapped [`NonNegError`] due to non-negative invariant being violated.
+    NonNegError(NonNegError),
     /// A wrapped [`CharTryFromError`] due to failed [`char`] conversion.
     CharTryFromError(CharTryFromError),
     /// A date conversion failed
@@ -155,6 +160,12 @@ impl From<TryFromIntError> for TryFromProtoError {
     }
 }
 
+impl From<NonNegError> for TryFromProtoError {
+    fn from(error: NonNegError) -> Self {
+        TryFromProtoError::NonNegError(error)
+    }
+}
+
 impl From<CharTryFromError> for TryFromProtoError {
     fn from(error: CharTryFromError) -> Self {
         TryFromProtoError::CharTryFromError(error)
@@ -199,6 +210,7 @@ impl std::fmt::Display for TryFromProtoError {
         use TryFromProtoError::*;
         match self {
             TryFromIntError(error) => error.fmt(f),
+            NonNegError(error) => error.fmt(f),
             CharTryFromError(error) => error.fmt(f),
             DateConversionError(msg) => write!(f, "Date conversion failed: `{}`", msg),
             RegexError(error) => error.fmt(f),
@@ -236,6 +248,7 @@ impl std::error::Error for TryFromProtoError {
         use TryFromProtoError::*;
         match self {
             TryFromIntError(error) => Some(error),
+            NonNegError(error) => Some(error),
             CharTryFromError(error) => Some(error),
             RegexError(error) => Some(error),
             DeserializationError(error) => Some(error),
@@ -532,6 +545,19 @@ impl RustType<u64> for std::num::NonZeroUsize {
 
     fn from_proto(proto: u64) -> Result<Self, TryFromProtoError> {
         Ok(usize::from_proto(proto)?.try_into()?)
+    }
+}
+
+impl<T> RustType<T> for NonNeg<T>
+where
+    T: Clone + Signed + fmt::Display,
+{
+    fn into_proto(&self) -> T {
+        (**self).clone()
+    }
+
+    fn from_proto(proto: T) -> Result<Self, TryFromProtoError> {
+        Ok(NonNeg::<T>::try_from(proto)?)
     }
 }
 

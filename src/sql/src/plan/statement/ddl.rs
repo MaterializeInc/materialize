@@ -1920,7 +1920,7 @@ pub fn plan_view(
         query,
     } = def;
 
-    let query::PlannedQuery {
+    let query::PlannedRootQuery {
         mut expr,
         mut desc,
         finishing,
@@ -2066,7 +2066,7 @@ pub fn plan_create_materialized_view(
         ensure_cluster_is_not_linked(scx, cluster_id)?;
     }
 
-    let query::PlannedQuery {
+    let query::PlannedRootQuery {
         mut expr,
         mut desc,
         finishing,

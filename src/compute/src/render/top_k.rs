@@ -21,9 +21,11 @@ use differential_dataflow::{AsCollection, Collection};
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
-use mz_expr::EvalError;
+use mz_expr::func::CastUint64ToInt64;
+use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc};
+use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{DatumVec, Diff, Row, SharedRow};
+use mz_repr::{Datum, DatumVec, Diff, Row, ScalarType, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
@@ -55,6 +57,40 @@ where
             let ok_input = ok_input.enter_region(inner);
             let mut err_collection = err_input.enter_region(inner);
 
+            // Determine if there should be errors due to limit evaluation; update `err_collection`.
+            // TODO(vmarcos): We evaluate the limit expression below for each input update. There
+            // is an opportunity to do so for every group key instead if the error handling is
+            // integrated with: 1. The intra-timestamp thinning step in monotonic top-k, e.g., by
+            // adding an error output there; 2. The validating reduction on basic top-k (#23687).
+            let limit_err = match &top_k_plan {
+                TopKPlan::MonotonicTop1(MonotonicTop1Plan { .. }) => None,
+                TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => Some(limit),
+                TopKPlan::Basic(BasicTopKPlan { limit, .. }) => Some(limit),
+            };
+            if let Some(limit) = limit_err {
+                if let Some(expr) = limit {
+                    // Produce errors from limit selectors that error or are
+                    // negative, and nothing from limit selectors that do
+                    // not. Note that even if expr.could_error() is false,
+                    // the expression might still return a negative limit and
+                    // thus needs to be checked.
+                    let expr = expr.clone();
+                    let mut datum_vec = mz_repr::DatumVec::new();
+                    let errors = ok_input.flat_map(move |row| {
+                        let temp_storage = mz_repr::RowArena::new();
+                        let datums = datum_vec.borrow_with(&row);
+                        match expr.eval(&datums[..], &temp_storage) {
+                            Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
+                                Some(EvalError::NegLimit.into())
+                            }
+                            Ok(_) => None,
+                            Err(e) => Some(e.into()),
+                        }
+                    });
+                    err_collection = err_collection.concat(&errors);
+                }
+            }
+
             let ok_result = match top_k_plan {
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                     group_key,
@@ -74,9 +110,18 @@ where
                     order_key,
                     group_key,
                     arity,
-                    limit,
+                    mut limit,
                     must_consolidate,
                 }) => {
+                    // Must permute `limit` to reference `group_key` elements as if in order.
+                    if let Some(expr) = limit.as_mut() {
+                        let mut map = BTreeMap::new();
+                        for (index, column) in group_key.iter().enumerate() {
+                            map.insert(*column, index);
+                        }
+                        expr.permute_map(&map);
+                    }
+
                     // Map the group key along with the row and consolidate if required to do so.
                     let mut datum_vec = mz_repr::DatumVec::new();
                     let collection = ok_input
@@ -113,7 +158,7 @@ where
                     //    being computed in a streaming fashion, even for the initial snapshot.
                     // 2. Then, we can do inter-timestamp thinning by feeding back negations for
                     //    any records that have been invalidated.
-                    let collection = if let Some(limit) = limit {
+                    let collection = if let Some(limit) = limit.clone() {
                         render_intra_ts_thinning(collection, order_key.clone(), limit)
                     } else {
                         collection
@@ -159,10 +204,19 @@ where
                     group_key,
                     order_key,
                     offset,
-                    limit,
+                    mut limit,
                     arity,
                     buckets,
                 }) => {
+                    // Must permute `limit` to reference `group_key` elements as if in order.
+                    if let Some(expr) = limit.as_mut() {
+                        let mut map = BTreeMap::new();
+                        for (index, column) in group_key.iter().enumerate() {
+                            map.insert(*column, index);
+                        }
+                        expr.permute_map(&map);
+                    }
+
                     let (oks, errs) = self.build_topk(
                         ok_input, group_key, order_key, offset, limit, arity, buckets,
                     );
@@ -170,6 +224,7 @@ where
                     oks
                 }
             };
+
             // Extract the results from the region.
             (ok_result.leave_region(), err_collection.leave_region())
         });
@@ -184,7 +239,7 @@ where
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         offset: usize,
-        limit: Option<usize>,
+        limit: Option<mz_expr::MirScalarExpr>,
         arity: usize,
         buckets: Vec<u64>,
     ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
@@ -210,7 +265,30 @@ where
         let mut validating = true;
         let mut err_collection: Option<Collection<S, _, _>> = None;
 
-        if let Some(limit) = limit {
+        if let Some(mut limit) = limit.clone() {
+            // We may need a new `limit` that reflects the addition of `offset`.
+            // Ideally we compile it down to a literal if at all possible.
+            if offset > 0 {
+                let new_limit = (|| {
+                    let limit = limit.as_literal_int64()?;
+                    let offset = i64::try_from(offset).ok()?;
+                    limit.checked_add(offset)
+                })();
+
+                if let Some(new_limit) = new_limit {
+                    limit = MirScalarExpr::literal_ok(Datum::Int64(new_limit), ScalarType::Int64);
+                } else {
+                    limit = limit.call_binary(
+                        MirScalarExpr::literal_ok(
+                            Datum::UInt64(u64::cast_from(offset)),
+                            ScalarType::UInt64,
+                        )
+                        .call_unary(UnaryFunc::CastUint64ToInt64(CastUint64ToInt64)),
+                        BinaryFunc::AddInt64,
+                    );
+                }
+            }
+
             // These bucket values define the shifts that happen to the 64 bit hash of the
             // record, and should have the properties that 1. there are not too many of them,
             // and 2. each has a modest difference to the next.
@@ -223,7 +301,7 @@ where
                     order_key.clone(),
                     bucket,
                     0,
-                    Some(offset + limit),
+                    Some(limit.clone()),
                     arity,
                     validating,
                 );
@@ -265,7 +343,7 @@ where
         order_key: Vec<mz_expr::ColumnOrder>,
         modulus: u64,
         offset: usize,
-        limit: Option<usize>,
+        limit: Option<mz_expr::MirScalarExpr>,
         arity: usize,
         validating: bool,
     ) -> (
@@ -379,7 +457,7 @@ fn build_topk_negated_stage<G, R>(
     input: &Collection<G, ((Row, u64), Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
-    limit: Option<usize>,
+    limit: Option<mz_expr::MirScalarExpr>,
     arity: usize,
 ) -> Collection<G, ((Row, u64), R), Diff>
 where
@@ -387,6 +465,8 @@ where
     G::Timestamp: Lattice + Columnation,
     R: MaybeValidatingRow<Row, Row>,
 {
+    let mut datum_vec = mz_repr::DatumVec::new();
+
     // We only want to arrange parts of the input that are not part of the actual output
     // such that `input.concat(&negated_output.negate())` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
@@ -394,7 +474,27 @@ where
     input
         .mz_arrange::<KeyValSpine<(Row, u64), _, _, _>>("Arranged TopK input")
         .mz_reduce_abelian::<_, KeyValSpine<_, _, _, _>>("Reduced TopK input", {
-            move |_key, source, target: &mut Vec<(R, Diff)>| {
+            move |key, source, target: &mut Vec<(R, Diff)>| {
+                // Unpack the limit, either into an integer literal or an expression to evaluate.
+                let limit: Option<i64> = limit.as_ref().map(|l| {
+                    if let Some(l) = l.as_literal_int64() {
+                        l
+                    } else {
+                        let temp_storage = mz_repr::RowArena::new();
+                        let key_datums = datum_vec.borrow_with(&key.0);
+                        // Unpack `key` and determine the limit.
+                        // If the limit errors, use a zero limit; errors are surfaced elsewhere.
+                        let datum_limit = l
+                            .eval(&key_datums, &temp_storage)
+                            .unwrap_or(Datum::Int64(0));
+                        if datum_limit == Datum::Null {
+                            i64::MAX
+                        } else {
+                            datum_limit.unwrap_int64()
+                        }
+                    }
+                });
+
                 if let Some(err) = R::into_error() {
                     for (row, diff) in source.iter() {
                         if diff.is_positive() {
@@ -406,11 +506,9 @@ where
                 }
 
                 // Determine if we must actually shrink the result set.
-                // TODO(benesch): avoid dangerous `as` conversion.
-                #[allow(clippy::as_conversions)]
                 let must_shrink = offset > 0
                     || limit
-                        .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() as usize > l)
+                        .map(|l| source.iter().map(|(_, d)| *d).sum::<Diff>() > l)
                         .unwrap_or(false);
                 if !must_shrink {
                     return;
@@ -462,7 +560,7 @@ where
                     #[allow(clippy::as_conversions)]
                     if let Some(limit) = &mut limit {
                         diff = std::cmp::min(diff, Diff::try_from(*limit).unwrap());
-                        *limit -= diff as usize;
+                        *limit -= diff;
                     }
                     // Output the indicated number of rows.
                     if diff > 0 {
@@ -479,12 +577,14 @@ where
 fn render_intra_ts_thinning<S>(
     collection: Collection<S, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
-    limit: usize,
+    limit: mz_expr::MirScalarExpr,
 ) -> Collection<S, (Row, Row), Diff>
 where
     S: Scope,
     S::Timestamp: Lattice,
 {
+    let mut datum_vec = mz_repr::DatumVec::new();
+
     let mut aggregates = BTreeMap::new();
     let mut vector = Vec::new();
     let shared = Rc::new(RefCell::new(monoids::Top1MonoidShared {
@@ -509,12 +609,28 @@ where
                             row,
                             shared: Rc::clone(&shared),
                         };
-                        let topk =
-                            agg_time
-                                .entry((grp_row, record_time))
-                                .or_insert_with(move || {
-                                    topk_agg::TopKBatch::new(limit.try_into().expect("must fit"))
-                                });
+
+                        // Evalute the limit, first as a constant and then against the key if needed.
+                        let limit = if let Some(l) = limit.as_literal_int64() {
+                            l
+                        } else {
+                            let temp_storage = mz_repr::RowArena::new();
+                            let key_datums = datum_vec.borrow_with(&grp_row);
+                            // Unpack `key` and determine the limit.
+                            // If the limit errors, use a zero limit; errors are surfaced elsewhere.
+                            let datum_limit = limit
+                                .eval(&key_datums, &temp_storage)
+                                .unwrap_or(mz_repr::Datum::Int64(0));
+                            if datum_limit == Datum::Null {
+                                i64::MAX
+                            } else {
+                                datum_limit.unwrap_int64()
+                            }
+                        };
+
+                        let topk = agg_time
+                            .entry((grp_row, record_time))
+                            .or_insert_with(move || topk_agg::TopKBatch::new(limit));
                         topk.update(monoid, diff);
                     }
                     notificator.notify_at(time.retain());

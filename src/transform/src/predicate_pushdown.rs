@@ -350,7 +350,7 @@ impl PredicatePushdown {
                             input,
                             group_key,
                             order_key: _,
-                            limit: _,
+                            limit,
                             offset: _,
                             monotonic: _,
                             expected_group_size: _,
@@ -358,12 +358,20 @@ impl PredicatePushdown {
                             let mut retain = Vec::new();
                             let mut push_down = Vec::new();
 
-                            let group_key_cols = BTreeSet::from_iter(group_key.iter().cloned());
+                            let mut support = BTreeSet::new();
+                            support.extend(group_key.iter().cloned());
+                            if let Some(limit) = limit {
+                                // Strictly speaking not needed because the
+                                // `limit` support should be a subset of the
+                                // `group_key` support, but we don't want to
+                                // take this for granted here.
+                                limit.support_into(&mut support);
+                            }
 
                             for predicate in predicates.drain(..) {
                                 // Do not push down literal errors unless it is only errors.
                                 if (!predicate.is_literal_err() || all_errors)
-                                    && predicate.support().is_subset(&group_key_cols)
+                                    && predicate.support().is_subset(&support)
                                 {
                                     push_down.push(predicate);
                                 } else {

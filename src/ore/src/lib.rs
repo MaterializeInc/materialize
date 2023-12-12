@@ -125,6 +125,7 @@ pub mod metrics;
 #[cfg(feature = "network")]
 pub mod netio;
 pub mod now;
+pub mod num;
 pub mod option;
 pub mod panic;
 pub mod path;
@@ -137,7 +138,6 @@ pub mod result;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
 pub mod retry;
-#[cfg(feature = "serde")]
 pub mod serde;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
 #[cfg(feature = "stack")]

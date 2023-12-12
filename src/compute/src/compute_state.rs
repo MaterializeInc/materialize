@@ -714,7 +714,12 @@ impl PendingPeek {
         let (result_tx, result_rx) = oneshot::channel();
         let timestamp = peek.timestamp;
         let mfp_plan = peek.map_filter_project.clone();
-        let max_results_needed = peek.finishing.limit.unwrap_or(usize::MAX) + peek.finishing.offset;
+        let max_results_needed = peek
+            .finishing
+            .limit
+            .map(|l| usize::cast_from(u64::from(l)))
+            .unwrap_or(usize::MAX)
+            + peek.finishing.offset;
 
         let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {
             let start = Instant::now();
@@ -1007,7 +1012,10 @@ impl IndexPeek {
         // `order_by` field. Further limiting will happen when the results
         // are collected, so we don't need to have exactly this many results,
         // just at least those results that would have been returned.
-        let max_results = peek.finishing.limit.map(|l| l + peek.finishing.offset);
+        let max_results = peek
+            .finishing
+            .limit
+            .map(|l| usize::cast_from(u64::from(l)) + peek.finishing.offset);
 
         use mz_ore::result::ResultExt;
 

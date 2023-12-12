@@ -545,6 +545,7 @@ mod columnation {
                         | e @ EvalError::TimestampCannotBeNan
                         | e @ EvalError::TimestampOutOfRange
                         | e @ EvalError::NegSqrt
+                        | e @ EvalError::NegLimit
                         | e @ EvalError::NullCharacterNotPermitted
                         | e @ EvalError::UnterminatedLikeEscapeSequence
                         | e @ EvalError::MultipleRowsFromSubquery

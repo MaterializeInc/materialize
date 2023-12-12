@@ -526,7 +526,22 @@ SELECT * FROM ov
                   "nulls_last": false
                 }
               ],
-              "limit": 5,
+              "limit": {
+                "Literal": [
+                  {
+                    "Ok": {
+                      "data": [
+                        47,
+                        5
+                      ]
+                    }
+                  },
+                  {
+                    "scalar_type": "Int64",
+                    "nullable": false
+                  }
+                ]
+              },
               "arity": 2,
               "must_consolidate": true
             }
@@ -800,7 +815,22 @@ SELECT * FROM ov
                   "nulls_last": false
                 }
               ],
-              "limit": 5,
+              "limit": {
+                "Literal": [
+                  {
+                    "Ok": {
+                      "data": [
+                        47,
+                        5
+                      ]
+                    }
+                  },
+                  {
+                    "scalar_type": "Int64",
+                    "nullable": false
+                  }
+                ]
+              },
               "arity": 2,
               "must_consolidate": true
             }

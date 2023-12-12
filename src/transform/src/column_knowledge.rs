@@ -444,8 +444,17 @@ impl ColumnKnowledge {
                     }
                     Ok(output)
                 }
-                MirRelationExpr::TopK { input, .. } => {
-                    self.harvest(input, knowledge, knowledge_stack)
+                MirRelationExpr::TopK { input, limit, .. } => {
+                    let input_knowledge = self.harvest(input, knowledge, knowledge_stack)?;
+                    if let Some(limit) = limit.as_mut() {
+                        optimize(
+                            limit,
+                            &input.typ().column_types,
+                            &input_knowledge[..],
+                            knowledge_stack,
+                        )?;
+                    }
+                    Ok(input_knowledge)
                 }
                 MirRelationExpr::Negate { input } => {
                     self.harvest(input, knowledge, knowledge_stack)

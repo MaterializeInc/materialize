@@ -7,13 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_expressions_in_limit_syntax TO true;
+
 # Test monotonic top-k processing with k > 1.
 
 $ set non-dbz-schema={
     "type": "record",
     "name": "cpx",
     "fields": [
-      {"name": "a", "type": "long"},
+      {"name": "a", "type": [ "null", "long" ]},
       {"name": "b", "type": "long"}
     ]
   }
@@ -21,19 +24,19 @@ $ set non-dbz-schema={
 $ kafka-create-topic topic=non-dbz-data
 
 $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp=1
-{"a": 1, "b": 1}
-{"a": 1, "b": 2}
-{"a": 1, "b": 3}
-{"a": 1, "b": 4}
-{"a": 1, "b": 5}
-{"a": 2, "b": 1000}
-{"a": 2, "b": 1001}
-{"a": 2, "b": 1002}
-{"a": 2, "b": 1003}
-{"a": 2, "b": 1004}
-{"a": 3, "b": 2000}
-{"a": 3, "b": 2000}
-{"a": 4, "b": 3001}
+{"a": {"long": 1}, "b": 1}
+{"a": {"long": 1}, "b": 2}
+{"a": {"long": 1}, "b": 3}
+{"a": {"long": 1}, "b": 4}
+{"a": {"long": 1}, "b": 5}
+{"a": {"long": 2}, "b": 1000}
+{"a": {"long": 2}, "b": 1001}
+{"a": {"long": 2}, "b": 1002}
+{"a": {"long": 2}, "b": 1003}
+{"a": {"long": 2}, "b": 1004}
+{"a": {"long": 3}, "b": 2000}
+{"a": {"long": 3}, "b": 2000}
+{"a": {"long": 4}, "b": 3001}
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
@@ -55,10 +58,122 @@ a b
 3 2000
 4 3001
 
+# Create a topk plan that has a limit expression that will initially not fail, but
+# then eventually fail after the addition of offending data to a monotonic input.
+# We observe that a non-monotonic top-k plan can recover from this condition after
+# the addition of even more data, but a monotonic top-k plan cannot.
+> CREATE VIEW v_basic AS
+  SELECT *
+  FROM
+    (SELECT sum(a) AS s FROM non_dbz_data GROUP BY a) grp,
+    LATERAL (
+      SELECT b FROM non_dbz_data
+      WHERE (grp.s IS NULL AND a IS NULL) OR a = grp.s
+      ORDER BY b LIMIT 6 / abs(grp.s+2)
+    );
+
+> CREATE VIEW v_monotonic AS
+  SELECT *
+  FROM
+    (SELECT DISTINCT a::numeric FROM non_dbz_data) grp,
+    LATERAL (
+      SELECT b FROM non_dbz_data
+      WHERE (grp.a IS NULL AND a IS NULL) OR a = grp.a
+      ORDER BY b LIMIT 6 / abs(grp.a+2)
+    );
+
+> CREATE DEFAULT INDEX ON v_basic;
+
+> CREATE DEFAULT INDEX ON v_monotonic;
+
+> SELECT * FROM v_basic ORDER BY s;
+s b
+----
+4 3001
+
+> SELECT * FROM v_monotonic ORDER BY a;
+a b
+----
+1 1
+1 2
+2 1000
+2 1001
+3 2000
+4 3001
+
+$ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp=2
+{"a": {"long": 5}, "b": 4001}
+{"a": {"long": 5}, "b": 4002}
+{"a": null, "b": 0}
+{"a": null, "b": 1}
+
+> SELECT * FROM v_basic ORDER BY s;
+s b
+----
+4 3001
+5 4001
+<null> 0
+<null> 1
+
+> SELECT * FROM v_monotonic ORDER BY a;
+a b
+----
+1 1
+1 2
+2 1000
+2 1001
+3 2000
+4 3001
+5 4001
+<null> 0
+<null> 1
+
+$ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp=3
+{"a": {"long": -1}, "b": -1}
+{"a": {"long": -1}, "b": -2}
+{"a": {"long": -2}, "b": -1001}
+
+! SELECT * FROM v_basic ORDER BY s;
+contains:division by zero
+
+! SELECT * FROM v_monotonic ORDER BY a;
+contains:division by zero
+
+$ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp=4
+{"a": {"long": -1}, "b": -3}
+{"a": {"long": -2}, "b": -1002}
+{"a": {"long": -3}, "b": -2001}
+
+> SELECT * FROM v_basic ORDER BY s;
+s b
+----
+-3 -2001
+-3 -2001
+4 3001
+5 4001
+<null> 0
+<null> 1
+
+! SELECT * FROM v_monotonic ORDER BY a;
+contains:division by zero
+
+> DROP VIEW v_basic;
+
+> DROP VIEW v_monotonic;
+
 # The following tests repeat the scenario in #18445.
+$ set other-non-dbz-schema={
+    "type": "record",
+    "name": "cpx",
+    "fields": [
+      {"name": "a", "type": "long" },
+      {"name": "b", "type": "long"}
+    ]
+  }
+
 $ kafka-create-topic topic=other-non-dbz-data
 
-$ kafka-ingest format=avro topic=other-non-dbz-data schema=${non-dbz-schema} timestamp=1
+$ kafka-ingest format=avro topic=other-non-dbz-data schema=${other-non-dbz-schema} timestamp=1
 {"a": 1, "b": 42}
 {"a": 2, "b": 42}
 {"a": 3, "b": 42}
@@ -101,7 +216,7 @@ $ kafka-ingest format=avro topic=other-non-dbz-data schema=${non-dbz-schema} tim
 
 > CREATE SOURCE other_non_dbz_data
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-other-non-dbz-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  FORMAT AVRO USING SCHEMA '${other-non-dbz-schema}'
   ENVELOPE NONE
 
 > SELECT sum(a) FROM (SELECT a FROM other_non_dbz_data ORDER BY b LIMIT 37);

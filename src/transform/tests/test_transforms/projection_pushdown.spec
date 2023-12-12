@@ -308,12 +308,12 @@ Project (#1, #0)
 # Project around a TopK (1)
 apply pipeline=projection_pushdown
 Project (#2, #2, #2)
-  TopK group_by=[#0] order_by=[#1 asc nulls_first, #2 asc nulls_first]
+  TopK group_by=[#0] order_by=[#1 asc nulls_first, #2 asc nulls_first] limit=(#0 + 4)
     Get x
 ----
 Project (#0, #0, #0)
   Project (#2)
-    TopK group_by=[#0] order_by=[#1 asc nulls_first, #2 asc nulls_first]
+    TopK group_by=[#0] order_by=[#1 asc nulls_first, #2 asc nulls_first] limit=(#0 + 4)
       Get x
 
 # Project around a TopK (2)
@@ -331,10 +331,10 @@ Project (#0, #0)
 # Project around a TopK (3)
 apply pipeline=projection_pushdown
 Project (#2, #1)
-  TopK group_by=[#2] order_by=[#1 asc nulls_first]
+  TopK group_by=[#2] order_by=[#1 asc nulls_first] limit=(#2 + 4)
     Get x
 ----
-TopK group_by=[#0] order_by=[#1 asc nulls_first]
+TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=(#0 + 4)
   Project (#2, #1)
     Get x
 

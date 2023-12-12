@@ -552,7 +552,7 @@ mod delta_queries {
                 cardinalities,
                 filters,
                 input_mapper,
-            );
+            )?;
 
             // A viable delta query requires that, for every order,
             // there is an arrangement for every input except for
@@ -638,7 +638,7 @@ mod differential {
                 cardinalities,
                 filters,
                 input_mapper,
-            );
+            )?;
 
             // Inside each order, we take the `FilterCharacteristics` from each element, and OR it
             // to every other element to the right. This is because we are gonna be looking for the
@@ -900,7 +900,7 @@ fn optimize_orders(
     cardinalities: &[Option<usize>],     // cardinalities of input relations
     filters: &[FilterCharacteristics],   // filter characteristics per input
     input_mapper: &JoinInputMapper,      // join helper
-) -> Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>> {
+) -> Result<Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>>, TransformError> {
     let mut orderer = Orderer::new(
         equivalences,
         available,
@@ -911,7 +911,7 @@ fn optimize_orders(
     );
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
-        .collect::<Vec<_>>()
+        .collect::<Result<Vec<_>, _>>()
 }
 
 struct Orderer<'a> {
@@ -992,7 +992,7 @@ impl<'a> Orderer<'a> {
     fn optimize_order_for(
         &mut self,
         start: usize,
-    ) -> Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)> {
+    ) -> Result<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>, TransformError> {
         self.order.clear();
         self.priority_queue.clear();
         for input in 0..self.inputs {
@@ -1123,13 +1123,14 @@ impl<'a> Orderer<'a> {
                 // `order_input`, which means that `placed` was true only for the
                 // starting input, which means that `fully_supported` was true due to
                 // one of the expressions referring only to the starting input.
-                unreachable!();
+                let msg = "Unreachable state in join order optimization".to_string();
+                return Err(TransformError::Internal(msg));
                 // (This couldn't be a soft_panic: we would form an arrangement with a wrong key.)
             }
         }
         self.order.insert(0, start_tuple);
 
-        std::mem::replace(&mut self.order, Vec::new())
+        Ok(std::mem::replace(&mut self.order, Vec::new()))
     }
 
     /// Introduces a specific input and keys to the order, along with its characteristics.

@@ -751,7 +751,20 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                 },
                 "group_key": [],
                 "order_key": [],
-                "limit": 1,
+                "limit": {
+                  "Literal": [
+                    {
+                      "data": [
+                        47,
+                        1
+                      ]
+                    },
+                    {
+                      "scalar_type": "Int64",
+                      "nullable": false
+                    }
+                  ]
+                },
                 "offset": 0,
                 "expected_group_size": null
               }
@@ -816,7 +829,20 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                     },
                     "group_key": [],
                     "order_key": [],
-                    "limit": 1,
+                    "limit": {
+                      "Literal": [
+                        {
+                          "data": [
+                            47,
+                            1
+                          ]
+                        },
+                        {
+                          "scalar_type": "Int64",
+                          "nullable": false
+                        }
+                      ]
+                    },
                     "offset": 0,
                     "expected_group_size": null
                   }

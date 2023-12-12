@@ -165,7 +165,7 @@ pub enum HirRelationExpr {
         /// Column indices used to order rows within groups.
         order_key: Vec<ColumnOrder>,
         /// Number of records to retain
-        limit: Option<usize>,
+        limit: Option<HirScalarExpr>,
         /// Number of records to skip
         offset: usize,
         /// User-supplied hint: how many rows will have the same group key.
@@ -1350,12 +1350,11 @@ impl HirRelationExpr {
         }
     }
 
-    #[allow(dead_code)]
     pub fn top_k(
         self,
         group_key: Vec<usize>,
         order_key: Vec<ColumnOrder>,
-        limit: Option<usize>,
+        limit: Option<HirScalarExpr>,
         offset: usize,
         expected_group_size: Option<u64>,
     ) -> Self {
@@ -1654,12 +1653,16 @@ impl HirRelationExpr {
                         f(&aggregate.expr, depth)?;
                     }
                 }
+                HirRelationExpr::TopK { limit, .. } => {
+                    if let Some(limit) = limit {
+                        f(limit, depth)?;
+                    }
+                }
                 HirRelationExpr::Union { .. }
                 | HirRelationExpr::Let { .. }
                 | HirRelationExpr::LetRec { .. }
                 | HirRelationExpr::Project { .. }
                 | HirRelationExpr::Distinct { .. }
-                | HirRelationExpr::TopK { .. }
                 | HirRelationExpr::Negate { .. }
                 | HirRelationExpr::Threshold { .. }
                 | HirRelationExpr::Constant { .. }
@@ -1703,12 +1706,16 @@ impl HirRelationExpr {
                         f(&mut aggregate.expr, depth)?;
                     }
                 }
+                HirRelationExpr::TopK { limit, .. } => {
+                    if let Some(limit) = limit {
+                        f(limit, depth)?;
+                    }
+                }
                 HirRelationExpr::Union { .. }
                 | HirRelationExpr::Let { .. }
                 | HirRelationExpr::LetRec { .. }
                 | HirRelationExpr::Project { .. }
                 | HirRelationExpr::Distinct { .. }
-                | HirRelationExpr::TopK { .. }
                 | HirRelationExpr::Negate { .. }
                 | HirRelationExpr::Threshold { .. }
                 | HirRelationExpr::Constant { .. }
@@ -1804,7 +1811,9 @@ impl HirRelationExpr {
                 )),
                 group_key: vec![],
                 order_key: old_finishing.order_by,
-                limit: old_finishing.limit,
+                limit: old_finishing
+                    .limit
+                    .map(|l| HirScalarExpr::literal(Datum::Int64(*l), ScalarType::Int64)),
                 offset: old_finishing.offset,
                 expected_group_size: group_size_hints.limit_input_group_size,
             }
@@ -2284,15 +2293,19 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                     f(aggregate.expr.as_ref());
                 }
             }
-            Distinct { input: _ }
-            | TopK {
+            TopK {
                 input: _,
                 group_key: _,
                 order_key: _,
-                limit: _,
+                limit,
                 offset: _,
                 expected_group_size: _,
+            } => {
+                if let Some(limit) = limit {
+                    f(limit)
+                }
             }
+            Distinct { input: _ }
             | Negate { input: _ }
             | Threshold { input: _ }
             | Union { base: _, inputs: _ } => (),
@@ -2637,6 +2650,42 @@ impl HirScalarExpr {
 
     pub fn is_literal_null(&self) -> bool {
         Some(Datum::Null) == self.as_literal()
+    }
+
+    /// Return true iff `self` consists only of constants, function calls, and
+    /// if-else statements.
+    pub fn is_constant(&self) -> bool {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            match expr {
+                Self::Literal(_, _) => {
+                    // leaf node, do nothing
+                }
+                Self::CallUnary { expr, .. } => {
+                    worklist.push(expr);
+                }
+                Self::CallBinary {
+                    func: _,
+                    expr1,
+                    expr2,
+                } => {
+                    worklist.push(expr1);
+                    worklist.push(expr2);
+                }
+                Self::CallVariadic { func: _, exprs } => {
+                    worklist.extend(exprs.iter());
+                }
+                Self::If { cond, then, els } => {
+                    worklist.push(cond);
+                    worklist.push(then);
+                    worklist.push(els);
+                }
+                _ => {
+                    return false; // Any other node makes `self` non-constant.
+                }
+            }
+        }
+        true
     }
 
     pub fn call_unary(self, func: UnaryFunc) -> Self {

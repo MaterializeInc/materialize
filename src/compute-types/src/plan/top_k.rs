@@ -52,12 +52,15 @@ impl TopKPlan {
         group_key: Vec<usize>,
         order_key: Vec<ColumnOrder>,
         offset: usize,
-        limit: Option<usize>,
+        limit: Option<mz_expr::MirScalarExpr>,
         arity: usize,
         monotonic: bool,
         expected_group_size: Option<u64>,
     ) -> Self {
-        if monotonic && offset == 0 && limit == Some(1) {
+        // Capture whether the limit is a literal integer first.
+        let limit_as_int64 = limit.as_ref().and_then(|l| l.as_literal_int64());
+
+        if monotonic && offset == 0 && limit_as_int64 == Some(1) {
             TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                 group_key,
                 order_key,
@@ -98,7 +101,7 @@ impl TopKPlan {
         match self {
             TopKPlan::Basic(plan) => {
                 if plan.offset == 0 {
-                    *self = if plan.limit == Some(1) {
+                    *self = if plan.limit.as_ref().and_then(|l| l.as_literal_int64()) == Some(1) {
                         TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                             group_key: plan.group_key.clone(),
                             order_key: plan.order_key.clone(),
@@ -108,7 +111,7 @@ impl TopKPlan {
                         TopKPlan::MonotonicTopK(MonotonicTopKPlan {
                             group_key: plan.group_key.clone(),
                             order_key: plan.order_key.clone(),
-                            limit: plan.limit,
+                            limit: plan.limit.clone(),
                             arity: plan.arity,
                             must_consolidate,
                         })
@@ -208,7 +211,7 @@ pub struct MonotonicTopKPlan {
     pub order_key: Vec<mz_expr::ColumnOrder>,
     /// Optionally, an upper bound on the per-group ordinal position of the
     /// records to produce from each group.
-    pub limit: Option<usize>,
+    pub limit: Option<mz_expr::MirScalarExpr>,
     /// The number of columns in the input and output.
     pub arity: usize,
     /// True if the input is not physically monotonic, and the operator must perform
@@ -252,7 +255,7 @@ pub struct BasicTopKPlan {
     pub order_key: Vec<mz_expr::ColumnOrder>,
     /// Optionally, an upper bound on the per-group ordinal position of the
     /// records to produce from each group.
-    pub limit: Option<usize>,
+    pub limit: Option<mz_expr::MirScalarExpr>,
     /// A lower bound on the per-group ordinal position of the records to
     /// produce from each group.
     ///

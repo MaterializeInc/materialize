@@ -18,11 +18,7 @@ documentation][user-docs].
 import subprocess
 from collections.abc import Iterable
 from ssl import SSLContext
-from typing import (
-    Any,
-    Literal,
-    TypeVar,
-)
+from typing import Any, Literal, TypeVar
 
 import pg8000
 

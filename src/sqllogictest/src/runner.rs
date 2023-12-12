@@ -1933,7 +1933,12 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     if i != 0 {
                         buf.append("\n");
                     }
-                    buf.append(&row.iter().map(|col| col.replace(' ', "␠")).join("  "));
+
+                    if row.len() <= 1 {
+                        buf.append(&row.iter().join("  "));
+                    } else {
+                        buf.append(&row.iter().map(|col| col.replace(' ', "␠")).join("  "));
+                    }
                 }
                 // In standard mode, output each value on its own line,
                 // and ignore row boundaries.
