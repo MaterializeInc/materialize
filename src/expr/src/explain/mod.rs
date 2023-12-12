@@ -29,7 +29,9 @@ use crate::{
     AccessStrategy, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
 
-pub use crate::explain::text::{HumanizedExplain, HumanizedExpr, HumanizedNotice, HumanizerMode};
+pub use crate::explain::text::{
+    fmt_text_constant_rows, HumanizedExplain, HumanizedExpr, HumanizedNotice, HumanizerMode,
+};
 
 mod json;
 mod text;
@@ -76,9 +78,7 @@ where
         let PushdownInfo { pushdown } = self.expr;
 
         if !pushdown.is_empty() {
-            let pushdown = pushdown
-                .iter()
-                .map(|e| HumanizedExplain::new(*e, self.cols));
+            let pushdown = pushdown.iter().map(|e| self.mode.expr(*e, self.cols));
             let pushdown = separated(" AND ", pushdown);
             writeln!(f, "{}pushdown=({})", ctx.as_mut(), pushdown)?;
         }

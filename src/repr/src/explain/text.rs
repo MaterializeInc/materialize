@@ -11,13 +11,12 @@
 
 use std::fmt;
 
-use mz_ore::str::{Indent, IndentLike};
+use mz_ore::str::Indent;
 
 use crate::explain::{
     CompactScalarSeq, CompactScalars, ExprHumanizer, IndexUsageType, Indices, ScalarOps,
     UnsupportedFormat, UsedIndexes,
 };
-use crate::Row;
 
 /// A trait implemented by explanation types that can be rendered as
 /// [`super::ExplainFormat::Text`].
@@ -286,51 +285,4 @@ pub fn text_string_at<'a, T: DisplayText<C>, C, F: Fn() -> C>(t: &'a T, f: F) ->
     }
 
     text_string(&TextStringAt { t, f })
-}
-
-fn write_first_rows(
-    f: &mut fmt::Formatter<'_>,
-    first_rows: &Vec<(&Row, &crate::Diff)>,
-    ctx: &Indent,
-) -> fmt::Result {
-    for (row, diff) in first_rows {
-        if **diff == 1 {
-            writeln!(f, "{}- {}", ctx, row)?;
-        } else {
-            writeln!(f, "{}- ({} x {})", ctx, row, diff)?;
-        }
-    }
-    Ok(())
-}
-
-pub fn fmt_text_constant_rows<'a, I>(
-    f: &mut fmt::Formatter<'_>,
-    mut rows: I,
-    ctx: &mut Indent,
-) -> fmt::Result
-where
-    I: Iterator<Item = (&'a Row, &'a crate::Diff)>,
-{
-    let mut row_count = 0;
-    let mut first_rows = Vec::with_capacity(20);
-    for _ in 0..20 {
-        if let Some((row, diff)) = rows.next() {
-            row_count += diff.abs();
-            first_rows.push((row, diff));
-        }
-    }
-    let rest_of_row_count = rows.map(|(_, diff)| diff.abs()).sum::<crate::Diff>();
-    if rest_of_row_count != 0 {
-        writeln!(
-            f,
-            "{}total_rows (diffs absed): {}",
-            ctx,
-            row_count + rest_of_row_count
-        )?;
-        writeln!(f, "{}first_rows:", ctx)?;
-        ctx.indented(move |ctx| write_first_rows(f, &first_rows, ctx))?;
-    } else {
-        write_first_rows(f, &first_rows, ctx)?;
-    }
-    Ok(())
 }

@@ -37,7 +37,9 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::sync::atomic::Ordering;
 
+use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::{bracketed, separated, Indent};
 
@@ -178,6 +180,8 @@ pub struct ExplainConfig {
     pub raw_plans: bool,
     /// Disable virtual syntax in the explanation.
     pub raw_syntax: bool,
+    /// Anonymize literals in the plan.
+    pub redacted: bool,
     /// Show the `subtree_size` attribute in the explanation if it is supported by the backing IR.
     pub subtree_size: bool,
     /// Print optimization timings.
@@ -196,6 +200,8 @@ pub struct ExplainConfig {
 impl Default for ExplainConfig {
     fn default() -> Self {
         Self {
+            // Don't redact in debug builds and in CI.
+            redacted: !SOFT_ASSERTIONS.load(Ordering::Relaxed),
             arity: false,
             cardinality: false,
             column_names: false,
@@ -239,6 +245,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             flags.insert("raw_syntax".into());
         }
         let result = ExplainConfig {
+            redacted: flags.remove("redacted"),
             arity: flags.remove("arity"),
             cardinality: flags.remove("cardinality"),
             column_names: flags.remove("column_names"),
@@ -927,6 +934,7 @@ mod tests {
 
         let format = ExplainFormat::Text;
         let config = &ExplainConfig {
+            redacted: false,
             arity: false,
             cardinality: false,
             column_names: false,
