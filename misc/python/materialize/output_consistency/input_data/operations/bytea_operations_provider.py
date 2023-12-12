@@ -80,9 +80,12 @@ encode_function = DbFunction(
     [ByteaOperationParam(), TEXT_FORMAT_PARAM],
     TextReturnTypeSpec(),
 )
-# encode may introduce new lines
+# encode may introduce new lines and backslashes
 encode_function.added_characteristics.add(
     ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS
+)
+encode_function.added_characteristics.add(
+    ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR
 )
 BYTEA_OPERATION_TYPES.append(encode_function)
 
