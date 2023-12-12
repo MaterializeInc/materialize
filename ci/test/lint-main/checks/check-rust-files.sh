@@ -11,4 +11,14 @@
 #
 # lint — complains about misformatted files and other problems.
 
-exec "$(dirname "$0")"/pyactivate -m materialize.lint.lint "$@"
+set -euo pipefail
+
+cd "$(dirname "$0")/../../../.."
+
+. misc/shlib/shlib.bash
+
+rust_files=$(sort -u <(git_files '*.rs'))
+
+try xargs misc/lint/test-attribute.sh <<< "$rust_files"
+
+try_status_report

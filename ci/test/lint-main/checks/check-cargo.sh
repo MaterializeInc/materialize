@@ -11,4 +11,12 @@
 #
 # lint — complains about misformatted files and other problems.
 
-exec "$(dirname "$0")"/pyactivate -m materialize.lint.lint "$@"
+set -euo pipefail
+
+cd "$(dirname "$0")/../../../.."
+
+. misc/shlib/shlib.bash
+
+try bin/lint-cargo
+
+try_status_report

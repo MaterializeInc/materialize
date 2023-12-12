@@ -8,7 +8,16 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-#
-# lint — complains about misformatted files and other problems.
 
-exec "$(dirname "$0")"/pyactivate -m materialize.lint.lint "$@"
+set -euo pipefail
+
+cd "$(dirname "$0")/../../../.."
+
+. misc/shlib/shlib.bash
+
+if [[ ! "${MZDEV_NO_SHELLCHECK:-}" ]]; then
+    shell_files=$(sort -u <(git_files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.*'))
+    try xargs shellcheck -P SCRIPTDIR <<< "$shell_files"
+fi
+
+try_status_report

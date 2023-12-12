@@ -11,4 +11,16 @@
 #
 # lint — complains about misformatted files and other problems.
 
-exec "$(dirname "$0")"/pyactivate -m materialize.lint.lint "$@"
+set -euo pipefail
+
+cd "$(dirname "$0")/../../../.."
+
+. misc/shlib/shlib.bash
+
+if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
+  if [[ ! "${MZDEV_NO_PYTHON_DOCTEST:-}" ]]; then
+    try bin/pyactivate -m pytest -qq --doctest-modules misc/python
+  fi
+fi
+
+try_status_report
