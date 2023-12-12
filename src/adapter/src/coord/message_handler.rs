@@ -374,8 +374,10 @@ impl Coordinator {
         // "unknown connector" error, or pick up a new connector that has
         // replaced the dropped connector.
         //
-        // WARNING: If we support `ALTER CONNECTION`, we'll need to also check
-        // for connectors that were altered while we were purifying.
+        // n.b. an `ALTER CONNECTION` occurring during purification is OK
+        // because we always look up/populate a connection's state after
+        // committing to the catalog, so are guaranteed to see the connection's
+        // most recent version.
         if !resolved_ids
             .0
             .iter()
