@@ -4506,6 +4506,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-mysql-util"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mysql_async",
+ "mz-ore",
+ "mz-ssh-util",
+ "thiserror",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-npm"
 version = "0.0.0"
 dependencies = [
@@ -5244,7 +5257,7 @@ dependencies = [
  "futures",
  "mz-ore",
  "openssl",
- "socket2 0.4.9",
+ "socket2 0.5.3",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -9667,6 +9680,7 @@ dependencies = [
  "kube-client",
  "kube-core",
  "libc",
+ "libz-sys",
  "log",
  "lru",
  "memchr",
@@ -9710,7 +9724,7 @@ dependencies = [
  "sha2",
  "similar",
  "smallvec",
- "socket2 0.4.9",
+ "socket2 0.5.3",
  "subtle",
  "syn 1.0.107",
  "syn 2.0.39",
