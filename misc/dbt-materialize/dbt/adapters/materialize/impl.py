@@ -206,10 +206,18 @@ class MaterializeAdapter(PostgresAdapter):
         # to be able to identify the catalog entries for the temporary views
         # created by this specific connection.
         connection_id = self.connections.get_thread_connection().handle.info.backend_pid
-        view_name = f"_dbt_column_schema{connection_id}"
+        select_sql = sql["select_sql"]
+        header_sql = sql["header_sql"]
+        view_name = f"__dbt_sbq{connection_id}"
 
-        # Create the temporary view.
-        self.connections.execute(f"create temporary view {view_name} as {sql}")
+        # NOTE(morsapaes): because we need to consider the existence of a
+        # sql_header configuration (see dbt-core #7714), run the SQL for the
+        # header in a separate transaction ahead of creating the temporary
+        # view.
+        if header_sql:
+            self.connections.execute(f"{header_sql}")
+
+        self.connections.execute(f"create temporary view {view_name} as {select_sql}")
 
         # Fetch the names and types of each column in the view. Schema ID 0
         # indicates the temporary schema.
