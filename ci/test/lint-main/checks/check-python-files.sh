@@ -18,7 +18,22 @@ cd "$(dirname "$0")/../../../.."
 . misc/shlib/shlib.bash
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
-    try bin/pycheck
+    pyright_version=$(sh ci/builder/pyright-version.sh)
+    typecheck_cmd="npx --yes pyright@$pyright_version --warnings"
+
+    python_folders=(ci misc/python)
+
+    compose_files=$(git_files "**/mzcompose.py" | grep -v "test/")
+
+    # NOTE: we actually _want_ the word-splitting behavior on `typecheck_cmd` below,
+    # so turn off the warning
+    # shellcheck disable=SC2086
+    try $typecheck_cmd "${python_folders[@]}" $compose_files "test/"
+
+    try bin/pyactivate -m ruff --extend-exclude=misc/dbt-materialize .
+    # We need to maintain compatibility with older Python versions for this
+    try bin/pyactivate -m ruff --target-version=py38 misc/dbt-materialize
+
     try bin/pyfmt --check --diff
     if try_last_failed; then
         echo "lint: $(red error:) python formatting discrepancies found"
