@@ -45,10 +45,7 @@ individual fields mapped to columns.
 
 <script>
 
-/* Helper Methods
-
-If this wasn't a simple script these would be in a `utils.js` or come from lodash.
-*/
+/* Helper Methods */
 
 function escapeString(s) {
     return s.replace(`'`, `''`);
@@ -56,19 +53,6 @@ function escapeString(s) {
 
 function escapeIdent(s) {
     return s.replace(`"`, `""`);
-}
-
-function clone(x) {
-    return JSON.parse(JSON.stringify(x))
-}
-
-function debounce(callback, wait) {
-    let timeout;
-    return (...args) => {
-        const context = this;
-        clearTimeout(timeout);
-        timeout = setTimeout(() => callback.apply(context, args), wait);
-    }
 }
 
 /* JSON Parsing and SQL conversion */
@@ -125,7 +109,7 @@ function expandObject(object, parents, columns) {
                 continue;
         }
 
-        columns.push([name, wrapping_function, cast, clone(parents)]);
+        columns.push([name, wrapping_function, cast, _.clone(parents)]);
     }
 }
 
@@ -223,12 +207,12 @@ function render() {
 render();
 
 // Debounce at a quicker rate since these generally cannot generate errors.
-$("#view_name").keyup(debounce(render, 200));
-$("#source_name").keyup(debounce(render, 200));
-$("#column_name").keyup(debounce(render, 200));
+$("#view_name").keyup(_.debounce(render, 200));
+$("#source_name").keyup(_.debounce(render, 200));
+$("#column_name").keyup(_.debounce(render, 200));
 $("input[name='type_view']").change(render);
 
 // Debounce relatively slowly on the JSON sample since it can generate parsing errors.
-$("#json_sample").keyup(debounce(render, 600));
+$("#json_sample").keyup(_.debounce(render, 600));
 
 </script>
