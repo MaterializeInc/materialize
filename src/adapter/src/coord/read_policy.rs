@@ -25,56 +25,15 @@ use std::hash::Hash;
 
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
 use mz_compute_types::ComputeInstanceId;
 use mz_repr::{GlobalId, Timestamp};
-use mz_storage_client::controller::ReadPolicy;
-use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use mz_storage_types::read_policy::ReadPolicy;
+use timely::progress::Antichain;
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::util::ResultExt;
-
-/// The value to round all `since` frontiers to.
-/// We pick 1s somewhat arbitrarily, but matching historical practice.
-// TODO[btv] If we want to further reduce capability chatter, we can implement the design in
-// `20230322_metrics_since_granularity.md`, making it configurable.
-pub(crate) const SINCE_GRANULARITY: mz_repr::Timestamp = mz_repr::Timestamp::new(1000);
-
-/// Information about the read capability requirements of a collection.
-///
-/// This type tracks both a default policy, as well as various holds that may
-/// be expressed, as by transactions to ensure collections remain readable.
-#[derive(Debug)]
-pub(crate) struct ReadCapability<T = mz_repr::Timestamp>
-where
-    T: timely::progress::Timestamp,
-{
-    /// The default read policy for the collection when no holds are present.
-    pub(crate) base_policy: ReadPolicy<T>,
-    /// Holds expressed by transactions, that should prevent compaction.
-    pub(crate) holds: MutableAntichain<T>,
-}
-
-impl<T: timely::progress::Timestamp> From<ReadPolicy<T>> for ReadCapability<T> {
-    fn from(base_policy: ReadPolicy<T>) -> Self {
-        Self {
-            base_policy,
-            holds: MutableAntichain::new(),
-        }
-    }
-}
-
-impl<T: timely::progress::Timestamp> ReadCapability<T> {
-    /// Acquires the effective read policy, reflecting both the base policy and any holds.
-    pub(crate) fn policy(&self) -> ReadPolicy<T> {
-        // TODO: This could be "optimized" when `self.holds.frontier` is empty.
-        ReadPolicy::Multiple(vec![
-            ReadPolicy::ValidFrom(self.holds.frontier().to_owned()),
-            self.base_policy.clone(),
-        ])
-    }
-}
 
 /// Relevant information for acquiring or releasing a bundle of read holds.
 #[derive(Clone, Debug)]
@@ -188,14 +147,14 @@ impl crate::coord::Coordinator {
     pub(crate) async fn initialize_storage_read_policies(
         &mut self,
         ids: Vec<GlobalId>,
-        compaction_window_ms: Option<Timestamp>,
+        compaction_window: CompactionWindow,
     ) {
         self.initialize_read_policies(
             &CollectionIdBundle {
                 storage_ids: ids.into_iter().collect(),
                 compute_ids: BTreeMap::new(),
             },
-            compaction_window_ms,
+            compaction_window,
         )
         .await;
     }
@@ -209,7 +168,7 @@ impl crate::coord::Coordinator {
         &mut self,
         ids: Vec<GlobalId>,
         instance: ComputeInstanceId,
-        compaction_window_ms: Option<Timestamp>,
+        compaction_window: CompactionWindow,
     ) {
         let mut compute_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
         compute_ids.insert(instance, ids.into_iter().collect());
@@ -218,7 +177,7 @@ impl crate::coord::Coordinator {
                 storage_ids: BTreeSet::new(),
                 compute_ids,
             },
-            compaction_window_ms,
+            compaction_window,
         )
         .await;
     }
@@ -232,7 +191,7 @@ impl crate::coord::Coordinator {
     pub(crate) async fn initialize_read_policies(
         &mut self,
         id_bundle: &CollectionIdBundle,
-        compaction_window_ms: Option<Timestamp>,
+        compaction_window: CompactionWindow,
     ) {
         let mut compute_policy_updates: BTreeMap<ComputeInstanceId, Vec<_>> = BTreeMap::new();
         let mut storage_policy_updates = Vec::new();
@@ -265,7 +224,7 @@ impl crate::coord::Coordinator {
         for (time, id_bundle) in id_bundles {
             for (compute_instance, compute_ids) in id_bundle.compute_ids {
                 for id in compute_ids {
-                    let mut read_capability = Self::default_read_capability(compaction_window_ms);
+                    let mut read_capability: ReadCapability<Timestamp> = compaction_window.into();
                     if let Some(time) = &time {
                         read_capability
                             .holds
@@ -280,7 +239,7 @@ impl crate::coord::Coordinator {
             }
 
             for id in id_bundle.storage_ids {
-                let mut read_capability = Self::default_read_capability(compaction_window_ms);
+                let mut read_capability: ReadCapability<Timestamp> = compaction_window.into();
                 if let Some(time) = &time {
                     read_capability
                         .holds
@@ -301,16 +260,6 @@ impl crate::coord::Coordinator {
         self.controller
             .storage
             .set_read_policy(storage_policy_updates);
-    }
-
-    fn default_read_capability(
-        compaction_window_ms: Option<Timestamp>,
-    ) -> ReadCapability<Timestamp> {
-        let policy = match compaction_window_ms {
-            Some(time) => ReadPolicy::lag_writes_by(time, SINCE_GRANULARITY),
-            None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-        };
-        policy.into()
     }
 
     pub(crate) fn update_storage_base_read_policies(

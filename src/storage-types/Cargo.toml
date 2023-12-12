@@ -13,6 +13,7 @@ aws-credential-types = { version = "0.55", features = ["hardcoded-credentials"] 
 aws-types = "0.55"
 bytes = "1.3.0"
 dec = "0.4.8"
+derivative = "2.2.0"
 differential-dataflow = "0.12.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
 itertools = { version = "0.10.5" }

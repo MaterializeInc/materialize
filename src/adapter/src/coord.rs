@@ -81,7 +81,9 @@ use fail::fail_point;
 use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
+use mz_adapter_types::compaction::{
+    CompactionWindow, ReadCapability, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+};
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
@@ -100,6 +102,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+
 use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
@@ -138,7 +141,6 @@ use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
-use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_oracle::postgres_oracle::{
@@ -1086,16 +1088,8 @@ impl Coordinator {
         self.controller
             .set_default_arrangement_exert_proportionality(exert_prop);
 
-        // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
-        //
-        // TODO[btv] -- This is of type `Timestamp` because that's what `initialize_read_policies`
-        // takes, but it's not clear that that type makes sense. Read policies are logically
-        // durations, not instants.
-        //
-        // Ultimately, it doesn't concretely matter today, because the type ends up just being
-        // u64 anyway.
-        let mut policies_to_set: BTreeMap<Timestamp, CollectionIdBundle> = Default::default();
-        policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS, Default::default());
+        let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
+            Default::default();
 
         debug!("coordinator init: creating compute replicas");
         let mut replicas_to_start = vec![];
@@ -1262,16 +1256,7 @@ impl Coordinator {
                 entry.item().typ(),
                 entry.id()
             );
-            let policy = entry
-                .item()
-                .initial_logical_compaction_window()
-                .map(|duration| {
-                    let ts = Timestamp::from(
-                        u64::try_from(duration.as_millis())
-                            .expect("Timestamp millis must fit in u64"),
-                    );
-                    ts
-                });
+            let policy = entry.item().initial_logical_compaction_window();
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
                 // indexes are always built individually and does not store information
@@ -1408,8 +1393,8 @@ impl Coordinator {
         // As of this writing, there can only be at most two keys in `policies_to_set`,
         // so the extra load isn't crazy, but that might not be true in general if we
         // open up custom compaction windows to users.
-        for (ts, policies) in policies_to_set {
-            self.initialize_read_policies(&policies, Some(ts)).await;
+        for (cw, policies) in policies_to_set {
+            self.initialize_read_policies(&policies, cw).await;
         }
 
         debug!("coordinator init: announcing completion of initialization to controller");

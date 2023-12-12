@@ -13,10 +13,11 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::bail;
 use itertools::Itertools;
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_secrets::InMemorySecretsController;
 use mz_storage_types::connections::ConnectionContext;
@@ -817,7 +818,7 @@ impl CatalogState {
         create_sql: String,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
-        custom_logical_compaction_window: Option<Duration>,
+        custom_logical_compaction_window: Option<CompactionWindow>,
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
         // Enable catalog features that might be required during planning in

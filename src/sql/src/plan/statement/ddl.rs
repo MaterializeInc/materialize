@@ -106,7 +106,7 @@ use crate::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
     AlterOptionParameter, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
     AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
+    AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, CompactionWindow, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
@@ -4132,7 +4132,12 @@ fn plan_index_options(
 
     if let Some(OptionalDuration(lcw)) = logical_compaction_window {
         scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-        out.push(crate::plan::IndexOption::LogicalCompactionWindow(lcw));
+        out.push(crate::plan::IndexOption::LogicalCompactionWindow(
+            match lcw {
+                Some(duration) => duration.try_into()?,
+                None => CompactionWindow::DisableCompaction,
+            },
+        ));
     }
 
     Ok(out)

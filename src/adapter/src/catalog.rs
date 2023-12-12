@@ -15,10 +15,10 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert;
 use std::sync::Arc;
-use std::time::Duration;
 
 use futures::Future;
 use itertools::Itertools;
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_storage_types::connections::ConnectionContext;
 use tokio::sync::mpsc::UnboundedSender;
@@ -3420,7 +3420,7 @@ impl Catalog {
         create_sql: String,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
-        custom_logical_compaction_window: Option<Duration>,
+        custom_logical_compaction_window: Option<CompactionWindow>,
     ) -> Result<CatalogItem, AdapterError> {
         self.state.parse_item(
             id,

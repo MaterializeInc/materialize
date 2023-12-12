@@ -120,8 +120,7 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
-    ExportState, IntrospectionType, MonotonicAppender, ReadPolicy, SnapshotCursor,
-    StorageController,
+    ExportState, IntrospectionType, MonotonicAppender, SnapshotCursor, StorageController,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
@@ -132,6 +131,7 @@ use mz_storage_types::controller::{
 };
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
+use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{
     ProtoDurableExportMetadata, SinkAsOf, StorageSinkConnection, StorageSinkDesc,
 };

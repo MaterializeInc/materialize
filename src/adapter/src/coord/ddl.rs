@@ -17,6 +17,7 @@ use std::time::Duration;
 use fail::fail_point;
 use futures::Future;
 use maplit::{btreemap, btreeset};
+use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_catalog::memory::objects::{
@@ -40,9 +41,10 @@ use mz_sql::session::vars::{
     MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
     MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
 };
-use mz_storage_client::controller::{ExportDescription, ReadPolicy};
+use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::SinkAsOf;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
@@ -50,7 +52,6 @@ use tracing::{event, warn, Level};
 
 use crate::catalog::{CatalogState, Op, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
-use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::{Session, Transaction, TransactionOps};

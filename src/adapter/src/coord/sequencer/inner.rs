@@ -19,6 +19,7 @@ use anyhow::anyhow;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use maplit::{btreemap, btreeset};
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{
@@ -48,7 +49,6 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId,
 };
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
-use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type, View,
@@ -71,15 +71,13 @@ use mz_sql_parser::ast::{
     PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::{
-    CollectionDescription, DataSource, DataSourceOther, ReadPolicy,
-};
+use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::instrument::WithSubscriber;
 use tracing::Instrument;
@@ -94,7 +92,6 @@ use crate::coord::dataflows::{
 };
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PeekDataflowPlan, PeekPlan, PlannedPeek};
-use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
@@ -303,10 +300,7 @@ impl Coordinator {
                 }
 
                 coord
-                    .initialize_storage_read_policies(
-                        source_ids,
-                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                    )
+                    .initialize_storage_read_policies(source_ids, CompactionWindow::Default)
                     .await;
             })
             .await;
@@ -605,10 +599,7 @@ impl Coordinator {
                 coord.apply_local_write(register_ts).await;
 
                 coord
-                    .initialize_storage_read_policies(
-                        vec![table_id],
-                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                    )
+                    .initialize_storage_read_policies(vec![table_id], CompactionWindow::Default)
                     .await;
 
                 // Advance the new table to a timestamp higher than the current
@@ -1089,10 +1080,7 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to append");
 
                 coord
-                    .initialize_storage_read_policies(
-                        vec![id],
-                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                    )
+                    .initialize_storage_read_policies(vec![id], CompactionWindow::Default)
                     .await;
 
                 coord.ship_dataflow(df_desc, cluster_id).await;
@@ -4590,9 +4578,7 @@ impl Coordinator {
         for o in plan.options {
             options.push(match o {
                 IndexOptionName::LogicalCompactionWindow => {
-                    IndexOption::LogicalCompactionWindow(Some(Duration::from_millis(
-                        DEFAULT_LOGICAL_COMPACTION_WINDOW_TS.into(),
-                    )))
+                    IndexOption::LogicalCompactionWindow(CompactionWindow::Default)
                 }
             });
         }
@@ -4617,13 +4603,7 @@ impl Coordinator {
                         .index()
                         .expect("setting options on index")
                         .cluster_id;
-                    let policy = match window {
-                        Some(time) => {
-                            ReadPolicy::lag_writes_by(time.try_into()?, SINCE_GRANULARITY)
-                        }
-                        None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-                    };
-                    self.update_compute_base_read_policy(cluster, id, policy);
+                    self.update_compute_base_read_policy(cluster, id, window.into());
                 }
             }
         }
@@ -5536,11 +5516,8 @@ impl Coordinator {
                     .await
                     .expect("altering collection after txn must succeed");
 
-                self.initialize_storage_read_policies(
-                    source_ids,
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                self.initialize_storage_read_policies(source_ids, CompactionWindow::Default)
+                    .await;
             }
         }
 

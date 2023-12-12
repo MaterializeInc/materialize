@@ -9,9 +9,9 @@
 
 //! Coordinator functionality to sequence cluster-related plans
 
-use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use std::collections::BTreeSet;
 
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant, ClusterVariantManaged};
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{
@@ -373,7 +373,7 @@ impl Coordinator {
             self.initialize_compute_read_policies(
                 introspection_source_ids,
                 cluster_id,
-                Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+                CompactionWindow::Default,
             )
             .await;
         }

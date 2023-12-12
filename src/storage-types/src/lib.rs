@@ -84,6 +84,7 @@ pub mod controller;
 pub mod errors;
 pub mod instances;
 pub mod parameters;
+pub mod read_policy;
 pub mod shim;
 pub mod sinks;
 pub mod sources;
