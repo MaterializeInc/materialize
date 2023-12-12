@@ -16,7 +16,7 @@ individual fields mapped to columns.
 <div class="json_widget">
     <div class="json">
         <textarea title="JSON Sample" id="json_sample" placeholder="JSON Sample">
-            { "payload": "materialize", "event": { "kind": 1, "success": true }, "ts": "2023-02-01T17:00:00.000Z" }
+            { "payload": "materialize", "event": { "kind": 1, "success": true, "createdAt": "2023-02-01T17:00:00.000Z" }, "ts": "2023-02-01T17:00:00.000Z" }
         </textarea>
         <div id="error_span" class="error">
             <p id="error_text"></p>
@@ -45,10 +45,7 @@ individual fields mapped to columns.
 
 <script>
 
-/* Helper Methods
-
-If this wasn't a simple script these would be in a `utils.js` or come from lodash.
-*/
+/* Helper Methods */
 
 function escapeString(s) {
     return s.replace(`'`, `''`);
@@ -56,19 +53,6 @@ function escapeString(s) {
 
 function escapeIdent(s) {
     return s.replace(`"`, `""`);
-}
-
-function clone(x) {
-    return JSON.parse(JSON.stringify(x))
-}
-
-function debounce(callback, wait) {
-    let timeout;
-    return (...args) => {
-        const context = this;
-        clearTimeout(timeout);
-        timeout = setTimeout(() => callback.apply(context, args), wait);
-    }
 }
 
 /* JSON Parsing and SQL conversion */
@@ -125,7 +109,7 @@ function expandObject(object, parents, columns) {
                 continue;
         }
 
-        columns.push([name, wrapping_function, cast, clone(parents)]);
+        columns.push([name, wrapping_function, cast, _.clone(parents)]);
     }
 }
 
@@ -147,7 +131,7 @@ function formSql(selectItems, viewName, sourceName, objectType) {
 
     let selects = selectItems.map(([name, wrapping_function, cast, parents]) => {
         // Note: The first "parent" is the JSON column.
-        const formattedName = [...parents.slice(1), name].join("_").toLowerCase();
+        const formattedName = [...parents.slice(1), _.snakeCase(name)].join("_").toLowerCase();
 
         const parentPath = [parents[0], ...parents.slice(1).map((p) => `'${p}'`)].join("->");
         const formattedPath = parentPath.concat(`->>'${name}'`);
@@ -223,12 +207,12 @@ function render() {
 render();
 
 // Debounce at a quicker rate since these generally cannot generate errors.
-$("#view_name").keyup(debounce(render, 200));
-$("#source_name").keyup(debounce(render, 200));
-$("#column_name").keyup(debounce(render, 200));
+$("#view_name").keyup(_.debounce(render, 200));
+$("#source_name").keyup(_.debounce(render, 200));
+$("#column_name").keyup(_.debounce(render, 200));
 $("input[name='type_view']").change(render);
 
 // Debounce relatively slowly on the JSON sample since it can generate parsing errors.
-$("#json_sample").keyup(debounce(render, 600));
+$("#json_sample").keyup(_.debounce(render, 600));
 
 </script>
