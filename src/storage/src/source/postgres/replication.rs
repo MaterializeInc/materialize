@@ -225,24 +225,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 "replication metadata",
                 &context.ssh_tunnel_manager,
             ).await?;
-            if let Err(err) = ensure_publication_exists(&client, &connection.publication).await? {
-                // If the publication gets deleted there is nothing else to do. These errors
-                // are not retractable.
-                for &oid in table_info.keys() {
-                    // We must emit this error at a definite LSN which ideally
-                    // would be the LSN at which the `DROP PUBLICATION` action
-                    // was written to in the upstream database. Unfortunately we
-                    // don't have a way to learn that LSN and so we must choose
-                    // an LSN out of thin air that is guaranteed to not
-                    // invalidate the definite decisions previously made by this
-                    // operator. We therefore always pick `u64::MAX`, which will
-                    // (in practice) never conflict any previously revealed
-                    // portions of the TVC.
-                    let update = ((oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
-                    data_output.give(&data_cap_set[0], update).await;
-                }
-                return Ok(());
-            }
 
             let stream_result = raw_stream(
                 &config,
@@ -392,6 +374,12 @@ async fn raw_stream<'a>(
     >,
     TransientError,
 > {
+    if let Err(err) = ensure_publication_exists(&metadata_client, publication).await? {
+        // If the publication gets deleted there is nothing else to do. These errors
+        // are not retractable.
+        return Ok(Err(err));
+    }
+
     // Skip the timeline ID check for sources without a known timeline ID
     // (sources created before the timeline ID was added to the source details)
     if let Some(expected_timeline_id) = timeline_id {
