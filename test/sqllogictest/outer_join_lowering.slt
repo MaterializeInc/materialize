@@ -114,9 +114,9 @@ Return // { arity: 4 }
           Join on=(#0{facts_k01} = #9{facts_k01} AND #1{dim01_k01} = #10{dim01_k01} AND #2{dim02_k01} = #11{dim02_k01} AND #3{dim03_k01} = #12{dim03_k01} AND #4{facts_d01} = #13{facts_d01} AND #5{facts_d02} = #14{facts_d02} AND #6{facts_d03} = #15{facts_d03} AND #7{facts_d04} = #16{facts_d04} AND #8{facts_d05} = #17{facts_d05}) // { arity: 18 }
             Union // { arity: 9 }
               Negate // { arity: 9 }
-                Distinct project=[#0{facts_k01}, #1{dim01_k01}, #2{dim02_k01}, #3{dim03_k01}, #4{facts_d01}, #5{facts_d02}, #6{facts_d03}, #7{facts_d04}, #8{facts_d05}] // { arity: 9 }
+                Distinct project=[#0{facts_k01}..=#8{facts_d05}] // { arity: 9 }
                   Get l1 // { arity: 15 }
-              Distinct project=[#0{facts_k01}, #1{dim01_k01}, #2{dim02_k01}, #3{dim03_k01}, #4{facts_d01}, #5{facts_d02}, #6{facts_d03}, #7{facts_d04}, #8{facts_d05}] // { arity: 9 }
+              Distinct project=[#0{facts_k01}..=#8{facts_d05}] // { arity: 9 }
                 Get l0 // { arity: 9 }
             Get l0 // { arity: 9 }
         Constant // { arity: 6 }
@@ -222,9 +222,9 @@ Return // { arity: 6 }
                 Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND #2{facts_k01} = #13{facts_k01} AND #3{dim01_k01} = #14{dim01_k01} AND #4{dim02_k01} = #15{dim02_k01} AND #5{dim03_k01} = #16{dim03_k01} AND #6{facts_d01} = #17{facts_d01} AND #7{facts_d02} = #18{facts_d02} AND #8{facts_d03} = #19{facts_d03} AND #9{facts_d04} = #20{facts_d04} AND #10{facts_d05} = #21{facts_d05}) // { arity: 22 }
                   Union // { arity: 11 }
                     Negate // { arity: 11 }
-                      Distinct project=[#0{x}, #1{y}, #2{facts_k01}, #3{dim01_k01}, #4{dim02_k01}, #5{dim03_k01}, #6{facts_d01}, #7{facts_d02}, #8{facts_d03}, #9{facts_d04}, #10{facts_d05}] // { arity: 11 }
+                      Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
                         Get l3 // { arity: 17 }
-                    Distinct project=[#0{x}, #1{y}, #2{facts_k01}, #3{dim01_k01}, #4{dim02_k01}, #5{dim03_k01}, #6{facts_d01}, #7{facts_d02}, #8{facts_d03}, #9{facts_d04}, #10{facts_d05}] // { arity: 11 }
+                    Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
                       Get l2 // { arity: 11 }
                   Get l2 // { arity: 11 }
               Constant // { arity: 6 }
@@ -281,7 +281,7 @@ Return // { arity: 6 }
                   Project (#0..=#10) // { arity: 11 }
                     Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
                       Get l2 // { arity: 11 }
-                      Distinct project=[#0{x}, #1{y}, #2] // { arity: 3 }
+                      Distinct project=[#0{x}..=#2] // { arity: 3 }
                         Project (#17..=#19) // { arity: 3 }
                           Map (#0{x}, #1{y}, (#3{dim01_k01} + #0{x})) // { arity: 20 }
                             Get l3 // { arity: 17 }
@@ -340,7 +340,7 @@ Return // { arity: 6 }
                     Project (#0..=#10) // { arity: 11 }
                       Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
                         Get l2 // { arity: 11 }
-                        Distinct project=[#0{x}, #1{y}, #2] // { arity: 3 }
+                        Distinct project=[#0{x}..=#2] // { arity: 3 }
                           Project (#17..=#19) // { arity: 3 }
                             Map (#0{x}, #1{y}, (#2{dim01_k01} + #1{y})) // { arity: 20 }
                               Get l3 // { arity: 17 }
@@ -402,9 +402,9 @@ Return // { arity: 6 }
                 Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND #2{facts_k01} = #13{facts_k01} AND #3{dim01_k01} = #14{dim01_k01} AND #4{dim02_k01} = #15{dim02_k01} AND #5{dim03_k01} = #16{dim03_k01} AND #6{facts_d01} = #17{facts_d01} AND #7{facts_d02} = #18{facts_d02} AND #8{facts_d03} = #19{facts_d03} AND #9{facts_d04} = #20{facts_d04} AND #10{facts_d05} = #21{facts_d05}) // { arity: 22 }
                   Union // { arity: 11 }
                     Negate // { arity: 11 }
-                      Distinct project=[#0{x}, #1{y}, #2{facts_k01}, #3{dim01_k01}, #4{dim02_k01}, #5{dim03_k01}, #6{facts_d01}, #7{facts_d02}, #8{facts_d03}, #9{facts_d04}, #10{facts_d05}] // { arity: 11 }
+                      Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
                         Get l3 // { arity: 17 }
-                    Distinct project=[#0{x}, #1{y}, #2{facts_k01}, #3{dim01_k01}, #4{dim02_k01}, #5{dim03_k01}, #6{facts_d01}, #7{facts_d02}, #8{facts_d03}, #9{facts_d04}, #10{facts_d05}] // { arity: 11 }
+                    Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
                       Get l2 // { arity: 11 }
                   Get l2 // { arity: 11 }
               Constant // { arity: 6 }
@@ -466,7 +466,7 @@ Return // { arity: 6 }
                     Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
                       Filter (#7{facts_d02} = 42) // { arity: 11 }
                         Get l2 // { arity: 11 }
-                      Distinct project=[#0{x}, #1{y}, #2] // { arity: 3 }
+                      Distinct project=[#0{x}..=#2] // { arity: 3 }
                         Project (#17..=#19) // { arity: 3 }
                           Map (#0{x}, #1{y}, (#3{dim01_k01} + #0{x})) // { arity: 20 }
                             Get l3 // { arity: 17 }
@@ -530,7 +530,7 @@ Return // { arity: 6 }
                       Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND (#3{dim01_k01} + #0{x}) = #13) // { arity: 14 }
                         Filter (#7{facts_d02} = 42) // { arity: 11 }
                           Get l2 // { arity: 11 }
-                        Distinct project=[#0{x}, #1{y}, #2] // { arity: 3 }
+                        Distinct project=[#0{x}..=#2] // { arity: 3 }
                           Project (#17..=#19) // { arity: 3 }
                             Map (#0{x}, #1{y}, (#2{dim01_k01} + #1{y})) // { arity: 20 }
                               Get l3 // { arity: 17 }
@@ -607,7 +607,7 @@ Return // { arity: 6 }
             Get l4 // { arity: 14 }
 With
   cte l5 =
-    Distinct project=[#0{x}, #1{y}, #2] // { arity: 3 }
+    Distinct project=[#0{x}..=#2] // { arity: 3 }
       Project (#14..=#16) // { arity: 3 }
         Map (#0{x}, #1{y}, coalesce(#2{dim01_k01}, #0{x})) // { arity: 17 }
           Get l4 // { arity: 14 }
@@ -668,9 +668,9 @@ Return // { arity: 6 }
                 Join on=(#0{x} = #11{x} AND #1{y} = #12{y} AND #2{facts_k01} = #13{facts_k01} AND #3{dim01_k01} = #14{dim01_k01} AND #4{dim02_k01} = #15{dim02_k01} AND #5{dim03_k01} = #16{dim03_k01} AND #6{facts_d01} = #17{facts_d01} AND #7{facts_d02} = #18{facts_d02} AND #8{facts_d03} = #19{facts_d03} AND #9{facts_d04} = #20{facts_d04} AND #10{facts_d05} = #21{facts_d05}) // { arity: 22 }
                   Union // { arity: 11 }
                     Negate // { arity: 11 }
-                      Distinct project=[#0{x}, #1{y}, #2{facts_k01}, #3{dim01_k01}, #4{dim02_k01}, #5{dim03_k01}, #6{facts_d01}, #7{facts_d02}, #8{facts_d03}, #9{facts_d04}, #10{facts_d05}] // { arity: 11 }
+                      Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
                         Get l8 // { arity: 17 }
-                    Distinct project=[#0{x}, #1{y}, #2{facts_k01}, #3{dim01_k01}, #4{dim02_k01}, #5{dim03_k01}, #6{facts_d01}, #7{facts_d02}, #8{facts_d03}, #9{facts_d04}, #10{facts_d05}] // { arity: 11 }
+                    Distinct project=[#0{x}..=#10{facts_d05}] // { arity: 11 }
                       Get l2 // { arity: 11 }
                   Get l2 // { arity: 11 }
               Constant // { arity: 6 }
