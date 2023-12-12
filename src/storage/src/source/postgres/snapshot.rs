@@ -321,13 +321,39 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             }
             *rewind_cap_set = CapabilitySet::new();
 
-            let upstream_info = mz_postgres_util::publication_info(
+            let upstream_info = match mz_postgres_util::publication_info(
                 &context.ssh_tunnel_manager,
                 &connection_config,
                 &connection.publication,
                 None,
             )
-            .await?;
+            .await
+            {
+                // If the replication stream cannot be obtained in a definite way there is
+                // nothing else to do. These errors are not retractable.
+                Err(err)
+                    if err.to_string()
+                        == DefiniteError::PublicationDropped(connection.publication.to_string())
+                            .to_string() =>
+                {
+                    let err = DefiniteError::PublicationDropped(connection.publication.to_string());
+                    for oid in reader_snapshot_table_info.keys() {
+                        // Produce a definite error here and then exit to ensure
+                        // a missing publication doesn't generate a transient
+                        // error and restart this dataflow indefinitely.
+                        //
+                        // We pick `u64::MAX` as the LSN which will (in
+                        // practice) never conflict any previously revealed
+                        // portions of the TVC.
+                        let update = ((*oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
+                        raw_handle.give(&data_cap_set[0], update).await;
+                    }
+
+                    return Ok(());
+                }
+                o => o?,
+            };
+
             let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
             for (&oid, (_, expected_desc, _)) in reader_snapshot_table_info.iter() {
