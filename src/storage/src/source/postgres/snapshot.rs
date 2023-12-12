@@ -219,7 +219,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let reader_snapshot_table_info: BTreeMap<_, _> = table_info
         .iter()
         .filter(|(oid, (output_index, _, _))| {
-            mz_ore::soft_assert!(
+            mz_ore::soft_assert_or_log!(
                 *output_index != 0,
                 "primary collection should not be represented in table info"
             );
@@ -285,7 +285,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 &format!("SET statement_timeout = {}", config.params.pg_source_snapshot_statement_timeout.as_millis())
             ).await?;
 
-            mz_ore::soft_assert!{{
+            mz_ore::soft_assert_no_log!{{
                 let row = simple_query_opt(&client, "SHOW statement_timeout;")
                     .await?
                     .unwrap();

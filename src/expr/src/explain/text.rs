@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use mz_ore::soft_assert;
+use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{
@@ -638,7 +638,7 @@ impl MirRelationExpr {
                                 (start_idx, start_key, start_characteristics),
                                 tail,
                             ) => {
-                                soft_assert!(inputs.len() == tail.len() + 1);
+                                soft_assert_eq_or_log!(inputs.len(), tail.len() + 1);
 
                                 writeln!(f, "{}implementation", ctx.indent)?;
                                 ctx.indented(|ctx| {
@@ -656,7 +656,7 @@ impl MirRelationExpr {
                                 })?;
                             }
                             JoinImplementation::DeltaQuery(half_join_chains) => {
-                                soft_assert!(inputs.len() == half_join_chains.len());
+                                soft_assert_eq_or_log!(inputs.len(), half_join_chains.len());
 
                                 writeln!(f, "{}implementation", ctx.indent)?;
                                 ctx.indented(|ctx| {

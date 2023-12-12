@@ -20,7 +20,7 @@ use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
-use mz_ore::soft_assert;
+use mz_ore::soft_assert_or_log;
 use mz_ore::str::separated;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
@@ -819,10 +819,11 @@ where
     // - Groups frame mode is currently not supported;
     // - Range frame mode is currently supported only for the default frame, which includes the
     //   current row.
-    soft_assert!(
+    soft_assert_or_log!(
         !((matches!(window_frame.units, WindowFrameUnits::Groups)
             || matches!(window_frame.units, WindowFrameUnits::Range))
-            && !window_frame.includes_current_row())
+            && !window_frame.includes_current_row()),
+        "window frame without current row"
     );
 
     if (matches!(

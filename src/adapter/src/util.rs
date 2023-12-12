@@ -14,7 +14,7 @@ use mz_compute_client::controller::error::{
 };
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{halt, soft_assert};
+use mz_ore::{halt, soft_assert_no_log};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
@@ -40,7 +40,7 @@ use crate::{ExecuteContext, ExecuteResponse};
 pub struct ClientTransmitter<T: Transmittable> {
     tx: Option<oneshot::Sender<Response<T>>>,
     internal_cmd_tx: UnboundedSender<Message>,
-    /// Expresses an optional [`soft_assert`] on the set of values allowed to be
+    /// Expresses an optional soft-assert on the set of values allowed to be
     /// sent from `self`.
     allowed: Option<Vec<T::Allowed>>,
 }
@@ -67,7 +67,7 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn send(mut self, result: Result<T, AdapterError>, session: Session) {
         // Guarantee that the value sent is of an allowed type.
-        soft_assert!(
+        soft_assert_no_log!(
             match (&result, self.allowed.take()) {
                 (Ok(ref t), Some(allowed)) => allowed.contains(&t.to_allowed()),
                 _ => true,
@@ -106,7 +106,7 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
             .expect("tx will always be `Some` unless `self` has been consumed")
     }
 
-    /// Sets `self` so that the next call to [`Self::send`] will [`soft_assert`]
+    /// Sets `self` so that the next call to [`Self::send`] will soft-assert
     /// that, if `Ok`, the value is one of `allowed`, as determined by
     /// [`Transmittable::to_allowed`].
     pub fn set_allowed(&mut self, allowed: Vec<T::Allowed>) {

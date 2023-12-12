@@ -24,7 +24,6 @@
 //!
 //!   * When a failed assertion should result in a log message rather a process
 //!     crash.
-//!
 //!   * When evaluating the condition is too expensive to evaluate in production
 //!     deployments.
 //!
@@ -33,10 +32,18 @@
 //!
 //! Ore provides the following macros to make soft assertions:
 //!
-//!   * [`soft_assert`](crate::soft_assert)
-//!   * [`soft_assert_eq`](crate::soft_assert_eq)
 //!   * [`soft_assert_or_log`](crate::soft_assert_or_log)
+//!   * [`soft_assert_eq_or_log`](crate::soft_assert_eq_or_log)
+//!   * [`soft_assert_ne_or_log`](crate::soft_assert_ne_or_log)
 //!   * [`soft_panic_or_log`](crate::soft_panic_or_log)
+//!   * [`soft_assert_no_log`](crate::soft_assert_no_log)
+//!   * [`soft_assert_eq_no_log`](crate::soft_assert_eq_no_log)
+//!   * [`soft_assert_ne_no_log`](crate::soft_assert_ne_no_log)
+//!
+//! The `_or_log` variants should be used by default, as they allow us to find
+//! failed condition checks in production. The `_no_log` variants are silent
+//! in production and should only be used when performance considerations
+//! prohibit the use of the logging variants.
 //!
 //! Due to limitations in Rust, these macros are exported at the crate root.
 
@@ -71,7 +78,7 @@ pub static SOFT_ASSERTIONS: AtomicBool = AtomicBool::new(true);
 /// Soft assertions have a small runtime cost even when disabled. See
 /// [`ore::assert`](crate::assert#Soft-assertions) for details.
 #[macro_export]
-macro_rules! soft_assert {
+macro_rules! soft_assert_no_log {
     ($cond:expr $(, $($arg:tt)+)?) => {{
         if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
             assert!($cond$(, $($arg)+)?);
@@ -84,7 +91,7 @@ macro_rules! soft_assert {
 /// Soft assertions have a small runtime cost even when disabled. See
 /// [`ore::assert`](crate::assert#Soft-assertions) for details.
 #[macro_export]
-macro_rules! soft_assert_eq {
+macro_rules! soft_assert_eq_no_log {
     ($cond:expr, $($arg:tt)+) => {{
         if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
             assert_eq!($cond, $($arg)+);
@@ -97,7 +104,7 @@ macro_rules! soft_assert_eq {
 /// Soft assertions have a small runtime cost even when disabled. See
 /// [`ore::assert`](crate::assert#Soft-assertions) for details.
 #[macro_export]
-macro_rules! soft_assert_ne {
+macro_rules! soft_assert_ne_no_log {
     ($cond:expr, $($arg:tt)+) => {{
         if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
             assert_ne!($cond, $($arg)+);
@@ -126,15 +133,76 @@ macro_rules! soft_assert_eq_or_log {
     ($left:expr, $right:expr) => {{
         if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
             assert_eq!($left, $right);
-        } else if $left != $right{
-            ::tracing::error!("assertion {:?} == {:?} failed", $left, $right)
+        } else {
+            // Borrowed from [`std::assert_eq`].
+            match (&$left, &$right) {
+                (left_val, right_val) => {
+                    if !(*left_val == *right_val) {
+                        ::tracing::error!(
+                            "assertion {:?} == {:?} failed",
+                            left_val, right_val
+                        );
+                    }
+                }
+            }
         }
     }};
     ($left:expr, $right:expr, $($arg:tt)+) => {{
         if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
             assert_eq!($left, $right, $($arg)+);
-        } else if $left != $right{
-            ::tracing::error!("assertion {:?} == {:?} failed: {}", $left, $right, format!($($arg)+))
+        } else {
+            // Borrowed from [`std::assert_eq`].
+            match (&$left, &$right) {
+                (left, right) => {
+                    if !(*left == *right) {
+                        ::tracing::error!(
+                            "assertion {:?} == {:?} failed: {}",
+                            left, right, format!($($arg)+)
+                        );
+                    }
+                }
+            }
+        }
+    }};
+}
+
+/// Asserts that two expressions are not equal to each other if soft assertions
+/// are enabled, or logs an error if soft assertions are disabled and the
+/// two expressions are not equal.
+#[macro_export]
+macro_rules! soft_assert_ne_or_log {
+    ($left:expr, $right:expr) => {{
+        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+            assert_ne!($left, $right);
+        } else {
+            // Borrowed from [`std::assert_ne`].
+            match (&$left, &$right) {
+                (left_val, right_val) => {
+                    if *left_val == *right_val {
+                        ::tracing::error!(
+                            "assertion {:?} != {:?} failed",
+                            left_val, right_val
+                        );
+                    }
+                }
+            }
+        }
+    }};
+    ($left:expr, $right:expr, $($arg:tt)+) => {{
+        if $crate::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+            assert_ne!($left, $right, $($arg)+);
+        } else {
+            // Borrowed from [`std::assert_ne`].
+            match (&$left, &$right) {
+                (left_val, right_val) => {
+                    if *left_val == *right_val {
+                        ::tracing::error!(
+                            "assertion {:?} != {:?} failed: {}",
+                            $left, $right, format!($($arg)+)
+                        );
+                    }
+                }
+            }
         }
     }};
 }

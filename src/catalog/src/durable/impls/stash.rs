@@ -24,7 +24,7 @@ use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
-use mz_ore::soft_assert_eq;
+use mz_ore::soft_assert_eq_no_log;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
@@ -877,7 +877,7 @@ impl DurableCatalogState for Connection {
                 return Ok(());
             }
             let collection = typed.from_tx(tx).await?;
-            soft_assert_eq!(
+            soft_assert_eq_no_log!(
                 is_initialized,
                 collection.is_initialized(tx).await?,
                 "stash initialization status should match collection '{}' initialization status",

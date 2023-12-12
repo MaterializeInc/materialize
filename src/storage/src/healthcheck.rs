@@ -481,7 +481,7 @@ where
                 // directly to the places where `should_halt = true` originates.
                 // We should definitely do that, but this is okay for a PoC.
                 if let Some((id, halt_with)) = halt_with_outer {
-                    mz_ore::soft_assert!(
+                    mz_ore::soft_assert_or_log!(
                         id == halting_id,
                         "sub{object_type}s should not produce \
                         halting errors, however {:?} halted while primary \

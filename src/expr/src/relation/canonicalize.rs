@@ -13,7 +13,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_ore::soft_assert;
+use mz_ore::soft_assert_or_log;
 use mz_repr::{ColumnType, Datum, ScalarType};
 
 use crate::visit::Visit;
@@ -205,7 +205,7 @@ where
 /// Additionally, it also removes IS NOT NULL predicates if there is another
 /// null rejecting predicate for the same sub-expression.
 pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types: &[ColumnType]) {
-    soft_assert!(
+    soft_assert_or_log!(
         predicates
             .iter()
             .all(|p| p.typ(column_types).scalar_type == ScalarType::Bool),
@@ -360,7 +360,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
 
     if completed.iter().any(|p| {
         (p.is_literal_false() || p.is_literal_null()) &&
-        // This extra check is only needed if we determine that the soft_assert!
+        // This extra check is only needed if we determine that the soft-assert
         // at the top of this function would ever fail for a good reason.
         p.typ(column_types).scalar_type == ScalarType::Bool
     }) {

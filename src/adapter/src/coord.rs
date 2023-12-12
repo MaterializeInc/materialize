@@ -1199,7 +1199,7 @@ impl Coordinator {
 
                     if let Some(waiting_on_this_dependent) = entries_awaiting_dependent.remove(&id)
                     {
-                        mz_ore::soft_assert! {{
+                        mz_ore::soft_assert_no_log! {{
                             let subsources =  entry.subsources();
                             let w: Vec<_> = waiting_on_this_dependent.iter().map(|e| e.id()).collect();
                             w.iter().all(|w| subsources.contains(w))

@@ -19,7 +19,7 @@ use enum_kinds::EnumKind;
 use futures::future::BoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_ore::collections::CollectionExt;
-use mz_ore::soft_assert;
+use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
@@ -423,7 +423,7 @@ impl TryFrom<&Statement<Raw>> for ExecuteResponse {
             _ => return Err(()),
         };
         // Ensure that if the planner ever adds possible plans we complain here.
-        soft_assert!(
+        soft_assert_no_log!(
             resp_kinds.len() == 1
                 && resp_kinds.first().expect("must exist") == &ExecuteResponseKind::from(&resp),
             "ExecuteResponses out of sync with planner"

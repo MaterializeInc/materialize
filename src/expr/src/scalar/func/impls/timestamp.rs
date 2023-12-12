@@ -136,8 +136,8 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampPrecision {
         a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
         // This should never have been called if precisions are same.
-        // Adding a soft_assert to flag if there are such instances.
-        mz_ore::soft_assert!(self.to != self.from);
+        // Adding a soft-assert to flag if there are such instances.
+        mz_ore::soft_assert_no_log!(self.to != self.from);
 
         let updated = a.round_to_precision(self.to)?;
         Ok(updated)
@@ -236,8 +236,8 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampTzPrecision {
         a: CheckedTimestamp<DateTime<Utc>>,
     ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
         // This should never have been called if precisions are same.
-        // Adding a soft_assert to flag if there are such instances.
-        mz_ore::soft_assert!(self.to != self.from);
+        // Adding a soft-assert to flag if there are such instances.
+        mz_ore::soft_assert_no_log!(self.to != self.from);
 
         let updated = a.round_to_precision(self.to)?;
         Ok(updated)

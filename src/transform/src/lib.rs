@@ -133,7 +133,7 @@ pub mod union_cancel;
 
 use crate::dataflow::DataflowMetainfo;
 pub use dataflow::optimize_dataflow;
-use mz_ore::soft_assert;
+use mz_ore::soft_assert_or_log;
 
 /// Compute the conjunction of a variadic number of expressions.
 #[macro_export]
@@ -679,7 +679,10 @@ impl Optimizer {
         // TODO: we should actually wire up notices that come from here. This is not urgent, because
         // currently notices can only come from the physical MIR optimizer (specifically,
         // `LiteralConstraints`), and callers of this method are running the logical MIR optimizer.
-        soft_assert!(dataflow_metainfo.optimizer_notices.is_empty());
+        soft_assert_or_log!(
+            dataflow_metainfo.optimizer_notices.is_empty(),
+            "logical MIR optimization unexpectedly produced notices"
+        );
 
         match transform_result {
             Ok(_) => {

@@ -19,7 +19,7 @@ use std::str;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use compact_bytes::CompactBytes;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
-use mz_ore::soft_assert;
+use mz_ore::soft_assert_no_log;
 use mz_ore::vec::Vector;
 use mz_persist_types::Codec64;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -1350,14 +1350,14 @@ where
                 let (prefix, lsu_bytes, suffix) = unsafe { lsu.align_to::<u8>() };
                 // The `u8` aligned version of the `lsu` should have twice as many
                 // elements as we expect for the `u16` version.
-                soft_assert!(
+                soft_assert_no_log!(
                     lsu_bytes.len() == Numeric::digits_to_lsu_elements_len(digits) * 2,
                     "u8 version of numeric LSU contained the wrong number of elements; expected {}, but got {}",
                     Numeric::digits_to_lsu_elements_len(digits) * 2,
                     lsu_bytes.len()
                 );
                 // There should be no unaligned elements in the prefix or suffix.
-                soft_assert!(prefix.is_empty() && suffix.is_empty());
+                soft_assert_no_log!(prefix.is_empty() && suffix.is_empty());
                 data.extend_from_slice(lsu_bytes);
             } else {
                 for u in lsu {

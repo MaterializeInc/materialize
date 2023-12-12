@@ -865,7 +865,12 @@ impl Coordinator {
                     // Assert we have one column for the body, and how ever many are required for
                     // the headers.
                     let num_columns = headers.num_columns() + 1;
-                    mz_ore::soft_assert!(desc.arity() <= num_columns);
+                    mz_ore::soft_assert_or_log!(
+                        desc.arity() <= num_columns,
+                        "expected at most {} columns, but got {}",
+                        num_columns,
+                        desc.arity()
+                    );
 
                     let body = desc
                         .get_by_name(&"body".into())

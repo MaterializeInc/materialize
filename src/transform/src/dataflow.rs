@@ -24,7 +24,7 @@ use mz_expr::{
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_ore::{soft_assert, soft_assert_eq, soft_panic_or_log};
+use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::explain::IndexUsageType;
 use mz_repr::GlobalId;
 
@@ -701,7 +701,7 @@ id: {}, key: {:?}",
         if let Some(index_reqs) = index_reqs_by_id.get(&index_desc.on_id) {
             for (req_idx_id, req_key, req_usage_type) in index_reqs {
                 if req_idx_id == index_id {
-                    soft_assert_eq!(*req_key, index_desc.key);
+                    soft_assert_eq_or_log!(*req_key, index_desc.key);
                     new_usage_types.push(req_usage_type.clone());
                 }
             }
@@ -757,7 +757,7 @@ id: {}, key: {:?}",
                     access_strategy: AccessStrategy::Index(accesses),
                 } => {
                     for (idx_id, _) in accesses {
-                        soft_assert!(
+                        soft_assert_or_log!(
                             dataflow.index_imports.contains_key(idx_id),
                             "Dangling Get index annotation"
                         );

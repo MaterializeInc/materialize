@@ -83,7 +83,7 @@ use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use mz_ore::soft_assert;
+use mz_ore::soft_assert_no_log;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_stash_types::{InternalStashError, StashError};
 use serde::{Deserialize, Serialize};
@@ -647,7 +647,7 @@ where
         K: RustType<KP>,
         V: RustType<VP>,
     {
-        soft_assert!(self.verify().is_ok());
+        soft_assert_no_log!(self.verify().is_ok());
         // Pending describes the desired final state for some keys. K,V pairs should be
         // retracted if they already exist and were deleted or are being updated.
         self.pending
@@ -752,7 +752,7 @@ where
             return Err(violation.into());
         }
         self.pending.insert(k, Some(v));
-        soft_assert!(self.verify().is_ok());
+        soft_assert_no_log!(self.verify().is_ok());
         Ok(())
     }
 
@@ -890,7 +890,7 @@ where
                 p.insert(k.clone(), None);
             }
         });
-        soft_assert!(self.verify().is_ok());
+        soft_assert_no_log!(self.verify().is_ok());
         deleted
     }
 
@@ -899,6 +899,6 @@ where
         self.for_values_mut(|p, k, _v| {
             p.insert(k.clone(), None);
         });
-        soft_assert!(self.verify().is_ok());
+        soft_assert_no_log!(self.verify().is_ok());
     }
 }
