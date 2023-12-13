@@ -11,9 +11,7 @@
 
 use std::sync::Arc;
 
-use mz_kafka_util::client::{
-    DEFAULT_FETCH_METADATA_TIMEOUT, DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL,
-};
+use mz_kafka_util::client::DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -102,6 +100,7 @@ pub async fn lookup_start_offsets<C>(
     topic: &str,
     time_offset: i64,
     now: u64,
+    fetch_metadata_timeout: Duration,
 ) -> Result<Vec<i64>, PlanError>
 where
     C: ConsumerContext + 'static,
@@ -127,7 +126,7 @@ where
             let num_partitions = mz_kafka_util::client::get_partitions(
                 consumer.as_ref().client(),
                 &topic,
-                DEFAULT_FETCH_METADATA_TIMEOUT,
+                fetch_metadata_timeout,
             )
             .map_err(|e| sql_err!("{}", e))?
             .len();
@@ -195,6 +194,7 @@ pub async fn validate_start_offsets<C>(
     consumer: Arc<BaseConsumer<C>>,
     topic: &str,
     start_offsets: Vec<i64>,
+    fetch_metadata_timeout: Duration,
 ) -> Result<(), PlanError>
 where
     C: ConsumerContext + 'static,
@@ -206,7 +206,7 @@ where
             let num_partitions = mz_kafka_util::client::get_partitions(
                 consumer.as_ref().client(),
                 &topic,
-                DEFAULT_FETCH_METADATA_TIMEOUT,
+                fetch_metadata_timeout,
             )
             .map_err(|e| sql_err!("{}", e))?
             .len();

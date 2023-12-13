@@ -35,14 +35,12 @@ use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tracing::{debug, error, info, warn, Level};
 
-/// A reasonable default timeout when refreshing topic metadata.
+/// A reasonable default timeout when refreshing topic metadata. This is configured
+/// at a source level.
 // 30s may seem infrequent, but the default is 5m. More frequent metadata
 // refresh rates are surprising to Kafka users, as topic partition counts hardly
 // ever change in production.
 pub const DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
-
-/// A reasonable default timeout when fetching metadata or partitions.
-pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A `ClientContext` implementation that uses `tracing` instead of `log`
 /// macros.
@@ -641,6 +639,9 @@ pub const DEFAULT_SOCKET_TIMEOUT: Duration = Duration::from_millis(60000);
 /// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
 pub const DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT: Duration = Duration::from_millis(30000);
 
+/// A reasonable default timeout when fetching metadata or partitions.
+pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Configurable timeouts for Kafka connections.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TcpTimeoutConfig {
@@ -650,6 +651,8 @@ pub struct TcpTimeoutConfig {
     pub socket_timeout: Duration,
     /// The timeout for setting up network connections.
     pub socket_connection_setup_timeout: Duration,
+    /// The timeout for fetching metadata from upstream.
+    pub fetch_metadata_timeout: Duration,
 }
 
 impl Default for TcpTimeoutConfig {
@@ -658,6 +661,7 @@ impl Default for TcpTimeoutConfig {
             keepalive: DEFAULT_KEEPALIVE,
             socket_timeout: DEFAULT_SOCKET_TIMEOUT,
             socket_connection_setup_timeout: DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT,
+            fetch_metadata_timeout: DEFAULT_FETCH_METADATA_TIMEOUT,
         }
     }
 }
@@ -669,6 +673,7 @@ impl TcpTimeoutConfig {
         keepalive: bool,
         socket_timeout: Duration,
         socket_connection_setup_timeout: Duration,
+        fetch_metadata_timeout: Duration,
     ) -> TcpTimeoutConfig {
         // Constrain values based on ranges here:
         // <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
@@ -706,6 +711,7 @@ impl TcpTimeoutConfig {
             keepalive,
             socket_timeout,
             socket_connection_setup_timeout,
+            fetch_metadata_timeout,
         }
     }
 }

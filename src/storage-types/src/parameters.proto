@@ -52,6 +52,7 @@ message ProtoKafkaSourceTcpTimeouts {
     bool keepalive = 1;
     mz_proto.ProtoDuration socket_timeout = 2;
     mz_proto.ProtoDuration socket_connection_setup_timeout = 3;
+    mz_proto.ProtoDuration fetch_metadata_timeout = 4;
 }
 message ProtoSshTimeoutConfig {
     mz_proto.ProtoDuration check_interval = 1;

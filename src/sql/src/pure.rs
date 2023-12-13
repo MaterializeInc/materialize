@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
-use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
+use mz_kafka_util::client::MzClientContext;
 use mz_ore::error::ErrorExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
@@ -324,7 +324,13 @@ async fn purify_create_sink(
 
             let metadata = client
                 .inner()
-                .fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT)
+                .fetch_metadata(
+                    None,
+                    storage_configuration
+                        .parameters
+                        .kafka_timeout_config
+                        .fetch_metadata_timeout,
+                )
                 .map_err(|e| {
                     KafkaSinkPurificationError::AdminClientError(Arc::new(
                         ContextCreationError::KafkaError(e),
@@ -499,6 +505,10 @@ async fn purify_create_source(
                         Arc::clone(&consumer),
                         &topic,
                         start_offsets,
+                        storage_configuration
+                            .parameters
+                            .kafka_timeout_config
+                            .fetch_metadata_timeout,
                     )
                     .await?;
                 }
@@ -509,6 +519,10 @@ async fn purify_create_source(
                         &topic,
                         time_offset,
                         now,
+                        storage_configuration
+                            .parameters
+                            .kafka_timeout_config
+                            .fetch_metadata_timeout,
                     )
                     .await?;
 
