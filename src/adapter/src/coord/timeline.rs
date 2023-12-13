@@ -233,8 +233,7 @@ impl Coordinator {
             self.catalog().config().now.clone(),
             self.timestamp_oracle_impl,
             timestamp_persistence,
-            self.timestamp_oracle_url.clone(),
-            &self.timestamp_oracle_metrics,
+            self.pg_timestamp_oracle_config.clone(),
             &mut self.global_timelines,
         )
         .await
@@ -248,8 +247,7 @@ impl Coordinator {
         now: NowFn,
         timestamp_oracle_impl: TimestampOracleImpl,
         timestamp_persistence: P,
-        timestamp_oracle_url: Option<String>,
-        metrics: &Arc<timestamp_oracle::metrics::Metrics>,
+        pg_oracle_config: Option<PostgresTimestampOracleConfig>,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
     ) -> &'a mut TimelineState<Timestamp>
     where
@@ -277,15 +275,14 @@ impl Coordinator {
 
             let oracle = match timestamp_oracle_impl {
                 TimestampOracleImpl::Postgres => {
-                    let timestamp_oracle_url = timestamp_oracle_url.expect("missing --timestamp-oracle-url even though the crdb-backed timestamp oracle was configured");
-                    let oracle_config = PostgresTimestampOracleConfig::new(
-                        &timestamp_oracle_url,
-                        Arc::clone(metrics),
-                    );
+                    let pg_oracle_config = pg_oracle_config.expect(
+                        "missing --timestamp-oracle-url even though the crdb-backed timestamp oracle was configured");
+
+                    let batching_metrics = Arc::clone(&pg_oracle_config.metrics);
 
                     let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
                         PostgresTimestampOracle::open(
-                            oracle_config,
+                            pg_oracle_config,
                             timeline.to_string(),
                             initially,
                             now_fn,
@@ -298,7 +295,7 @@ impl Coordinator {
                         .expect("postgres timestamp oracle is shareable");
 
                     let batching_oracle =
-                        BatchingTimestampOracle::new(Arc::clone(metrics), shared_oracle);
+                        BatchingTimestampOracle::new(batching_metrics, shared_oracle);
 
                     let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> =
                         Box::new(batching_oracle);

@@ -5310,6 +5310,7 @@ dependencies = [
  "http",
  "itertools",
  "maplit",
+ "mz-adapter-types",
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",

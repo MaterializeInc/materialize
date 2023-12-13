@@ -1038,9 +1038,6 @@ pub struct Coordinator {
     /// Coordinator metrics.
     metrics: Metrics,
 
-    /// For registering new metrics.
-    timestamp_oracle_metrics: Arc<timestamp_oracle::metrics::Metrics>,
-
     /// Tracing handle.
     tracing_handle: TracingHandle,
 
@@ -1055,8 +1052,10 @@ pub struct Coordinator {
     /// use.
     timestamp_oracle_impl: vars::TimestampOracleImpl,
 
-    /// Postgres connection URL for the Postgres/CRDB-backed timestamp oracle.
-    timestamp_oracle_url: Option<String>,
+    /// Optional config for the Postgres-backed timestamp oracle. This is
+    /// _required_ when `postgres` is configured using the `timestamp_oracle`
+    /// system variable.
+    pg_timestamp_oracle_config: Option<PostgresTimestampOracleConfig>,
 }
 
 impl Coordinator {
@@ -2348,8 +2347,6 @@ pub fn serve(
 
         let metrics = Metrics::register_into(&metrics_registry);
         let metrics_clone = metrics.clone();
-        let timestamp_oracle_metrics =
-            Arc::new(timestamp_oracle::metrics::Metrics::new(&metrics_registry));
         let segment_client_clone = segment_client.clone();
         let span = tracing::Span::current();
         let coord_now = now.clone();
@@ -2360,12 +2357,18 @@ pub fn serve(
         // use the same impl!
         let timestamp_oracle_impl = catalog.system_config().timestamp_oracle_impl();
 
-        let initial_timestamps = get_initial_oracle_timestamps(
-            &catalog,
-            &timestamp_oracle_url,
-            &timestamp_oracle_metrics,
-        )
-        .await?;
+        let pg_timestamp_oracle_config = timestamp_oracle_url
+            .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
+        if let Some(config) = pg_timestamp_oracle_config.as_ref() {
+            // Apply settings from system vars as early as possible because some
+            // of them are locked in right when an oracle is first opened!
+            let pg_timestamp_oracle_params =
+                flags::pg_timstamp_oracle_config(catalog.system_config());
+            pg_timestamp_oracle_params.apply(config);
+        }
+
+        let initial_timestamps =
+            get_initial_oracle_timestamps(&catalog, &pg_timestamp_oracle_config).await?;
 
         let thread = thread::Builder::new()
             // The Coordinator thread tends to keep a lot of data on its stack. To
@@ -2387,8 +2390,7 @@ pub fn serve(
                         coord_now.clone(),
                         timestamp_oracle_impl,
                         persistence,
-                        timestamp_oracle_url.clone(),
-                        &timestamp_oracle_metrics,
+                        pg_timestamp_oracle_config.clone(),
                         &mut timestamp_oracles,
                     ));
                 }
@@ -2434,12 +2436,11 @@ pub fn serve(
                     storage_usage_collection_interval,
                     segment_client,
                     metrics,
-                    timestamp_oracle_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(),
                     webhook_concurrency_limit,
                     timestamp_oracle_impl,
-                    timestamp_oracle_url,
+                    pg_timestamp_oracle_config,
                 };
                 let bootstrap = handle.block_on(async {
                     coord
@@ -2512,8 +2513,7 @@ pub fn serve(
 // postgres/crdb-backed oracle.
 async fn get_initial_oracle_timestamps(
     catalog: &Catalog,
-    pg_timestamp_oracle_url: &Option<String>,
-    timestamp_oracle_metrics: &Arc<timestamp_oracle::metrics::Metrics>,
+    pg_timestamp_oracle_config: &Option<PostgresTimestampOracleConfig>,
 ) -> Result<BTreeMap<Timeline, Timestamp>, AdapterError> {
     let catalog_oracle_timestamps = catalog.get_all_persisted_timestamps().await?;
     let debug_msg = || {
@@ -2528,13 +2528,10 @@ async fn get_initial_oracle_timestamps(
     );
 
     let mut initial_timestamps = catalog_oracle_timestamps;
-    if let Some(timestamp_oracle_url) = pg_timestamp_oracle_url {
-        let oracle_config = PostgresTimestampOracleConfig::new(
-            timestamp_oracle_url,
-            Arc::clone(timestamp_oracle_metrics),
-        );
+    if let Some(pg_timestamp_oracle_config) = pg_timestamp_oracle_config {
         let postgres_oracle_timestamps =
-            PostgresTimestampOracle::<NowFn>::get_all_timelines(oracle_config).await?;
+            PostgresTimestampOracle::<NowFn>::get_all_timelines(pg_timestamp_oracle_config.clone())
+                .await?;
 
         let debug_msg = || {
             postgres_oracle_timestamps

@@ -76,6 +76,10 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
+use mz_adapter_types::timestamp_oracle::{
+    DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
+    DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
+};
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_ore::cast::CastFrom;
@@ -715,6 +719,38 @@ const TIMESTAMP_ORACLE_IMPL: ServerVar<TimestampOracleImpl> = ServerVar {
     name: UncasedStr::new("timestamp_oracle"),
     value: &TimestampOracleImpl::Catalog,
     description: "Backing implementation of TimestampOracle.",
+    internal: true,
+};
+
+/// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_max_size`.
+const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("pg_timestamp_oracle_connection_pool_max_size"),
+    value: &DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE,
+    description: "Maximum size of the Postgres/CRDB connection pool, used by the Postgres/CRDB timestamp oracle.",
+    internal: true,
+};
+
+/// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_max_wait`.
+const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT: ServerVar<Option<Duration>> = ServerVar {
+    name: UncasedStr::new("pg_timestamp_oracle_connection_pool_max_wait"),
+    value: &Some(DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT),
+    description: "The maximum time to wait when attempting to obtain a connection from the Postgres/CRDB connection pool, used by the Postgres/CRDB timestamp oracle.",
+    internal: true,
+};
+
+/// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_ttl`.
+const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_timestamp_oracle_connection_pool_ttl"),
+    value: &DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL,
+    description: "The minimum TTL of a Consensus connection to Postgres/CRDB before it is proactively terminated",
+    internal: true,
+};
+
+/// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_ttl_stagger`.
+const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_timestamp_oracle_connection_pool_ttl_stagger"),
+    value: &DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
+    description: "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
     internal: true,
 };
 
@@ -2850,7 +2886,11 @@ impl SystemVars {
             .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
-            .with_var(&TIMESTAMP_ORACLE_IMPL);
+            .with_var(&TIMESTAMP_ORACLE_IMPL)
+            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE)
+            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT)
+            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL)
+            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3630,6 +3670,26 @@ impl SystemVars {
     /// Returns the `timestamp_oracle` configuration parameter.
     pub fn timestamp_oracle_impl(&self) -> TimestampOracleImpl {
         *self.expect_value(&TIMESTAMP_ORACLE_IMPL)
+    }
+
+    /// Returns the `pg_timestamp_oracle_connection_pool_max_size` configuration parameter.
+    pub fn pg_timestamp_oracle_connection_pool_max_size(&self) -> usize {
+        *self.expect_value(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE)
+    }
+
+    /// Returns the `pg_timestamp_oracle_connection_pool_max_wait` configuration parameter.
+    pub fn pg_timestamp_oracle_connection_pool_max_wait(&self) -> Option<Duration> {
+        *self.expect_value(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT)
+    }
+
+    /// Returns the `pg_timestamp_oracle_connection_pool_ttl` configuration parameter.
+    pub fn pg_timestamp_oracle_connection_pool_ttl(&self) -> Duration {
+        *self.expect_value(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL)
+    }
+
+    /// Returns the `pg_timestamp_oracle_connection_pool_ttl_stagger` configuration parameter.
+    pub fn pg_timestamp_oracle_connection_pool_ttl_stagger(&self) -> Duration {
+        *self.expect_value(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER)
     }
 }
 
@@ -5296,6 +5356,17 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
         || PersistFeatureFlag::ALL.iter().any(|f| f.name == name)
+}
+
+/// Returns whether the named variable is a Postgres/CRDB timestamp oracle
+/// configuration parameter.
+pub fn is_pg_timestamp_oracle_config_var(name: &str) -> bool {
+    name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE.name()
+        || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT.name()
+        || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL.name()
+        || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER.name()
+        || name == CRDB_CONNECT_TIMEOUT.name()
+        || name == CRDB_TCP_USER_TIMEOUT.name()
 }
 
 /// Returns whether the named variable is a cluster scheduling config

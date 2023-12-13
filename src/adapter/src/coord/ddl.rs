@@ -216,6 +216,7 @@ impl Coordinator {
         let mut update_tracing_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
+        let mut update_pg_timestamp_oracle_config = false;
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
@@ -312,6 +313,8 @@ impl Coordinator {
                     update_tracing_config |= vars::is_tracing_var(name);
                     update_compute_config |= vars::is_compute_config_var(name);
                     update_storage_config |= vars::is_storage_config_var(name);
+                    update_pg_timestamp_oracle_config |=
+                        vars::is_pg_timestamp_oracle_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
@@ -330,6 +333,7 @@ impl Coordinator {
                     update_tracing_config = true;
                     update_compute_config = true;
                     update_storage_config = true;
+                    update_pg_timestamp_oracle_config = true;
                     update_metrics_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
@@ -590,6 +594,9 @@ impl Coordinator {
             if update_storage_config {
                 self.update_storage_config();
             }
+            if update_pg_timestamp_oracle_config {
+                self.update_pg_timestamp_oracle_config();
+            }
             if update_metrics_retention {
                 self.update_metrics_retention();
             }
@@ -840,6 +847,13 @@ impl Coordinator {
     fn update_storage_config(&mut self) {
         let config_params = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_parameters(config_params);
+    }
+
+    fn update_pg_timestamp_oracle_config(&mut self) {
+        let config_params = flags::pg_timstamp_oracle_config(self.catalog().system_config());
+        if let Some(config) = self.pg_timestamp_oracle_config.as_ref() {
+            config_params.apply(config)
+        }
     }
 
     fn update_metrics_retention(&mut self) {
