@@ -49,8 +49,10 @@ Commits must be ordered descending by their date.
 """
 MIN_ANCESTOR_MZ_VERSION_PER_COMMIT: dict[str, MzVersion] = {
     # insert newer commits at the top
+    # PR#23659 (persist-txn: enable in CI with "eager uppers") introduces regressions against v0.79.0
+    "c4f520a57a3046e5074939d2ea345d1c72be7079": MzVersion.parse_mz("v0.80.0"),
     # PR#23421 (coord: smorgasbord of improvements for the crdb-backed timestamp oracle) introduces regressions against 0.78.13
-    "5179ebd39aea4867622357a832aaddcde951b411": MzVersion.parse_mz("v0.79.0")
+    "5179ebd39aea4867622357a832aaddcde951b411": MzVersion.parse_mz("v0.79.0"),
 }
 
 
