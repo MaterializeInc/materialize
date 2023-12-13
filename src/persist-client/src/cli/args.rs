@@ -208,10 +208,13 @@ impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
     async fn compare_and_set(
         &self,
         key: &str,
-        _expected: Option<SeqNo>,
-        _new: VersionedData,
+        expected: Option<SeqNo>,
+        new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
-        warn!("ignoring cas({key}) in read-only mode");
+        warn!(
+            "ignoring cas({key}) in read-only mode ({} bytes at seqno {expected:?})",
+            new.data.len(),
+        );
         Ok(CaSResult::Committed)
     }
 
@@ -224,8 +227,8 @@ impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
         self.0.scan(key, from, limit).await
     }
 
-    async fn truncate(&self, key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
-        warn!("ignoring truncate({key}) in read-only mode");
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+        warn!("ignoring truncate({key}) in read-only mode (to seqno {seqno})");
         Ok(0)
     }
 }
