@@ -1130,6 +1130,14 @@ const KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Controls the timeout when fetching kafka metadata.
+const KAFKA_FETCH_METADATA_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("kafka_fetch_metadata_timeout"),
+    value: &mz_kafka_util::client::DEFAULT_FETCH_METADATA_TIMEOUT,
+    description: "Controls the timeout when fetching kafka metadata.",
+    internal: true,
+};
+
 /// Controls the connection timeout to Cockroach.
 ///
 /// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
@@ -2899,6 +2907,7 @@ impl SystemVars {
             .with_var(&KAFKA_SOCKET_KEEPALIVE)
             .with_var(&KAFKA_SOCKET_TIMEOUT)
             .with_var(&KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT)
+            .with_var(&KAFKA_FETCH_METADATA_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
@@ -3468,6 +3477,11 @@ impl SystemVars {
     /// Returns the `kafka_socket_connection_setup_timeout` configuration parameter.
     pub fn kafka_socket_connection_setup_timeout(&self) -> Duration {
         *self.expect_value(&KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT)
+    }
+
+    /// Returns the `kafka_fetch_metadata_timeout` configuration parameter.
+    pub fn kafka_fetch_metadata_timeout(&self) -> Duration {
+        *self.expect_value(&KAFKA_FETCH_METADATA_TIMEOUT)
     }
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
@@ -5390,6 +5404,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == KAFKA_SOCKET_KEEPALIVE.name()
         || name == KAFKA_SOCKET_TIMEOUT.name()
         || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
+        || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()

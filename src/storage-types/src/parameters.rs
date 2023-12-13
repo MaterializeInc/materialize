@@ -320,6 +320,7 @@ impl RustType<ProtoKafkaSourceTcpTimeouts> for mz_kafka_util::client::TcpTimeout
             socket_connection_setup_timeout: Some(
                 self.socket_connection_setup_timeout.into_proto(),
             ),
+            fetch_metadata_timeout: Some(self.fetch_metadata_timeout.into_proto()),
         }
     }
 
@@ -334,6 +335,9 @@ impl RustType<ProtoKafkaSourceTcpTimeouts> for mz_kafka_util::client::TcpTimeout
                 .into_rust_if_some(
                     "ProtoKafkaSourceTcpTimeouts::socket_connection_setup_timeout",
                 )?,
+            fetch_metadata_timeout: proto
+                .fetch_metadata_timeout
+                .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::fetch_metadata_timeout")?,
         })
     }
 }

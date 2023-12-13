@@ -20,10 +20,7 @@ use chrono::NaiveDateTime;
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use maplit::btreemap;
-use mz_kafka_util::client::{
-    get_partitions, MzClientContext, PartitionId, TunnelingClientContext,
-    DEFAULT_FETCH_METADATA_TIMEOUT,
-};
+use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, TunnelingClientContext};
 use mz_ore::error::ErrorExt;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -329,7 +326,15 @@ impl SourceRender for KafkaSourceConnection {
                             "kafka metadata thread: starting..."
                         );
                         while let Some(partition_info) = partition_info.upgrade() {
-                            let result = fetch_partition_info(consumer.client(), &topic);
+                            let result = fetch_partition_info(
+                                consumer.client(),
+                                &topic,
+                                config
+                                    .config
+                                    .parameters
+                                    .kafka_timeout_config
+                                    .fetch_metadata_timeout,
+                            );
                             trace!(
                                 source_id = config.id.to_string(),
                                 worker_id = config.worker_id,
@@ -1246,13 +1251,14 @@ mod tests {
 fn fetch_partition_info<C: ClientContext>(
     client: &Client<C>,
     topic: &str,
+    fetch_timeout: Duration,
 ) -> Result<BTreeMap<PartitionId, WatermarkOffsets>, anyhow::Error> {
-    let pids = get_partitions(client, topic, DEFAULT_FETCH_METADATA_TIMEOUT)?;
+    let pids = get_partitions(client, topic, fetch_timeout)?;
 
     let mut result = BTreeMap::new();
 
     for pid in pids {
-        let (low, high) = client.fetch_watermarks(topic, pid, DEFAULT_FETCH_METADATA_TIMEOUT)?;
+        let (low, high) = client.fetch_watermarks(topic, pid, fetch_timeout)?;
         let watermarks = WatermarkOffsets {
             low: low.try_into().expect("invalid negative offset"),
             high: high.try_into().expect("invalid negative offset"),

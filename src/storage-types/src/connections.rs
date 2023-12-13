@@ -18,10 +18,7 @@ use anyhow::{anyhow, Context};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader};
-use mz_kafka_util::client::{
-    BrokerRewrite, MzClientContext, MzKafkaError, TunnelingClientContext,
-    DEFAULT_FETCH_METADATA_TIMEOUT,
-};
+use mz_kafka_util::client::{BrokerRewrite, MzClientContext, MzKafkaError, TunnelingClientContext};
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -587,6 +584,11 @@ impl KafkaConnection {
             .create_with_context(storage_configuration, context, &BTreeMap::new())
             .await?;
 
+        let timeout = storage_configuration
+            .parameters
+            .kafka_timeout_config
+            .fetch_metadata_timeout;
+
         // librdkafka doesn't expose an API for determining whether a connection to
         // the Kafka cluster has been successfully established. So we make a
         // metadata request, though we don't care about the results, so that we can
@@ -599,7 +601,7 @@ impl KafkaConnection {
         // error is buried in the librdkafka logs, which are not visible to users.
         let result = mz_ore::task::spawn_blocking(
             || "kafka_get_metadata",
-            move || consumer.fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT),
+            move || consumer.fetch_metadata(None, timeout),
         )
         .await?;
         match result {

@@ -170,6 +170,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             config.kafka_socket_keepalive(),
             config.kafka_socket_timeout(),
             config.kafka_socket_connection_setup_timeout(),
+            config.kafka_fetch_metadata_timeout(),
         ),
     }
 }
