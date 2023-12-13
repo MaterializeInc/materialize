@@ -114,15 +114,15 @@ pub struct UnopenedPersistCatalogState {
     metrics: Arc<Metrics>,
 }
 
-impl UnopenedPersistCatalogState {
-    /// Deterministically generate the a ID for the given `organization_id` and `seed`.
-    fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
-        let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
-        soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
-        let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
-        ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
-    }
+/// Deterministically generate the a ID for the given `organization_id` and `seed`.
+pub fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
+    let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
+    soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
+    let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
+    ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
+}
 
+impl UnopenedPersistCatalogState {
     /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with `organization_id`.
     #[tracing::instrument(level = "info", skip(persist_client, metrics))]
     pub(crate) async fn new(
@@ -131,14 +131,14 @@ impl UnopenedPersistCatalogState {
         metrics: Arc<Metrics>,
     ) -> UnopenedPersistCatalogState {
         const SEED: usize = 1;
-        let shard_id = Self::shard_id(organization_id, SEED);
-        debug!(?shard_id, "new persist backed catalog state");
+        let shard_id = shard_id(organization_id, SEED);
+        tracing::info!(?shard_id, "new persist backed catalog state");
         let since_handle = persist_client
             .open_critical_since(
                 shard_id,
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
-                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                PersistClient::CATALOG_CRITICAL_SINCE,
                 Diagnostics {
                     shard_name: SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state critical since".to_string(),

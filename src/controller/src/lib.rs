@@ -44,7 +44,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::PersistLocation;
+use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{GlobalId, TimestampManipulation};
@@ -97,6 +97,8 @@ pub struct ControllerConfig {
     pub secrets_args: SecretsReaderCliArgs,
     /// The connection context, to thread through to clusterd, with cli flags.
     pub connection_context: ConnectionContext,
+    /// WIP
+    pub catalog_shard_id: ShardId,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -419,6 +421,7 @@ where
             config.metrics_registry.clone(),
             persist_txn_tables,
             config.connection_context,
+            config.catalog_shard_id,
         )
         .await;
 

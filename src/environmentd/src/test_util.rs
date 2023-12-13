@@ -433,6 +433,10 @@ impl Listeners {
                         secrets_reader_aws_prefix: None,
                     },
                     connection_context,
+                    catalog_shard_id: mz_catalog::shard_id(
+                        config.environment_id.organization_id(),
+                        1,
+                    ),
                 },
                 secrets_controller,
                 cloud_resource_controller: None,

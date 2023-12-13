@@ -45,7 +45,9 @@ use mz_sql::session::user::{
     MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID,
     SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
-use mz_storage_client::controller::{IntrospectionManaged, IntrospectionType};
+use mz_storage_client::controller::{
+    IntrospectionManaged, IntrospectionType, IntrospectionUnmanaged,
+};
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
     MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
@@ -53,6 +55,8 @@ use mz_storage_client::healthcheck::{
 };
 use once_cell::sync::Lazy;
 use serde::Serialize;
+
+use crate::durable::impls::persist::PersistCatalogState;
 
 pub const BUILTIN_PREFIXES: &[&str] = &["mz_", "pg_", "external_"];
 const BUILTIN_CLUSTER_REPLICA_NAME: &str = "r1";
@@ -1944,6 +1948,15 @@ pub static MZ_COMPUTE_HYDRATION_STATUSES: Lazy<BuiltinSource> = Lazy::new(|| Bui
         .with_column("hydrated", ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_CATALOG_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_catalog_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: IntrospectionType::Unmanaged(IntrospectionUnmanaged::Catalog),
+    desc: PersistCatalogState::desc(),
+    is_retained_metrics_object: false,
+    sensitivity: DataSensitivity::Superuser,
 });
 
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -6670,6 +6683,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_STATUSES),
         Builtin::View(&MZ_HYDRATION_STATUSES),
+        Builtin::Source(&MZ_CATALOG_RAW),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),

@@ -54,7 +54,7 @@ use crate::durable::transaction::TransactionBatch;
 
 pub mod debug;
 mod error;
-mod impls;
+pub(crate) mod impls;
 pub mod initialize;
 pub mod objects;
 mod transaction;

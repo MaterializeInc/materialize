@@ -1040,6 +1040,8 @@ impl<'a> RunnerInner<'a> {
                     secrets_reader_aws_prefix: None,
                 },
                 connection_context,
+                // WIP feels like this isn't the right way to do this plumbing,
+                catalog_shard_id: mz_catalog::shard_id(environment_id.organization_id(), 1),
             },
             secrets_controller,
             cloud_resource_controller: None,

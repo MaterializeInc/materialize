@@ -859,6 +859,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             secrets_reader_kubernetes_context: Some(args.orchestrator_kubernetes_context),
             secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
         },
+        // WIP feels like this isn't the right way to do this plumbing,
+        catalog_shard_id: mz_catalog::shard_id(args.environment_id.organization_id(), 1),
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {

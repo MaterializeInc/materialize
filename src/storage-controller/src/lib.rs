@@ -27,6 +27,7 @@ use mz_cluster_client::ReplicaId;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
@@ -49,7 +50,7 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
-    ExportState,IntrospectionManaged, IntrospectionType, MonotonicAppender, Response, SnapshotCursor, StorageController,
+    ExportState,IntrospectionManaged, IntrospectionType,IntrospectionUnmanaged, MonotonicAppender, Response, SnapshotCursor, StorageController,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
@@ -216,6 +217,10 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Write frontiers that have been recorded in the `ReplicaFrontiers` collection, kept to be
     /// able to retract old rows.
     recorded_replica_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<T>>,
+
+    /// WIP
+    catalog_shard_id: ShardId,
+    catalog_upper_task: Option<(GlobalId, AbortOnDropHandle<()>)>,
 }
 
 #[async_trait(?Send)]
@@ -381,13 +386,26 @@ where
         // each section.
         let mut entries = Vec::with_capacity(collections.len());
 
-        for (id, _desc) in &collections {
-            entries.push((
-                *id,
-                DurableCollectionMetadata {
-                    data_shard: ShardId::new(),
-                },
-            ))
+        for (id, desc) in &collections {
+            let data_shard = match desc.data_source {
+                DataSource::Introspection(IntrospectionType::Unmanaged(
+                    IntrospectionUnmanaged::Catalog,
+                )) => {
+                    tracing::warn!(
+                        "WIP using {} for catalog source shard id",
+                        self.catalog_shard_id
+                    );
+                    self.catalog_shard_id
+                }
+                DataSource::Ingestion(_)
+                | DataSource::Introspection(IntrospectionType::Managed(_))
+                | DataSource::Progress
+                | DataSource::Webhook
+                | DataSource::Other(DataSourceOther::TableWrites)
+                | DataSource::Other(DataSourceOther::Compute)
+                | DataSource::Other(DataSourceOther::Source) => ShardId::new(),
+            };
+            entries.push((*id, DurableCollectionMetadata { data_shard }))
         }
 
         // Perform all stash writes in a single transaction, to minimize transaction overhead and
@@ -571,7 +589,20 @@ where
                 );
 
                 match description.data_source {
-                    DataSource::Introspection(_) | DataSource::Webhook => {
+                    DataSource::Introspection(IntrospectionType::Unmanaged(
+                        IntrospectionUnmanaged::Catalog,
+                    )) => {
+                        warn!(desc = ?description, meta = ?metadata, "registering {} with an upper watch task", id);
+                        Self::maybe_start_catalog_upper_task(
+                            &mut self.catalog_upper_task,
+                            self.internal_response_sender.clone(),
+                            id,
+                            write,
+                        );
+                        self.collections.insert(id, collection_state);
+                    }
+                    DataSource::Introspection(IntrospectionType::Managed(_))
+                    | DataSource::Webhook => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
                         self.persist_monotonic_worker.register(id, write);
                         self.collections.insert(id, collection_state);
@@ -696,11 +727,7 @@ where
 
                     client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
-                DataSource::Introspection(i) => {
-                    let i = match i {
-                        IntrospectionType::Managed(i) => i,
-                    };
-
+                DataSource::Introspection(IntrospectionType::Managed(i)) => {
                     let prev = self
                         .introspection_ids
                         .lock()
@@ -792,7 +819,9 @@ where
                     // Register the collection so our manager knows about it.
                     self.collection_manager.register_collection(id);
                 }
-                DataSource::Progress | DataSource::Other(_) => {}
+                DataSource::Progress
+                | DataSource::Other(_)
+                | DataSource::Introspection(IntrospectionType::Unmanaged(_)) => {}
             }
         }
 
@@ -2020,7 +2049,12 @@ where
         metrics_registry: MetricsRegistry,
         persist_txn_tables: PersistTxnTablesImpl,
         connection_context: ConnectionContext,
+        catalog_shard_id: ShardId,
     ) -> Self {
+        tracing::warn!(
+            "WIP creating storage controller with catalog shard id {}",
+            catalog_shard_id
+        );
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         let tls = mz_tls_util::make_tls(
@@ -2198,6 +2232,8 @@ where
             metrics: StorageControllerMetrics::new(metrics_registry),
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
+            catalog_shard_id,
+            catalog_upper_task: None,
         }
     }
 
@@ -2739,7 +2775,7 @@ where
                 .await;
 
             match collection_desc.data_source {
-                DataSource::Introspection(_) | DataSource::Webhook => {
+                DataSource::Introspection(IntrospectionType::Managed(_)) | DataSource::Webhook => {
                     self.persist_monotonic_worker.update(id, write);
                 }
                 DataSource::Other(DataSourceOther::TableWrites) => {
@@ -2748,7 +2784,8 @@ where
                 DataSource::Ingestion(_)
                 | DataSource::Progress
                 | DataSource::Other(DataSourceOther::Compute)
-                | DataSource::Other(DataSourceOther::Source) => {
+                | DataSource::Other(DataSourceOther::Source)
+                | DataSource::Introspection(IntrospectionType::Unmanaged(_)) => {
                     // No-op.
                 }
             }
@@ -3204,5 +3241,38 @@ where
         self.collection_status_manager
             .append_sink_updates(sink_status_updates)
             .await;
+    }
+
+    fn maybe_start_catalog_upper_task(
+        catalog_upper_task: &mut Option<(GlobalId, AbortOnDropHandle<()>)>,
+        tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+        id: GlobalId,
+        mut write: WriteHandle<SourceData, (), T, Diff>,
+    ) {
+        if let Some((prev_id, _task)) = catalog_upper_task.as_ref() {
+            assert_eq!(id, *prev_id);
+            return;
+        }
+        let mut upper = write.shared_upper();
+        tracing::warn!("WIP starting catalog upper task at {:?}", upper.elements());
+        let task = mz_ore::task::spawn(|| "storage controller upper watch", async move {
+            loop {
+                tracing::info!("WIP new catalog upper {:?}", upper.elements());
+                match tx.send(StorageResponse::FrontierUppers(vec![(id, upper.clone())])) {
+                    Ok(()) => {}
+                    Err(_) => {
+                        // Controller shut down.
+                        return;
+                    }
+                };
+                if upper.is_empty() {
+                    // Last upper we'll ever get.
+                    return;
+                }
+                write.wait_for_upper_past(&upper).await;
+                upper = write.shared_upper();
+            }
+        });
+        *catalog_upper_task = Some((id, task.abort_on_drop()));
     }
 }

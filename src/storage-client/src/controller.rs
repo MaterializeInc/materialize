@@ -47,6 +47,7 @@ use crate::client::TimestamplessUpdate;
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum IntrospectionType {
     Managed(IntrospectionManaged),
+    Unmanaged(IntrospectionUnmanaged),
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -82,6 +83,12 @@ pub enum IntrospectionManaged {
     PrivatelinkConnectionStatusHistory,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
+pub enum IntrospectionUnmanaged {
+    /// Written by the persist-backed catalog
+    Catalog,
+}
+
 /// Describes how data is written to the collection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataSource {
@@ -102,7 +109,7 @@ pub enum DataSource {
 
 /// Describes how data is written to a collection maintained outside of the
 /// storage controller.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
 pub enum DataSourceOther {
     /// `environmentd` appends timestamped data, i.e. it is a `TABLE`.
     TableWrites,
