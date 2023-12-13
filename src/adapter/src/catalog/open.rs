@@ -1921,6 +1921,7 @@ mod builtin_migration_tests {
                         cluster_id: ClusterId::User(1),
                         non_null_assertions: vec![],
                         custom_logical_compaction_window: None,
+                        refresh_schedule: None,
                     })
                 }
                 SimplifiedItem::Index { on } => {

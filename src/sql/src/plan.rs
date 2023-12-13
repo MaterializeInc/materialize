@@ -35,6 +35,7 @@ use enum_kinds::EnumKind;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
@@ -864,6 +865,7 @@ pub enum ExplaineeStatement {
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
         non_null_assertions: Vec<usize>,
+        refresh_schedule: Option<RefreshSchedule>,
     },
     /// The object to be explained is a CREATE INDEX.
     CreateIndex {
@@ -1438,6 +1440,7 @@ pub struct MaterializedView {
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
     pub compaction_window: Option<CompactionWindow>,
+    pub refresh_schedule: Option<RefreshSchedule>,
 }
 
 #[derive(Clone, Debug)]

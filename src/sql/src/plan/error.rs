@@ -228,6 +228,8 @@ pub enum PlanError {
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
     MissingName(CatalogItemType),
+    InvalidRefreshAt,
+    InvalidRefreshEveryAlignedTo,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -370,6 +372,10 @@ impl PlanError {
             }
             Self::RecursiveTypeMismatch(..) => {
                 Some("You will need to rewrite or cast the query's expressions.".into())
+            },
+            Self::InvalidRefreshAt
+            | Self::InvalidRefreshEveryAlignedTo => {
+                Some("Calling `mz_now()` is allowed.".into())
             },
             _ => None,
         }
@@ -598,6 +604,14 @@ impl fmt::Display for PlanError {
             }
             Self::MissingName(item_type) => {
                 write!(f, "unspecified name for {item_type}")
+            }
+            Self::InvalidRefreshAt => {
+                write!(f, "REFRESH AT argument must be an expression that can be simplified \
+                           and/or cast to a constant whose type is mz_timestamp")
+            }
+            Self::InvalidRefreshEveryAlignedTo => {
+                write!(f, "REFRESH EVERY ... ALIGNED TO argument must be an expression that can be simplified \
+                           and/or cast to a constant whose type is mz_timestamp")
             }
         }
     }

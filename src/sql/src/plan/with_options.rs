@@ -9,12 +9,13 @@
 
 //! Provides tooling to handle `WITH` options.
 
+use std::time::Duration;
+
 use mz_repr::adt::interval::Interval;
 use mz_repr::{strconv, GlobalId};
-use mz_sql_parser::ast::{Ident, KafkaBroker, ReplicaDefinition};
+use mz_sql_parser::ast::{Ident, KafkaBroker, RefreshOptionValue, ReplicaDefinition};
 use mz_storage_types::connections::StringOrSecret;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 use crate::ast::{AstInfo, UnresolvedItemName, Value, WithOptionValue};
 use crate::names::{ResolvedDataType, ResolvedItemName};
@@ -434,15 +435,21 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
         match v {
             WithOptionValue::Value(v) => V::try_from_value(v),
             WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.into_string())),
+            WithOptionValue::RetainHistoryFor(v) => V::try_from_value(v),
             WithOptionValue::Sequence(_)
             | WithOptionValue::Item(_)
             | WithOptionValue::UnresolvedItemName(_)
             | WithOptionValue::Secret(_)
             | WithOptionValue::DataType(_)
             | WithOptionValue::ClusterReplicas(_)
-            | WithOptionValue::ConnectionKafkaBroker(_) => sql_bail!(
+            | WithOptionValue::ConnectionKafkaBroker(_)
+            | WithOptionValue::Refresh(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
+                    // The first few are unreachable because they are handled at the top of the outer match.
+                    WithOptionValue::Value(_) => unreachable!(),
+                    WithOptionValue::Ident(_) => unreachable!(),
+                    WithOptionValue::RetainHistoryFor(_) => unreachable!(),
                     WithOptionValue::Sequence(_) => "sequences",
                     WithOptionValue::Item(_) => "object references",
                     WithOptionValue::UnresolvedItemName(_) => "object names",
@@ -450,11 +457,10 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::DataType(_) => "data types",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",
                     WithOptionValue::ConnectionKafkaBroker(_) => "connection kafka brokers",
-                    _ => unreachable!(),
+                    WithOptionValue::Refresh(_) => "refresh option values",
                 },
                 V::name()
             ),
-            WithOptionValue::RetainHistoryFor(v) => V::try_from_value(v),
         }
     }
     fn name() -> String {
@@ -516,5 +522,25 @@ impl TryFromValue<WithOptionValue<Aug>> for Vec<KafkaBroker<Aug>> {
 impl ImpliedValue for Vec<KafkaBroker<Aug>> {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide a kafka broker")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for RefreshOptionValue<Aug> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::Refresh(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for a refresh option", v)
+        }
+    }
+
+    fn name() -> String {
+        "refresh option value".to_string()
+    }
+}
+
+impl ImpliedValue for RefreshOptionValue<Aug> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a refresh option value")
     }
 }

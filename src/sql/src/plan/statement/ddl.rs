@@ -19,12 +19,15 @@ use std::time::Duration;
 
 use itertools::{Either, Itertools};
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
+use mz_expr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::HashSet;
+use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
@@ -39,7 +42,8 @@ use mz_sql_parser::ast::{
     CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
     DocOnIdentifier, DocOnSchema, DropOwnedStatement, KafkaSinkConfigOption,
-    MaterializedViewOption, MaterializedViewOptionName, SetRoleVar, UnresolvedItemName,
+    MaterializedViewOption, MaterializedViewOptionName, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, SetRoleVar, UnresolvedItemName,
     UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_sql_parser::ident;
@@ -98,7 +102,7 @@ use crate::names::{
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
-use crate::plan::query::{scalar_type_from_catalog, ExprContext, QueryLifetime};
+use crate::plan::query::{plan_expr, scalar_type_from_catalog, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
@@ -122,6 +126,7 @@ use crate::plan::{
     WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
+use crate::session::vars::ENABLE_REFRESH_EVERY_MVS;
 
 mod connection;
 
@@ -2079,8 +2084,120 @@ pub fn plan_create_materialized_view(
     let MaterializedViewOptionExtracted {
         assert_not_null,
         retain_history,
+        refresh,
         seen: _,
     }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
+
+    let refresh_schedule = {
+        let mut refresh_schedule = RefreshSchedule::empty();
+        let mut on_commits_seen = 0;
+        for refresh_option_value in refresh {
+            if !matches!(refresh_option_value, RefreshOptionValue::OnCommit) {
+                scx.require_feature_flag(&ENABLE_REFRESH_EVERY_MVS)?;
+            }
+            match refresh_option_value {
+                RefreshOptionValue::OnCommit => {
+                    on_commits_seen += 1;
+                }
+                RefreshOptionValue::AtCreation => {
+                    soft_panic_or_log!("REFRESH AT CREATION should have been purified away");
+                    sql_bail!("INTERNAL ERROR: REFRESH AT CREATION should have been purified away")
+                }
+                RefreshOptionValue::At(RefreshAtOptionValue { mut time }) => {
+                    transform_ast::transform(scx, &mut time)?; // Desugar the expression
+                    let ecx = &ExprContext {
+                        qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
+                        name: "REFRESH AT",
+                        scope: &Scope::empty(),
+                        relation_type: &RelationType::empty(),
+                        allow_aggregates: false,
+                        allow_subqueries: false,
+                        allow_parameters: false,
+                        allow_windows: false,
+                    };
+                    let hir = plan_expr(ecx, &time)?.cast_to(
+                        ecx,
+                        CastContext::Assignment,
+                        &ScalarType::MzTimestamp,
+                    )?;
+                    // (mz_now was purified away to a literal earlier)
+                    let timestamp = hir
+                        .into_literal_mz_timestamp()
+                        .ok_or_else(|| PlanError::InvalidRefreshAt)?;
+                    refresh_schedule.ats.push(timestamp);
+                }
+                RefreshOptionValue::Every(RefreshEveryOptionValue {
+                    interval,
+                    aligned_to,
+                }) => {
+                    let interval = Interval::try_from_value(Value::Interval(interval))?;
+                    if interval.as_microseconds() <= 0 {
+                        sql_bail!("REFRESH interval must be positive; got: {}", interval);
+                    }
+                    if interval.months != 0 {
+                        // This limitation is because we want Intervals to be cleanly convertable
+                        // to a unix epoch timestamp difference. When the interval involves months, then
+                        // this is not true anymore, because months have variable lengths.
+                        // See `Timestamp::round_up`.
+                        sql_bail!("REFRESH interval must not involve units larger than days");
+                    }
+
+                    let mut aligned_to = match aligned_to {
+                        Some(aligned_to) => aligned_to,
+                        None => {
+                            soft_panic_or_log!(
+                                "ALIGNED TO should have been filled in by purification"
+                            );
+                            sql_bail!(
+                                "INTERNAL ERROR: ALIGNED TO should have been filled in by purification"
+                            )
+                        }
+                    };
+
+                    // Desugar the `aligned_to` expression
+                    transform_ast::transform(scx, &mut aligned_to)?;
+
+                    let ecx = &ExprContext {
+                        qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
+                        name: "REFRESH EVERY ... ALIGNED TO",
+                        scope: &Scope::empty(),
+                        relation_type: &RelationType::empty(),
+                        allow_aggregates: false,
+                        allow_subqueries: false,
+                        allow_parameters: false,
+                        allow_windows: false,
+                    };
+                    let aligned_to_hir = plan_expr(ecx, &aligned_to)?.cast_to(
+                        ecx,
+                        CastContext::Assignment,
+                        &ScalarType::MzTimestamp,
+                    )?;
+                    // (mz_now was purified away to a literal earlier)
+                    let aligned_to_const = aligned_to_hir
+                        .into_literal_mz_timestamp()
+                        .ok_or_else(|| PlanError::InvalidRefreshEveryAlignedTo)?;
+
+                    refresh_schedule.everies.push(RefreshEvery {
+                        interval: interval.duration()?,
+                        aligned_to: aligned_to_const,
+                    });
+                }
+            }
+        }
+
+        if on_commits_seen > 1 {
+            sql_bail!("REFRESH ON COMMIT cannot be specified multiple times");
+        }
+        if on_commits_seen > 0 && refresh_schedule != RefreshSchedule::empty() {
+            sql_bail!("REFRESH ON COMMIT is not compatible with any of the other REFRESH options");
+        }
+
+        if refresh_schedule == RefreshSchedule::empty() {
+            None
+        } else {
+            Some(refresh_schedule)
+        }
+    };
 
     if !assert_not_null.is_empty() {
         scx.require_feature_flag(&crate::session::vars::ENABLE_ASSERT_NOT_NULL)?;
@@ -2180,6 +2297,7 @@ pub fn plan_create_materialized_view(
             cluster_id,
             non_null_assertions,
             compaction_window,
+            refresh_schedule,
         },
         replace,
         drop_ids,
@@ -2191,7 +2309,8 @@ pub fn plan_create_materialized_view(
 generate_extracted_config!(
     MaterializedViewOption,
     (AssertNotNull, Ident, AllowMultiple),
-    (RetainHistory, Duration)
+    (RetainHistory, Duration),
+    (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
 
 pub fn describe_create_sink(

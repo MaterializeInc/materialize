@@ -833,7 +833,12 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let create_stmt = mz_sql::parse::parse(&view.create_sql)
-            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", view.create_sql))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "create_sql cannot be invalid: `{}` --- error: `{}`",
+                    view.create_sql, e
+                )
+            })
             .into_element()
             .ast;
         let query = match &create_stmt {
@@ -875,7 +880,12 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let create_stmt = mz_sql::parse::parse(&mview.create_sql)
-            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", mview.create_sql))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "create_sql cannot be invalid: `{}` --- error: `{}`",
+                    mview.create_sql, e
+                )
+            })
             .into_element()
             .ast;
         let query = match &create_stmt {
@@ -975,7 +985,12 @@ impl CatalogState {
         let mut updates = vec![];
 
         let create_stmt = mz_sql::parse::parse(&index.create_sql)
-            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", index.create_sql))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "create_sql cannot be invalid: `{}` --- error: `{}`",
+                    index.create_sql, e
+                )
+            })
             .into_element()
             .ast;
 

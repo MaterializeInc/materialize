@@ -28,7 +28,7 @@ use crate::ast::{
     AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, CreateConnectionOption,
     CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceFormat,
     CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident,
-    KeyConstraint, MaterializedViewOption, Query, SelectItem, SourceIncludeMetadata,
+    IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SourceIncludeMetadata,
     SubscribeOutput, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
     UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
@@ -3130,6 +3130,7 @@ pub enum WithOptionValue<T: AstInfo> {
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
     ConnectionKafkaBroker(KafkaBroker<T>),
     RetainHistoryFor(Value),
+    Refresh(RefreshOptionValue<T>),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -3140,7 +3141,8 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             match self {
                 WithOptionValue::Value(_)
                 | WithOptionValue::Sequence(_)
-                | WithOptionValue::RetainHistoryFor(_) => {
+                | WithOptionValue::RetainHistoryFor(_)
+                | WithOptionValue::Refresh(_) => {
                     // These are redact-aware.
                 }
                 WithOptionValue::DataType(_)
@@ -3186,10 +3188,61 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_str("FOR ");
                 f.write_node(value);
             }
+            WithOptionValue::Refresh(opt) => f.write_node(opt),
         }
     }
 }
 impl_display_t!(WithOptionValue);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RefreshOptionValue<T: AstInfo> {
+    OnCommit,
+    AtCreation,
+    At(RefreshAtOptionValue<T>),
+    Every(RefreshEveryOptionValue<T>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RefreshAtOptionValue<T: AstInfo> {
+    // We need an Expr because we want to support `mz_now()`.
+    pub time: Expr<T>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RefreshEveryOptionValue<T: AstInfo> {
+    // The refresh interval.
+    pub interval: IntervalValue,
+    // We need an Expr because we want to support `mz_now()`.
+    pub aligned_to: Option<Expr<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for RefreshOptionValue<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            RefreshOptionValue::OnCommit => {
+                f.write_str("ON COMMIT");
+            }
+            RefreshOptionValue::AtCreation => {
+                f.write_str("AT CREATION");
+            }
+            RefreshOptionValue::At(RefreshAtOptionValue { time }) => {
+                f.write_str("AT ");
+                f.write_node(time);
+            }
+            RefreshOptionValue::Every(RefreshEveryOptionValue {
+                interval,
+                aligned_to,
+            }) => {
+                f.write_str("EVERY '");
+                f.write_node(interval);
+                if let Some(aligned_to) = aligned_to {
+                    f.write_str(" ALIGNED TO ");
+                    f.write_node(aligned_to)
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TransactionMode {
