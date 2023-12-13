@@ -278,18 +278,11 @@ impl Coordinator {
         //
         // TODO: Remove this after both (either?) of the above features are on
         // for good and no possibility of running the old code.
-        //
-        // TODO(txn): To bundle all the perf differences up in one PR, I'm
-        // leaving this disabled for now. Re-enable it in the same PR that turns
-        // persist-txn on for CI, so we can get a full picture of the perf
-        // impact.
-        if false {
-            let () = self
-                .catalog
-                .confirm_leadership()
-                .await
-                .unwrap_or_terminate("unable to confirm leadership");
-        }
+        let () = self
+            .catalog
+            .confirm_leadership()
+            .await
+            .unwrap_or_terminate("unable to confirm leadership");
 
         let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(self.pending_writes.len());

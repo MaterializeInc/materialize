@@ -111,6 +111,7 @@ use mz_server_core::TlsCertConfig;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use openssl::asn1::Asn1Time;
@@ -532,8 +533,8 @@ impl Listeners {
                 deploy_generation: config.deploy_generation,
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
-                // TODO(txn): Get this flipped on before turning anything on in prod.
-                persist_txn_tables_cli: None,
+                // TODO(txn-lazy): Get "lazy" flipped on before turning "lazy" on in prod.
+                persist_txn_tables_cli: Some(PersistTxnTablesImpl::Eager),
             })
             .await?;
 
