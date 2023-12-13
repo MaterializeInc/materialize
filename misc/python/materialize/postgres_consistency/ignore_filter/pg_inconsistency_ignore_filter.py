@@ -40,6 +40,12 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
     PostExecutionInconsistencyIgnoreFilterBase,
     PreExecutionInconsistencyIgnoreFilterBase,
 )
+from materialize.output_consistency.ignore_filter.param_matchers import (
+    index_of_param_by_equality,
+)
+from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
+    REGEX_PARAM,
+)
 from materialize.output_consistency.input_data.return_specs.date_time_return_spec import (
     DateTimeReturnTypeSpec,
 )
@@ -136,13 +142,21 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             if isinstance(return_type_spec, TextReturnTypeSpec):
                 return YesIgnore("#22002: min/max on text")
 
-        if db_function.function_name_in_lower_case in {
-            "regexp_match",
-            "regexp_replace",
-        } and expression.args[0].has_any_characteristic(
-            {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
-        ):
-            return YesIgnore("#22000: regexp with linebreak")
+        if db_function.function_name_in_lower_case.startswith("regexp"):
+            regex_param_index = index_of_param_by_equality(
+                db_function.params, REGEX_PARAM
+            )
+            assert regex_param_index is not None
+
+            if expression.args[regex_param_index].has_any_characteristic(
+                {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
+            ):
+                return YesIgnore("#22000: regexp with linebreak")
+
+            if expression.args[regex_param_index].has_any_characteristic(
+                {ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR}
+            ):
+                return YesIgnore("#23605: regexp with backslash")
 
         if db_function.function_name_in_lower_case == "replace":
             # replace is not working properly with empty text; however, it is not possible to reliably determine if an
@@ -160,14 +174,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ):
                 # Postgres returns a double for nullif(int, double), which does not seem better
                 return YesIgnore("not considered worse")
-
-        if (
-            db_function.function_name_in_lower_case == "regexp_split_to_array"
-            and expression.args[0].has_any_characteristic(
-                {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
-            )
-        ):
-            return YesIgnore("#22000: regexp_split_to_array with linebreaks")
 
         if db_function.function_name_in_lower_case in [
             "length",
