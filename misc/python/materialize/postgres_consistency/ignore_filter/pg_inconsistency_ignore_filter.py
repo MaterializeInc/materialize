@@ -167,7 +167,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
             )
         ):
-            return YesIgnore("#22011: regexp_split_to_array with linebreaks")
+            return YesIgnore("#22000: regexp_split_to_array with linebreaks")
 
         if db_function.function_name_in_lower_case in [
             "length",
