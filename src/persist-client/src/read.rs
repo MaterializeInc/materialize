@@ -198,23 +198,22 @@ where
     pub fn return_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
         self.listen.handle.process_returned_leased_part(leased_part)
     }
-}
 
-impl<K, V, T, D> Drop for Subscribe<K, V, T, D>
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
-{
-    fn drop(&mut self) {
-        // Return all leased parts from the snapshot to ensure they don't panic
-        // if dropped.
+    /// Politely expires this subscribe, releasing its lease.
+    ///
+    /// There is a best-effort impl in Drop to expire a listen that wasn't
+    /// explicitly expired with this method. When possible, explicit expiry is
+    /// still preferred because the Drop one is best effort and is dependant on
+    /// a tokio [Handle] being available in the TLC at the time of drop (which
+    /// is a bit subtle). Also, explicit expiry allows for control over when it
+    /// happens.
+    pub async fn expire(mut self) {
         if let Some(parts) = self.snapshot.take() {
             for part in parts {
                 self.return_leased_part(part)
             }
         }
+        self.listen.expire().await;
     }
 }
 
@@ -436,7 +435,7 @@ where
     /// Politely expires this listen, releasing its lease.
     ///
     /// There is a best-effort impl in Drop to expire a listen that wasn't
-    /// explictly expired with this method. When possible, explicit expiry is
+    /// explicitly expired with this method. When possible, explicit expiry is
     /// still preferred because the Drop one is best effort and is dependant on
     /// a tokio [Handle] being available in the TLC at the time of drop (which
     /// is a bit subtle). Also, explicit expiry allows for control over when it

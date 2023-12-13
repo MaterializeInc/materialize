@@ -824,7 +824,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn expire(self: Box<Self>) {
         self.write_handle.expire().await;
-        // Note: `Subscribe` doesn't expose an `expire` method at the time of writing this comment.
+        self.subscribe.expire().await;
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
