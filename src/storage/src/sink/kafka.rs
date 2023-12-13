@@ -297,8 +297,10 @@ impl KafkaTxProducer {
                     // big difference.
                     "queue.buffering.max.ms" => format!("{}", 10),
                     "transactional.id" => format!("mz-producer-{sink_id}-0"),
-                    // Time out transactions after 10 seconds
-                    "transaction.timeout.ms" => format!("{}", 10_000),
+                    // Use the default transaction timeout. (At time of writing: 60s.)
+                    // The Kafka sink may have long-running transactions, since it expects
+                    // to be able to write all data at the same timestamp in a single
+                    // transaction... including the initial snapshot.
                 },
             )
             .await?;
