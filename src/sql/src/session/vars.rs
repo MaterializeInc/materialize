@@ -1103,6 +1103,33 @@ const SSH_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Enables `socket.keepalive.enable` for rdkafka client connections. Defaults to true.
+const KAFKA_SOCKET_KEEPALIVE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("kafka_socket_keepalive"),
+    value: &mz_kafka_util::client::DEFAULT_KEEPALIVE,
+    description:
+        "Enables `socket.keepalive.enable` for rdkafka client connections. Defaults to true.",
+    internal: true,
+};
+
+/// Controls `socket.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default.
+const KAFKA_SOCKET_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("kafka_socket_timeout"),
+    value: &mz_kafka_util::client::DEFAULT_SOCKET_TIMEOUT,
+    description: "Controls `socket.timeout.ms` for rdkafka \
+        client connections. Defaults to the rdkafka default.",
+    internal: true,
+};
+
+/// Controls `socket.connection.setup.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default.
+const KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("kafka_socket_connection_setup_timeout"),
+    value: &mz_kafka_util::client::DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT,
+    description: "Controls `socket.connection.setup.timeout.ms` for rdkafka \
+        client connections. Defaults to the rdkafka default.",
+    internal: true,
+};
+
 /// Controls the connection timeout to Cockroach.
 ///
 /// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
@@ -2869,6 +2896,9 @@ impl SystemVars {
             .with_var(&SSH_CHECK_INTERVAL)
             .with_var(&SSH_CONNECT_TIMEOUT)
             .with_var(&SSH_KEEPALIVES_IDLE)
+            .with_var(&KAFKA_SOCKET_KEEPALIVE)
+            .with_var(&KAFKA_SOCKET_TIMEOUT)
+            .with_var(&KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
@@ -3423,6 +3453,21 @@ impl SystemVars {
     /// Returns the `ssh_keepalives_idle` configuration parameter.
     pub fn ssh_keepalives_idle(&self) -> Duration {
         *self.expect_value(&SSH_KEEPALIVES_IDLE)
+    }
+
+    /// Returns the `kafka_socket_keepalive` configuration parameter.
+    pub fn kafka_socket_keepalive(&self) -> bool {
+        *self.expect_value(&KAFKA_SOCKET_KEEPALIVE)
+    }
+
+    /// Returns the `kafka_socket_timeout` configuration parameter.
+    pub fn kafka_socket_timeout(&self) -> Duration {
+        *self.expect_value(&KAFKA_SOCKET_TIMEOUT)
+    }
+
+    /// Returns the `kafka_socket_connection_setup_timeout` configuration parameter.
+    pub fn kafka_socket_connection_setup_timeout(&self) -> Duration {
+        *self.expect_value(&KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT)
     }
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
@@ -5342,6 +5387,9 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == SSH_CHECK_INTERVAL.name()
         || name == SSH_CONNECT_TIMEOUT.name()
         || name == SSH_KEEPALIVES_IDLE.name()
+        || name == KAFKA_SOCKET_KEEPALIVE.name()
+        || name == KAFKA_SOCKET_TIMEOUT.name()
+        || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
