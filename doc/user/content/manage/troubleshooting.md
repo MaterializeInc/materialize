@@ -492,7 +492,7 @@ snapshot. See the next section.
 
 ## Has my source ingested its initial snapshot?
 
-Query the `snapshot_comitted` field of the
+Query the `snapshot_committed` field of the
 [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics) table:
 
 ```sql
