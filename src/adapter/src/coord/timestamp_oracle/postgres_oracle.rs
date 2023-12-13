@@ -94,27 +94,7 @@ impl PostgresTimestampOracleConfig {
     pub fn new(url: &str, metrics_registry: &MetricsRegistry) -> Self {
         let metrics = Arc::new(timestamp_oracle::metrics::Metrics::new(metrics_registry));
 
-        let dynamic = DynamicConfig {
-            // TODO(aljoscha): These defaults are taken as is from the persist
-            // Consensus tuning. Once we're sufficiently advanced we might want
-            // to pick defaults that are different from the persist defaults.
-            pg_connection_pool_max_size: AtomicUsize::new(
-                DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE,
-            ),
-            pg_connection_pool_max_wait: RwLock::new(Some(
-                DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
-            )),
-            pg_connection_pool_ttl: RwLock::new(DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL),
-            pg_connection_pool_ttl_stagger: RwLock::new(
-                DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
-            ),
-            pg_connection_pool_connect_timeout: RwLock::new(
-                DEFAULT_PG_TIMESTAMP_ORACLE_CONNECT_TIMEOUT,
-            ),
-            pg_connection_pool_tcp_user_timeout: RwLock::new(
-                DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT,
-            ),
-        };
+        let dynamic = DynamicConfig::default();
 
         PostgresTimestampOracleConfig {
             url: url.to_string(),
@@ -142,14 +122,7 @@ impl PostgresTimestampOracleConfig {
             }
         };
 
-        let dynamic = DynamicConfig {
-            pg_connection_pool_max_size: AtomicUsize::new(2),
-            pg_connection_pool_max_wait: RwLock::new(None),
-            pg_connection_pool_ttl: RwLock::new(Duration::MAX),
-            pg_connection_pool_ttl_stagger: RwLock::new(Duration::MAX),
-            pg_connection_pool_connect_timeout: RwLock::new(Duration::MAX),
-            pg_connection_pool_tcp_user_timeout: RwLock::new(Duration::ZERO),
-        };
+        let dynamic = DynamicConfig::default();
 
         let config = PostgresTimestampOracleConfig {
             url: url.to_string(),
@@ -202,6 +175,32 @@ pub struct DynamicConfig {
     /// amount of time that transmitted data may remain unacknowledged before
     /// the TCP connection is forcibly closed.
     pg_connection_pool_tcp_user_timeout: RwLock<Duration>,
+}
+
+impl Default for DynamicConfig {
+    fn default() -> Self {
+        Self {
+            // TODO(aljoscha): These defaults are taken as is from the persist
+            // Consensus tuning. Once we're sufficiently advanced we might want
+            // to pick defaults that are different from the persist defaults.
+            pg_connection_pool_max_size: AtomicUsize::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE,
+            ),
+            pg_connection_pool_max_wait: RwLock::new(Some(
+                DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
+            )),
+            pg_connection_pool_ttl: RwLock::new(DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL),
+            pg_connection_pool_ttl_stagger: RwLock::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
+            ),
+            pg_connection_pool_connect_timeout: RwLock::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_CONNECT_TIMEOUT,
+            ),
+            pg_connection_pool_tcp_user_timeout: RwLock::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT,
+            ),
+        }
+    }
 }
 
 impl DynamicConfig {
