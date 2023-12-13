@@ -1589,7 +1589,7 @@ pub const TYPE_TSTZ_RANGE_ARRAY: BuiltinType<NameReference> = BuiltinType {
 
 pub const TYPE_MZ_ACL_ITEM: BuiltinType<NameReference> = BuiltinType {
     name: "mz_aclitem",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: mz_pgrepr::oid::TYPE_MZ_ACL_ITEM_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::MzAclItem,
@@ -1600,7 +1600,7 @@ pub const TYPE_MZ_ACL_ITEM: BuiltinType<NameReference> = BuiltinType {
 
 pub const TYPE_MZ_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
     name: "_mz_aclitem",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: mz_pgrepr::oid::TYPE_MZ_ACL_ITEM_ARRAY_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Array {
