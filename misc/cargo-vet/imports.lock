@@ -15,9 +15,23 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.aho-corasick]]
+version = "1.1.2"
+when = "2023-10-09"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.assert_cmd]]
 version = "2.0.5"
 when = "2022-10-20"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.assert_cmd]]
+version = "2.0.12"
+when = "2023-07-14"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
@@ -29,9 +43,30 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.async-trait]]
+version = "0.1.74"
+when = "2023-10-15"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.bstr]]
 version = "0.2.14"
 when = "2020-10-18"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.bstr]]
+version = "0.2.17"
+when = "2021-09-20"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.bstr]]
+version = "1.8.0"
+when = "2023-11-09"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -43,9 +78,23 @@ user-id = 696
 user-login = "fitzgen"
 user-name = "Nick Fitzgerald"
 
+[[publisher.bumpalo]]
+version = "3.14.0"
+when = "2023-09-14"
+user-id = 696
+user-login = "fitzgen"
+user-name = "Nick Fitzgerald"
+
 [[publisher.byteorder]]
 version = "1.4.3"
 when = "2021-03-10"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.byteorder]]
+version = "1.5.0"
+when = "2023-10-06"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -71,6 +120,13 @@ user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
 
+[[publisher.clap]]
+version = "3.2.25"
+when = "2023-04-27"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
 [[publisher.clap_derive]]
 version = "3.2.24"
 when = "2023-04-25"
@@ -78,9 +134,23 @@ user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
 
+[[publisher.clap_derive]]
+version = "3.2.25"
+when = "2023-04-27"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
 [[publisher.clap_lex]]
 version = "0.2.2"
 when = "2022-06-13"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.clap_lex]]
+version = "0.2.4"
+when = "2022-06-28"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
@@ -113,9 +183,23 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.csv]]
+version = "1.3.0"
+when = "2023-10-03"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.csv-core]]
 version = "0.1.10"
 when = "2020-02-14"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.csv-core]]
+version = "0.1.11"
+when = "2023-10-03"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -127,9 +211,23 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.cxx]]
+version = "1.0.110"
+when = "2023-10-28"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.cxx-build]]
 version = "1.0.63"
 when = "2022-01-18"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.cxx-build]]
+version = "1.0.110"
+when = "2023-10-28"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -141,6 +239,13 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.cxxbridge-flags]]
+version = "1.0.110"
+when = "2023-10-28"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.cxxbridge-macro]]
 version = "1.0.63"
 when = "2022-01-18"
@@ -148,12 +253,12 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
-[[publisher.differential-dataflow]]
-version = "0.12.0"
-when = "2021-03-10"
-user-id = 704
-user-login = "frankmcsherry"
-user-name = "Frank McSherry"
+[[publisher.cxxbridge-macro]]
+version = "1.0.110"
+when = "2023-10-28"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
 
 [[publisher.dyn-clone]]
 version = "1.0.9"
@@ -162,9 +267,23 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.dyn-clone]]
+version = "1.0.16"
+when = "2023-11-03"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.encoding_rs]]
 version = "0.8.26"
 when = "2020-11-02"
+user-id = 4484
+user-login = "hsivonen"
+user-name = "Henri Sivonen"
+
+[[publisher.encoding_rs]]
+version = "0.8.33"
+when = "2023-08-23"
 user-id = 4484
 user-login = "hsivonen"
 user-name = "Henri Sivonen"
@@ -183,6 +302,13 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.filetime]]
+version = "0.2.23"
+when = "2023-12-05"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
 [[publisher.getopts]]
 version = "0.2.21"
 when = "2019-08-19"
@@ -197,9 +323,23 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.globset]]
+version = "0.4.14"
+when = "2023-11-26"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.indexmap]]
 version = "1.9.1"
 when = "2022-06-21"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
+
+[[publisher.indexmap]]
+version = "1.9.3"
+when = "2023-03-24"
 user-id = 539
 user-login = "cuviper"
 user-name = "Josh Stone"
@@ -211,9 +351,23 @@ user-id = 539
 user-login = "cuviper"
 user-name = "Josh Stone"
 
+[[publisher.indexmap]]
+version = "2.1.0"
+when = "2023-10-31"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
+
 [[publisher.itoa]]
 version = "1.0.6"
 when = "2023-03-03"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.itoa]]
+version = "1.0.10"
+when = "2023-12-09"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -232,6 +386,13 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.js-sys]]
+version = "0.3.66"
+when = "2023-11-27"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
 [[publisher.link-cplusplus]]
 version = "1.0.6"
 when = "2021-11-13"
@@ -240,8 +401,15 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.linux-raw-sys]]
-version = "0.3.4"
-when = "2023-04-22"
+version = "0.3.8"
+when = "2023-05-19"
+user-id = 6825
+user-login = "sunfishcode"
+user-name = "Dan Gohman"
+
+[[publisher.linux-raw-sys]]
+version = "0.4.12"
+when = "2023-11-30"
 user-id = 6825
 user-login = "sunfishcode"
 user-name = "Dan Gohman"
@@ -253,9 +421,23 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.memchr]]
+version = "2.6.4"
+when = "2023-10-01"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.num-complex]]
 version = "0.4.0"
 when = "2021-03-06"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
+
+[[publisher.num-complex]]
+version = "0.4.4"
+when = "2023-08-13"
 user-id = 539
 user-login = "cuviper"
 user-name = "Josh Stone"
@@ -288,6 +470,13 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.openssl-src]]
+version = "300.2.1+3.2.0"
+when = "2023-12-11"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
 [[publisher.paste]]
 version = "1.0.11"
 when = "2022-12-17"
@@ -295,9 +484,37 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.paste]]
+version = "1.0.14"
+when = "2023-07-15"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.predicates]]
 version = "2.1.4"
 when = "2022-12-02"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.predicates]]
+version = "2.1.5"
+when = "2022-12-29"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.predicates]]
+version = "3.0.4"
+when = "2023-09-18"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.predicates-core]]
+version = "1.0.6"
+when = "2023-03-15"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
@@ -316,9 +533,9 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
-[[publisher.proc-macro-hack]]
-version = "0.5.19"
-when = "2020-10-28"
+[[publisher.prettyplease]]
+version = "0.2.15"
+when = "2023-09-07"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -337,9 +554,23 @@ user-id = 539
 user-login = "cuviper"
 user-name = "Josh Stone"
 
+[[publisher.rayon]]
+version = "1.8.0"
+when = "2023-09-20"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
+
 [[publisher.rayon-core]]
 version = "1.9.1"
 when = "2021-05-18"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
+
+[[publisher.rayon-core]]
+version = "1.12.0"
+when = "2023-09-20"
 user-id = 539
 user-login = "cuviper"
 user-name = "Josh Stone"
@@ -351,6 +582,13 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.regex]]
+version = "1.10.2"
+when = "2023-10-16"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.regex-automata]]
 version = "0.1.9"
 when = "2020-03-09"
@@ -358,9 +596,37 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.regex-automata]]
+version = "0.1.10"
+when = "2021-06-01"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.regex-automata]]
+version = "0.4.3"
+when = "2023-10-16"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.regex-syntax]]
 version = "0.6.28"
 when = "2022-11-05"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.regex-syntax]]
+version = "0.6.29"
+when = "2023-03-21"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.regex-syntax]]
+version = "0.8.2"
+when = "2023-10-14"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -373,8 +639,15 @@ user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
 [[publisher.rustix]]
-version = "0.37.15"
-when = "2023-04-26"
+version = "0.37.27"
+when = "2023-10-26"
+user-id = 6825
+user-login = "sunfishcode"
+user-name = "Dan Gohman"
+
+[[publisher.rustix]]
+version = "0.38.28"
+when = "2023-12-09"
 user-id = 6825
 user-login = "sunfishcode"
 user-name = "Dan Gohman"
@@ -385,6 +658,20 @@ when = "2022-12-17"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
+
+[[publisher.ryu]]
+version = "1.0.16"
+when = "2023-12-09"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.same-file]]
+version = "1.0.6"
+when = "2020-01-11"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
 
 [[publisher.scoped-tls]]
 version = "1.0.1"
@@ -400,9 +687,23 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.scratch]]
+version = "1.0.7"
+when = "2023-07-15"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.seq-macro]]
 version = "0.3.1"
 when = "2022-08-03"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.seq-macro]]
+version = "0.3.5"
+when = "2023-07-15"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -414,9 +715,23 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.serde]]
+version = "1.0.193"
+when = "2023-11-21"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.serde_derive]]
 version = "1.0.164"
 when = "2023-06-08"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.serde_derive]]
+version = "1.0.193"
+when = "2023-11-21"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -435,9 +750,23 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.serde_json]]
+version = "1.0.108"
+when = "2023-10-30"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.serde_path_to_error]]
 version = "0.1.8"
 when = "2022-08-03"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.serde_path_to_error]]
+version = "0.1.14"
+when = "2023-07-15"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -449,9 +778,23 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.serde_repr]]
+version = "0.1.17"
+when = "2023-10-30"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.serde_spanned]]
 version = "0.6.3"
 when = "2023-06-24"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.serde_spanned]]
+version = "0.6.4"
+when = "2023-10-23"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
@@ -463,6 +806,13 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.serde_yaml]]
+version = "0.9.27"
+when = "2023-10-26"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.snap]]
 version = "1.1.0"
 when = "2022-11-19"
@@ -470,9 +820,23 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.snap]]
+version = "1.1.1"
+when = "2023-12-05"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.streaming-iterator]]
 version = "0.1.5"
 when = "2019-12-13"
+user-id = 539
+user-login = "cuviper"
+user-name = "Josh Stone"
+
+[[publisher.streaming-iterator]]
+version = "0.1.9"
+when = "2023-01-06"
 user-id = 539
 user-login = "cuviper"
 user-name = "Josh Stone"
@@ -485,8 +849,22 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.syn]]
-version = "2.0.18"
-when = "2023-05-26"
+version = "1.0.109"
+when = "2023-02-24"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.syn]]
+version = "2.0.39"
+when = "2023-11-06"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
+[[publisher.syn]]
+version = "2.0.41"
+when = "2023-12-12"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -498,6 +876,13 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.tar]]
+version = "0.4.40"
+when = "2023-08-07"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
 [[publisher.termcolor]]
 version = "1.2.0"
 when = "2023-01-15"
@@ -505,33 +890,12 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
-[[publisher.timely]]
-version = "0.12.0"
-when = "2021-03-10"
-user-id = 704
-user-login = "frankmcsherry"
-user-name = "Frank McSherry"
-
-[[publisher.timely_bytes]]
-version = "0.12.0"
-when = "2021-03-10"
-user-id = 704
-user-login = "frankmcsherry"
-user-name = "Frank McSherry"
-
-[[publisher.timely_communication]]
-version = "0.12.0"
-when = "2021-03-10"
-user-id = 704
-user-login = "frankmcsherry"
-user-name = "Frank McSherry"
-
-[[publisher.timely_logging]]
-version = "0.12.0"
-when = "2021-03-10"
-user-id = 704
-user-login = "frankmcsherry"
-user-name = "Frank McSherry"
+[[publisher.termcolor]]
+version = "1.4.0"
+when = "2023-11-14"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
 
 [[publisher.tokio-macros]]
 version = "1.7.0"
@@ -547,6 +911,13 @@ user-id = 6741
 user-login = "Darksonn"
 user-name = "Alice Ryhl"
 
+[[publisher.tokio-test]]
+version = "0.4.3"
+when = "2023-08-23"
+user-id = 6741
+user-login = "Darksonn"
+user-name = "Alice Ryhl"
+
 [[publisher.toml]]
 version = "0.5.7"
 when = "2020-10-11"
@@ -554,9 +925,23 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.toml]]
+version = "0.5.11"
+when = "2023-01-20"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
 [[publisher.toml_datetime]]
 version = "0.6.3"
 when = "2023-06-24"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
+[[publisher.toml_datetime]]
+version = "0.6.5"
+when = "2023-10-23"
 user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
@@ -568,6 +953,13 @@ user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
 
+[[publisher.toml_edit]]
+version = "0.19.15"
+when = "2023-09-08"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
 [[publisher.unicode-ident]]
 version = "1.0.0"
 when = "2022-05-16"
@@ -575,9 +967,23 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.unicode-ident]]
+version = "1.0.12"
+when = "2023-09-13"
+user-id = 3618
+user-login = "dtolnay"
+user-name = "David Tolnay"
+
 [[publisher.unicode-normalization]]
 version = "0.1.21"
 when = "2022-07-01"
+user-id = 1139
+user-login = "Manishearth"
+user-name = "Manish Goregaokar"
+
+[[publisher.unicode-normalization]]
+version = "0.1.22"
+when = "2022-09-16"
 user-id = 1139
 user-login = "Manishearth"
 user-name = "Manish Goregaokar"
@@ -592,6 +998,13 @@ user-name = "Manish Goregaokar"
 [[publisher.unicode-width]]
 version = "0.1.10"
 when = "2022-09-13"
+user-id = 1139
+user-login = "Manishearth"
+user-name = "Manish Goregaokar"
+
+[[publisher.unicode-width]]
+version = "0.1.11"
+when = "2023-09-19"
 user-id = 1139
 user-login = "Manishearth"
 user-name = "Manish Goregaokar"
@@ -617,6 +1030,13 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.walkdir]]
+version = "2.4.0"
+when = "2023-09-05"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.wasi]]
 version = "0.11.0+wasi-snapshot-preview1"
 when = "2022-01-19"
@@ -631,9 +1051,23 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.wasm-bindgen]]
+version = "0.2.89"
+when = "2023-11-27"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
 [[publisher.wasm-bindgen-backend]]
 version = "0.2.87"
 when = "2023-06-12"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
+[[publisher.wasm-bindgen-backend]]
+version = "0.2.89"
+when = "2023-11-27"
 user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
@@ -645,9 +1079,23 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.wasm-bindgen-futures]]
+version = "0.4.39"
+when = "2023-11-27"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
 [[publisher.wasm-bindgen-macro]]
 version = "0.2.87"
 when = "2023-06-12"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
+[[publisher.wasm-bindgen-macro]]
+version = "0.2.89"
+when = "2023-11-27"
 user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
@@ -659,9 +1107,23 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.wasm-bindgen-macro-support]]
+version = "0.2.89"
+when = "2023-11-27"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
 [[publisher.wasm-bindgen-shared]]
 version = "0.2.87"
 when = "2023-06-12"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
+[[publisher.wasm-bindgen-shared]]
+version = "0.2.89"
+when = "2023-11-27"
 user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
@@ -673,9 +1135,23 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.web-sys]]
+version = "0.3.66"
+when = "2023-11-28"
+user-id = 1
+user-login = "alexcrichton"
+user-name = "Alex Crichton"
+
 [[publisher.winapi-util]]
 version = "0.1.3"
 when = "2020-01-11"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.winapi-util]]
+version = "0.1.6"
+when = "2023-09-20"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -694,12 +1170,40 @@ user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
 
+[[publisher.winnow]]
+version = "0.5.28"
+when = "2023-12-11"
+user-id = 6743
+user-login = "epage"
+user-name = "Ed Page"
+
 [[audits.bytecode-alliance.wildcard-audits.bumpalo]]
 who = "Nick Fitzgerald <fitzgen@gmail.com>"
 criteria = "safe-to-deploy"
 user-id = 696 # Nick Fitzgerald (fitzgen)
 start = "2019-03-16"
 end = "2024-03-10"
+
+[[audits.bytecode-alliance.audits.addr2line]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "0.17.0 -> 0.19.0"
+notes = """
+This is a minor update for addr2line which looks to mainly update its
+dependencies and refactor existing code to expose more functionality and such.
+"""
+
+[[audits.bytecode-alliance.audits.addr2line]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "0.19.0 -> 0.20.0"
+notes = "This version brings support for split-dwarf which while it uses the filesystem is always done at the behest of the caller, so everything is as expected for this update."
+
+[[audits.bytecode-alliance.audits.addr2line]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "0.20.0 -> 0.21.0"
+notes = "This version bump updated some dependencies and optimized some internals. All looks good."
 
 [[audits.bytecode-alliance.audits.adler]]
 who = "Alex Crichton <alex@alexcrichton.com>"
@@ -729,12 +1233,6 @@ criteria = "safe-to-deploy"
 version = "0.3.66"
 notes = "I am the author of this crate."
 
-[[audits.bytecode-alliance.audits.base64]]
-who = "Pat Hickey <phickey@fastly.com>"
-criteria = "safe-to-deploy"
-version = "0.21.0"
-notes = "This crate has no dependencies, no build.rs, and contains no unsafe code."
-
 [[audits.bytecode-alliance.audits.bitflags]]
 who = "Jamey Sharp <jsharp@fastly.com>"
 criteria = "safe-to-deploy"
@@ -754,11 +1252,22 @@ Nothing outside the realm of what one would expect from a bitflags generator,
 all as expected.
 """
 
+[[audits.bytecode-alliance.audits.bytesize]]
+who = "Andrew Brown <andrew.brown@intel.com>"
+criteria = "safe-to-deploy"
+version = "1.3.0"
+
 [[audits.bytecode-alliance.audits.cargo-platform]]
 who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.1.2"
 notes = "no build, no ambient capabilities, no unsafe"
+
+[[audits.bytecode-alliance.audits.cc]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+version = "1.0.73"
+notes = "I am the author of this crate."
 
 [[audits.bytecode-alliance.audits.ciborium]]
 who = "Pat Hickey <phickey@fastly.com>"
@@ -803,6 +1312,15 @@ who = "Jamey Sharp <jsharp@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.1.2"
 notes = "This should be portable to any POSIX system and seems like it should be part of the libc crate, but at any rate it's safe as is."
+
+[[audits.bytecode-alliance.audits.fastrand]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "2.0.0 -> 2.0.1"
+notes = """
+This update had a few doc updates but no otherwise-substantial source code
+updates.
+"""
 
 [[audits.bytecode-alliance.audits.foreign-types]]
 who = "Pat Hickey <phickey@fastly.com>"
@@ -904,6 +1422,32 @@ who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.1.0"
 
+[[audits.bytecode-alliance.audits.memoffset]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "0.7.1 -> 0.8.0"
+notes = "This was a small update to the crate which has to do with Rust language features and compiler versions, no substantial changes."
+
+[[audits.bytecode-alliance.audits.memoffset]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.0 -> 0.9.0"
+notes = "No major changes in the crate, mostly updates to use new nightly Rust features."
+
+[[audits.bytecode-alliance.audits.miniz_oxide]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+version = "0.7.1"
+notes = """
+This crate is a Rust implementation of zlib compression/decompression and has
+been used by default by the Rust standard library for quite some time. It's also
+a default dependency of the popular `backtrace` crate for decompressing debug
+information. This crate forbids unsafe code and does not otherwise access system
+resources. It's originally a port of the `miniz.c` library as well, and given
+its own longevity should be relatively hardened against some of the more common
+compression-related issues.
+"""
+
 [[audits.bytecode-alliance.audits.native-tls]]
 who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
@@ -915,6 +1459,23 @@ who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.46.0"
 notes = "one use of unsafe to call windows specific api to get console handle."
+
+[[audits.bytecode-alliance.audits.num_cpus]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "1.15.0 -> 1.16.0"
+notes = "Some minor platform updates but no major change to any code."
+
+[[audits.bytecode-alliance.audits.openssl-macros]]
+who = "Pat Hickey <phickey@fastly.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+
+[[audits.bytecode-alliance.audits.openssl-probe]]
+who = "Pat Hickey <phickey@fastly.com>"
+criteria = "safe-to-deploy"
+version = "0.1.5"
+notes = "IO is only checking for the existence of paths in the filesystem"
 
 [[audits.bytecode-alliance.audits.overload]]
 who = "Pat Hickey <phickey@fastly.com>"
@@ -943,18 +1504,26 @@ who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.1.0"
 
-[[audits.bytecode-alliance.audits.proc-macro2]]
-who = "Pat Hickey <phickey@fastly.com>"
-criteria = "safe-to-deploy"
-delta = "1.0.51 -> 1.0.57"
-
-[[audits.bytecode-alliance.audits.proc-macro2]]
+[[audits.bytecode-alliance.audits.pulldown-cmark]]
 who = "Alex Crichton <alex@alexcrichton.com>"
 criteria = "safe-to-deploy"
-delta = "1.0.59 -> 1.0.63"
+version = "0.8.0"
 notes = """
-This is a routine update for new nightly features and new syntax popping up on
-nightly, nothing out of the ordinary.
+This crate has `unsafe` blocks and they're all related to SIMD-acceleration and
+are otherwise not doing other `unsafe` operations. Additionally the crate does
+not do anything other than markdown rendering as is expected.
+"""
+
+[[audits.bytecode-alliance.audits.pulldown-cmark]]
+who = "Alex Crichton <alex@alexcrichton.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.0 -> 0.9.3"
+notes = """
+This is a large change to the `pulldown-cmark` crate but it tightens
+restrictions on `unsafe` code to forbid it in non-SIMD mode and additionally
+many changes look to be related to refactoring, improving, and restructuring.
+This crate is not fundamentally different from before, which was trusted, but
+looks to be receiving new assistance for maintainership as well.
 """
 
 [[audits.bytecode-alliance.audits.quote]]
@@ -1007,6 +1576,12 @@ criteria = "safe-to-deploy"
 delta = "1.7.0 -> 2.1.0"
 notes = "A number of updates to parsed syntax and such but nothing unexpected and entirely what one would expect a Rust procedural macro to do."
 
+[[audits.bytecode-alliance.audits.tokio-native-tls]]
+who = "Pat Hickey <phickey@fastly.com>"
+criteria = "safe-to-deploy"
+version = "0.3.1"
+notes = "unsafety is used for smuggling std::task::Context as a raw pointer. Lifetime and type safety appears to be taken care of correctly."
+
 [[audits.bytecode-alliance.audits.tokio-util]]
 who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
@@ -1044,6 +1619,12 @@ is similar to what it once was back then. Skimming over the crate there is
 nothing suspicious and it's everything you'd expect a Rust URL parser to be.
 """
 
+[[audits.bytecode-alliance.audits.vcpkg]]
+who = "Pat Hickey <phickey@fastly.com>"
+criteria = "safe-to-deploy"
+version = "0.2.15"
+notes = "no build.rs, no macros, no unsafe. It reads the filesystem and makes copies of DLLs into OUT_DIR."
+
 [[audits.bytecode-alliance.audits.want]]
 who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
@@ -1072,6 +1653,18 @@ criteria = "safe-to-deploy"
 version = "1.0.1"
 notes = "No unsafe usage or ambient capabilities"
 
+[[audits.embark-studios.audits.idna]]
+who = "Johan Andersson <opensource@embark-studios.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.0 -> 0.4.0"
+notes = "No unsafe usage or ambient capabilities"
+
+[[audits.embark-studios.audits.jsonwebtoken]]
+who = "Johan Andersson <opensource@embark-studios.com>"
+criteria = "safe-to-deploy"
+version = "8.3.0"
+notes = "No unsafe usage or ambient capabilities"
+
 [[audits.embark-studios.audits.no-std-compat]]
 who = "Johan Andersson <opensource@embark-studios.com>"
 criteria = "safe-to-deploy"
@@ -1082,6 +1675,18 @@ notes = "No unsafe usage or ambient capabilities"
 who = "Johan Andersson <opensource@embark-studios.com>"
 criteria = "safe-to-deploy"
 delta = "0.2.0 -> 0.4.1"
+
+[[audits.embark-studios.audits.num_enum]]
+who = "Johan Andersson <opensource@embark-studios.com>"
+criteria = "safe-to-deploy"
+version = "0.5.11"
+notes = "No unsafe usage or ambient capabilities"
+
+[[audits.embark-studios.audits.num_enum_derive]]
+who = "Johan Andersson <opensource@embark-studios.com>"
+criteria = "safe-to-deploy"
+version = "0.5.11"
+notes = "Proc macro that generates some unsafe code for conversion but looks sound, no ambient capabilities"
 
 [[audits.embark-studios.audits.similar]]
 who = "Johan Andersson <opensource@embark-studios.com>"
@@ -1094,12 +1699,6 @@ who = "Johan Andersson <opensource@embark-studios.com>"
 criteria = "safe-to-deploy"
 version = "0.1.2"
 notes = "No unsafe usage or ambient capabilities. Old crate from released and unchanged from 2017"
-
-[[audits.embark-studios.audits.tap]]
-who = "Johan Andersson <opensource@embark-studios.com>"
-criteria = "safe-to-deploy"
-version = "1.0.1"
-notes = "No unsafe usage or ambient capabilities"
 
 [[audits.embark-studios.audits.thiserror]]
 who = "Johan Andersson <opensource@embark-studios.com>"
@@ -1143,16 +1742,76 @@ criteria = "safe-to-deploy"
 version = "0.4.5"
 notes = "No unsafe usage or ambient capabilities"
 
+[[audits.google.audits.async-stream]]
+who = "Tyler Mandry <tmandry@google.com>"
+criteria = "safe-to-deploy"
+version = "0.3.4"
+notes = "Reviewed on https://fxrev.dev/761470"
+aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/third_party/rust_crates/supply-chain/audits.toml?format=TEXT"
+
+[[audits.google.audits.async-stream]]
+who = "David Koloski <dkoloski@google.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.4 -> 0.3.5"
+notes = "Reviewed on https://fxrev.dev/906795"
+aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/third_party/rust_crates/supply-chain/audits.toml?format=TEXT"
+
+[[audits.google.audits.async-stream-impl]]
+who = "Tyler Mandry <tmandry@google.com>"
+criteria = "safe-to-deploy"
+version = "0.3.4"
+notes = "Reviewed on https://fxrev.dev/761470"
+aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/third_party/rust_crates/supply-chain/audits.toml?format=TEXT"
+
+[[audits.google.audits.async-stream-impl]]
+who = "David Koloski <dkoloski@google.com>"
+criteria = "safe-to-deploy"
+delta = "0.3.4 -> 0.3.5"
+notes = "Reviewed on https://fxrev.dev/906795"
+aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/third_party/rust_crates/supply-chain/audits.toml?format=TEXT"
+
 [[audits.google.audits.cfg-if]]
 who = "George Burgess IV <gbiv@google.com>"
 criteria = "safe-to-deploy"
 version = "1.0.0"
 aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
+[[audits.google.audits.fastrand]]
+who = "George Burgess IV <gbiv@google.com>"
+criteria = "safe-to-deploy"
+version = "1.9.0"
+notes = """
+`does-not-implement-crypto` is certified because this crate explicitly says
+that the RNG here is not cryptographically secure.
+"""
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
 [[audits.google.audits.glob]]
 who = "George Burgess IV <gbiv@google.com>"
 criteria = "safe-to-deploy"
 version = "0.3.1"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
+[[audits.google.audits.http-range-header]]
+who = "George Burgess IV <gbiv@google.com>"
+criteria = "safe-to-deploy"
+version = "0.3.1"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
+[[audits.google.audits.httpdate]]
+who = "George Burgess IV <gbiv@google.com>"
+criteria = "safe-to-deploy"
+version = "1.0.3"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
+[[audits.google.audits.link-cplusplus]]
+who = "George Burgess IV <gbiv@google.com>"
+criteria = "safe-to-deploy"
+version = "1.0.9"
+notes = """
+This crate exists simply to link with libcxx or libstdcxx. No assertions
+are made about the safety of either of those libraries. :)
+"""
 aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
 [[audits.google.audits.match_cfg]]
@@ -1167,10 +1826,28 @@ criteria = "safe-to-deploy"
 version = "0.1.0"
 aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
+[[audits.google.audits.openssl-macros]]
+who = "George Burgess IV <gbiv@google.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.0 -> 0.1.1"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
+[[audits.google.audits.predicates-tree]]
+who = "Max Lee <endlesspring@google.com>"
+criteria = "safe-to-run"
+version = "1.0.9"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
 [[audits.google.audits.proc-macro-error-attr]]
 who = "George Burgess IV <gbiv@google.com>"
 criteria = "safe-to-deploy"
 version = "1.0.4"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
+[[audits.google.audits.termtree]]
+who = "Max Lee <endlesspring@google.com>"
+criteria = "safe-to-run"
+version = "0.4.1"
 aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
 [[audits.google.audits.tokio-stream]]
@@ -1179,6 +1856,19 @@ criteria = "safe-to-deploy"
 version = "0.1.11"
 notes = "Reviewed on https://fxrev.dev/804724"
 aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/third_party/rust_crates/supply-chain/audits.toml?format=TEXT"
+
+[[audits.google.audits.tokio-stream]]
+who = "David Koloski <dkoloski@google.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.11 -> 0.1.14"
+notes = "Reviewed on https://fxrev.dev/907732."
+aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/third_party/rust_crates/supply-chain/audits.toml?format=TEXT"
+
+[[audits.google.audits.unicode-xid]]
+who = "George Burgess IV <gbiv@google.com>"
+criteria = "safe-to-deploy"
+version = "0.2.4"
+aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
 [[audits.google.audits.version_check]]
 who = "George Burgess IV <gbiv@google.com>"
@@ -1296,6 +1986,43 @@ version = "1.1.0"
 notes = "All code written or reviewed by Josh Stone."
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
+[[audits.mozilla.audits.bindgen]]
+who = "Emilio Cobos Álvarez <emilio@crisal.io>"
+criteria = "safe-to-deploy"
+version = "0.59.2"
+notes = "I'm the primary author and maintainer of the crate."
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.bindgen]]
+who = "Emilio Cobos Álvarez <emilio@crisal.io>"
+criteria = "safe-to-deploy"
+delta = "0.59.2 -> 0.63.0"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.bindgen]]
+who = "Mike Hommey <mh+mozilla@glandium.org>"
+criteria = "safe-to-deploy"
+delta = "0.63.0 -> 0.64.0"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.bindgen]]
+who = "Mike Hommey <mh+mozilla@glandium.org>"
+criteria = "safe-to-deploy"
+delta = "0.64.0 -> 0.66.1"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.bindgen]]
+who = "Mike Hommey <mh+mozilla@glandium.org>"
+criteria = "safe-to-deploy"
+delta = "0.66.1 -> 0.68.1"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.bindgen]]
+who = "Andreas Pehrson <apehrson@mozilla.com>"
+criteria = "safe-to-deploy"
+delta = "0.68.1 -> 0.69.1"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
 [[audits.mozilla.audits.bit-set]]
 who = "Aria Beingessner <a.beingessner@gmail.com>"
 criteria = "safe-to-deploy"
@@ -1348,12 +2075,46 @@ delta = "2.4.0 -> 2.4.1"
 notes = "Only allowing new clippy lints"
 aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
 
+[[audits.mozilla.audits.cc]]
+who = "Mike Hommey <mh+mozilla@glandium.org>"
+criteria = "safe-to-deploy"
+delta = "1.0.73 -> 1.0.78"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.cc]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.78 -> 1.0.83"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.crossbeam-queue]]
+who = "Matthew Gregan <kinetik@flim.org>"
+criteria = "safe-to-deploy"
+version = "0.3.8"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.crypto-common]]
+who = "Mike Hommey <mh+mozilla@glandium.org>"
+criteria = "safe-to-deploy"
+delta = "0.1.3 -> 0.1.6"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
 [[audits.mozilla.audits.debugid]]
 who = "Gabriele Svelto <gsvelto@mozilla.com>"
 criteria = "safe-to-deploy"
 version = "0.8.0"
 notes = "This crates was written by Sentry and I've fully audited it as Firefox crash reporting machinery relies on it."
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.doc-comment]]
+who = "Nika Layzell <nika@thelayzells.com>"
+criteria = "safe-to-deploy"
+version = "0.3.3"
+notes = """
+Trivial macro crate implementing a trick for expanding macros within doc
+comments on older versions of rustc.
+"""
+aggregated-from = "https://raw.githubusercontent.com/mozilla/cargo-vet/main/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.either]]
 who = "Nika Layzell <nika@thelayzells.com>"
@@ -1377,11 +2138,29 @@ criteria = "safe-to-deploy"
 delta = "1.7.0 -> 1.8.0"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
+[[audits.mozilla.audits.fastrand]]
+who = "Mike Hommey <mh+mozilla@glandium.org>"
+criteria = "safe-to-deploy"
+delta = "1.9.0 -> 2.0.0"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
 [[audits.mozilla.audits.fnv]]
 who = "Bobby Holley <bobbyholley@gmail.com>"
 criteria = "safe-to-deploy"
 version = "1.0.7"
 notes = "Simple hasher implementation with no unsafe code."
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.form_urlencoded]]
+who = "Valentin Gosu <valentin.gosu@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.2.0"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.form_urlencoded]]
+who = "Valentin Gosu <valentin.gosu@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.2.0 -> 1.2.1"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.futures-channel]]
@@ -1420,6 +2199,23 @@ criteria = "safe-to-deploy"
 delta = "0.3.27 -> 0.3.28"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
+[[audits.mozilla.audits.getrandom]]
+who = "Simon Friedberger <simon@mozilla.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.10 -> 0.2.11"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.half]]
+who = "John M. Schanck <jschanck@mozilla.com>"
+criteria = "safe-to-deploy"
+version = "1.8.2"
+notes = """
+This crate contains unsafe code for bitwise casts to/from binary16 floating-point
+format. I've reviewed these and found no issues. There are no uses of ambient
+capabilities.
+"""
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
 [[audits.mozilla.audits.hashbrown]]
 who = "Mike Hommey <mh+mozilla@glandium.org>"
 criteria = "safe-to-deploy"
@@ -1434,10 +2230,22 @@ version = "0.2.0"
 notes = "Trivial crate, no unsafe code."
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
+[[audits.mozilla.audits.heck]]
+who = "Mike Hommey <mh+mozilla@glandium.org>"
+criteria = "safe-to-deploy"
+delta = "0.4.0 -> 0.4.1"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
 [[audits.mozilla.audits.hex]]
 who = "Simon Friedberger <simon@mozilla.com>"
 criteria = "safe-to-deploy"
 version = "0.4.3"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.idna]]
+who = "Valentin Gosu <valentin.gosu@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.0 -> 0.5.0"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.lazy_static]]
@@ -1446,6 +2254,12 @@ criteria = "safe-to-deploy"
 version = "1.4.0"
 notes = "I have read over the macros, and audited the unsafe code."
 aggregated-from = "https://raw.githubusercontent.com/mozilla/cargo-vet/main/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.libloading]]
+who = "Mike Hommey <mh+mozilla@glandium.org>"
+criteria = "safe-to-deploy"
+delta = "0.7.3 -> 0.7.4"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.log]]
 who = "Mike Hommey <mh+mozilla@glandium.org>"
@@ -1486,6 +2300,27 @@ version = "0.4.3"
 notes = "All code written or reviewed by Josh Stone."
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
+[[audits.mozilla.audits.num-integer]]
+who = "Josh Stone <jistone@redhat.com>"
+criteria = "safe-to-deploy"
+version = "0.1.45"
+notes = "All code written or reviewed by Josh Stone."
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.num-iter]]
+who = "Josh Stone <jistone@redhat.com>"
+criteria = "safe-to-deploy"
+version = "0.1.43"
+notes = "All code written or reviewed by Josh Stone."
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.num-rational]]
+who = "Josh Stone <jistone@redhat.com>"
+criteria = "safe-to-deploy"
+version = "0.4.1"
+notes = "All code written or reviewed by Josh Stone."
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
 [[audits.mozilla.audits.num-traits]]
 who = "Josh Stone <jistone@redhat.com>"
 criteria = "safe-to-deploy"
@@ -1500,67 +2335,17 @@ delta = "1.0.0 -> 0.1.2"
 notes = "Small refactor of some simple iterator logic, no unsafe code or capabilities."
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.proc-macro2]]
-who = "Nika Layzell <nika@thelayzells.com>"
+[[audits.mozilla.audits.percent-encoding]]
+who = "Valentin Gosu <valentin.gosu@gmail.com>"
 criteria = "safe-to-deploy"
-version = "1.0.39"
-notes = """
-`proc-macro2` acts as either a thin(-ish) wrapper around the std-provided
-`proc_macro` crate, or as a fallback implementation of the crate, depending on
-where it is used.
-
-If using this crate on older versions of rustc (1.56 and earlier), it will
-temporarily replace the panic handler while initializing in order to detect if
-it is running within a `proc_macro`, which could lead to surprising behaviour.
-This should not be an issue for more recent compiler versions, which support
-`proc_macro::is_available()`.
-
-The `proc-macro2` crate's fallback behaviour is not identical to the complex
-behaviour of the rustc compiler (e.g. it does not perform unicode normalization
-for identifiers), however it behaves well enough for its intended use-case
-(tests and scripts processing rust code).
-
-`proc-macro2` does not use unsafe code, however exposes one `unsafe` API to
-allow bypassing checks in the fallback implementation when constructing
-`Literal` using `from_str_unchecked`. This was intended to only be used by the
-`quote!` macro, however it has been removed
-(https://github.com/dtolnay/quote/commit/f621fe64a8a501cae8e95ebd6848e637bbc79078),
-and is likely completely unused. Even when used, this API shouldn't be able to
-cause unsoundness.
-"""
+delta = "2.2.0 -> 2.3.0"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.proc-macro2]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
+[[audits.mozilla.audits.percent-encoding]]
+who = "Valentin Gosu <valentin.gosu@gmail.com>"
 criteria = "safe-to-deploy"
-delta = "1.0.39 -> 1.0.43"
+delta = "2.3.0 -> 2.3.1"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.proc-macro2]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
-criteria = "safe-to-deploy"
-delta = "1.0.43 -> 1.0.49"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.proc-macro2]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
-criteria = "safe-to-deploy"
-delta = "1.0.49 -> 1.0.51"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.proc-macro2]]
-who = "Jan-Erik Rediger <jrediger@mozilla.com>"
-criteria = "safe-to-deploy"
-delta = "1.0.57 -> 1.0.59"
-notes = "Enabled on Wasm"
-aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.proc-macro2]]
-who = "Jan-Erik Rediger <jrediger@mozilla.com>"
-criteria = "safe-to-deploy"
-delta = "1.0.63 -> 1.0.66"
-notes = "Removed special support for some really old Rust versions"
-aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.quote]]
 who = "Nika Layzell <nika@thelayzells.com>"
@@ -1616,6 +2401,13 @@ a security vulnerability.
 """
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
+[[audits.mozilla.audits.rustversion]]
+who = "Jan-Erik Rediger <jrediger@mozilla.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.9 -> 1.0.14"
+notes = "Doc updates, minimal CI changes and a fix to build-script reruns"
+aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
+
 [[audits.mozilla.audits.semver]]
 who = "Bobby Holley <bobbyholley@gmail.com>"
 criteria = "safe-to-deploy"
@@ -1626,6 +2418,24 @@ aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-ch
 who = "Dana Keeler <dkeeler@mozilla.com>"
 criteria = "safe-to-deploy"
 version = "0.10.5"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.subtle]]
+who = "Simon Friedberger <simon@mozilla.com>"
+criteria = "safe-to-deploy"
+version = "2.5.0"
+notes = "The goal is to provide some constant-time correctness for cryptographic implementations. The approach is reasonable, it is known to be insufficient but this is pointed out in the documentation."
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.synstructure]]
+who = "Nika Layzell <nika@thelayzells.com>"
+criteria = "safe-to-deploy"
+version = "0.12.6"
+notes = """
+I am the primary author of the `synstructure` crate, and its current
+maintainer. The one use of `unsafe` is unnecessary, but documented and
+harmless. It will be removed in the next version.
+"""
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.time-core]]
@@ -1644,4 +2454,22 @@ aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-ch
 who = "Bobby Holley <bobbyholley@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.5.7 -> 0.5.9"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.url]]
+who = "Valentin Gosu <valentin.gosu@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.4.0"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.url]]
+who = "Valentin Gosu <valentin.gosu@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "2.4.0 -> 2.4.1"
+aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[[audits.mozilla.audits.url]]
+who = "Valentin Gosu <valentin.gosu@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "2.4.1 -> 2.5.0"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"

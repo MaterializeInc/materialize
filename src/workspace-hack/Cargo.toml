@@ -233,26 +233,26 @@ zstd-sys = { version = "2.0.9", features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
-rustix = { version = "0.37.15", features = ["fs", "termios"] }
+rustix = { version = "0.37.25", features = ["fs", "termios"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
-rustix = { version = "0.37.15", features = ["fs", "termios"] }
+rustix = { version = "0.37.25", features = ["fs", "termios"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-apple-darwin.dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
-rustix = { version = "0.37.15", features = ["fs", "termios"] }
+rustix = { version = "0.37.25", features = ["fs", "termios"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
-rustix = { version = "0.37.15", features = ["fs", "termios"] }
+rustix = { version = "0.37.25", features = ["fs", "termios"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 ### END HAKARI SECTION
