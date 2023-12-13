@@ -343,9 +343,9 @@ impl PersistConfig {
 
     /// Default value for [`DynamicConfig::next_listen_batch_retry_params`].
     pub const DEFAULT_NEXT_LISTEN_BATCH_RETRYER: RetryParameters = RetryParameters {
-        initial_backoff: Duration::from_millis(4),
+        initial_backoff: Duration::from_millis(1200), // pubsub is on by default!
         multiplier: 2,
-        clamp: Duration::from_secs(16),
+        clamp: Duration::from_millis(100), // pubsub is on by default!
     };
 
     /// Default value for [`DynamicConfig::txns_data_shard_retry_params`].
