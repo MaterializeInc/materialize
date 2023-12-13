@@ -44,6 +44,7 @@ class DbOperationOrFunction:
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
         is_pg_compatible: bool = True,
+        tags: set[str] | None = None,
         since_mz_version: MzVersion | None = None,
     ):
         """
@@ -62,6 +63,7 @@ class DbOperationOrFunction:
         self.relevance = relevance
         self.is_enabled = is_enabled
         self.is_pg_compatible = is_pg_compatible
+        self.tags = tags
         self.since_mz_version = since_mz_version
         self.added_characteristics: set[ExpressionCharacteristics] = set()
 
@@ -85,6 +87,12 @@ class DbOperationOrFunction:
 
     def __str__(self) -> str:
         raise NotImplementedError
+
+    def is_tagged(self, tag: str) -> bool:
+        if self.tags is None:
+            return False
+
+        return tag in self.tags
 
     def try_resolve_exact_data_type(self, args: list[Expression]) -> DataType | None:
         return None
@@ -119,6 +127,7 @@ class DbOperation(DbOperationOrFunction):
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
         is_pg_compatible: bool = True,
+        tags: set[str] | None = None,
     ):
         param_count = len(params)
         super().__init__(
@@ -131,6 +140,7 @@ class DbOperation(DbOperationOrFunction):
             relevance=relevance,
             is_enabled=is_enabled,
             is_pg_compatible=is_pg_compatible,
+            tags=tags,
         )
         self.pattern = pattern
 
@@ -161,6 +171,7 @@ class DbFunction(DbOperationOrFunction):
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
         is_pg_compatible: bool = True,
+        tags: set[str] | None = None,
         since_mz_version: MzVersion | None = None,
     ):
         self.validate_params(params)
@@ -175,6 +186,7 @@ class DbFunction(DbOperationOrFunction):
             relevance=relevance,
             is_enabled=is_enabled,
             is_pg_compatible=is_pg_compatible,
+            tags=tags,
             since_mz_version=since_mz_version,
         )
         self.function_name_in_lower_case = function_name.lower()
