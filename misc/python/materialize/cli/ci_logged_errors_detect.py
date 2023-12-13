@@ -94,6 +94,8 @@ IGNORE_RE = re.compile(
     | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     # For platform-checks upgrade tests
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?\ name=enable_dangerous_functions
+    | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
+    | failed\ writing\ row\ to\ mz_aws_connections.*no\ AWS\ external\ ID\ prefix\ configured
     )
     """,
     re.VERBOSE | re.MULTILINE,
