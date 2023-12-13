@@ -571,7 +571,7 @@ impl CatalogState {
         self.entry_by_id.get_mut(id).expect("catalog out of sync")
     }
 
-    /// Gets an type named `name` from exactly one of the system schemas.
+    /// Gets a type named `name` from exactly one of the system schemas.
     ///
     /// # Panics
     /// - If `name` is not an entry in any system schema

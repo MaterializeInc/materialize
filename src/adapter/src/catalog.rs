@@ -4217,6 +4217,10 @@ impl SessionCatalog for ConnCatalog<'_> {
         }
     }
 
+    fn get_system_type(&self, name: &str) -> &dyn mz_sql::catalog::CatalogItem {
+        self.state.get_system_type(name)
+    }
+
     fn try_get_item(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
         Some(self.state.try_get_entry(id)?)
     }
