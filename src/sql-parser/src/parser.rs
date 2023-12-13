@@ -2369,23 +2369,32 @@ impl<'a> Parser<'a> {
     fn parse_kafka_sink_config_option(
         &mut self,
     ) -> Result<KafkaSinkConfigOption<Raw>, ParserError> {
-        let name =
-            match self.expect_one_of_keywords(&[COMPRESSION, PROGRESS, TOPIC, TRANSACTIONAL])? {
-                COMPRESSION => {
-                    self.expect_keyword(TYPE)?;
-                    KafkaSinkConfigOptionName::CompressionType
-                }
-                PROGRESS => {
-                    self.expect_keywords(&[GROUP, ID, PREFIX])?;
-                    KafkaSinkConfigOptionName::ProgressGroupIdPrefix
-                }
-                TOPIC => KafkaSinkConfigOptionName::Topic,
-                TRANSACTIONAL => {
-                    self.expect_keywords(&[ID, PREFIX])?;
-                    KafkaSinkConfigOptionName::TransactionalIdPrefix
-                }
-                _ => unreachable!(),
-            };
+        let name = match self.expect_one_of_keywords(&[
+            COMPRESSION,
+            PROGRESS,
+            TOPIC,
+            LEGACY,
+            TRANSACTIONAL,
+        ])? {
+            COMPRESSION => {
+                self.expect_keyword(TYPE)?;
+                KafkaSinkConfigOptionName::CompressionType
+            }
+            PROGRESS => {
+                self.expect_keywords(&[GROUP, ID, PREFIX])?;
+                KafkaSinkConfigOptionName::ProgressGroupIdPrefix
+            }
+            TOPIC => KafkaSinkConfigOptionName::Topic,
+            TRANSACTIONAL => {
+                self.expect_keywords(&[ID, PREFIX])?;
+                KafkaSinkConfigOptionName::TransactionalIdPrefix
+            }
+            LEGACY => {
+                self.expect_keywords(&[IDS])?;
+                KafkaSinkConfigOptionName::LegacyIds
+            }
+            _ => unreachable!(),
+        };
         Ok(KafkaSinkConfigOption {
             name,
             value: self.parse_optional_option_value()?,

@@ -865,6 +865,7 @@ pub enum KafkaSinkConfigOptionName {
     ProgressGroupIdPrefix,
     Topic,
     TransactionalIdPrefix,
+    LegacyIds,
 }
 
 impl AstDisplay for KafkaSinkConfigOptionName {
@@ -874,6 +875,7 @@ impl AstDisplay for KafkaSinkConfigOptionName {
             KafkaSinkConfigOptionName::ProgressGroupIdPrefix => "PROGRESS GROUP ID PREFIX",
             KafkaSinkConfigOptionName::Topic => "TOPIC",
             KafkaSinkConfigOptionName::TransactionalIdPrefix => "TRANSACTIONAL ID PREFIX",
+            KafkaSinkConfigOptionName::LegacyIds => "LEGACY IDS",
         })
     }
 }

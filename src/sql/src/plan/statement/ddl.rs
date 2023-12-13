@@ -46,7 +46,7 @@ use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
+    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -2495,8 +2495,25 @@ fn kafka_sink_builder(
         compression_type,
         progress_group_id_prefix,
         transactional_id_prefix,
+        legacy_ids,
         seen: _,
     }: KafkaSinkConfigOptionExtracted = options.try_into()?;
+
+    let transactional_id = match (transactional_id_prefix, legacy_ids) {
+        (Some(_), Some(true)) => {
+            sql_bail!("LEGACY IDS cannot be used at the same time as TRANSACTIONAL ID PREFIX")
+        }
+        (None, Some(true)) => KafkaIdStyle::Legacy,
+        (prefix, _) => KafkaIdStyle::Prefix(prefix),
+    };
+
+    let progress_group_id = match (progress_group_id_prefix, legacy_ids) {
+        (Some(_), Some(true)) => {
+            sql_bail!("LEGACY IDS cannot be used at the same time as PROGRESS GROUP ID PREFIX")
+        }
+        (None, Some(true)) => KafkaIdStyle::Legacy,
+        (prefix, _) => KafkaIdStyle::Prefix(prefix),
+    };
 
     let topic_name = topic.ok_or_else(|| sql_err!("KAFKA CONNECTION must specify TOPIC"))?;
 
@@ -2603,8 +2620,8 @@ fn kafka_sink_builder(
         key_desc_and_indices,
         value_desc,
         compression_type,
-        progress_group_id_prefix,
-        transactional_id_prefix,
+        progress_group_id,
+        transactional_id,
     }))
 }
 

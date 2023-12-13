@@ -54,7 +54,7 @@ use crate::ast::{
     Format, ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
 };
 use crate::catalog::{CatalogItemType, ErsatzCatalog, SessionCatalog};
-use crate::kafka_util::KafkaSourceConfigOptionExtracted;
+use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{Aug, ResolvedColumnName, ResolvedItemName};
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
@@ -286,7 +286,7 @@ async fn purify_create_sink(
     match &connection {
         CreateSinkConnection::Kafka {
             connection,
-            options: _,
+            options,
             key: _,
         } => {
             let scx = StatementContext::new(None, &catalog);
@@ -303,6 +303,12 @@ async fn purify_create_sink(
                     ),
                 }
             };
+
+            let extracted_options: KafkaSinkConfigOptionExtracted = options.clone().try_into()?;
+
+            if extracted_options.legacy_ids == Some(true) {
+                sql_bail!("LEGACY IDs option is not supported");
+            }
 
             let client: AdminClient<_> = connection
                 .create_with_context(

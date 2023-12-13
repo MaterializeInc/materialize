@@ -432,8 +432,8 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub topic: String,
     pub fuel: usize,
     pub compression_type: KafkaSinkCompressionType,
-    pub progress_group_id_prefix: Option<String>,
-    pub transactional_id_prefix: Option<String>,
+    pub progress_group_id: KafkaIdStyle,
+    pub transactional_id: KafkaIdStyle,
 }
 
 impl KafkaSinkConnection {
@@ -464,11 +464,14 @@ impl KafkaSinkConnection {
         connection_context: &ConnectionContext,
         sink_id: GlobalId,
     ) -> String {
-        format!(
-            "{}{}",
-            self.progress_group_id_prefix.as_deref().unwrap_or(""),
-            self.client_id(connection_context, sink_id)
-        )
+        match self.progress_group_id {
+            KafkaIdStyle::Prefix(ref prefix) => format!(
+                "{}{}",
+                prefix.as_deref().unwrap_or(""),
+                self.client_id(connection_context, sink_id)
+            ),
+            KafkaIdStyle::Legacy => format!("materialize-bootstrap-sink-{sink_id}"),
+        }
     }
 
     /// Returns the transactional ID to use for the sink.
@@ -480,11 +483,14 @@ impl KafkaSinkConnection {
         connection_context: &ConnectionContext,
         sink_id: GlobalId,
     ) -> String {
-        format!(
-            "{}{}",
-            self.transactional_id_prefix.as_deref().unwrap_or(""),
-            self.client_id(connection_context, sink_id)
-        )
+        match self.transactional_id {
+            KafkaIdStyle::Prefix(ref prefix) => format!(
+                "{}{}",
+                prefix.as_deref().unwrap_or(""),
+                self.client_id(connection_context, sink_id)
+            ),
+            KafkaIdStyle::Legacy => format!("mz-producer-{sink_id}-0"),
+        }
     }
 }
 
@@ -512,8 +518,8 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             topic,
             fuel,
             compression_type,
-            progress_group_id_prefix,
-            transactional_id_prefix: transactional_id,
+            progress_group_id,
+            transactional_id,
         } = self;
 
         let compatibility_checks = [
@@ -535,11 +541,11 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
                 "compression_type",
             ),
             (
-                progress_group_id_prefix == &other.progress_group_id_prefix,
-                "progress_group_id_prefix",
+                progress_group_id == &other.progress_group_id,
+                "progress_group_id",
             ),
             (
-                transactional_id == &other.transactional_id_prefix,
+                transactional_id == &other.transactional_id,
                 "transactional_id",
             ),
         ];
@@ -573,8 +579,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             topic,
             fuel,
             compression_type,
-            progress_group_id_prefix,
-            transactional_id_prefix: transactional_id,
+            progress_group_id,
+            transactional_id,
         } = self;
         KafkaSinkConnection {
             connection_id,
@@ -586,9 +592,45 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             topic,
             fuel,
             compression_type,
-            progress_group_id_prefix,
-            transactional_id_prefix: transactional_id,
+            progress_group_id,
+            transactional_id,
         }
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum KafkaIdStyle {
+    /// A new-style id that is optionally prefixed.
+    Prefix(Option<String>),
+    /// A legacy style id.
+    Legacy,
+}
+
+impl RustType<ProtoKafkaIdStyle> for KafkaIdStyle {
+    fn into_proto(&self) -> ProtoKafkaIdStyle {
+        use crate::sinks::proto_kafka_id_style::Kind::*;
+        use crate::sinks::proto_kafka_id_style::ProtoKafkaIdStylePrefix;
+
+        ProtoKafkaIdStyle {
+            kind: Some(match self {
+                Self::Prefix(prefix) => Prefix(ProtoKafkaIdStylePrefix {
+                    prefix: prefix.into_proto(),
+                }),
+                Self::Legacy => Legacy(()),
+            }),
+        }
+    }
+    fn from_proto(proto: ProtoKafkaIdStyle) -> Result<Self, TryFromProtoError> {
+        use crate::sinks::proto_kafka_id_style::Kind::*;
+
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaIdStyle::kind"))?;
+
+        Ok(match kind {
+            Prefix(prefix) => Self::Prefix(prefix.prefix.into_rust()?),
+            Legacy(()) => Self::Legacy,
+        })
     }
 }
 
@@ -611,8 +653,8 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 KafkaSinkCompressionType::Lz4 => CompressionType::Lz4(()),
                 KafkaSinkCompressionType::Zstd => CompressionType::Zstd(()),
             }),
-            progress_group_id_prefix: self.progress_group_id_prefix.clone(),
-            transactional_id_prefix: self.transactional_id_prefix.clone(),
+            progress_group_id: Some(self.progress_group_id.into_proto()),
+            transactional_id: Some(self.transactional_id.into_proto()),
         }
     }
 
@@ -647,8 +689,12 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                     ))
                 }
             },
-            progress_group_id_prefix: proto.progress_group_id_prefix,
-            transactional_id_prefix: proto.transactional_id_prefix,
+            progress_group_id: proto
+                .progress_group_id
+                .into_rust_if_some("ProtoKafkaSinkConnectionV2::progress_group_id")?,
+            transactional_id: proto
+                .transactional_id
+                .into_rust_if_some("ProtoKafkaSinkConnectionV2::transactional_id")?,
         })
     }
 }

@@ -27,6 +27,12 @@
   ENVELOPE DEBEZIUM
 contains:No such column: f2
 
+! CREATE SINK invalid_legacy_ids FROM v1
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}', LEGACY IDS)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+contains:LEGACY IDs option is not supported
+
 #
 # Sink dependencies
 #

@@ -53,7 +53,8 @@ generate_extracted_config!(
     ),
     (ProgressGroupIdPrefix, String),
     (Topic, String),
-    (TransactionalIdPrefix, String)
+    (TransactionalIdPrefix, String),
+    (LegacyIds, bool)
 );
 
 impl TryFromValue<Value> for KafkaSinkCompressionType {

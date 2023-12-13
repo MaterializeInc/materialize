@@ -92,8 +92,18 @@ message ProtoKafkaSinkConnectionV2 {
         google.protobuf.Empty lz4 = 17;
         google.protobuf.Empty zstd = 18;
     }
-    optional string progress_group_id_prefix = 19;
-    optional string transactional_id_prefix = 20;
+    ProtoKafkaIdStyle progress_group_id = 19;
+    ProtoKafkaIdStyle transactional_id = 20;
+}
+
+message ProtoKafkaIdStyle {
+    message ProtoKafkaIdStylePrefix {
+        optional string prefix = 1;
+    }
+    oneof kind {
+        ProtoKafkaIdStylePrefix prefix = 1;
+        google.protobuf.Empty legacy = 2;
+    }
 }
 
 message ProtoPersistSinkConnection {
