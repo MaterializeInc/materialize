@@ -47,22 +47,21 @@ macro_rules! objects {
                     pub mod [<objects_ $x>] {
                         include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
 
-                        use ::prost::Message;
+                        use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
 
-                        use crate::durable::impls::persist::state_update::StateUpdateKindBinary;
-
-                        impl From<StateUpdateKind> for StateUpdateKindBinary {
+                        impl From<StateUpdateKind> for StateUpdateKindRaw {
                             fn from(value: StateUpdateKind) -> Self {
-                                Self(value.encode_to_vec())
+                                // TODO: This requires that the json->proto->json roundtrips
+                                // exactly, see #23908.
+                                StateUpdateKindRaw::from_serde(&value)
                             }
                         }
 
-                        impl TryFrom<StateUpdateKindBinary> for StateUpdateKind {
+                        impl TryFrom<StateUpdateKindRaw> for StateUpdateKind {
                             type Error = String;
 
-                            fn try_from(value: StateUpdateKindBinary) -> Result<Self, Self::Error> {
-                                StateUpdateKind::decode(value.0.as_slice())
-                                    .map_err(|err| err.to_string())
+                            fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
+                                Ok(value.to_serde::<Self>())
                             }
                         }
                     }
@@ -193,7 +192,7 @@ pub(crate) mod persist {
     use timely::progress::Timestamp as TimelyTimestamp;
 
     use crate::durable::impls::persist::state_update::{
-        IntoStateUpdateKindBinary, StateUpdateKindBinary,
+        IntoStateUpdateKindRaw, StateUpdateKindRaw,
     };
     use crate::durable::impls::persist::{StateUpdate, Timestamp, UnopenedPersistCatalogState};
     use crate::durable::initialize::USER_VERSION_KEY;
@@ -209,7 +208,7 @@ pub(crate) mod persist {
 
     /// Describes a single action to take during a migration from `V1` to `V2`.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-    enum MigrationAction<V1: IntoStateUpdateKindBinary, V2: IntoStateUpdateKindBinary> {
+    enum MigrationAction<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> {
         /// Deletes the provided key.
         Delete(V1),
         /// Inserts the provided key-value pair. The key must not currently exist!
@@ -219,10 +218,10 @@ pub(crate) mod persist {
         Update(V1, V2),
     }
 
-    impl<V1: IntoStateUpdateKindBinary, V2: IntoStateUpdateKindBinary> MigrationAction<V1, V2> {
+    impl<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> MigrationAction<V1, V2> {
         /// Converts `self` into a `Vec<StateUpdate<StateUpdateKindBinary>>` that can be appended
         /// to persist.
-        fn into_updates(self, upper: Timestamp) -> Vec<StateUpdate<StateUpdateKindBinary>> {
+        fn into_updates(self, upper: Timestamp) -> Vec<StateUpdate<StateUpdateKindRaw>> {
             match self {
                 MigrationAction::Delete(kind) => {
                     vec![StateUpdate {
@@ -341,7 +340,7 @@ pub(crate) mod persist {
     /// `current_version`.
     ///
     /// Returns the new version and upper.
-    async fn run_versioned_upgrade<V1: IntoStateUpdateKindBinary, V2: IntoStateUpdateKindBinary>(
+    async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw>(
         unopened_catalog_state: &mut UnopenedPersistCatalogState,
         upper: Timestamp,
         current_version: u64,
@@ -391,7 +390,7 @@ pub(crate) mod persist {
     }
 
     /// Generates a [`proto::StateUpdateKind`] to update the user version.
-    fn version_update_kind(version: u64) -> StateUpdateKindBinary {
+    fn version_update_kind(version: u64) -> StateUpdateKindRaw {
         // We can use the current protobuf versions because Configs can never be migrated and are
         // always wire compatible.
         proto::StateUpdateKind {

@@ -34,9 +34,9 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::Diff;
+use mz_repr::{Diff, RelationDesc, ScalarType};
 use mz_storage_types::controller::PersistTxnTablesImpl;
-use mz_storage_types::sources::Timeline;
+use mz_storage_types::sources::{SourceData, Timeline};
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::debug;
@@ -44,9 +44,7 @@ use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
 use crate::durable::impls::persist::metrics::Metrics;
-use crate::durable::impls::persist::state_update::{
-    IntoStateUpdateKindBinary, StateUpdateKindBinary, StateUpdateKindSchema,
-};
+use crate::durable::impls::persist::state_update::{IntoStateUpdateKindRaw, StateUpdateKindRaw};
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
 use crate::durable::initialize::{
     DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
@@ -90,15 +88,15 @@ enum Mode {
 #[derive(Debug)]
 pub struct UnopenedPersistCatalogState {
     /// Write handle to persist.
-    write_handle: WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    write_handle: WriteHandle<SourceData, (), Timestamp, Diff>,
     /// Read handle to persist.
-    read_handle: ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    read_handle: ReadHandle<SourceData, (), Timestamp, Diff>,
     /// Handle for connecting to persist.
     persist_client: PersistClient,
     /// Catalog shard ID.
     shard_id: ShardId,
     /// Cache of the most recent catalog snapshot.
-    snapshot_cache: Option<(Timestamp, Vec<StateUpdate<StateUpdateKindBinary>>)>,
+    snapshot_cache: Option<(Timestamp, Vec<StateUpdate<StateUpdateKindRaw>>)>,
     /// The epoch of the catalog, if one exists.
     epoch: Option<Epoch>,
     /// Metrics for the persist catalog.
@@ -127,7 +125,7 @@ impl UnopenedPersistCatalogState {
         let (mut write_handle, mut read_handle) = persist_client
             .open(
                 shard_id,
-                Arc::new(StateUpdateKindSchema::default()),
+                Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
                 diagnostics(),
             )
@@ -326,7 +324,7 @@ impl UnopenedPersistCatalogState {
     pub(crate) async fn snapshot_binary(
         &mut self,
         as_of: Timestamp,
-    ) -> &Vec<StateUpdate<StateUpdateKindBinary>> {
+    ) -> &Vec<StateUpdate<StateUpdateKindRaw>> {
         match &self.snapshot_cache {
             Some((cached_as_of, _)) if as_of == *cached_as_of => {}
             _ => {
@@ -359,14 +357,8 @@ impl UnopenedPersistCatalogState {
         }
         snapshot
             .into_iter()
-            .map(|((kind, _unit), ts, diff)| StateUpdate {
-                kind: kind
-                    .expect("kind decoding error")
-                    .try_into()
-                    .expect("kind decoding error"),
-                ts,
-                diff,
-            })
+            .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
+            .map(|state_update| state_update.try_into().expect("kind decoding error"))
     }
 
     /// Get the current value of config `key`.
@@ -465,7 +457,7 @@ impl UnopenedPersistCatalogState {
 
     /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
     /// iff the current global upper of the catalog is `current_upper`.
-    pub(crate) async fn compare_and_append<T: IntoStateUpdateKindBinary>(
+    pub(crate) async fn compare_and_append<T: IntoStateUpdateKindRaw>(
         &mut self,
         updates: Vec<StateUpdate<T>>,
         current_upper: Timestamp,
@@ -560,9 +552,9 @@ pub struct PersistCatalogState {
     /// The [`Mode`] that this catalog was opened in.
     mode: Mode,
     /// Write handle to persist.
-    write_handle: WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    write_handle: WriteHandle<SourceData, (), Timestamp, Diff>,
     /// Subscription to catalog changes.
-    subscribe: Subscribe<StateUpdateKindBinary, (), Timestamp, Diff>,
+    subscribe: Subscribe<SourceData, (), Timestamp, Diff>,
     /// Handle for connecting to persist.
     persist_client: PersistClient,
     /// Catalog shard ID.
@@ -578,6 +570,12 @@ pub struct PersistCatalogState {
 }
 
 impl PersistCatalogState {
+    // Returns the schema of the `Row`s/`SourceData`s stored in the persist
+    // shard backing the catalog.
+    pub fn desc() -> RelationDesc {
+        RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
+    }
+
     /// Fetch the current upper of the catalog state.
     async fn current_upper(&mut self) -> Timestamp {
         current_upper(&mut self.write_handle).await
@@ -656,13 +654,11 @@ impl PersistCatalogState {
                     }
                     ListenEvent::Updates(batch_updates) => {
                         debug!("syncing updates {batch_updates:?}");
-                        for ((key, _unit), ts, diff) in batch_updates {
-                            let kind = key
-                                .expect("key decoding error")
-                                .try_into()
-                                .expect("key decoding error");
-                            updates.push(StateUpdate { kind, ts, diff });
-                        }
+                        let batch_updates = batch_updates
+                            .into_iter()
+                            .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
+                            .map(|update| update.try_into().expect("kind decoding error"));
+                        updates.extend(batch_updates);
                     }
                 }
             }
@@ -802,11 +798,11 @@ impl PersistCatalogState {
     }
 
     /// Open a read handle to the catalog.
-    async fn read_handle(&mut self) -> ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff> {
+    async fn read_handle(&mut self) -> ReadHandle<SourceData, (), Timestamp, Diff> {
         self.persist_client
             .open_leased_reader(
                 self.shard_id,
-                Arc::new(StateUpdateKindSchema::default()),
+                Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
                 diagnostics(),
             )
@@ -1132,7 +1128,7 @@ fn diagnostics() -> Diagnostics {
 
 /// Fetch the current upper of the catalog state.
 async fn current_upper(
-    write_handle: &mut WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
 ) -> Timestamp {
     write_handle
         .fetch_recent_upper()
@@ -1145,7 +1141,7 @@ async fn current_upper(
 /// Reports if the persist shard can be read at some time, and the current upper. A persist
 /// shard can only be read once it's been written to at least once.
 async fn is_persist_shard_readable(
-    write_handle: &mut WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
 ) -> (bool, Timestamp) {
     let upper = current_upper(write_handle).await;
     (upper > Timestamp::minimum(), upper)
@@ -1153,10 +1149,7 @@ async fn is_persist_shard_readable(
 
 /// Generates a timestamp for reading from `read_handle` that is as fresh as possible, given
 /// `upper`.
-fn as_of(
-    read_handle: &ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
-    upper: Timestamp,
-) -> Timestamp {
+fn as_of(read_handle: &ReadHandle<SourceData, (), Timestamp, Diff>, upper: Timestamp) -> Timestamp {
     soft_assert_or_log!(
         upper > Timestamp::minimum(),
         "Catalog persist shard is uninitialized"
@@ -1169,15 +1162,16 @@ fn as_of(
 
 /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
 /// iff the current global upper of the catalog is `current_upper`.
-async fn compare_and_append<T: IntoStateUpdateKindBinary>(
-    write_handle: &mut WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+async fn compare_and_append<T: IntoStateUpdateKindRaw>(
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
     updates: Vec<StateUpdate<T>>,
     current_upper: Timestamp,
     next_upper: Timestamp,
 ) -> Result<(), CatalogError> {
-    let updates = updates
-        .into_iter()
-        .map(|update| ((update.kind.into(), ()), update.ts, update.diff));
+    let updates = updates.into_iter().map(|update| {
+        let kind: StateUpdateKindRaw = update.kind.into();
+        ((Into::<SourceData>::into(kind), ()), update.ts, update.diff)
+    });
     write_handle
         .compare_and_append(
             updates,
@@ -1197,7 +1191,7 @@ async fn compare_and_append<T: IntoStateUpdateKindBinary>(
 
 #[tracing::instrument(level = "debug", skip(read_handle))]
 async fn snapshot(
-    read_handle: &mut ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
     as_of: Timestamp,
     metrics: &Arc<Metrics>,
 ) -> impl Iterator<Item = StateUpdate<StateUpdateKind>> + DoubleEndedIterator {
@@ -1212,10 +1206,10 @@ async fn snapshot(
 /// The output is consolidated and sorted by timestamp in ascending order.
 #[tracing::instrument(level = "debug", skip(read_handle, metrics))]
 async fn snapshot_binary(
-    read_handle: &mut ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
     as_of: Timestamp,
     metrics: &Arc<Metrics>,
-) -> impl Iterator<Item = StateUpdate<StateUpdateKindBinary>> + DoubleEndedIterator {
+) -> impl Iterator<Item = StateUpdate<StateUpdateKindRaw>> + DoubleEndedIterator {
     metrics.snapshots_taken.inc();
     let counter = metrics.snapshot_latency_seconds.clone();
     snapshot_binary_inner(read_handle, as_of)
@@ -1230,9 +1224,9 @@ async fn snapshot_binary(
 /// The output is consolidated and sorted by timestamp in ascending order.
 #[tracing::instrument(level = "debug", skip(read_handle))]
 async fn snapshot_binary_inner(
-    read_handle: &mut ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
     as_of: Timestamp,
-) -> impl Iterator<Item = StateUpdate<StateUpdateKindBinary>> + DoubleEndedIterator {
+) -> impl Iterator<Item = StateUpdate<StateUpdateKindRaw>> + DoubleEndedIterator {
     let snapshot = read_handle
         .snapshot_and_fetch(Antichain::from_elem(as_of))
         .await
@@ -1243,18 +1237,14 @@ async fn snapshot_binary_inner(
     );
     snapshot
         .into_iter()
-        .map(|((kind, _unit), ts, diff)| StateUpdate {
-            kind: kind.expect("kind decoding error"),
-            ts,
-            diff,
-        })
+        .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
         .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
 }
 
 /// Get the current epoch.
 async fn get_current_epoch(
-    write_handle: &mut WriteHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
-    read_handle: &mut ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
+    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
     metrics: &Arc<Metrics>,
 ) -> Option<Epoch> {
     let (persist_shard_readable, current_upper) = is_persist_shard_readable(write_handle).await;
@@ -1268,7 +1258,7 @@ async fn get_current_epoch(
 
 /// Get epoch at `as_of`.
 async fn get_epoch(
-    read_handle: &mut ReadHandle<StateUpdateKindBinary, (), Timestamp, Diff>,
+    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
     as_of: Timestamp,
     metrics: &Arc<Metrics>,
 ) -> Epoch {

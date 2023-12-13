@@ -221,6 +221,12 @@ fn main() -> anyhow::Result<()> {
         .enum_attribute("SchemaSpecifier.spec", ATTR)
         .enum_attribute("RoleVars.Entry.val", ATTR)
         .enum_attribute("StateUpdateKind.kind", ATTR)
+        // Serialize/deserialize the top-level enum in the persist-backed
+        // catalog as "internally tagged"[^1] to set up persist pushdown
+        // statistics for success.
+        //
+        // [^1]: https://serde.rs/enum-representations.html#internally-tagged
+        .enum_attribute("StateUpdateKind.kind", "#[serde(tag = \"kind\")]")
         // We derive Arbitrary for all protobuf types for wire compatibility testing.
         .message_attribute(".", ARBITRARY_ATTR)
         .enum_attribute(".", ARBITRARY_ATTR)
