@@ -53,8 +53,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # Old name of `enable_unsafe_functions`.
     "enable_dangerous_functions": "true",
     "enable_disk_cluster_replicas": "true",
-    "statement_logging_max_sample_rate": "1.0",
-    "statement_logging_default_sample_rate": "1.0",
+    "statement_logging_max_sample_rate": "0.01",
+    "statement_logging_default_sample_rate": "0.01",
     # Following values are set based on Load Test environment to
     # reduce CRDB load as we are struggling with it in CI:
     "persist_next_listen_batch_retryer_clamp": "100ms",
