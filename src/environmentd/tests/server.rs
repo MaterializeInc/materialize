@@ -82,7 +82,7 @@ use std::fmt::Write;
 use std::io::Write as _;
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{iter, thread};
@@ -3204,6 +3204,176 @@ fn test_webhook_url_notice() {
         .expect("success");
     let body: String = row.get("body");
     assert_eq!(body, "request_foo");
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn webhook_concurrent_swap() {
+    let server = test_util::TestHarness::default().start().await;
+    let mut client = server.connect().await.unwrap();
+
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    struct WebhookEvent {
+        name: String,
+    }
+
+    // Create our webhook sources.
+    let webhook_cluster = "webhook_cluster_concurrent_swap";
+    client
+        .execute(
+            &format!("CREATE CLUSTER {webhook_cluster} REPLICAS (r1 (SIZE '1'));"),
+            &[],
+        )
+        .await
+        .expect("failed to create cluster");
+
+    let src_foo = "webhook_foo";
+    client
+        .execute(
+            &format!("CREATE SOURCE {src_foo} IN CLUSTER {webhook_cluster} FROM WEBHOOK BODY FORMAT TEXT"),
+            &[],
+        )
+        .await
+        .expect("failed to create source");
+    let src_bar = "webhook_bar";
+    client
+        .execute(
+            &format!("CREATE SOURCE {src_bar} IN CLUSTER {webhook_cluster} FROM WEBHOOK BODY FORMAT TEXT"),
+            &[],
+        )
+        .await
+        .expect("failed to create source");
+
+    // Spin up tasks that will contiously push data to both webhooks.
+    let addr = server.inner.http_local_addr();
+    let http_client = reqwest::Client::new();
+    let keep_sending = Arc::new(AtomicBool::new(true));
+
+    let create_poster = |name: &'static str,
+                         client: reqwest::Client,
+                         addr,
+                         keep_sending: Arc<AtomicBool>,
+                         count: Arc<AtomicUsize>| {
+        let url = format!("http://{addr}/api/webhook/materialize/public/{name}");
+        mz_ore::task::spawn(|| format!("POST-{name}"), async move {
+            let mut tasks = Vec::new();
+
+            while keep_sending.load(std::sync::atomic::Ordering::Relaxed) {
+                let http_client = client.clone();
+                let webhook_url = url.clone();
+                let handle =
+                    mz_ore::task::spawn(|| "webhook_concurrent_actions-appender", async move {
+                        // Send all of our events to our webhook source.
+                        http_client
+                            .post(&webhook_url)
+                            .body(name)
+                            .send()
+                            .await
+                            .expect("failed to POST event");
+                    });
+                tasks.push(handle);
+                count.fetch_add(1, Ordering::SeqCst);
+
+                // Wait before sending another request.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            // Wait for all of the inner sends to finish.
+            futures::future::join_all(tasks).await;
+        })
+    };
+
+    // Spawn tasks that will continuously POST events to our webhook sources.
+    let foo_count = Arc::new(AtomicUsize::new(0));
+    let foo_poster = create_poster(
+        src_foo,
+        http_client.clone(),
+        addr.clone(),
+        Arc::clone(&keep_sending),
+        Arc::clone(&foo_count),
+    );
+    let bar_count = Arc::new(AtomicUsize::new(0));
+    let bar_poster = create_poster(
+        src_bar,
+        http_client.clone(),
+        addr.clone(),
+        Arc::clone(&keep_sending),
+        Arc::clone(&bar_count),
+    );
+
+    // Let the posting tasks run for a bit.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Swap the two sources.
+    let txn = client
+        .transaction()
+        .await
+        .expect("failed to start a transaction");
+
+    txn.execute(&format!("ALTER SOURCE {src_foo} RENAME TO temp"), &[])
+        .await
+        .expect("failed to rename foo");
+    txn.execute(&format!("ALTER SOURCE {src_bar} RENAME TO {src_foo}"), &[])
+        .await
+        .expect("failed to swap bar");
+    txn.execute(&format!("ALTER SOURCE temp RENAME TO {src_bar}"), &[])
+        .await
+        .expect("failed to swap foo");
+
+    txn.commit().await.expect("transaction failed");
+
+    // Now that we've swapped the source, this is the maximum number of original events we should
+    // see in each source.
+    let max_foo = foo_count.load(Ordering::SeqCst);
+    let max_bar = bar_count.load(Ordering::SeqCst);
+
+    // Let the posting tasks run for a bit longer.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Stop the tasks.
+    keep_sending.store(false, Ordering::SeqCst);
+    let _ = foo_poster.await;
+    let _ = bar_poster.await;
+
+    let foo_row = client
+        .query_one(
+            &format!("SELECT COUNT(*) FROM {src_bar} WHERE body = '{src_foo}'"),
+            &[],
+        )
+        .await
+        .expect("failed to count foos");
+    let foo_count: usize = foo_row.get::<_, i64>(0).try_into().expect("invalid count");
+
+    let bar_row = client
+        .query_one(
+            &format!("SELECT COUNT(*) FROM {src_foo} WHERE body = '{src_bar}'"),
+            &[],
+        )
+        .await
+        .expect("failed to count foos");
+    let bar_count: usize = bar_row.get::<_, i64>(0).try_into().expect("invalid count");
+
+    assert!(foo_count <= max_foo);
+    assert!(bar_count <= max_bar);
+
+    let appender_count = server
+        .metrics_registry
+        .gather()
+        .into_iter()
+        .find(|m| m.get_name() == "mz_webhook_get_appender_count")
+        .unwrap()
+        .take_metric()[0]
+        .get_counter()
+        .get_value();
+
+    // We should only get a webhook appender from the Coordinator 4 times, once for each source
+    // when we start posting, and then once again for each source after they are renamed.
+    assert_eq!(appender_count, 4.0);
+
+    // Best effort cleanup.
+    let _ = client
+        .execute(&format!("DROP CLUSTER {webhook_cluster} CASCADE"), &[])
+        .await;
 }
 
 #[mz_ore::test]

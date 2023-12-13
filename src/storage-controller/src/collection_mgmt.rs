@@ -11,6 +11,7 @@
 //! collections.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 use differential_dataflow::lattice::Lattice;
@@ -31,7 +32,7 @@ use tracing::{debug, error, info};
 use crate::{persist_handles, StorageError};
 
 // Note(parkmycar): The capacity here was chosen arbitrarily.
-const CHANNEL_CAPACITY: usize = 2048;
+const CHANNEL_CAPACITY: usize = 4096;
 // Default rate at which we append data and advance the uppers of managed collections.
 const DEFAULT_TICK: Duration = Duration::from_secs(1);
 
@@ -155,6 +156,7 @@ where
     pub(super) fn monotonic_appender(
         &self,
         id: GlobalId,
+        catalog_revision: Arc<AtomicU64>,
     ) -> Result<MonotonicAppender, StorageError> {
         let guard = self.collections.lock().expect("CollectionManager panicked");
         let tx = guard
@@ -162,7 +164,7 @@ where
             .map(|(tx, _, _)| tx.clone())
             .ok_or(StorageError::IdentifierMissing(id))?;
 
-        Ok(MonotonicAppender::new(tx))
+        Ok(MonotonicAppender::new(tx, catalog_revision))
     }
 }
 

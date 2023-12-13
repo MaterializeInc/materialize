@@ -13,7 +13,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use enum_kinds::EnumKind;
 use futures::future::BoxFuture;
@@ -88,12 +87,11 @@ pub enum Command {
         conn_id: ConnectionId,
     },
 
-    AppendWebhook {
+    GetWebhook {
         database: String,
         schema: String,
         name: String,
         conn_id: ConnectionId,
-        received_at: DateTime<Utc>,
         tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     },
 
@@ -137,7 +135,7 @@ impl Command {
             | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
-            | Command::AppendWebhook { .. }
+            | Command::GetWebhook { .. }
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
@@ -153,7 +151,7 @@ impl Command {
             | Command::Startup { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
-            | Command::AppendWebhook { .. }
+            | Command::GetWebhook { .. }
             | Command::Terminate { .. }
             | Command::GetSystemVars { .. }
             | Command::SetSystemVars { .. }
