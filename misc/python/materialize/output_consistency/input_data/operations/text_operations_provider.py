@@ -50,6 +50,7 @@ from materialize.output_consistency.operation.operation import (
 
 TEXT_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
+TAG_REGEX = "regex"
 
 TEXT_OPERATION_TYPES.append(
     DbOperation(
@@ -65,6 +66,7 @@ TEXT_OPERATION_TYPES.append(
         "$ ~ $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
+        tags={TAG_REGEX},
     )
 )
 
@@ -74,6 +76,7 @@ TEXT_OPERATION_TYPES.append(
         "$ ~* $",
         [TextOperationParam(), REGEX_PARAM],
         BooleanReturnTypeSpec(),
+        tags={TAG_REGEX},
     )
 )
 
@@ -273,6 +276,7 @@ TEXT_OPERATION_TYPES.append(
         "regexp_match",
         [TextOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
         ArrayReturnTypeSpec(DataTypeCategory.TEXT),
+        tags={TAG_REGEX},
     )
 )
 
@@ -281,6 +285,7 @@ TEXT_OPERATION_TYPES.append(
         "regexp_replace",
         [TextOperationParam(), REGEX_PARAM, TextOperationParam()],
         ArrayReturnTypeSpec(DataTypeCategory.TEXT),
+        tags={TAG_REGEX},
     )
 )
 
@@ -289,6 +294,7 @@ TEXT_OPERATION_TYPES.append(
         "regexp_split_to_array",
         [TextOperationParam(), REGEX_PARAM, REGEX_FLAG_PARAM],
         ArrayReturnTypeSpec(DataTypeCategory.ARRAY),
+        tags={TAG_REGEX},
     )
 )
 
