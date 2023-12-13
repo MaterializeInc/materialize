@@ -23,7 +23,7 @@ use mz_repr::explain::{
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
 use mz_sql_parser::ast::ExplainStage;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::optimizer_notices::OptimizerNotice;
+use mz_transform::notice::RawOptimizerNotice;
 use tracing::dispatcher;
 use tracing_subscriber::prelude::*;
 
@@ -104,9 +104,10 @@ impl OptimizerTrace {
             used_indexes: UsedIndexes::default(),
             finishing: row_set_finishing.clone(),
             duration: Duration::default(),
-            optimizer_notices: OptimizerNotice::explain(
+            optimizer_notices: RawOptimizerNotice::explain(
                 &dataflow_metainfo.optimizer_notices,
                 humanizer,
+                config.redacted,
             )?,
         };
 
@@ -123,9 +124,10 @@ impl OptimizerTrace {
             used_indexes,
             finishing: row_set_finishing,
             duration: Duration::default(),
-            optimizer_notices: OptimizerNotice::explain(
+            optimizer_notices: RawOptimizerNotice::explain(
                 &dataflow_metainfo.optimizer_notices,
                 humanizer,
+                config.redacted,
             )?,
         };
         let fast_path_plan = match fast_path_plan {

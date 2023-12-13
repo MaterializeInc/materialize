@@ -5955,6 +5955,7 @@ dependencies = [
  "anyhow",
  "datadriven",
  "differential-dataflow",
+ "enum-kinds",
  "itertools",
  "mz-compute-types",
  "mz-expr",

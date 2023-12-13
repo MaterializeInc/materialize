@@ -22,7 +22,7 @@ use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
 };
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::optimizer_notices::OptimizerNotice;
+use mz_transform::notices::OptimizerNotice;
 
 use crate::AdapterError;
 
@@ -65,9 +65,12 @@ where
             .collect(),
     );
 
-    let optimizer_notices =
-        OptimizerNotice::explain(&dataflow_metainfo.optimizer_notices, humanizer)
-            .map_err(ExplainError::FormatError)?;
+    let optimizer_notices = OptimizerNotice::explain(
+        &dataflow_metainfo.optimizer_notices,
+        humanizer,
+        config.redacted,
+    )
+    .map_err(ExplainError::FormatError)?;
 
     let context = ExplainContext {
         config,

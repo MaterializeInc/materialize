@@ -33,7 +33,7 @@ use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
-use mz_transform::optimizer_notices::OptimizerNotice;
+use mz_transform::notice::IndexKeyEmpty;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 
 use crate::catalog::Catalog;
@@ -193,7 +193,7 @@ impl Optimize<Index> for Optimizer {
         )?;
 
         if index.keys.is_empty() {
-            df_meta.push_optimizer_notice_dedup(OptimizerNotice::IndexKeyEmpty);
+            df_meta.push_optimizer_notice_dedup(IndexKeyEmpty);
         }
 
         // Return the (sealed) plan at the end of this optimization step.

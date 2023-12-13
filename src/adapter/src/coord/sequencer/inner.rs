@@ -75,7 +75,7 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourc
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::optimizer_notices::OptimizerNotice;
+use mz_transform::notices::RawOptimizerNotice;
 use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
@@ -6227,24 +6227,32 @@ impl Coordinator {
     pub(super) fn emit_optimizer_notices(
         &mut self,
         session: &Session,
-        optimizer_notices: &Vec<OptimizerNotice>,
+        notices: &Vec<RawOptimizerNotice>,
     ) {
-        let humanizer = self.catalog().for_session(session);
-        for optimizer_notice in optimizer_notices {
-            let system_vars = self.catalog.system_config();
-            let notice_enabled = match optimizer_notice {
-                OptimizerNotice::IndexTooWideForLiteralConstraints(..) => {
+        let humanizer = self.catalog().state();
+        let system_vars = self.catalog.system_config();
+        for notice in notices {
+            let kind = OptimizerNoticeKind::from(notice);
+            let notice_enabled = match kind {
+                OptimizerNoticeKind::IndexTooWideForLiteralConstraints => {
                     system_vars.enable_notices_for_index_too_wide_for_literal_constraints()
                 }
-                OptimizerNotice::IndexKeyEmpty => system_vars.enable_notices_for_index_empty_key(),
+                OptimizerNoticeKind::IndexKeyEmpty => {
+                    system_vars.enable_notices_for_index_empty_key()
+                }
             };
             if notice_enabled {
-                let (notice, hint) = optimizer_notice.to_string(&humanizer);
-                session.add_notice(AdapterNotice::OptimizerNotice { notice, hint });
+                // We don't need to redact the notice parts because
+                // `emit_optimizer_notices` is onlyy called by the `sequence_~`
+                // method for the DDL that produces that notice.
+                session.add_notice(AdapterNotice::OptimizerNotice {
+                    notice: notice.message(humanizer, false).to_string(),
+                    hint: notice.hint(humanizer, false).to_string(),
+                });
             }
             self.metrics
                 .optimization_notices
-                .with_label_values(&[optimizer_notice.metric_label()])
+                .with_label_values(&[kind.metric_label()])
                 .inc_by(1);
         }
     }
