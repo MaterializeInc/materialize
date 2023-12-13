@@ -31,6 +31,7 @@ use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext}
 use rdkafka::types::RDKafkaRespErr;
 use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
+use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tracing::{debug, error, info, warn, Level};
 
@@ -631,16 +632,97 @@ pub fn get_partitions<C: ClientContext>(
     Ok(partition_ids)
 }
 
+/// Default to true as they hey have no downsides <https://github.com/confluentinc/librdkafka/issues/283>.
+pub const DEFAULT_KEEPALIVE: bool = true;
+/// The `rdkafka` default.
+/// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
+pub const DEFAULT_SOCKET_TIMEOUT: Duration = Duration::from_millis(60000);
+/// The `rdkafka` default.
+/// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
+pub const DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT: Duration = Duration::from_millis(30000);
+
+/// Configurable timeouts for Kafka connections.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TcpTimeoutConfig {
+    /// Whether or not to enable
+    pub keepalive: bool,
+    /// The timeout for network requests.
+    pub socket_timeout: Duration,
+    /// The timeout for setting up network connections.
+    pub socket_connection_setup_timeout: Duration,
+}
+
+impl Default for TcpTimeoutConfig {
+    fn default() -> Self {
+        TcpTimeoutConfig {
+            keepalive: DEFAULT_KEEPALIVE,
+            socket_timeout: DEFAULT_SOCKET_TIMEOUT,
+            socket_connection_setup_timeout: DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT,
+        }
+    }
+}
+
+impl TcpTimeoutConfig {
+    /// Build a `TcpTimeoutConfig` from the given parameters. Parameters outside the supported
+    /// range are defaulted and cause an error log.
+    pub fn build(
+        keepalive: bool,
+        socket_timeout: Duration,
+        socket_connection_setup_timeout: Duration,
+    ) -> TcpTimeoutConfig {
+        // Constrain values based on ranges here:
+        // <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
+        //
+        // Note we error log but do not fail as this is called in a non-fallible
+        // LD-sync in the adapter.
+
+        // The documented max here is `300000`, but rdkafka bans `socket.timeout.ms` being more
+        // than `transaction.timeout.ms` + 100ms. We don't currently allow configuring
+        // `transaction.timeout.ms`, so we use its default + 100 here.
+        let socket_timeout = if socket_timeout.as_millis() > 60100 {
+            error!("socket_timeout ({socket_timeout:?}) greater than max of 60100ms, defaulting to the default of {DEFAULT_SOCKET_TIMEOUT:?}");
+            DEFAULT_SOCKET_TIMEOUT
+        } else if socket_timeout.as_millis() < 10 {
+            error!("socket_timeout ({socket_timeout:?}) less than max of 10ms, defaulting to the default of {DEFAULT_SOCKET_TIMEOUT:?}");
+            DEFAULT_SOCKET_TIMEOUT
+        } else {
+            socket_timeout
+        };
+
+        let socket_connection_setup_timeout = if socket_connection_setup_timeout.as_millis()
+            > 2147483647
+        {
+            error!("socket_timeout ({socket_connection_setup_timeout:?}) greater than max of 2147483647ms, \
+            defaulting to the default of {DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT:?}");
+            DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT
+        } else if socket_timeout.as_millis() < 10 {
+            error!("socket_timeout ({socket_timeout:?}) less than max of 10ms, defaulting to the default of {DEFAULT_SOCKET_TIMEOUT:?}");
+            DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT
+        } else {
+            socket_timeout
+        };
+
+        TcpTimeoutConfig {
+            keepalive,
+            socket_timeout,
+            socket_connection_setup_timeout,
+        }
+    }
+}
+
 /// A simpler version of [`create_new_client_config`] that defaults
 /// the `log_level` to `INFO` and should only be used in tests.
 pub fn create_new_client_config_simple() -> ClientConfig {
-    create_new_client_config(tracing::Level::INFO)
+    create_new_client_config(tracing::Level::INFO, Default::default())
 }
 
 /// Build a new [`rdkafka`] [`ClientConfig`] with its `log_level` set correctly
 /// based on the passed through [`tracing::Level`]. This level should be
 /// determined for `target: "librdkafka"`.
-pub fn create_new_client_config(tracing_level: Level) -> ClientConfig {
+pub fn create_new_client_config(
+    tracing_level: Level,
+    timeout_config: TcpTimeoutConfig,
+) -> ClientConfig {
     #[allow(clippy::disallowed_methods)]
     let mut config = ClientConfig::new();
 
@@ -680,6 +762,22 @@ pub fn create_new_client_config(tracing_level: Level) -> ClientConfig {
         tracing::debug!(target: "librdkafka", "Enabling debug logs for rdkafka");
         config.set("debug", "all");
     }
+
+    if timeout_config.keepalive {
+        config.set("socket.keepalive.enable", "true");
+    }
+
+    config.set(
+        "socket.timeout.ms",
+        timeout_config.socket_timeout.as_millis().to_string(),
+    );
+    config.set(
+        "socket.connection.setup.timeout.ms",
+        timeout_config
+            .socket_connection_setup_timeout
+            .as_millis()
+            .to_string(),
+    );
 
     config
 }

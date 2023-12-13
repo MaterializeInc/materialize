@@ -57,6 +57,8 @@ pub struct StorageParameters {
     pub record_namespaced_errors: bool,
     /// Networking configuration for ssh connections.
     pub ssh_timeout_config: SshTimeoutConfig,
+    /// Networking configuration for kafka connections.
+    pub kafka_timeout_config: mz_kafka_util::client::TcpTimeoutConfig,
 }
 
 // Implement `Default` manually, so that the default can match the
@@ -80,6 +82,7 @@ impl Default for StorageParameters {
             shrink_upsert_unused_buffers_by_ratio: Default::default(),
             record_namespaced_errors: true,
             ssh_timeout_config: Default::default(),
+            kafka_timeout_config: Default::default(),
         }
     }
 }
@@ -172,6 +175,7 @@ impl StorageParameters {
             shrink_upsert_unused_buffers_by_ratio,
             record_namespaced_errors,
             ssh_timeout_config,
+            kafka_timeout_config,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -192,6 +196,7 @@ impl StorageParameters {
         self.shrink_upsert_unused_buffers_by_ratio = shrink_upsert_unused_buffers_by_ratio;
         self.record_namespaced_errors = record_namespaced_errors;
         self.ssh_timeout_config = ssh_timeout_config;
+        self.kafka_timeout_config = kafka_timeout_config;
     }
 }
 
@@ -226,6 +231,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             ),
             record_namespaced_errors: self.record_namespaced_errors,
             ssh_timeout_config: Some(self.ssh_timeout_config.into_proto()),
+            kafka_timeout_config: Some(self.kafka_timeout_config.into_proto()),
         }
     }
 
@@ -277,6 +283,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             ssh_timeout_config: proto
                 .ssh_timeout_config
                 .into_rust_if_some("ProtoStorageParameters::ssh_timeout_config")?,
+            kafka_timeout_config: proto
+                .kafka_timeout_config
+                .into_rust_if_some("ProtoStorageParameters::kafka_timeout_config")?,
         })
     }
 }
@@ -299,6 +308,32 @@ impl RustType<ProtoPgSourceTcpTimeouts> for mz_postgres_util::TcpTimeoutConfig {
             keepalives_idle: proto.keepalives_idle.into_rust()?,
             keepalives_interval: proto.keepalives_interval.into_rust()?,
             tcp_user_timeout: proto.tcp_user_timeout.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoKafkaSourceTcpTimeouts> for mz_kafka_util::client::TcpTimeoutConfig {
+    fn into_proto(&self) -> ProtoKafkaSourceTcpTimeouts {
+        ProtoKafkaSourceTcpTimeouts {
+            keepalive: self.keepalive,
+            socket_timeout: Some(self.socket_timeout.into_proto()),
+            socket_connection_setup_timeout: Some(
+                self.socket_connection_setup_timeout.into_proto(),
+            ),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaSourceTcpTimeouts) -> Result<Self, TryFromProtoError> {
+        Ok(mz_kafka_util::client::TcpTimeoutConfig {
+            keepalive: proto.keepalive,
+            socket_timeout: proto
+                .socket_timeout
+                .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::socket_timeout")?,
+            socket_connection_setup_timeout: proto
+                .socket_connection_setup_timeout
+                .into_rust_if_some(
+                    "ProtoKafkaSourceTcpTimeouts::socket_connection_setup_timeout",
+                )?,
         })
     }
 }
