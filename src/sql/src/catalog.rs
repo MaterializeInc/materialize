@@ -232,6 +232,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
         self.resolve_item(name)
     }
 
+    /// Gets a type named `name` from exactly one of the system schemas.
+    ///
+    /// # Panics
+    /// - If `name` is not an entry in any system schema
+    /// - If more than one system schema has an entry named `name`.
+    fn get_system_type(&self, name: &str) -> &dyn CatalogItem;
+
     /// Gets an item by its ID.
     fn try_get_item(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
 
