@@ -41,10 +41,10 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
     PreExecutionInconsistencyIgnoreFilterBase,
 )
 from materialize.output_consistency.ignore_filter.param_matchers import (
-    index_of_param_by_equality,
+    index_of_param_by_type,
 )
-from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
-    REGEX_PARAM,
+from materialize.output_consistency.input_data.params.text_operation_param import (
+    TextOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.date_time_return_spec import (
     DateTimeReturnTypeSpec,
@@ -143,8 +143,8 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 return YesIgnore("#22002: min/max on text")
 
         if db_function.function_name_in_lower_case.startswith("regexp"):
-            regex_param_index = index_of_param_by_equality(
-                db_function.params, REGEX_PARAM
+            regex_param_index = index_of_param_by_type(
+                db_function.params, TextOperationParam
             )
             assert regex_param_index is not None
 
