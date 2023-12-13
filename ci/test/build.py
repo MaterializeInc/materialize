@@ -119,7 +119,7 @@ def maybe_upload_debuginfo(
         # profiling provider), but only if this is a tag build. Polar Signals is
         # expensive, so we don't want to upload development or unstable builds
         # that won't ever be profiled by Polar Signals.
-        if is_tag_build:
+        if False:
             print(f"Uploading debuginfo for {bin} to Polar Signals...")
             spawn.runv(
                 [
