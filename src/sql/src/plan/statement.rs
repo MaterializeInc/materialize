@@ -241,7 +241,8 @@ pub fn describe(
 /// Planning is a pure, synchronous function and so requires that the provided
 /// `stmt` does does not depend on any external state. Statements that rely on
 /// external state must remove that state prior to calling this function via
-/// [`crate::pure::purify_statement`].
+/// [`crate::pure::purify_statement`] or
+/// [`crate::pure::purify_create_materialized_view_options`].
 ///
 /// TODO: sinks do not currently obey this rule, which is a bug
 /// <https://github.com/MaterializeInc/materialize/issues/20019>

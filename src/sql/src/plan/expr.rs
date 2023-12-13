@@ -3071,6 +3071,28 @@ impl HirScalarExpr {
             }
         })
     }
+
+    /// Attempts to simplify this expression to a literal MzTimestamp.
+    ///
+    /// Returns `None` if this expression cannot be simplified, e.g. because it
+    /// contains non-literal values.
+    ///
+    /// TODO: Make this (and the other similar fns above) return Result, so that we can show the
+    /// error when it fails. (E.g., there can be non-trivial cast errors.)
+    ///
+    /// # Panics
+    ///
+    /// Panics if this expression does not have type [`ScalarType::MzTimestamp`].
+    pub fn into_literal_mz_timestamp(self) -> Option<Timestamp> {
+        self.simplify_to_literal().and_then(|row| {
+            let datum = row.unpack_first();
+            if datum.is_null() {
+                None
+            } else {
+                Some(datum.unwrap_mz_timestamp())
+            }
+        })
+    }
 }
 
 impl VisitChildren<Self> for HirScalarExpr {

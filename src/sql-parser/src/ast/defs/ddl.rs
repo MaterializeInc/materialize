@@ -31,6 +31,8 @@ pub enum MaterializedViewOptionName {
     /// The `ASSERT NOT NULL [=] <ident>` option.
     AssertNotNull,
     RetainHistory,
+    /// The `REFRESH [=] ...` option.
+    Refresh,
 }
 
 impl AstDisplay for MaterializedViewOptionName {
@@ -38,6 +40,7 @@ impl AstDisplay for MaterializedViewOptionName {
         match self {
             MaterializedViewOptionName::AssertNotNull => f.write_str("ASSERT NOT NULL"),
             MaterializedViewOptionName::RetainHistory => f.write_str("RETAIN HISTORY"),
+            MaterializedViewOptionName::Refresh => f.write_str("REFRESH"),
         }
     }
 }

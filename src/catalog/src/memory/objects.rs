@@ -26,6 +26,7 @@ use mz_controller::clusters::{
     ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
@@ -706,6 +707,7 @@ pub struct MaterializedView {
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
     pub custom_logical_compaction_window: Option<CompactionWindow>,
+    pub refresh_schedule: Option<RefreshSchedule>,
 }
 
 #[derive(Debug, Clone, Serialize)]

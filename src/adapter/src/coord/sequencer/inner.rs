@@ -22,6 +22,7 @@ use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
     RowSetFinishing,
@@ -2755,6 +2756,7 @@ impl Coordinator {
                 cluster_id,
                 broken,
                 non_null_assertions,
+                refresh_schedule,
             } => {
                 // Please see the docs on `explain_query_optimizer_pipeline` above.
                 self.explain_create_materialized_view_optimizer_pipeline(
@@ -2764,6 +2766,7 @@ impl Coordinator {
                     cluster_id,
                     broken,
                     non_null_assertions,
+                    refresh_schedule,
                     &config,
                     root_dispatch,
                 )
@@ -3095,6 +3098,7 @@ impl Coordinator {
         target_cluster_id: ClusterId,
         broken: bool,
         non_null_assertions: Vec<usize>,
+        _refresh_schedule: Option<RefreshSchedule>,
         explain_config: &mz_repr::explain::ExplainConfig,
         _root_dispatch: tracing::Dispatch,
     ) -> Result<

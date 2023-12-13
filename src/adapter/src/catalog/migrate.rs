@@ -17,7 +17,10 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::namespaces::PG_CATALOG_SCHEMA;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::catalog::NameReference;
-use mz_sql_parser::ast::{visit_mut, Ident, Raw, RawDataType, Statement};
+use mz_sql_parser::ast::{
+    visit_mut, CreateMaterializedViewStatement, Ident, MaterializedViewOption,
+    MaterializedViewOptionName, Raw, RawDataType, RefreshOptionValue, Statement,
+};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::GenericSourceConnection;
@@ -94,6 +97,10 @@ pub(crate) async fn migrate(
                 ast_rewrite_create_sink_into_kafka_options_0_80_0(stmt)?;
             }
             ast_rewrite_rewrite_type_schemas_0_81_0(stmt);
+
+            if catalog_version <= Version::new(0, 81, u64::MAX) {
+                ast_rewrite_create_materialized_view_refresh_options_0_82_0(stmt)?;
+            }
 
             Ok(())
         })
@@ -344,6 +351,37 @@ fn persist_default_cluster_0_82_0(
     if !already_set {
         txn.upsert_system_config(CLUSTER_KEY, "default".to_string())?;
     }
+
+    Ok(())
+}
+
+fn ast_rewrite_create_materialized_view_refresh_options_0_82_0(
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::visit_mut::VisitMut;
+    use mz_sql::ast::WithOptionValue;
+
+    struct Rewriter;
+
+    impl<'ast> VisitMut<'ast, Raw> for Rewriter {
+        fn visit_create_materialized_view_statement_mut(
+            &mut self,
+            node: &'ast mut CreateMaterializedViewStatement<Raw>,
+        ) {
+            if !node
+                .with_options
+                .iter()
+                .any(|option| matches!(option.name, MaterializedViewOptionName::Refresh))
+            {
+                node.with_options.push(MaterializedViewOption {
+                    name: MaterializedViewOptionName::Refresh,
+                    value: Some(WithOptionValue::Refresh(RefreshOptionValue::OnCommit)),
+                })
+            }
+        }
+    }
+
+    Rewriter.visit_statement_mut(stmt);
 
     Ok(())
 }

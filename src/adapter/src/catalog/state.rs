@@ -942,6 +942,7 @@ impl CatalogState {
                     cluster_id: materialized_view.cluster_id,
                     non_null_assertions: materialized_view.non_null_assertions,
                     custom_logical_compaction_window: materialized_view.compaction_window,
+                    refresh_schedule: materialized_view.refresh_schedule,
                 })
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {

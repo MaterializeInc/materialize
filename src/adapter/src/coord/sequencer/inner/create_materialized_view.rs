@@ -97,11 +97,20 @@ impl Coordinator {
         let plan::CreateMaterializedViewPlan {
             materialized_view:
                 plan::MaterializedView {
-                    expr, cluster_id, ..
+                    expr,
+                    cluster_id,
+                    refresh_schedule,
+                    ..
                 },
             ambiguous_columns,
             ..
         } = &plan;
+
+        if refresh_schedule.is_some() {
+            return Err(AdapterError::Unsupported(
+                "REFRESH options other than ON COMMIT",
+            ));
+        }
 
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
@@ -188,10 +197,10 @@ impl Coordinator {
             optimizer_config,
         );
 
-        let span = tracing::debug_span!("optimize create materielized view task");
+        let span = tracing::debug_span!("optimize create materialized view task");
 
         mz_ore::task::spawn_blocking(
-            || "optimize create materielized view",
+            || "optimize create materialized view",
             move || {
                 let _guard = span.enter();
 
@@ -238,6 +247,7 @@ impl Coordinator {
                             cluster_id,
                             non_null_assertions,
                             compaction_window,
+                            refresh_schedule,
                             ..
                         },
                     drop_ids,
@@ -268,6 +278,7 @@ impl Coordinator {
                     cluster_id,
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
+                    refresh_schedule: refresh_schedule.clone(),
                 }),
                 owner_id: *ctx.session().current_role_id(),
             }),

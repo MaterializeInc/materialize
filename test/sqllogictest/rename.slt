@@ -159,7 +159,7 @@ query TT
 SHOW CREATE MATERIALIZED VIEW grand_friend.mv1;
 ----
 materialize.grand_friend.mv1
-CREATE MATERIALIZED VIEW "materialize"."grand_friend"."mv1" IN CLUSTER "quickstart" AS SELECT "x" FROM "materialize"."enemy"."v1"
+CREATE MATERIALIZED VIEW "materialize"."grand_friend"."mv1" IN CLUSTER "quickstart" WITH (REFRESH = ON COMMIT) AS SELECT "x" FROM "materialize"."enemy"."v1"
 
 statement ok
 CREATE TABLE a1.t (y text);

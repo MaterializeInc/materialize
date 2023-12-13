@@ -196,7 +196,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
         cluster_replica_name: &'b QualifiedReplica,
     ) -> Result<&dyn CatalogClusterReplica<'a>, CatalogError>;
 
-    /// Resolves a partially-specified item name.
+    /// Resolves a partially-specified item name, that is NOT a function or
+    /// type. (For resolving functions or types, please use
+    /// [SessionCatalog::resolve_function] or [SessionCatalog::resolve_type].)
     ///
     /// If the partial name has a database component, it searches only the
     /// specified database; otherwise, it searches the active database. If the

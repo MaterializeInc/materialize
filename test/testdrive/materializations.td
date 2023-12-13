@@ -79,7 +79,7 @@ data_view
 > SHOW CREATE MATERIALIZED VIEW test1
 name                      create_sql
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"quickstart\" AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
+materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"quickstart\" WITH (REFRESH = ON COMMIT) AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
 
 # Materialized view can be built on a not-materialized view.
 > CREATE MATERIALIZED VIEW test2 AS

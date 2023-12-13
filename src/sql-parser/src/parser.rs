@@ -531,7 +531,7 @@ impl<'a> Parser<'a> {
         maybe!(self.maybe_parse(|parser| {
             let data_type = parser.parse_data_type()?;
             if data_type.to_string().as_str() == "interval" {
-                Ok(Expr::Value(parser.parse_interval_value()?))
+                Ok(Expr::Value(Value::Interval(parser.parse_interval_value()?)))
             } else {
                 Ok(Expr::Cast {
                     expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
@@ -567,7 +567,9 @@ impl<'a> Parser<'a> {
             Token::Keyword(NULLIF) => self.parse_nullif_expr(),
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
-            Token::Keyword(INTERVAL) => Ok(Expr::Value(self.parse_interval_value()?)),
+            Token::Keyword(INTERVAL) => {
+                Ok(Expr::Value(Value::Interval(self.parse_interval_value()?)))
+            }
             Token::Keyword(NOT) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
@@ -1016,7 +1018,7 @@ impl<'a> Parser<'a> {
     ///   - `INTERVAL '1:1:1.1' HOUR TO SECOND (5)`
     ///   - `INTERVAL '1.111' SECOND (2)`
     ///
-    fn parse_interval_value(&mut self) -> Result<Value, ParserError> {
+    fn parse_interval_value(&mut self) -> Result<IntervalValue, ParserError> {
         // The first token in an interval is a string literal which specifies
         // the duration of the interval.
         let value = self.parse_literal_string()?;
@@ -1085,12 +1087,12 @@ impl<'a> Parser<'a> {
                 }
                 Err(_) => (DateTimeField::Year, DateTimeField::Second, None),
             };
-        Ok(Value::Interval(IntervalValue {
+        Ok(IntervalValue {
             value,
             precision_high,
             precision_low,
             fsec_max_precision,
-        }))
+        })
     }
 
     /// Parse an operator following an expression
@@ -3218,7 +3220,7 @@ impl<'a> Parser<'a> {
     fn parse_materialized_view_option_name(
         &mut self,
     ) -> Result<MaterializedViewOptionName, ParserError> {
-        let option = self.expect_one_of_keywords(&[ASSERT, RETAIN])?;
+        let option = self.expect_one_of_keywords(&[ASSERT, RETAIN, REFRESH])?;
         let name = match option {
             ASSERT => {
                 self.expect_keywords(&[NOT, NULL])?;
@@ -3228,6 +3230,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(HISTORY)?;
                 MaterializedViewOptionName::RetainHistory
             }
+            REFRESH => MaterializedViewOptionName::Refresh,
             _ => unreachable!(),
         };
         Ok(name)
@@ -3237,13 +3240,13 @@ impl<'a> Parser<'a> {
         &mut self,
     ) -> Result<MaterializedViewOption<Raw>, ParserError> {
         let name = self.parse_materialized_view_option_name()?;
-        if name == MaterializedViewOptionName::RetainHistory {
-            return Ok(MaterializedViewOption {
-                name,
-                value: self.parse_option_retain_history()?,
-            });
-        }
-        let value = self.parse_optional_option_value()?;
+        let value = match name {
+            MaterializedViewOptionName::RetainHistory => self.parse_option_retain_history()?,
+            MaterializedViewOptionName::Refresh => {
+                Some(self.parse_materialized_view_refresh_option_value()?)
+            }
+            _ => self.parse_optional_option_value()?,
+        };
         Ok(MaterializedViewOption { name, value })
     }
 
@@ -3252,6 +3255,45 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FOR)?;
         let value = self.parse_value()?;
         Ok(Some(WithOptionValue::RetainHistoryFor(value)))
+    }
+
+    fn parse_materialized_view_refresh_option_value(
+        &mut self,
+    ) -> Result<WithOptionValue<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+
+        match self.expect_one_of_keywords(&[ON, AT, EVERY])? {
+            ON => {
+                self.expect_keyword(COMMIT)?;
+                Ok(WithOptionValue::Refresh(RefreshOptionValue::OnCommit))
+            }
+            AT => {
+                if self.parse_keyword(CREATION) {
+                    Ok(WithOptionValue::Refresh(RefreshOptionValue::AtCreation))
+                } else {
+                    Ok(WithOptionValue::Refresh(RefreshOptionValue::At(
+                        RefreshAtOptionValue {
+                            time: self.parse_expr()?,
+                        },
+                    )))
+                }
+            }
+            EVERY => {
+                let interval = self.parse_interval_value()?;
+                let aligned_to = if self.parse_keywords(&[ALIGNED, TO]) {
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
+                Ok(WithOptionValue::Refresh(RefreshOptionValue::Every(
+                    RefreshEveryOptionValue {
+                        interval,
+                        aligned_to,
+                    },
+                )))
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -5138,7 +5180,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(TRUE) => Ok(Value::Boolean(true)),
                 Token::Keyword(FALSE) => Ok(Value::Boolean(false)),
                 Token::Keyword(NULL) => Ok(Value::Null),
-                Token::Keyword(INTERVAL) => Ok(self.parse_interval_value()?),
+                Token::Keyword(INTERVAL) => Ok(Value::Interval(self.parse_interval_value()?)),
                 Token::Keyword(kw) => {
                     parser_err!(
                         self,
