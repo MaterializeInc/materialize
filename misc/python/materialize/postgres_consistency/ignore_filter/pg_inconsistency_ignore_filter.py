@@ -177,6 +177,9 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             "left",
             "right",
             "substring",
+            "ltrim",
+            "rtrim",
+            "btrim",
         ] and expression.matches(
             partial(
                 involves_data_type_category, data_type_category=DataTypeCategory.JSONB
@@ -216,7 +219,10 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#23578: empty result in || with simple values")
 
-        if db_operation.pattern in ["position($ IN $)",] and expression.matches(
+        if db_operation.pattern in [
+            "position($ IN $)",
+            "trim($ $ FROM $)",
+        ] and expression.matches(
             partial(
                 involves_data_type_category, data_type_category=DataTypeCategory.JSONB
             ),
