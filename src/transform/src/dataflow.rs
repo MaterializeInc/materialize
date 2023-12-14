@@ -29,7 +29,7 @@ use mz_repr::explain::IndexUsageType;
 use mz_repr::GlobalId;
 
 use crate::monotonic::MonotonicFlag;
-use crate::optimizer_notices::OptimizerNotice;
+use crate::notice::RawOptimizerNotice;
 use crate::{IndexOracle, Optimizer, StatisticsOracle, TransformCtx, TransformError};
 
 /// Optimizes the implementation of each dataflow.
@@ -1177,10 +1177,10 @@ impl IndexUsageContext {
 /// Extra information about the dataflow. This is not going to be shipped, but has to be processed
 /// in other ways, e.g., showing notices to the user, or saving meta-information to the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DataflowMetainfo {
+pub struct DataflowMetainfo<Notice = RawOptimizerNotice> {
     /// Notices that the optimizer wants to show to users.
-    /// For pushing a new element, use `push_optimizer_notice_dedup`.
-    pub optimizer_notices: Vec<OptimizerNotice>,
+    /// For pushing a new element, use [`Self::push_optimizer_notice_dedup`].
+    pub optimizer_notices: Vec<Notice>,
     /// What kind of operation (full scan, lookup, ...) will access each index. Computed by
     /// `prune_and_annotate_dataflow_index_imports`.
     pub index_usage_types: BTreeMap<GlobalId, Vec<IndexUsageType>>,
@@ -1195,10 +1195,14 @@ impl Default for DataflowMetainfo {
     }
 }
 
-impl DataflowMetainfo {
-    /// Pushes an `OptimizerNotice` into `DataflowMetainfo::optimizer_notices`, but only if the
-    /// exact same notice is not already present.
-    pub fn push_optimizer_notice_dedup(&mut self, notice: OptimizerNotice) {
+impl DataflowMetainfo<RawOptimizerNotice> {
+    /// Pushes a [`RawOptimizerNotice`] into [`Self::optimizer_notices`], but
+    /// only if the exact same notice is not already present.
+    pub fn push_optimizer_notice_dedup<T>(&mut self, notice: T)
+    where
+        T: Into<RawOptimizerNotice>,
+    {
+        let notice = notice.into();
         if !self.optimizer_notices.contains(&notice) {
             self.optimizer_notices.push(notice);
         }

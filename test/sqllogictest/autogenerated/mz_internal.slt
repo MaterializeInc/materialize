@@ -202,6 +202,20 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  referenced_object_id  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_notices' ORDER BY position
+----
+1  notice_type  text
+2  message  text
+3  hint  text
+4  action  text
+5  redacted_message  text
+6  redacted_hint  text
+7  redacted_action  text
+8  action_type  text
+9  object_id  text
+10  created_at  timestamp␠with␠time␠zone
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_postgres_sources' ORDER BY position
 ----
 1  id  text
@@ -718,10 +732,13 @@ mz_message_counts
 mz_message_counts_per_worker
 mz_message_counts_received_raw
 mz_message_counts_sent_raw
+mz_notices
+mz_notices_redacted
 mz_object_dependencies
 mz_object_fully_qualified_names
 mz_object_lifetimes
 mz_object_transitive_dependencies
+mz_optimizer_notices
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
 mz_peek_durations_histogram_raw
