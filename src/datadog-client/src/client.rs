@@ -27,7 +27,6 @@ use crate::{
 pub struct Client<'a> {
     pub(crate) inner: reqwest::Client,
     pub(crate) api_key: &'a str,
-    pub(crate) application_key: Option<&'a str>,
 }
 
 /// Contains the metrics interface.
@@ -52,8 +51,9 @@ impl<'a> Client<'a> {
         let req = self
             .inner
             .request(method, domain)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
             .header("DD-API-KEY", self.api_key)
-            .header("DD-APPLICATION-KEY", self.application_key.unwrap_or(""))
             .timeout(Duration::from_secs(60));
 
         Ok(req)
@@ -86,5 +86,50 @@ impl<'a> Client<'a> {
                 })),
             }
         }
+    }
+}
+
+// TODO: This is a temporal test and should not be merged.
+#[cfg(test)]
+mod tests {
+    use crate::client::metrics::MetricType;
+    use crate::client::metrics::{Point, Series, SubmitMetricsParams};
+    use crate::config::{ClientBuilder, ClientConfig};
+    use crate::error::Error;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    pub async fn submit_a_metric() -> Result<(), Error> {
+        let start = SystemTime::now();
+        let since_the_epoch: i64 = start
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs() as i64;
+
+        let client = ClientBuilder::default().build(ClientConfig {
+            api_key: env!("DATADOG_API_KEY"),
+        });
+
+        client
+            .submit_metric(SubmitMetricsParams {
+                series: vec![Series {
+                    metric: "test_metric",
+                    points: vec![Point {
+                        timestamp: since_the_epoch.into(),
+                        value: 80.0,
+                    }],
+                    source_type_name: "Materialize",
+                    typ: MetricType::Gauge,
+                    interval: None,
+                    metadata: None,
+                    resources: None,
+                    tags: None,
+                    unit: None,
+                }],
+            })
+            .await?;
+
+        Ok(())
     }
 }

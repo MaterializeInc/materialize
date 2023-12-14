@@ -30,8 +30,6 @@ pub static DEFAULT_ENDPOINT: Lazy<Url> =
 pub struct ClientConfig<'a> {
     /// API key to issue requests from the client.
     pub api_key: &'a str,
-    /// Application key to issue requests from the client.
-    pub application_key: Option<&'a str>,
 }
 
 /// A builder for a [`Client`].
@@ -56,7 +54,6 @@ impl ClientBuilder {
 
         Client {
             api_key: config.api_key,
-            application_key: config.application_key,
             inner,
         }
     }

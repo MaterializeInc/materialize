@@ -4076,6 +4076,7 @@ dependencies = [
 name = "mz-datadog-client"
 version = "0.0.0"
 dependencies = [
+ "mz-ore",
  "once_cell",
  "reqwest",
  "serde",

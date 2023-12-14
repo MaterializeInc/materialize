@@ -82,6 +82,7 @@ pub struct Resource<'a> {
 }
 
 #[derive(Serialize)]
+#[serde(untagged)]
 /// Represents the mutliple metric types accepted by Datadog.
 pub enum MetricType {
     /// Represents the unspecified metric type.
@@ -157,8 +158,9 @@ impl<'a> Client<'a> {
         &self,
         params: SubmitMetricsParams<'a>,
     ) -> Result<SubmitMetricsResponse, Error> {
-        let req = self.build_request(Method::GET, ["v2", "series"])?;
+        let req = self.build_request(Method::POST, ["api", "v2", "series"])?;
         let req = req.json(&params);
+        let req = req.header("Content-Encoding", "application/json");
 
         self.send_request(req).await
     }
