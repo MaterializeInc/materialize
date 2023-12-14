@@ -630,11 +630,14 @@ pub fn get_partitions<C: ClientContext>(
     Ok(partition_ids)
 }
 
-/// Default to true as they hey have no downsides <https://github.com/confluentinc/librdkafka/issues/283>.
+/// Default to true as they have no downsides <https://github.com/confluentinc/librdkafka/issues/283>.
 pub const DEFAULT_KEEPALIVE: bool = true;
 /// The `rdkafka` default.
 /// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
 pub const DEFAULT_SOCKET_TIMEOUT: Duration = Duration::from_millis(60000);
+/// The `rdkafka` default.
+/// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
+pub const DEFAULT_TRANSACTION_TIMEOUT: Duration = Duration::from_millis(60000);
 /// The `rdkafka` default.
 /// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
 pub const DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT: Duration = Duration::from_millis(30000);
@@ -644,72 +647,112 @@ pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Configurable timeouts for Kafka connections.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TcpTimeoutConfig {
+pub struct TimeoutConfig {
     /// Whether or not to enable
     pub keepalive: bool,
-    /// The timeout for network requests.
+    /// The timeout for network requests. Can't be more than 100ms longer than
+    /// `transaction_timeout.
     pub socket_timeout: Duration,
+    /// The timeout for transactions.
+    pub transaction_timeout: Duration,
     /// The timeout for setting up network connections.
     pub socket_connection_setup_timeout: Duration,
     /// The timeout for fetching metadata from upstream.
     pub fetch_metadata_timeout: Duration,
 }
 
-impl Default for TcpTimeoutConfig {
+impl Default for TimeoutConfig {
     fn default() -> Self {
-        TcpTimeoutConfig {
+        TimeoutConfig {
             keepalive: DEFAULT_KEEPALIVE,
             socket_timeout: DEFAULT_SOCKET_TIMEOUT,
+            transaction_timeout: DEFAULT_TRANSACTION_TIMEOUT,
             socket_connection_setup_timeout: DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT,
             fetch_metadata_timeout: DEFAULT_FETCH_METADATA_TIMEOUT,
         }
     }
 }
 
-impl TcpTimeoutConfig {
+impl TimeoutConfig {
     /// Build a `TcpTimeoutConfig` from the given parameters. Parameters outside the supported
     /// range are defaulted and cause an error log.
     pub fn build(
         keepalive: bool,
         socket_timeout: Duration,
+        transaction_timeout: Duration,
         socket_connection_setup_timeout: Duration,
         fetch_metadata_timeout: Duration,
-    ) -> TcpTimeoutConfig {
+    ) -> TimeoutConfig {
         // Constrain values based on ranges here:
         // <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
         //
         // Note we error log but do not fail as this is called in a non-fallible
         // LD-sync in the adapter.
 
-        // The documented max here is `300000`, but rdkafka bans `socket.timeout.ms` being more
-        // than `transaction.timeout.ms` + 100ms. We don't currently allow configuring
-        // `transaction.timeout.ms`, so we use its default + 100 here.
-        let socket_timeout = if socket_timeout.as_millis() > 60100 {
-            error!("socket_timeout ({socket_timeout:?}) greater than max of 60100ms, defaulting to the default of {DEFAULT_SOCKET_TIMEOUT:?}");
-            DEFAULT_SOCKET_TIMEOUT
-        } else if socket_timeout.as_millis() < 10 {
-            error!("socket_timeout ({socket_timeout:?}) less than max of 10ms, defaulting to the default of {DEFAULT_SOCKET_TIMEOUT:?}");
-            DEFAULT_SOCKET_TIMEOUT
-        } else {
-            socket_timeout
-        };
-
-        let socket_connection_setup_timeout = if socket_connection_setup_timeout.as_millis()
-            > 2147483647
+        let transaction_timeout = if transaction_timeout.as_millis() > i32::MAX.try_into().unwrap()
         {
-            error!("socket_timeout ({socket_connection_setup_timeout:?}) greater than max of 2147483647ms, \
-            defaulting to the default of {DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT:?}");
-            DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT
+            error!(
+                "transaction_timeout ({transaction_timeout:?}) greater than max \
+                of {}, defaulting to the default of {DEFAULT_TRANSACTION_TIMEOUT:?}",
+                i32::MAX
+            );
+            DEFAULT_TRANSACTION_TIMEOUT
+        } else if socket_timeout.as_millis() < 1000 {
+            error!(
+                "transaction_timeout ({transaction_timeout:?}) less than max \
+                of 1000ms, defaulting to the default of {DEFAULT_TRANSACTION_TIMEOUT:?}"
+            );
+            DEFAULT_TRANSACTION_TIMEOUT
+        } else {
+            transaction_timeout
+        };
+
+        // The documented max here is `300000`, but rdkafka bans `socket.timeout.ms` being more
+        // than `transaction.timeout.ms` + 100ms.
+        let socket_timeout = if socket_timeout.as_millis()
+            > (std::cmp::min(transaction_timeout.as_millis() + 100, 300000))
+        {
+            error!(
+                "socket_timeout ({socket_timeout:?}) greater than max \
+                of min(30000, transaction.timeout.ms + 100 ({})), \
+                defaulting to the default of {DEFAULT_SOCKET_TIMEOUT:?}",
+                transaction_timeout.as_millis() + 100
+            );
+            DEFAULT_SOCKET_TIMEOUT
         } else if socket_timeout.as_millis() < 10 {
-            error!("socket_timeout ({socket_timeout:?}) less than max of 10ms, defaulting to the default of {DEFAULT_SOCKET_TIMEOUT:?}");
-            DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT
+            error!(
+                "socket_timeout ({socket_timeout:?}) less than max \
+                of 10ms, defaulting to the default of {DEFAULT_SOCKET_TIMEOUT:?}"
+            );
+            DEFAULT_SOCKET_TIMEOUT
         } else {
             socket_timeout
         };
 
-        TcpTimeoutConfig {
+        let socket_connection_setup_timeout =
+            if socket_connection_setup_timeout.as_millis() > i32::MAX.try_into().unwrap() {
+                error!(
+                    "socket_connection_setup_timeout ({socket_connection_setup_timeout:?}) \
+                    greater than max of {}ms, defaulting to the default \
+                    of {DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT:?}",
+                    i32::MAX,
+                );
+                DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT
+            } else if socket_timeout.as_millis() < 10 {
+                error!(
+                    "socket_connection_setup_timeout ({socket_connection_setup_timeout:?}) \
+                    less than max of 10ms, defaulting to the default of \
+                {DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT:?}"
+                );
+                DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT
+            } else {
+                socket_connection_setup_timeout
+            };
+
+        TimeoutConfig {
             keepalive,
             socket_timeout,
+            transaction_timeout,
             socket_connection_setup_timeout,
             fetch_metadata_timeout,
         }
@@ -727,7 +770,7 @@ pub fn create_new_client_config_simple() -> ClientConfig {
 /// determined for `target: "librdkafka"`.
 pub fn create_new_client_config(
     tracing_level: Level,
-    timeout_config: TcpTimeoutConfig,
+    timeout_config: TimeoutConfig,
 ) -> ClientConfig {
     #[allow(clippy::disallowed_methods)]
     let mut config = ClientConfig::new();
@@ -776,6 +819,10 @@ pub fn create_new_client_config(
     config.set(
         "socket.timeout.ms",
         timeout_config.socket_timeout.as_millis().to_string(),
+    );
+    config.set(
+        "transaction.timeout.ms",
+        timeout_config.transaction_timeout.as_millis().to_string(),
     );
     config.set(
         "socket.connection.setup.timeout.ms",
