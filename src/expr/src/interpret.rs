@@ -1520,6 +1520,34 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_like() {
+        let arena = RowArena::new();
+
+        let expr = MirScalarExpr::CallUnary {
+            func: UnaryFunc::IsLikeMatch(IsLikeMatch(
+                crate::like_pattern::compile("%whatever%", true).unwrap(),
+            )),
+            expr: Box::new(MirScalarExpr::Column(0)),
+        };
+
+        let relation = RelationType::new(vec![ScalarType::String.nullable(true)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(Datum::String("aardvark"), Datum::String("zebra")),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(
+            !range_out.fallible,
+            "like function should not error on non-error input"
+        );
+        assert!(range_out.may_contain(Datum::True));
+        assert!(range_out.may_contain(Datum::False));
+        assert!(range_out.may_contain(Datum::Null));
+    }
+
+    #[mz_ore::test]
     fn test_trace() {
         use super::Trace;
 
