@@ -12,7 +12,7 @@ import subprocess
 
 from materialize.mz_version import MzVersion
 
-IMAGE_NAMES_VERIFIED_TO_EXIST = set()
+EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
 
 
 def image_of_release_version_exists(version: MzVersion) -> bool:
@@ -26,9 +26,12 @@ def image_of_commit_exists(commit_hash: str) -> bool:
 def mz_image_tag_exists(image_tag: str) -> bool:
     image_name = f"materialize/materialized:{image_tag}"
 
-    if image_name in IMAGE_NAMES_VERIFIED_TO_EXIST:
-        print(f"Image known to exist from earlier check: {image_name}")
-        return True
+    if image_name in EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK:
+        image_exists = EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name]
+        print(
+            f"Status of image {image_name} known from earlier check: {'exists' if image_exists else 'does not exist'}"
+        )
+        return image_exists
 
     command = [
         "docker",
@@ -40,13 +43,16 @@ def mz_image_tag_exists(image_tag: str) -> bool:
 
     try:
         subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
-        IMAGE_NAMES_VERIFIED_TO_EXIST.add(image_name)
+        EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
         return True
     except subprocess.CalledProcessError as e:
         print(f"Failed to pull image: {image_name}")
 
-        if "not found: manifest unknown: manifest unknown" not in e.output:
+        if "not found: manifest unknown: manifest unknown" in e.output:
+            EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
+        else:
             print(f"Error when pulling image was: {e.output}")
+            # do not cache the result of unknown error messages
 
         return False
 
