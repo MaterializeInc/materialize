@@ -415,12 +415,16 @@ SCENARIOS = [
 
             > CREATE INDEX i_accumulable IN CLUSTER idx_cluster ON accumulable(a);
 
+            > SET CLUSTER = idx_cluster;
+
             > SELECT count(*) FROM accumulable;
             10000001
             """
         ),
         post_restart=dedent(
             """
+            > SET CLUSTER = idx_cluster;
+
             > SELECT count(*) FROM accumulable;
             10000001
             """
