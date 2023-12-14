@@ -1112,29 +1112,48 @@ const KAFKA_SOCKET_KEEPALIVE: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
-/// Controls `socket.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default.
+/// Controls `socket.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default
+/// (60000ms). Cannot be greater than 300000ms, more than 100ms greater than
+/// `kafka_transaction_timeout`, or less than 10ms.
 const KAFKA_SOCKET_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("kafka_socket_timeout"),
     value: &mz_kafka_util::client::DEFAULT_SOCKET_TIMEOUT,
     description: "Controls `socket.timeout.ms` for rdkafka \
-        client connections. Defaults to the rdkafka default.",
+        client connections. Defaults to the rdkafka default (60000ms). \
+        Cannot be greater than 300000ms or more than 100ms greater than \
+        Cannot be greater than 300000ms, more than 100ms greater than \
+        `kafka_transaction_timeout`, or less than 10ms.",
     internal: true,
 };
 
-/// Controls `socket.connection.setup.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default.
+/// Controls `transaction.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default
+/// (60000ms). Cannot be greater than `i32::MAX` or less than 1000ms.
+const KAFKA_TRANSACTION_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("kafka_transaction_timeout"),
+    value: &mz_kafka_util::client::DEFAULT_TRANSACTION_TIMEOUT,
+    description: "Controls `transaction.timeout.ms` for rdkafka \
+        client connections. Defaults to the rdkafka default (60000ms). \
+        Cannot be greater than `i32::MAX` or less than 1000ms.",
+    internal: true,
+};
+
+/// Controls `socket.connection.setup.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default
+/// (30000ms). Cannot be greater than `i32::MAX` or less than 1000ms
 const KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("kafka_socket_connection_setup_timeout"),
     value: &mz_kafka_util::client::DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT,
     description: "Controls `socket.connection.setup.timeout.ms` for rdkafka \
-        client connections. Defaults to the rdkafka default.",
+        client connections. Defaults to the rdkafka default (30000ms). \
+        Cannot be greater than `i32::MAX` or less than 1000ms",
     internal: true,
 };
 
-/// Controls the timeout when fetching kafka metadata.
+/// Controls the timeout when fetching kafka metadata. Defaults to 10s.
 const KAFKA_FETCH_METADATA_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("kafka_fetch_metadata_timeout"),
     value: &mz_kafka_util::client::DEFAULT_FETCH_METADATA_TIMEOUT,
-    description: "Controls the timeout when fetching kafka metadata.",
+    description: "Controls the timeout when fetching kafka metadata. \
+        Defaults to 10s.",
     internal: true,
 };
 
@@ -2906,6 +2925,7 @@ impl SystemVars {
             .with_var(&SSH_KEEPALIVES_IDLE)
             .with_var(&KAFKA_SOCKET_KEEPALIVE)
             .with_var(&KAFKA_SOCKET_TIMEOUT)
+            .with_var(&KAFKA_TRANSACTION_TIMEOUT)
             .with_var(&KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT)
             .with_var(&KAFKA_FETCH_METADATA_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
@@ -3472,6 +3492,11 @@ impl SystemVars {
     /// Returns the `kafka_socket_timeout` configuration parameter.
     pub fn kafka_socket_timeout(&self) -> Duration {
         *self.expect_value(&KAFKA_SOCKET_TIMEOUT)
+    }
+
+    /// Returns the `kafka_transaction_timeout` configuration parameter.
+    pub fn kafka_transaction_timeout(&self) -> Duration {
+        *self.expect_value(&KAFKA_TRANSACTION_TIMEOUT)
     }
 
     /// Returns the `kafka_socket_connection_setup_timeout` configuration parameter.
@@ -5403,6 +5428,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == SSH_KEEPALIVES_IDLE.name()
         || name == KAFKA_SOCKET_KEEPALIVE.name()
         || name == KAFKA_SOCKET_TIMEOUT.name()
+        || name == KAFKA_TRANSACTION_TIMEOUT.name()
         || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
         || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()

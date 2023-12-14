@@ -36,7 +36,7 @@ message ProtoStorageParameters {
     bool record_namespaced_errors = 18;
     uint64 keep_n_privatelink_status_history_entries = 19;
     ProtoSshTimeoutConfig ssh_timeout_config = 20;
-    ProtoKafkaSourceTcpTimeouts kafka_timeout_config = 21;
+    ProtoKafkaTimeouts kafka_timeout_config = 21;
 }
 
 
@@ -48,9 +48,10 @@ message ProtoPgSourceTcpTimeouts {
     optional mz_proto.ProtoDuration tcp_user_timeout = 5;
 }
 
-message ProtoKafkaSourceTcpTimeouts {
+message ProtoKafkaTimeouts {
     bool keepalive = 1;
     mz_proto.ProtoDuration socket_timeout = 2;
+    mz_proto.ProtoDuration transaction_timeout = 5;
     mz_proto.ProtoDuration socket_connection_setup_timeout = 3;
     mz_proto.ProtoDuration fetch_metadata_timeout = 4;
 }

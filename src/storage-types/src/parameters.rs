@@ -58,7 +58,7 @@ pub struct StorageParameters {
     /// Networking configuration for ssh connections.
     pub ssh_timeout_config: SshTimeoutConfig,
     /// Networking configuration for kafka connections.
-    pub kafka_timeout_config: mz_kafka_util::client::TcpTimeoutConfig,
+    pub kafka_timeout_config: mz_kafka_util::client::TimeoutConfig,
 }
 
 // Implement `Default` manually, so that the default can match the
@@ -312,11 +312,12 @@ impl RustType<ProtoPgSourceTcpTimeouts> for mz_postgres_util::TcpTimeoutConfig {
     }
 }
 
-impl RustType<ProtoKafkaSourceTcpTimeouts> for mz_kafka_util::client::TcpTimeoutConfig {
-    fn into_proto(&self) -> ProtoKafkaSourceTcpTimeouts {
-        ProtoKafkaSourceTcpTimeouts {
+impl RustType<ProtoKafkaTimeouts> for mz_kafka_util::client::TimeoutConfig {
+    fn into_proto(&self) -> ProtoKafkaTimeouts {
+        ProtoKafkaTimeouts {
             keepalive: self.keepalive,
             socket_timeout: Some(self.socket_timeout.into_proto()),
+            transaction_timeout: Some(self.transaction_timeout.into_proto()),
             socket_connection_setup_timeout: Some(
                 self.socket_connection_setup_timeout.into_proto(),
             ),
@@ -324,12 +325,15 @@ impl RustType<ProtoKafkaSourceTcpTimeouts> for mz_kafka_util::client::TcpTimeout
         }
     }
 
-    fn from_proto(proto: ProtoKafkaSourceTcpTimeouts) -> Result<Self, TryFromProtoError> {
-        Ok(mz_kafka_util::client::TcpTimeoutConfig {
+    fn from_proto(proto: ProtoKafkaTimeouts) -> Result<Self, TryFromProtoError> {
+        Ok(mz_kafka_util::client::TimeoutConfig {
             keepalive: proto.keepalive,
             socket_timeout: proto
                 .socket_timeout
                 .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::socket_timeout")?,
+            transaction_timeout: proto
+                .transaction_timeout
+                .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::transaction_timeout")?,
             socket_connection_setup_timeout: proto
                 .socket_connection_setup_timeout
                 .into_rust_if_some(
