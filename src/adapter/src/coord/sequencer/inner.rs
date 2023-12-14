@@ -239,7 +239,6 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                let mut source_ids = Vec::with_capacity(sources.len());
                 for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(coord.catalog().resolve_builtin_storage_collection(
@@ -296,12 +295,15 @@ impl Coordinator {
                         .await
                         .unwrap_or_terminate("cannot fail to create collections");
 
-                    source_ids.push(source_id);
+                    coord
+                        .initialize_storage_read_policies(
+                            vec![source_id],
+                            source
+                                .custom_logical_compaction_window
+                                .unwrap_or(CompactionWindow::Default),
+                        )
+                        .await;
                 }
-
-                coord
-                    .initialize_storage_read_policies(source_ids, CompactionWindow::Default)
-                    .await;
             })
             .await;
 

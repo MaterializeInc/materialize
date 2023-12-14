@@ -1290,6 +1290,7 @@ pub struct Source {
     pub create_sql: String,
     pub data_source: DataSourceDesc,
     pub desc: RelationDesc,
+    pub compaction_window: Option<CompactionWindow>,
 }
 
 #[derive(Debug, Clone)]

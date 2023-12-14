@@ -3609,6 +3609,12 @@ async fn test_retain_history() {
         )
         .await
         .is_err());
+    assert!(client
+        .batch_execute(
+            "CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE = '1', RETAIN HISTORY = FOR '2s')",
+        )
+        .await
+        .is_err());
 
     sys_client
         .batch_execute("ALTER SYSTEM SET enable_logical_compaction_window = true")
@@ -3641,57 +3647,65 @@ async fn test_retain_history() {
         )
         .await
         .unwrap();
-
-    // Test compaction and querying without an index present.
-    Retry::default()
-        .retry_async(|_| async {
-            let ts = get_explain_timestamp_determination("v", &client).await?;
-            let source = ts.sources.into_element();
-            let upper = source.write_frontier.into_element();
-            let since = source.read_frontier.into_element();
-            if upper.saturating_sub(since) < Timestamp::from(2000u64) {
-                anyhow::bail!("{upper} - {since} should be atleast 2s apart")
-            }
-            client
-                .query(
-                    &format!(
-                        "SELECT * FROM v AS OF {}-2000",
-                        ts.determination.timestamp_context.timestamp_or_default()
-                    ),
-                    &[],
-                )
-                .await?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-    // With an index the AS OF query should fail because we haven't taught the planner about retain
-    // history yet.
     client
-        .batch_execute("CREATE INDEX i ON v (a)")
+        .batch_execute(
+            "CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE = '1', RETAIN HISTORY = FOR '5s')",
+        )
         .await
         .unwrap();
 
-    let ts = get_explain_timestamp("v", &client).await;
-    assert_contains!(
-        client
-            .query(&format!("SELECT * FROM v AS OF {ts}-2000"), &[])
+    for name in ["v", "s"] {
+        // Test compaction and querying without an index present.
+        Retry::default()
+            .retry_async(|_| async {
+                let ts = get_explain_timestamp_determination(name, &client).await?;
+                let source = ts.sources.into_element();
+                let upper = source.write_frontier.into_element();
+                let since = source.read_frontier.into_element();
+                if upper.saturating_sub(since) < Timestamp::from(2000u64) {
+                    anyhow::bail!("{upper} - {since} should be atleast 2s apart")
+                }
+                client
+                    .query(
+                        &format!(
+                            "SELECT * FROM {name} AS OF {}-2000",
+                            ts.determination.timestamp_context.timestamp_or_default()
+                        ),
+                        &[],
+                    )
+                    .await?;
+                Ok(())
+            })
             .await
-            .unwrap_err()
-            .to_string(),
-        "not valid for all inputs"
-    );
+            .unwrap();
 
-    // Make sure we didn't fail just because the index didn't have enough time after creation.
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    let ts = get_explain_timestamp("v", &client).await;
-    assert_contains!(
+        // With an index the AS OF query should fail because we haven't taught the planner about retain
+        // history yet.
         client
-            .query(&format!("SELECT * FROM v AS OF {ts}-2000"), &[])
+            .batch_execute(&format!("CREATE DEFAULT INDEX ON {name}"))
             .await
-            .unwrap_err()
-            .to_string(),
-        "not valid for all inputs"
-    );
+            .unwrap();
+
+        let ts = get_explain_timestamp(name, &client).await;
+        assert_contains!(
+            client
+                .query(&format!("SELECT * FROM {name} AS OF {ts}-2000"), &[])
+                .await
+                .unwrap_err()
+                .to_string(),
+            "not valid for all inputs"
+        );
+
+        // Make sure we didn't fail just because the index didn't have enough time after creation.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let ts = get_explain_timestamp(name, &client).await;
+        assert_contains!(
+            client
+                .query(&format!("SELECT * FROM {name} AS OF {ts}-2000"), &[])
+                .await
+                .unwrap_err()
+                .to_string(),
+            "not valid for all inputs"
+        );
+    }
 }
