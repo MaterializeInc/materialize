@@ -14,6 +14,9 @@
 # limitations under the License.
 
 import pytest
+from dbt.tests.adapter.constraints.fixtures import (
+    model_contract_header_schema_yml,
+)
 from dbt.tests.adapter.constraints.test_constraints import (
     BaseConstraintQuotedColumn,
     BaseConstraintsRuntimeDdlEnforcement,
@@ -23,6 +26,7 @@ from dbt.tests.adapter.constraints.test_constraints import (
     BaseIncrementalContractSqlHeader,
     BaseModelConstraintsRuntimeEnforcement,
     BaseTableConstraintsColumnsEqual,
+    BaseTableContractSqlHeader,
     BaseViewConstraintsColumnsEqual,
 )
 from dbt.tests.util import run_dbt, run_sql_with_adapter
@@ -130,6 +134,15 @@ class TestNullabilityAssertions:
             'WITH (ASSERT NOT NULL = "a", ASSERT NOT NULL = "b")'
             in nullability_assertions_ddl[1]
         )
+
+
+class TestTableContractSqlHeaderMaterialize(BaseTableContractSqlHeader):
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "my_model_contract_sql_header.sql": override_model_contract_sql_header_sql,
+            "constraints_schema.yml": model_contract_header_schema_yml,
+        }
 
 
 class TestContractInvalidCluster:
