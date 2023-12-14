@@ -1413,6 +1413,7 @@ pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
     pub connection: StorageSinkConnection<ReferencedConnection>,
+    // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
 }
 

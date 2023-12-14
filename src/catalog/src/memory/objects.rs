@@ -17,6 +17,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW;
 use mz_adapter_types::connection::ConnectionId;
+use mz_storage_types::sources::encoding::SourceDataEncoding;
 use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
@@ -51,7 +52,7 @@ use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
@@ -544,6 +545,20 @@ impl Source {
         }
     }
 
+    /// The key and value formats of the source.
+    pub fn formats(&self) -> (Option<&str>, Option<&str>) {
+        match &self.data_source {
+            DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.encoding {
+                SourceDataEncoding::Single(encoding) => (None, encoding.type_()),
+                SourceDataEncoding::KeyValue { key, value } => (key.type_(), value.type_()),
+            },
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Webhook { .. }
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => (None, None),
+        }
+    }
+
     /// Envelope of the source.
     pub fn envelope(&self) -> Option<&str> {
         // Note how "none"/"append-only" is different from `None`. Source
@@ -551,7 +566,7 @@ impl Source {
         // other sources have an envelope that we call the "NONE"-envelope.
 
         match &self.data_source {
-            // NOTE(aljoscha): We could move the block for ingestsions into
+            // NOTE(aljoscha): We could move the block for ingestions into
             // `SourceEnvelope` itself, but that one feels more like an internal
             // thing and adapter should own how we represent envelopes as a
             // string? It would not be hard to convince me otherwise, though.
@@ -635,6 +650,7 @@ pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
     pub connection: StorageSinkConnection<ReferencedConnection>,
+    // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub resolved_ids: ResolvedIds,
@@ -651,6 +667,15 @@ impl Sink {
         match &self.envelope {
             SinkEnvelope::Debezium => Some("debezium"),
             SinkEnvelope::Upsert => Some("upsert"),
+        }
+    }
+
+    /// Output format of the sink.
+    pub fn format(&self) -> &str {
+        let StorageSinkConnection::Kafka(connection) = &self.connection;
+        match &connection.format {
+            KafkaSinkFormat::Avro { .. } => "avro",
+            KafkaSinkFormat::Json => "json",
         }
     }
 

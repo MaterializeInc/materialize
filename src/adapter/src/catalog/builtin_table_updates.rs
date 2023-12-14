@@ -349,8 +349,8 @@ impl CatalogState {
         let mut updates =
             match entry.item() {
                 CatalogItem::Log(_) => self.pack_source_update(
-                    id, oid, schema_id, name, "log", None, None, None, None, owner_id, privileges,
-                    diff, None,
+                    id, oid, schema_id, name, "log", None, None, None, None, None, None, owner_id,
+                    privileges, diff, None,
                 ),
                 CatalogItem::Index(index) => {
                     self.pack_index_update(id, oid, name, owner_id, index, diff)
@@ -363,6 +363,8 @@ impl CatalogState {
                     let envelope = source.envelope();
                     let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
 
+                    let (key_format, value_format) = source.formats();
+
                     let mut updates = self.pack_source_update(
                         id,
                         oid,
@@ -372,6 +374,8 @@ impl CatalogState {
                         connection_id,
                         self.get_storage_object_size(id),
                         envelope,
+                        key_format,
+                        value_format,
                         cluster_id.as_deref(),
                         owner_id,
                         privileges,
@@ -512,6 +516,8 @@ impl CatalogState {
         connection_id: Option<GlobalId>,
         size: Option<&str>,
         envelope: Option<&str>,
+        key_format: Option<&str>,
+        value_format: Option<&str>,
         cluster_id: Option<&str>,
         owner_id: &RoleId,
         privileges: Datum,
@@ -536,6 +542,8 @@ impl CatalogState {
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
                 Datum::from(size),
                 Datum::from(envelope),
+                Datum::from(key_format),
+                Datum::from(value_format),
                 Datum::from(cluster_id),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -840,6 +848,7 @@ impl CatalogState {
             .ast;
 
         let envelope = sink.envelope();
+        let format = sink.format();
 
         updates.push(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SINKS),
@@ -852,6 +861,7 @@ impl CatalogState {
                 Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
                 Datum::from(self.get_storage_object_size(id)),
                 Datum::from(envelope),
+                Datum::from(format),
                 Datum::String(&sink.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
                 Datum::String(&sink.create_sql),
