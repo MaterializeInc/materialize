@@ -23,7 +23,7 @@ class MultiplePartitions(Check):
     """Test that adds new partitions to a Kafka source"""
 
     def initialize(self) -> Testdrive:
-        if self.base_version < MzVersion.parse_mz("v0.80.0-dev"):
+        if self.base_version < MzVersion.parse_mz("v0.79.1"):
             topic_metadata_refresh_interval = "MS 500"
         else:
             topic_metadata_refresh_interval = "'500ms'"
