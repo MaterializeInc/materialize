@@ -25,14 +25,17 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
+use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
 use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::str::{separated, Indent, StrExt};
+use mz_ore::str::{separated, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
-use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, UsedIndexes};
+use mz_repr::explain::text::DisplayText;
+use mz_repr::explain::{
+    CompactScalars, IndexUsageType, Indices, PlanRenderingContext, UsedIndexes,
+};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -109,20 +112,27 @@ pub enum FastPathPlan {
     PeekPersist(GlobalId, mz_expr::SafeMfpPlan),
 }
 
-impl<'a, C> DisplayText<C> for FastPathPlan
-where
-    C: AsMut<Indent> + AsRef<&'a dyn ExprHumanizer>,
-{
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
+impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
+    fn fmt_text(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut PlanRenderingContext<'a, T>,
+    ) -> fmt::Result {
+        let redacted = ctx.config.redacted;
+        let mode = HumanizedExplain::new(ctx.config.redacted);
+
+        // TODO(aalexandrov): factor out common PeekExisting and PeekPersist
+        // code.
         match self {
             FastPathPlan::Constant(Ok(rows), _) => {
                 if !rows.is_empty() {
-                    writeln!(f, "{}Constant", ctx.as_mut())?;
+                    writeln!(f, "{}Constant", ctx.indent)?;
                     *ctx.as_mut() += 1;
                     fmt_text_constant_rows(
                         f,
                         rows.iter().map(|(row, diff)| (row, diff)),
                         ctx.as_mut(),
+                        redacted,
                     )?;
                     *ctx.as_mut() -= 1;
                 } else {
@@ -131,11 +141,30 @@ where
                 Ok(())
             }
             FastPathPlan::Constant(Err(err), _) => {
-                writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().quoted())
+                if redacted {
+                    writeln!(f, "{}Error █", ctx.as_mut())
+                } else {
+                    writeln!(f, "{}Error {}", ctx.as_mut(), err.to_string().quoted())
+                }
             }
             FastPathPlan::PeekExisting(coll_id, idx_id, literal_constraints, mfp) => {
                 ctx.as_mut().set();
                 let (map, filter, project) = mfp.as_map_filter_project();
+
+                let (map_cols, filter_cols) = if !ctx.config.humanized_exprs {
+                    (None, None)
+                } else if let Some(cols) = ctx.humanizer.column_names_for_id(*coll_id) {
+                    let map_cols = itertools::chain(
+                        cols.iter().cloned(),
+                        std::iter::repeat(String::new()).take(map.len()),
+                    )
+                    .collect::<Vec<_>>();
+                    let filter_cols = map_cols.clone();
+                    (Some(map_cols), Some(filter_cols))
+                } else {
+                    (None, None)
+                };
+
                 if project.len() != mfp.input_arity + map.len()
                     || !project.iter().enumerate().all(|(i, o)| i == *o)
                 {
@@ -144,12 +173,13 @@ where
                     *ctx.as_mut() += 1;
                 }
                 if !filter.is_empty() {
-                    let predicates = separated(" AND ", filter);
+                    let predicates = separated(" AND ", mode.seq(&filter, filter_cols.as_ref()));
                     writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
                     *ctx.as_mut() += 1;
                 }
                 if !map.is_empty() {
-                    let scalars = CompactScalarSeq(&map);
+                    let scalars = mode.seq(&map, map_cols.as_ref());
+                    let scalars = CompactScalars(scalars);
                     writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
                 }
@@ -168,6 +198,21 @@ where
             FastPathPlan::PeekPersist(gid, mfp) => {
                 ctx.as_mut().set();
                 let (map, filter, project) = mfp.as_map_filter_project();
+
+                let (map_cols, filter_cols) = if !ctx.config.humanized_exprs {
+                    (None, None)
+                } else if let Some(cols) = ctx.humanizer.column_names_for_id(*gid) {
+                    let map_cols = itertools::chain(
+                        cols.iter().cloned(),
+                        std::iter::repeat(String::new()).take(map.len()),
+                    )
+                    .collect::<Vec<_>>();
+                    let filter_cols = map_cols.clone();
+                    (Some(map_cols), Some(filter_cols))
+                } else {
+                    (None, None)
+                };
+
                 if project.len() != mfp.input_arity + map.len()
                     || !project.iter().enumerate().all(|(i, o)| i == *o)
                 {
@@ -176,17 +221,18 @@ where
                     *ctx.as_mut() += 1;
                 }
                 if !filter.is_empty() {
-                    let predicates = separated(" AND ", filter);
+                    let predicates = separated(" AND ", mode.seq(&filter, filter_cols.as_ref()));
                     writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
                     *ctx.as_mut() += 1;
                 }
                 if !map.is_empty() {
-                    let scalars = CompactScalarSeq(&map);
+                    let scalars = mode.seq(&map, map_cols.as_ref());
+                    let scalars = CompactScalars(scalars);
                     writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
                     *ctx.as_mut() += 1;
                 }
                 let human_id = ctx
-                    .as_ref()
+                    .humanizer
                     .humanize_id(*gid)
                     .unwrap_or_else(|| gid.to_string());
                 writeln!(f, "{}PeekPersist {human_id}", ctx.as_mut())?;
@@ -725,7 +771,7 @@ mod tests {
     use mz_expr::{MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;
     use mz_repr::explain::text::text_string_at;
-    use mz_repr::explain::{DummyHumanizer, RenderingContext};
+    use mz_repr::explain::{DummyHumanizer, ExplainConfig, PlanRenderingContext};
     use mz_repr::{ColumnType, Datum, ScalarType};
 
     use super::*;
@@ -765,7 +811,15 @@ mod tests {
         );
 
         let humanizer = DummyHumanizer;
-        let ctx_gen = || RenderingContext::new(Indent::default(), &humanizer);
+        let config = ExplainConfig {
+            redacted: false,
+            ..Default::default()
+        };
+        let ctx_gen = || {
+            let indent = Indent::default();
+            let annotations = BTreeMap::new();
+            PlanRenderingContext::<FastPathPlan>::new(indent, &humanizer, annotations, &config)
+        };
 
         let constant_err_exp = "Error \"division by zero\"\n";
         let no_lookup_exp =

@@ -96,15 +96,6 @@ pub struct GlobalMirPlan<T: Clone> {
 }
 
 impl<T: Clone> GlobalMirPlan<T> {
-    pub fn df_desc(&self) -> &MirDataflowDescription {
-        &self.df_desc
-    }
-
-    #[allow(dead_code)] // This will be needed for EXPLAIN SUBSCRIBE
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
-
     /// Computes the [`CollectionIdBundle`] of the wrapped dataflow.
     pub fn id_bundle(&self, compute_instance_id: ComputeInstanceId) -> CollectionIdBundle {
         dataflow_import_id_bundle(&self.df_desc, compute_instance_id)
@@ -120,14 +111,6 @@ pub struct GlobalLirPlan {
 }
 
 impl GlobalLirPlan {
-    pub fn df_desc(&self) -> &LirDataflowDescription {
-        &self.df_desc
-    }
-
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
-
     pub fn sink_id(&self) -> GlobalId {
         let sink_exports = &self.df_desc.sink_exports;
         let sink_id = sink_exports.keys().next().expect("valid sink");

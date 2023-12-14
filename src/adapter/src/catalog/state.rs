@@ -18,8 +18,6 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use mz_secrets::InMemorySecretsController;
-use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -46,15 +44,18 @@ use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
+use mz_ore::option::FallibleMapExt;
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
+use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
     PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole,
@@ -78,6 +79,7 @@ use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
+use mz_storage_types::connections::ConnectionContext;
 use mz_transform::Optimizer;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -2203,5 +2205,97 @@ impl ConnectionResolver for CatalogState {
             Aws(conn) => Aws(conn),
             AwsPrivatelink(conn) => AwsPrivatelink(conn),
         }
+    }
+}
+
+impl ExprHumanizer for CatalogState {
+    fn humanize_id(&self, id: GlobalId) -> Option<String> {
+        self.entry_by_id
+            .get(&id)
+            .map(|entry| entry.name())
+            .map(|name| self.resolve_full_name(name, None).to_string())
+    }
+
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
+        self.entry_by_id
+            .get(&id)
+            .map(|entry| entry.name())
+            .map(|name| name.item.clone())
+    }
+
+    fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
+        use ScalarType::*;
+
+        match typ {
+            Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
+            List {
+                custom_id: Some(global_id),
+                ..
+            }
+            | Map {
+                custom_id: Some(global_id),
+                ..
+            } => {
+                let item = self.get_entry(global_id);
+                self.resolve_full_name(item.name(), None).to_string()
+            }
+            List { element_type, .. } => {
+                format!("{} list", self.humanize_scalar_type(element_type))
+            }
+            Map { value_type, .. } => format!(
+                "map[{}=>{}]",
+                self.humanize_scalar_type(&ScalarType::String),
+                self.humanize_scalar_type(value_type)
+            ),
+            Record {
+                custom_id: Some(id),
+                ..
+            } => {
+                let item = self.get_entry(id);
+                self.resolve_full_name(item.name(), None).to_string()
+            }
+            Record { fields, .. } => format!(
+                "record({})",
+                fields
+                    .iter()
+                    .map(|f| format!("{}: {}", f.0, self.humanize_column_type(&f.1)))
+                    .join(",")
+            ),
+            PgLegacyChar => "\"char\"".into(),
+            UInt16 => "uint2".into(),
+            UInt32 => "uint4".into(),
+            UInt64 => "uint8".into(),
+            ty => {
+                let name = QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec: ResolvedDatabaseSpecifier::Ambient,
+                        schema_spec: SchemaSpecifier::Id(*self.get_pg_catalog_schema_id()),
+                    },
+                    item: mz_pgrepr::Type::from(ty).name().to_string(),
+                };
+
+                self.resolve_full_name(&name, None).to_string()
+            }
+        }
+    }
+
+    fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
+        self.entry_by_id
+            .get(&id)
+            .try_map(|entry| {
+                Ok::<_, SqlCatalogError>(
+                    entry
+                        .desc(&self.resolve_full_name(entry.name(), None))?
+                        .iter_names()
+                        .cloned()
+                        .map(|col_name| col_name.to_string())
+                        .collect(),
+                )
+            })
+            .unwrap_or(None)
+    }
+
+    fn id_exists(&self, id: GlobalId) -> bool {
+        self.entry_by_id.get(&id).is_some()
     }
 }

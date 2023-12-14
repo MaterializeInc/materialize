@@ -21,10 +21,11 @@
 use itertools::Itertools;
 use std::fmt;
 
+use mz_expr::explain::fmt_text_constant_rows;
 use mz_expr::virtual_syntax::{AlgExcept, Except};
 use mz_expr::{Id, WindowFrame};
 use mz_ore::str::{separated, IndentLike};
-use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
+use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalarSeq, Indices, PlanRenderingContext};
 
 use crate::plan::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
@@ -79,7 +80,12 @@ impl HirRelationExpr {
                 if !rows.is_empty() {
                     writeln!(f, "{}Constant", ctx.indent)?;
                     ctx.indented(|ctx| {
-                        fmt_text_constant_rows(f, rows.iter().map(|row| (row, &1)), &mut ctx.indent)
+                        fmt_text_constant_rows(
+                            f,
+                            rows.iter().map(|row| (row, &1)),
+                            &mut ctx.indent,
+                            ctx.config.redacted,
+                        )
                     })?;
                 } else {
                     writeln!(f, "{}Constant <empty>", ctx.indent)?;

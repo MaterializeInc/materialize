@@ -341,7 +341,7 @@ ORDER BY
 Explained Query:
   Finish order_by=[#1 desc nulls_first, #2{o_orderdate} asc nulls_last] output=[#0..=#3]
     Project (#0, #3, #1, #2) // { arity: 4 }
-      Reduce group_by=[#0{o_orderkey}, #1{o_orderdate}, #2{o_shippriority}] aggregates=[sum((#3{l_extendedprice} * (1 - #4{l_discount})))] // { arity: 4 }
+      Reduce group_by=[#0{o_orderkey}..=#2{o_shippriority}] aggregates=[sum((#3{l_extendedprice} * (1 - #4{l_discount})))] // { arity: 4 }
         Project (#8, #12, #15, #22, #23) // { arity: 5 }
           Filter (#6{c_mktsegment} = "BUILDING") AND (#12{o_orderdate} < 1995-03-15) AND (#27{l_shipdate} > 1995-03-15) AND (#0{c_custkey}) IS NOT NULL AND (#8{o_orderkey}) IS NOT NULL // { arity: 33 }
             Join on=(#0{c_custkey} = #9{o_custkey} AND #8{o_orderkey} = #17{l_orderkey}) type=delta // { arity: 33 }
@@ -1190,7 +1190,7 @@ ORDER BY
 Explained Query:
   Finish order_by=[#3 desc nulls_first, #0{p_brand} asc nulls_last, #1{p_type} asc nulls_last, #2{p_size} asc nulls_last] output=[#0..=#3]
     Return // { arity: 4 }
-      Reduce group_by=[#1{p_brand}, #2{p_type}, #3{p_size}] aggregates=[count(distinct #0{ps_suppkey})] // { arity: 4 }
+      Reduce group_by=[#1{p_brand}..=#3{p_size}] aggregates=[count(distinct #0{ps_suppkey})] // { arity: 4 }
         Project (#0..=#3) // { arity: 4 }
           Join on=(#0{ps_suppkey} = #4{ps_suppkey}) type=differential // { arity: 5 }
             implementation

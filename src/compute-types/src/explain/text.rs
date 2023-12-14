@@ -25,9 +25,10 @@ use std::fmt;
 use std::ops::Deref;
 
 use itertools::{izip, Itertools};
+use mz_expr::explain::fmt_text_constant_rows;
 use mz_expr::{Id, MirScalarExpr};
 use mz_ore::str::{separated, IndentLike, StrExt};
-use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
+use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalarSeq, Indices, PlanRenderingContext};
 
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
@@ -54,6 +55,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                                 f,
                                 rows.iter().map(|(data, _, diff)| (data, diff)),
                                 &mut ctx.indent,
+                                ctx.config.redacted,
                             )
                         })?;
                     } else {

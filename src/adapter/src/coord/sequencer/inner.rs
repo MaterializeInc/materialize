@@ -3020,17 +3020,6 @@ impl Coordinator {
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
 
-        // Save plan structures.
-        self.catalog_mut()
-            .set_optimized_plan(id, global_mir_plan.df_desc().clone());
-        self.catalog_mut()
-            .set_physical_plan(id, global_lir_plan.df_desc().clone());
-        self.catalog_mut()
-            .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
-
-        // Emit notices.
-        self.emit_optimizer_notices(ctx.session(), &global_lir_plan.df_meta().optimizer_notices);
-
         let sink_id = global_lir_plan.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -3049,11 +3038,13 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
+        let (df_desc, df_meta) = global_lir_plan.unapply();
+        // Emit notices.
+        self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+
         // Add metadata for the new SUBSCRIBE.
         let write_notify_fut = self.add_active_subscribe(sink_id, active_subscribe).await;
-
-        // Ship the underlying dataflow.
-        let (df_desc, _df_meta) = global_lir_plan.unapply();
+        // Ship dataflow.
         let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
 
         // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
