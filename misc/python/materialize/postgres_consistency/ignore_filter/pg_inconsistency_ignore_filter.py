@@ -43,6 +43,12 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
 from materialize.output_consistency.ignore_filter.param_matchers import (
     index_of_param_by_type,
 )
+from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
+    TAG_JSONB_TO_TEXT,
+)
+from materialize.output_consistency.input_data.operations.text_operations_provider import (
+    TAG_REGEX,
+)
 from materialize.output_consistency.input_data.params.text_operation_param import (
     TextOperationParam,
 )
@@ -96,6 +102,25 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         if matches_float_comparison(expression):
             return YesIgnore("#22022: real with decimal comparison")
 
+        if operation.is_tagged(TAG_REGEX):
+            regex_param_index = index_of_param_by_type(
+                operation.params, TextOperationParam
+            )
+            assert regex_param_index is not None
+
+            if expression.args[regex_param_index].has_any_characteristic(
+                {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
+            ):
+                return YesIgnore("#22000: regexp with linebreak")
+
+        if operation.is_tagged(TAG_JSONB_TO_TEXT) and expression.matches(
+            partial(
+                involves_data_type_category, data_type_category=DataTypeCategory.JSONB
+            ),
+            True,
+        ):
+            return YesIgnore("Consequence of #23571")
+
         return super()._matches_problematic_operation_or_function_invocation(
             expression, operation, _all_involved_characteristics
         )
@@ -142,26 +167,16 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             if isinstance(return_type_spec, TextReturnTypeSpec):
                 return YesIgnore("#22002: min/max on text")
 
-        if db_function.function_name_in_lower_case.startswith("regexp"):
-            regex_param_index = index_of_param_by_type(
-                db_function.params, TextOperationParam
-            )
-            assert regex_param_index is not None
-
-            if expression.args[regex_param_index].has_any_characteristic(
-                {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
-            ):
-                return YesIgnore("#22000: regexp with linebreak")
-
-            if expression.args[regex_param_index].has_any_characteristic(
-                {ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR}
-            ):
-                return YesIgnore("#23605: regexp with backslash")
-
         if db_function.function_name_in_lower_case == "replace":
             # replace is not working properly with empty text; however, it is not possible to reliably determine if an
             # expression is an empty text, we therefore need to exclude the function completely
             return YesIgnore("#22001: replace")
+
+        if db_function.function_name_in_lower_case == "regexp_replace":
+            if expression.args[2].has_any_characteristic(
+                {ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR}
+            ):
+                return YesIgnore("#23605: regexp with backslash")
 
         if db_function.function_name_in_lower_case == "nullif":
             type_arg0 = expression.args[0].try_resolve_exact_data_type()
@@ -174,25 +189,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ):
                 # Postgres returns a double for nullif(int, double), which does not seem better
                 return YesIgnore("not considered worse")
-
-        if db_function.function_name_in_lower_case in [
-            "length",
-            "bit_length",
-            "char_length",
-            "octet_length",
-            "left",
-            "right",
-            "substring",
-            "ltrim",
-            "rtrim",
-            "btrim",
-        ] and expression.matches(
-            partial(
-                involves_data_type_category, data_type_category=DataTypeCategory.JSONB
-            ),
-            True,
-        ):
-            return YesIgnore("Consequence of #23571")
 
         return NoIgnore()
 
