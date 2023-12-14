@@ -279,6 +279,22 @@ impl<C: ConnectionAccess> DataEncoding<C> {
         }
     }
 
+    /// A human-readable name for the type of encoding
+    ///
+    /// This may be `None` if we don't actually render a decode operator (like for pg sources).
+    pub fn type_(&self) -> Option<&str> {
+        match &self.inner {
+            DataEncodingInner::Avro(_) => Some("avro"),
+            DataEncodingInner::Protobuf(_) => Some("protobuf"),
+            DataEncodingInner::Csv(_) => Some("csv"),
+            DataEncodingInner::Regex(_) => Some("regex"),
+            DataEncodingInner::Bytes => Some("bytes"),
+            DataEncodingInner::Json => Some("json"),
+            DataEncodingInner::Text => Some("text"),
+            DataEncodingInner::RowCodec(_) => None,
+        }
+    }
+
     /// Computes the [`RelationDesc`] for the relation specified by this
     /// data encoding and envelope.
     ///
