@@ -131,14 +131,21 @@ pub struct Peek {
     id: GlobalId,
     /// The logical timestamp requested.
     time: Timestamp,
+    /// The type of the peek: currently 'index' or 'persist'.
+    peek_type: &'static str,
     /// The ID of the peek.
     uuid: Uuid,
 }
 
 impl Peek {
     /// Create a new peek from its arguments.
-    pub fn new(id: GlobalId, time: Timestamp, uuid: Uuid) -> Self {
-        Self { id, time, uuid }
+    pub fn new(id: GlobalId, time: Timestamp, peek_type: &'static str, uuid: Uuid) -> Self {
+        Self {
+            id,
+            time,
+            peek_type,
+            uuid,
+        }
     }
 }
 

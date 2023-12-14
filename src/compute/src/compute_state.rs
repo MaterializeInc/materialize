@@ -673,7 +673,11 @@ impl PendingPeek {
     /// Produces a corresponding log event.
     pub fn as_log_event(&self) -> logging::compute::Peek {
         let peek = self.peek();
-        logging::compute::Peek::new(peek.target.id(), peek.timestamp, peek.uuid)
+        let peek_type = match self {
+            PendingPeek::Index(_) => "index",
+            PendingPeek::Persist(_) => "persist",
+        };
+        logging::compute::Peek::new(peek.target.id(), peek.timestamp, peek_type, peek.uuid)
     }
 
     fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {
