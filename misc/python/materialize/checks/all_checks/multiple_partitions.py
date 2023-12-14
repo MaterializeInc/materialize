@@ -11,6 +11,7 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.mz_version import MzVersion
 
 
 def schemas() -> str:
@@ -22,21 +23,26 @@ class MultiplePartitions(Check):
     """Test that adds new partitions to a Kafka source"""
 
     def initialize(self) -> Testdrive:
+        if self.base_version < MzVersion.parse_mz("v0.80.0-dev"):
+            topic_metadata_refresh_interval = "MS 500"
+        else:
+            topic_metadata_refresh_interval = "'500ms'"
+
         return Testdrive(
             schemas()
             + dedent(
-                """
-                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                f"""
+                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 
                 $ kafka-create-topic topic=multiple-partitions-topic
 
                 # ingest A-key entries
-                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=100
-                {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${{keyschema}} schema=${{schema}} repeat=100
+                {{"key1": "A${{kafka-ingest.iteration}}"}} {{"f1": "A${{kafka-ingest.iteration}}"}}
 
                 > CREATE SOURCE multiple_partitions_source
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL '500ms')
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${{testdrive.seed}}', TOPIC METADATA REFRESH INTERVAL {topic_metadata_refresh_interval})
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
