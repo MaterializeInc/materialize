@@ -611,9 +611,13 @@ class AccumulateReductions(Dataflow):
 
 > CREATE INDEX i_accumulable IN CLUSTER idx_cluster ON accumulable(a);
 
+> SET CLUSTER = idx_cluster;
+
 > SELECT count(*) FROM accumulable;
   /* B */
 10000001
+
+> SET CLUSTER = default;
 """
         )
 
