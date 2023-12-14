@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import psycopg2
+from psycopg2.extras import register_uuid
 
 import dbt.adapters.postgres.connections
 import dbt.exceptions
@@ -48,6 +49,11 @@ def connect(**kwargs):
         *(kwargs.get("options") or []),
     ]
     kwargs["options"] = " ".join(options)
+
+    # NOTE(morsapaes): work around dbt-core #8353 while #8900 doesn't land to
+    # unblock users using UUID types.
+    register_uuid()
+
     return _connect(**kwargs)
 
 
