@@ -14,9 +14,6 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.adapter.constraints.fixtures import (
-    model_contract_header_schema_yml,
-)
 from dbt.tests.adapter.constraints.test_constraints import (
     BaseConstraintQuotedColumn,
     BaseConstraintsRuntimeDdlEnforcement,
@@ -26,13 +23,14 @@ from dbt.tests.adapter.constraints.test_constraints import (
     BaseIncrementalContractSqlHeader,
     BaseModelConstraintsRuntimeEnforcement,
     BaseTableConstraintsColumnsEqual,
-    BaseTableContractSqlHeader,
     BaseViewConstraintsColumnsEqual,
 )
 from dbt.tests.util import run_dbt, run_sql_with_adapter
 from fixtures import (
+    contract_invalid_cluster_schema_yml,
     nullability_assertions_schema_yml,
     test_materialized_view,
+    test_view,
 )
 
 # Materialize does not support time zones or materializing session variables, so
@@ -134,10 +132,20 @@ class TestNullabilityAssertions:
         )
 
 
-class TestTableContractSqlHeaderMaterialize(BaseTableContractSqlHeader):
+class TestContractInvalidCluster:
     @pytest.fixture(scope="class")
     def models(self):
         return {
-            "my_model_contract_sql_header.sql": override_model_contract_sql_header_sql,
-            "constraints_schema.yml": model_contract_header_schema_yml,
+            "contract_invalid_cluster.yml": contract_invalid_cluster_schema_yml,
+            "contract_invalid_cluster.sql": test_view,
         }
+
+    # In the absence of the pre-installed `default` cluster, Materialize should
+    # not error if data contracts are enforced.
+    # See #23600: https://github.com/MaterializeInc/materialize/issues/23600
+    def test_materialize_drop_default(self, project):
+        project.run_sql("DROP CLUSTER default CASCADE")
+
+        run_dbt(["run", "--models", "contract_invalid_cluster"], expect_pass=True)
+
+        project.run_sql("CREATE CLUSTER default SIZE = '1'")

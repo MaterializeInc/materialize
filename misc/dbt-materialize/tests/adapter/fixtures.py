@@ -30,6 +30,12 @@ test_materialized_view_index = """
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
 """
 
+test_view = """
+{{ config(materialized='view') }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
+"""
+
 test_view_index = """
 {{ config(
     materialized='view',
@@ -258,6 +264,24 @@ models:
         data_type: string
         constraints:
           - type: not_null
+      - name: c
+        data_type: string
+"""
+
+contract_invalid_cluster_schema_yml = """
+version: 2
+models:
+  - name: test_view
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: a
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: b
+        data_type: string
       - name: c
         data_type: string
 """
