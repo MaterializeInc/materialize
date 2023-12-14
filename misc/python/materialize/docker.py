@@ -12,6 +12,8 @@ import subprocess
 
 from materialize.mz_version import MzVersion
 
+IMAGE_NAMES_VERIFIED_TO_EXIST = set()
+
 
 def image_of_release_version_exists(version: MzVersion) -> bool:
     return mz_image_tag_exists(version_to_image_tag(version))
@@ -23,6 +25,11 @@ def image_of_commit_exists(commit_hash: str) -> bool:
 
 def mz_image_tag_exists(image_tag: str) -> bool:
     image_name = f"materialize/materialized:{image_tag}"
+
+    if image_name in IMAGE_NAMES_VERIFIED_TO_EXIST:
+        print(f"Image known to exist from earlier check: {image_name}")
+        return True
+
     command = [
         "docker",
         "pull",
@@ -33,6 +40,7 @@ def mz_image_tag_exists(image_tag: str) -> bool:
 
     try:
         subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
+        IMAGE_NAMES_VERIFIED_TO_EXIST.add(image_name)
         return True
     except subprocess.CalledProcessError as e:
         print(f"Failed to pull image: {image_name}")
