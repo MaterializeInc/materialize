@@ -14,11 +14,10 @@
 -- limitations under the License.
 
 {% macro materialize__get_empty_subquery_sql(select_sql, select_sql_header=none) %}
-    -- The default macro generates a `SELECT * FROM(<query>) WHERE FALSE LIMIT
-    -- 0`, which in PostgreSQL is optimized to a no-op that returns no rows. In
-    -- Materialize, `SELECT ... LIMIT 0` requires a cluster. Because the
-    -- connection is not guaranteed to have a valid cluster, we pass the model
-    -- and header statements as raw SQL.
-    {% set sql = ({"select_sql": select_sql,"header_sql": select_sql_header}) %}
-    {{ return(sql) }}
+    {%- if select_sql_header is not none -%}
+    {{ select_sql_header + '#__dbt_sbq_parse_header__#' }}
+    {%- endif -%}
+    select * from (
+        {{ select_sql }}
+    ) as __dbt_sbq
 {% endmacro %}
