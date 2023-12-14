@@ -15,6 +15,9 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement};
+use mz_sql_parser::ast::{
+    CreateSourceConnection, CreateSourceStatement, IntervalValue, KafkaSourceConfigOptionName,
+};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::GenericSourceConnection;
@@ -267,6 +270,43 @@ fn ast_rewrite_create_sink_into_kafka_options_0_80_0(
                         name: KafkaSinkConfigOptionName::LegacyIds,
                         value: Some(WithOptionValue::Value(Value::Boolean(true))),
                     });
+                }
+            }
+        }
+
+        fn visit_create_source_statement_mut(
+            &mut self,
+            node: &'ast mut CreateSourceStatement<Raw>,
+        ) {
+            let CreateSourceConnection::Kafka { options, .. } = &mut node.connection else {
+                return;
+            };
+
+            // ** HACK ALERT **
+            //
+            // In v0.80 of Materialize we removed support for the unstable Kafka connection syntax
+            //
+            // `TOPIC METADATA REFRESH INTERVAL MS 500`
+            //
+            // now users have to write:
+            //
+            // `TOPIC METADATA REFRESH INTERVAL = '500ms'`
+            //
+            // To bridge the gap though for any environments that might have this old syntax (there
+            // shouldn't be any), we support parsing the `MS` keyword and then do this switch from
+            // `Number` to `Interval`.
+
+            for option in options {
+                match (&option.name, &mut option.value) {
+                    (
+                        KafkaSourceConfigOptionName::TopicMetadataRefreshInterval,
+                        Some(WithOptionValue::Value(Value::Number(num))),
+                    ) => {
+                        let mut new_interval = IntervalValue::default();
+                        new_interval.value = format!("{}ms", num.to_string());
+                        option.value = Some(WithOptionValue::Value(Value::Interval(new_interval)));
+                    }
+                    _ => (),
                 }
             }
         }

@@ -24,8 +24,8 @@ class AwsConnection(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
-                f"""
-                $[version>=8000] postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                """
+                $[version>=8000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_aws_connection = true
                 ALTER SYSTEM SET enable_connection_validation_syntax = true
 

@@ -1567,7 +1567,10 @@ impl Catalog {
                     };
                     let name = state.resolve_full_name(&name, None);
                     return Err(Error::new(ErrorKind::Corruption {
-                        detail: format!("failed to deserialize item {} ({}): {}", item.id, name, e),
+                        detail: format!(
+                            "failed to deserialize item {} ({}): {}\n\n{}",
+                            item.id, name, e, item.create_sql
+                        ),
                     }));
                 }
             };
