@@ -1,5 +1,10 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Remove the dependency of data contracts pre-flight checks on the existence of
+  the pre-installed `default` cluster. Fixes [#23600](https://github.com/MaterializeInc/materialize/issues/23600).
+
 ## 1.7.0 - 2023-11-20
 
 * Support specifying the materialization type used to store test failures via

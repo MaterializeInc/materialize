@@ -19,6 +19,7 @@ from typing import Optional
 
 import psycopg2
 
+import dbt.adapters.postgres.connections
 import dbt.exceptions
 from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
 from dbt.events import AdapterLogger
@@ -28,6 +29,30 @@ from dbt.semver import versions_compatible
 SUPPORTED_MATERIALIZE_VERSIONS = ">=0.68.0"
 
 logger = AdapterLogger("Materialize")
+
+# Override the psycopg2 connect function in order to inject Materialize-specific
+# session parameter defaults.
+#
+# This approach is a bit hacky, but some of these session parameters *must* be
+# set as part of connection initiation, so we can't simply run `SET` commands
+# after the session is established.
+def connect(**kwargs):
+    options = [
+        # Ensure that dbt's introspection queries get routed to the
+        # `mz_introspection` cluster, even if the server or role's default is
+        # different.
+        "--auto_route_introspection_queries=on",
+        # dbt prints notices to stdout, which is very distracting because dbt
+        # can establish many new connections during `dbt run`.
+        "--welcome_message=off",
+        *(kwargs.get("options") or []),
+    ]
+    kwargs["options"] = " ".join(options)
+    return _connect(**kwargs)
+
+
+_connect = psycopg2.connect
+psycopg2.connect = connect
 
 
 @dataclass
@@ -65,23 +90,16 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         # More info: https://www.psycopg.org/docs/usage.html#transactions-control
         connection.handle.autocommit = True
 
-        cursor = connection.handle.cursor()
-
-        # Check for the current DB version using the "mz_introspection" cluster in case "default"
-        # doesn't exist.
-        cursor.execute("SHOW mz_version")
-        mz_version = cursor.fetchone()[0].split()[0].strip("v")
-
+        mz_version = connection.handle.info.parameter_status(
+            "mz_version"
+        )  # e.g. v0.79.0-dev (937dfde5e)
+        mz_version = mz_version.split()[0]  # e.g. v0.79.0-dev
+        mz_version = mz_version[1:]  # e.g. 0.79.0-dev
         if not versions_compatible(mz_version, SUPPORTED_MATERIALIZE_VERSIONS):
             raise dbt.exceptions.DbtRuntimeError(
                 f"Detected unsupported Materialize version {mz_version}\n"
                 f"  Supported versions: {SUPPORTED_MATERIALIZE_VERSIONS}"
             )
-
-        # Make sure 'auto_route_introspection_queries' is enabled.
-        var_name = "auto_route_introspection_queries"
-        logger.debug(f"Enabling {var_name}")
-        cursor.execute(f"SET {var_name} = true")
 
         return connection
 
