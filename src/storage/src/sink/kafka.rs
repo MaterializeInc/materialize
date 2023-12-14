@@ -220,7 +220,6 @@ struct KafkaTxProducerConfig<'a> {
     storage_configuration: &'a StorageConfiguration,
     producer_context: SinkProducerContext,
     sink_id: GlobalId,
-    worker_id: String,
 }
 
 #[derive(Clone)]
@@ -238,31 +237,11 @@ impl KafkaTxProducer {
             storage_configuration,
             producer_context,
             sink_id,
-            worker_id,
         }: KafkaTxProducerConfig<'a>,
     ) -> Result<KafkaTxProducer, ContextCreationError> {
-        // Create a producer with the old transactional id to fence out writers from older
-        // versions, if any. This section should be removed after it has been running in
-        // production for a week or two.
-        let fence_producer: ThreadedProducer<_> = connection
-            .connection
-            .create_with_context(
-                storage_configuration,
-                MzClientContext::default(),
-                &btreemap! {
-                    "transactional.id" => format!("mz-producer-{sink_id}-{worker_id}"),
-                },
-            )
-            .await?;
-        let fence_producer = Arc::new(fence_producer);
-
-        task::spawn_blocking(|| format!("init_transactions:{name}"), {
-            let fence_producer = Arc::clone(&fence_producer);
-            move || fence_producer.init_transactions(Duration::from_secs(5))
-        })
-        .unwrap_or_else(|_| Err(KafkaError::Canceled))
-        .await
-        .check_ssh_status(fence_producer.context())?;
+        let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
+        let transactional_id =
+            connection.transactional_id(&storage_configuration.connection_context, sink_id);
 
         let producer = connection
             .connection
@@ -270,6 +249,8 @@ impl KafkaTxProducer {
                 storage_configuration,
                 producer_context,
                 &btreemap! {
+                    // Allow Kafka monitoring tools to identify this producer.
+                    "client.id" => client_id,
                     // Ensure that messages are sinked in order and without
                     // duplicates. Note that this only applies to a single
                     // instance of a producer - in the case of restarts, all
@@ -296,7 +277,8 @@ impl KafkaTxProducer {
                     // different settings for this value to see if it makes a
                     // big difference.
                     "queue.buffering.max.ms" => format!("{}", 10),
-                    "transactional.id" => format!("mz-producer-{sink_id}-0"),
+                    // Use the transactional ID requested by the user.
+                    "transactional.id" => transactional_id,
                     // Use the default transaction timeout. (At time of writing: 60s.)
                     // The Kafka sink may have long-running transactions, since it expects
                     // to be able to write all data at the same timestamp in a single
@@ -478,7 +460,6 @@ impl KafkaSinkState {
         healthchecker: HealthOutputHandle,
     ) -> (Self, Option<Timestamp>) {
         let metrics = Arc::new(metrics.get_sink_metrics(&connection.topic, sink_id, worker_id));
-        let worker_id = worker_id.to_string();
 
         let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
 
@@ -502,7 +483,6 @@ impl KafkaSinkState {
                     storage_configuration,
                     producer_context,
                     sink_id,
-                    worker_id,
                 })
                 .await
             })()

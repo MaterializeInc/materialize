@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_kafka_config_denylist_options = true
-
 # Test that the source ingestion pipeline commits offsets back to Kafka with
 # the expected group ID.
 
@@ -39,7 +36,7 @@ three
 
 $ set-from-sql var=consumer-group-id
 SELECT
-  ks.group_id_base
+  ks.group_id_prefix
 FROM mz_sources s
 JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'
@@ -65,7 +62,7 @@ three
 
 $ set-from-sql var=consumer-group-id
 SELECT
-  ks.group_id_base
+  ks.group_id_prefix
 FROM mz_sources s
 JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'

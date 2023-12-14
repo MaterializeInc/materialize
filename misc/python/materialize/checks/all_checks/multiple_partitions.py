@@ -28,7 +28,6 @@ class MultiplePartitions(Check):
                 """
                 $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-                ALTER SYSTEM SET enable_kafka_config_denylist_options = true
 
                 $ kafka-create-topic topic=multiple-partitions-topic
 
@@ -37,7 +36,7 @@ class MultiplePartitions(Check):
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
                 > CREATE SOURCE multiple_partitions_source
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL MS 500)
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL '500ms')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 

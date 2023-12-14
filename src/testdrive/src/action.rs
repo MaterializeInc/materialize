@@ -273,6 +273,10 @@ impl State {
             );
         }
         self.cmd_vars.insert(
+            "testdrive.materialize-environment-id".into(),
+            self.environment_id.to_string(),
+        );
+        self.cmd_vars.insert(
             "testdrive.materialize-sql-addr".into(),
             self.materialize_sql_addr.clone(),
         );

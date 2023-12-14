@@ -9,7 +9,6 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-ALTER SYSTEM SET enable_kafka_config_denylist_options = true
 
 # Tests for `START TIMESTAMP` configuration which resolves a start offset
 # during creation of the source.
@@ -74,7 +73,7 @@ grape:grape
 
 > CREATE SOURCE append_time_offset_1
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL MS=10,
+      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=1,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -83,7 +82,7 @@ grape:grape
 
 > CREATE SOURCE append_time_offset_2
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL MS=10,
+      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=2,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -92,7 +91,7 @@ grape:grape
 
 > CREATE SOURCE append_time_offset_3
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL MS=10,
+      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=3,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -101,7 +100,7 @@ grape:grape
 
 > CREATE SOURCE append_time_offset_4
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL MS=10,
+      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=4,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -110,7 +109,7 @@ grape:grape
 
 > CREATE SOURCE append_time_offset_5
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL MS=10,
+      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=5,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -204,7 +203,7 @@ grape:grape
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP=0,
       TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL MS 10
+      TOPIC METADATA REFRESH INTERVAL '10ms'
   )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
@@ -214,7 +213,7 @@ grape:grape
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 1,
       TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL MS 10
+      TOPIC METADATA REFRESH INTERVAL '10ms'
   )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
@@ -224,7 +223,7 @@ grape:grape
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 2,
       TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL MS 10
+      TOPIC METADATA REFRESH INTERVAL '10ms'
   )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
@@ -234,7 +233,7 @@ grape:grape
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 3,
       TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL MS 10
+      TOPIC METADATA REFRESH INTERVAL '10ms'
   )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
@@ -244,7 +243,7 @@ grape:grape
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 4,
       TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL MS 10
+      TOPIC METADATA REFRESH INTERVAL '10ms'
   )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET
@@ -254,7 +253,7 @@ grape:grape
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 5,
       TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL MS 10
+      TOPIC METADATA REFRESH INTERVAL '10ms'
   )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE OFFSET

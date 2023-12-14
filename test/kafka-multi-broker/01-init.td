@@ -44,11 +44,8 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=6
     URL '${testdrive.schema-registry-url}'
   );
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_kafka_config_denylist_options = true
-
 > CREATE SINK multi_broker_sink
   FROM kafka_multi_broker
-  INTO KAFKA CONNECTION kafka_conn (REPLICATION FACTOR = 2, PARTITION COUNT = 2, TOPIC 'testdrive-kafka-multi-broker-sink-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-multi-broker-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

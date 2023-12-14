@@ -161,7 +161,7 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_kafka_sources' ORDER BY position
 ----
 1  id  text
-2  group_id_base  text
+2  group_id_prefix  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_lag' ORDER BY position

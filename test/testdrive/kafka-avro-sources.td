@@ -9,7 +9,6 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_source_denylist_with_options = true
-ALTER SYSTEM SET enable_kafka_config_denylist_options = true
 
 # Test support for Avro sources without using the Confluent Schema Registry.
 
@@ -247,7 +246,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 > CREATE SOURCE non_dbz_data_varying_partition
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL MS=10,
+    TOPIC METADATA REFRESH INTERVAL = '10ms',
     START OFFSET=[1]
   )
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
@@ -275,7 +274,7 @@ a  b
 > CREATE SOURCE non_dbz_data_varying_partition_2
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL MS=10,
+    TOPIC METADATA REFRESH INTERVAL = '10ms',
     START OFFSET=[1,1]
   )
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'

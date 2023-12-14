@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_kafka_config_denylist_options = true
-
 $ kafka-create-topic topic=test partitions=1
 $ kafka-ingest topic=test format=bytes
 jack,jill
@@ -103,7 +100,7 @@ name               type   size  cluster
   ENVELOPE DEBEZIUM
 
 > CREATE SINK snk3 FROM v3
-  INTO KAFKA CONNECTION kafka_conn (RETENTION BYTES = 1000000000000, TOPIC 'testdrive-snk3-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk3-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
@@ -214,49 +211,11 @@ snk7             kafka  ${arg.default-storage-size}  materialize_public_snk7
 snk8             kafka  ${arg.default-storage-size}  materialize_public_snk8
 snk_unsigned     kafka  ${arg.default-storage-size}  materialize_public_snk_unsigned
 
-# test explicit partition count
-> CREATE SINK snk9 FROM foo
-  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=1, TOPIC 'testdrive-snk9-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-
-# test explicit replication factor
-> CREATE SINK snk10 FROM foo
-  INTO KAFKA CONNECTION kafka_conn (REPLICATION FACTOR=1, TOPIC 'testdrive-snk10-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-
-# test explicit partition count and replication factor
-> CREATE SINK snk11 FROM foo
-  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=1, REPLICATION FACTOR=1, TOPIC 'testdrive-snk11-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-
-# test broker defaulted partition count and replication factor
-> CREATE SINK snk12 FROM foo
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk12-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-
-# test explicit request for broker defaulted partition count and replication factor
-> CREATE SINK snk13 FROM foo
-  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=-1, REPLICATION FACTOR=-1, TOPIC 'testdrive-snk13-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-
 # test already existing topic with non-default partition count
-$ kafka-create-topic topic=snk14 partitions=4
+$ kafka-create-topic topic=snk9 partitions=4
 
-> CREATE SINK snk14 FROM foo
+> CREATE SINK snk9 FROM foo
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk14-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-
-# test already existing topic with non-default partition count -- even if arg specified
-$ kafka-create-topic topic=snk15 partitions=4
-
-> CREATE SINK snk15 FROM foo
-  INTO KAFKA CONNECTION kafka_conn (PARTITION COUNT=1, TOPIC 'testdrive-snk15-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
@@ -279,7 +238,7 @@ $ kafka-create-topic topic=snk15 partitions=4
 2
 
 # Including for sinks with default size
-> SELECT size FROM mz_sinks WHERE name = 'snk13'
+> SELECT size FROM mz_sinks WHERE name = 'snk9'
 "${arg.default-storage-size}"
 
 # Check that SHOW SINKS shows the size correctly
@@ -295,12 +254,6 @@ snk6               kafka  ${arg.default-storage-size}  materialize_public_snk6
 snk7               kafka  ${arg.default-storage-size}  materialize_public_snk7
 snk8               kafka  ${arg.default-storage-size}  materialize_public_snk8
 snk9               kafka  ${arg.default-storage-size}  materialize_public_snk9
-snk10              kafka  ${arg.default-storage-size}  materialize_public_snk10
-snk11              kafka  ${arg.default-storage-size}  materialize_public_snk11
-snk12              kafka  ${arg.default-storage-size}  materialize_public_snk12
-snk13              kafka  ${arg.default-storage-size}  materialize_public_snk13
-snk14              kafka  ${arg.default-storage-size}  materialize_public_snk14
-snk15              kafka  ${arg.default-storage-size}  materialize_public_snk15
 sink_with_size     kafka  2                            materialize_public_sink_with_size
 sink_with_options  kafka  2                            materialize_public_sink_with_options
 snk_unsigned       kafka  ${arg.default-storage-size}  materialize_public_snk_unsigned

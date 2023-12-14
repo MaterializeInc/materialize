@@ -169,6 +169,7 @@ Hour
 Hours
 Id
 Idle
+Ids
 If
 Ignore
 Ilike
@@ -204,6 +205,7 @@ Latest
 Leading
 Least
 Left
+Legacy
 Level
 Like
 Limit
@@ -229,7 +231,6 @@ Minutes
 Mode
 Month
 Months
-Ms
 Mutually
 Name
 Names
@@ -307,7 +308,6 @@ Replication
 Reset
 Respect
 Restrict
-Retention
 Return
 Returning
 Revoke
@@ -384,6 +384,7 @@ Tpch
 Trace
 Trailing
 Transaction
+Transactional
 Trim
 True
 Tunnel

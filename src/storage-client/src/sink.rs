@@ -18,10 +18,10 @@ use mz_kafka_util::client::{
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::task;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::Timestamp;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt};
-use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkConnectionRetention};
+use mz_storage_types::sinks::KafkaSinkConnection;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -31,15 +31,6 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::sink::progress_key::ProgressKey;
-
-/// Formatter for Kafka group.id setting
-pub struct SinkGroupId;
-
-impl SinkGroupId {
-    pub fn new(sink_id: GlobalId) -> String {
-        format!("materialize-bootstrap-sink-{sink_id}")
-    }
-}
 
 pub mod progress_key {
     use std::fmt;
@@ -161,6 +152,15 @@ async fn discover_topic_configs<C: ClientContext>(
 }
 
 /// Configuration of a topic created by `ensure_kafka_topic`.
+// TODO(benesch): some fields here use `-1` to indicate broker default, while
+// others use `None` to indicate broker default and `-1` has a different special
+// meaning. This is not very Rusty and very easy to get wrong. We should adjust
+// the API for this method to use types that are safer and have more obvious
+// meaning. For example, `partition_count` could have type
+// `Option<NonNeg<i32>>`, where `-1` is prohibited as a value and the Rustier
+// `None` value represents the broker default (n.b.: `u32` is not a good choice
+// because the maximum number of Kafka partitions is `i32::MAX`, not
+// `u32::MAX`).
 #[derive(Debug, Clone)]
 pub struct TopicConfig {
     /// The number of partitions to create.
@@ -179,9 +179,18 @@ pub struct TopicConfig {
 #[derive(Debug, Clone)]
 pub enum TopicCleanupPolicy {
     /// Clean up the topic using a time and/or size based retention policies.
-    ///
-    /// Use `-1` to indicate infinite retention.
-    Retention(KafkaSinkConnectionRetention),
+    Retention {
+        /// A time-based retention policy.
+        ///
+        /// `None` indicates broker default. `Some(-1)` indicates infinite
+        /// retention.
+        ms: Option<i64>,
+        /// A size based retention policy.
+        ///
+        /// `None` indicates broker default. `Some(-1)` indicates infinite
+        /// retention.
+        bytes: Option<i64>,
+    },
     /// Clean up the topic using key-based compaction.
     Compaction,
 }
@@ -231,18 +240,18 @@ where
         TopicReplication::Fixed(replication_factor),
     );
 
-    let retention_ms_slot;
-    let retention_bytes_slot;
+    let retention_ms;
+    let retention_bytes;
     match cleanup_policy {
-        TopicCleanupPolicy::Retention(retention) => {
+        TopicCleanupPolicy::Retention { ms, bytes } => {
             kafka_topic = kafka_topic.set("cleanup.policy", "delete");
-            if let Some(retention_ms) = &retention.duration {
-                retention_ms_slot = retention_ms.to_string();
-                kafka_topic = kafka_topic.set("retention.ms", &retention_ms_slot);
+            if let Some(ms) = ms {
+                retention_ms = ms.to_string();
+                kafka_topic = kafka_topic.set("retention.ms", &retention_ms);
             }
-            if let Some(retention_bytes) = &retention.bytes {
-                retention_bytes_slot = retention_bytes.to_string();
-                kafka_topic = kafka_topic.set("retention.bytes", &retention_bytes_slot);
+            if let Some(bytes) = &bytes {
+                retention_bytes = bytes.to_string();
+                kafka_topic = kafka_topic.set("retention.bytes", &retention_bytes);
             }
         }
         TopicCleanupPolicy::Compaction => {
@@ -315,6 +324,8 @@ pub async fn build_kafka(
     storage_configuration: &StorageConfiguration,
 ) -> Result<Option<Timestamp>, ContextCreationError> {
     // Fetch the progress of the last incarnation of the sink, if any.
+    let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
+    let group_id = connection.progress_group_id(&storage_configuration.connection_context, sink_id);
     let progress_topic = connection
         .progress_topic(&storage_configuration.connection_context)
         .into_owned();
@@ -327,7 +338,12 @@ pub async fn build_kafka(
                 storage_configuration,
                 MzClientContext::default(),
                 &btreemap! {
-                    "group.id" => SinkGroupId::new(sink_id),
+                    // Consumer group ID, which may have been overridden by the
+                    // user. librdkafka requires this, even though we'd prefer
+                    // to disable the consumer group protocol entirely.
+                    "group.id" => group_id.clone(),
+                    // Allow Kafka monitoring tools to identify this consumer.
+                    "client.id" => client_id.clone(),
                     "isolation.level" => isolation_level.into(),
                     "enable.auto.commit" => "false".into(),
                     "auto.offset.reset" => "earliest".into(),
@@ -392,12 +408,14 @@ pub async fn build_kafka(
     ensure_kafka_topic(
         &admin_client,
         &connection.topic,
+        // TODO: allow users to configure these parameters.
         TopicConfig {
-            partition_count: connection.partition_count,
-            replication_factor: connection.replication_factor,
-            // TODO: allow users to request compaction cleanup policy instead of
-            // retention.
-            cleanup_policy: TopicCleanupPolicy::Retention(connection.retention),
+            partition_count: -1,
+            replication_factor: -1,
+            cleanup_policy: TopicCleanupPolicy::Retention {
+                ms: None,
+                bytes: None,
+            },
         },
     )
     .await
