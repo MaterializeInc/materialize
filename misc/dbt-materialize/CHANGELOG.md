@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.7.1 - 2023-12-14
 
 * Remove the dependency of data contracts pre-flight checks on the existence of
   the pre-installed `default` cluster. Fixes [#23600](https://github.com/MaterializeInc/materialize/issues/23600).
