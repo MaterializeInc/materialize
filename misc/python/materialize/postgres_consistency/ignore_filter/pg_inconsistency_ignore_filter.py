@@ -43,6 +43,9 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
 from materialize.output_consistency.ignore_filter.param_matchers import (
     index_of_param_by_type,
 )
+from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
+    TAG_JSONB_TO_TEXT,
+)
 from materialize.output_consistency.input_data.operations.text_operations_provider import (
     TAG_REGEX,
 )
@@ -109,6 +112,14 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
             ):
                 return YesIgnore("#22000: regexp with linebreak")
+
+        if operation.is_tagged(TAG_JSONB_TO_TEXT) and expression.matches(
+            partial(
+                involves_data_type_category, data_type_category=DataTypeCategory.JSONB
+            ),
+            True,
+        ):
+            return YesIgnore("Consequence of #23571")
 
         return super()._matches_problematic_operation_or_function_invocation(
             expression, operation, _all_involved_characteristics
@@ -178,25 +189,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ):
                 # Postgres returns a double for nullif(int, double), which does not seem better
                 return YesIgnore("not considered worse")
-
-        if db_function.function_name_in_lower_case in [
-            "length",
-            "bit_length",
-            "char_length",
-            "octet_length",
-            "left",
-            "right",
-            "substring",
-            "ltrim",
-            "rtrim",
-            "btrim",
-        ] and expression.matches(
-            partial(
-                involves_data_type_category, data_type_category=DataTypeCategory.JSONB
-            ),
-            True,
-        ):
-            return YesIgnore("Consequence of #23571")
 
         return NoIgnore()
 

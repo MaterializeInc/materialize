@@ -34,6 +34,8 @@ from materialize.output_consistency.operation.operation import (
 
 JSONB_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
+TAG_JSONB_TO_TEXT = "jsonb_to_text"
+
 JSONB_OPERATION_TYPES.append(
     DbOperation(
         "$ -> $",
@@ -53,6 +55,7 @@ JSONB_OPERATION_TYPES.append(
         "$ ->> $",
         [JsonbOperationParam(), JSON_FIELD_NAME_PARAM],
         TextReturnTypeSpec(),
+        tags={TAG_JSONB_TO_TEXT},
     )
 )
 JSONB_OPERATION_TYPES.append(
@@ -60,6 +63,7 @@ JSONB_OPERATION_TYPES.append(
         "$ ->> $",
         [JsonbOperationParam(), JSON_FIELD_INDEX_PARAM],
         TextReturnTypeSpec(),
+        tags={TAG_JSONB_TO_TEXT},
     )
 )
 JSONB_OPERATION_TYPES.append(
@@ -111,6 +115,7 @@ JSONB_OPERATION_TYPES.append(
         "jsonb_pretty",
         [JsonbOperationParam()],
         TextReturnTypeSpec(),
+        tags={TAG_JSONB_TO_TEXT},
     )
 )
 
