@@ -66,14 +66,14 @@ JSONB_OPERATION_TYPES.append(
     DbOperation(
         "$ || $",
         [JsonbOperationParam(), JsonbOperationParam()],
-        TextReturnTypeSpec(),
+        JsonbReturnTypeSpec(),
     )
 )
 JSONB_OPERATION_TYPES.append(
     DbOperation(
         "$ - $",
         [JsonbOperationParam(), JSON_FIELD_NAME_PARAM],
-        TextReturnTypeSpec(),
+        JsonbReturnTypeSpec(),
     )
 )
 JSONB_OPERATION_TYPES.append(
