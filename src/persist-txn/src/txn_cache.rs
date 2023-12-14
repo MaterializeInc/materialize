@@ -615,6 +615,12 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                     ts, prev_ts
                 ));
             }
+            if ts < &self.since_ts {
+                return Err(format!(
+                    "unapplied timestamp {:?} less than since {:?}",
+                    ts, self.since_ts
+                ));
+            }
             prev_ts = ts.clone();
         }
 
