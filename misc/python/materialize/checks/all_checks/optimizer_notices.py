@@ -13,7 +13,7 @@ from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 
-SCHEMA = "check_optimzier_notices"
+SCHEMA = "optimizer_notices"
 
 
 class OptimizerNotices(Check):
@@ -23,27 +23,29 @@ class OptimizerNotices(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
+                f"""
+                $postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                ALTER SYSTEM SET enable_mz_notices = true
+                > DROP SCHEMA IF EXISTS {SCHEMA} CASCADE;
+                > CREATE SCHEMA {SCHEMA};
+                > CREATE TABLE {SCHEMA}.t1(x INTEGER, y INTEGER);
+                > CREATE INDEX t1_idx ON {SCHEMA}.t1(x, y);
                 """
-                > DROP SCHEMA IF EXISTS {sch} CASCADE;
-                > CREATE SCHEMA {sch};
-                > CREATE TABLE {sch}.t1(x INTEGER, y INTEGER);
-                > CREATE INDEX t1_idx ON {sch}.t1(x, y);
-                """
-            ).format(sch=SCHEMA)
+            )
         )
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(dedent(s).format(sch=SCHEMA))
+            Testdrive(dedent(s))
             for s in [
-                """
+                f"""
                 # emits one "index too wide" notice
-                > CREATE MATERIALIZED VIEW {sch}.mv1 AS SELECT x, y FROM {sch}.t1 WHERE x = 5;
+                > CREATE MATERIALIZED VIEW {SCHEMA}.mv1 AS SELECT x, y FROM {SCHEMA}.t1 WHERE x = 5;
                 """,
-                """
+                f"""
                 # emits one "index too wide" notice one "index key empty" notice
-                > CREATE VIEW {sch}.v1 AS SELECT x, y FROM {sch}.t1 WHERE x = 7;
-                > CREATE INDEX v1_idx ON {sch}.v1();
+                > CREATE VIEW {SCHEMA}.v1 AS SELECT x, y FROM {SCHEMA}.t1 WHERE x = 7;
+                > CREATE INDEX v1_idx ON {SCHEMA}.v1();
                 """,
             ]
         ]

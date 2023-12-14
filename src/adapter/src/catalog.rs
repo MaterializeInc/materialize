@@ -1196,12 +1196,14 @@ impl Catalog {
 
         for id in drop_ids {
             if let Some(df_meta) = self.try_get_dataflow_metainfo(&id) {
-                // Generate retractions for the Builtin tables.
-                self.pack_optimizer_notices(
-                    &mut builtin_table_updates,
-                    df_meta.optimizer_notices.iter(),
-                    -1,
-                );
+                if self.state().system_config().enable_mz_notices() {
+                    // Generate retractions for the Builtin tables.
+                    self.pack_optimizer_notices(
+                        &mut builtin_table_updates,
+                        df_meta.optimizer_notices.iter(),
+                        -1,
+                    );
+                }
             }
             // Drop in-memory planning metadata.
             self.drop_plans_and_metainfos(id);
