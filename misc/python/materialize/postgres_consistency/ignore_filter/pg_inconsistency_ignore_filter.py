@@ -110,11 +110,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ):
                 return YesIgnore("#22000: regexp with linebreak")
 
-            if expression.args[regex_param_index].has_any_characteristic(
-                {ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR}
-            ):
-                return YesIgnore("#23605: regexp with backslash")
-
         return super()._matches_problematic_operation_or_function_invocation(
             expression, operation, _all_involved_characteristics
         )
@@ -165,6 +160,12 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             # replace is not working properly with empty text; however, it is not possible to reliably determine if an
             # expression is an empty text, we therefore need to exclude the function completely
             return YesIgnore("#22001: replace")
+
+        if db_function.function_name_in_lower_case == "regexp_replace":
+            if expression.args[2].has_any_characteristic(
+                {ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR}
+            ):
+                return YesIgnore("#23605: regexp with backslash")
 
         if db_function.function_name_in_lower_case == "nullif":
             type_arg0 = expression.args[0].try_resolve_exact_data_type()
