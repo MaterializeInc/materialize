@@ -4726,7 +4726,10 @@ impl UnaryFunc {
     /// Returns true if the function could introduce an error on non-error input.
     pub fn could_error(&self) -> bool {
         match self {
-            UnaryFunc::IsNull(_) | UnaryFunc::CastVarCharToString(_) | UnaryFunc::Not(_) => false,
+            UnaryFunc::IsNull(_)
+            | UnaryFunc::CastVarCharToString(_)
+            | UnaryFunc::Not(_)
+            | UnaryFunc::IsLikeMatch(_) => false,
             _ => true,
         }
     }
