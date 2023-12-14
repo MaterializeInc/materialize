@@ -22,20 +22,20 @@ def image_of_commit_exists(commit_hash: str) -> bool:
 
 
 def mz_image_tag_exists(image_tag: str) -> bool:
-    image = f"materialize/materialized:{image_tag}"
+    image_name = f"materialize/materialized:{image_tag}"
     command = [
         "docker",
         "pull",
-        image,
+        image_name,
     ]
 
-    print(f"Trying to pull image: {image}")
+    print(f"Trying to pull image: {image_name}")
 
     try:
         subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
         return True
     except subprocess.CalledProcessError as e:
-        print(f"Failed to pull image: {image}")
+        print(f"Failed to pull image: {image_name}")
 
         if "not found: manifest unknown: manifest unknown" not in e.output:
             print(f"Error when pulling image was: {e.output}")
