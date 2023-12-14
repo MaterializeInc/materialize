@@ -65,6 +65,9 @@ pub enum IntrospectionType {
     StatementExecutionHistory,
     SessionHistory,
     PreparedStatementHistory,
+    // For statement lifecycle logging, which is closely related
+    // to statement logging
+    StatementLifecycleHistory,
 
     // Collections written by the compute controller.
     ComputeDependencies,
@@ -195,6 +198,11 @@ impl<T: Codec64 + Timestamp + Lattice> SnapshotCursor<T> {
     > {
         self.cursor.next().await
     }
+}
+
+#[derive(Debug)]
+pub enum Response<T> {
+    FrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
 }
 
 #[async_trait(?Send)]
@@ -463,7 +471,7 @@ pub trait StorageController: Debug {
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
-    async fn process(&mut self) -> Result<(), anyhow::Error>;
+    async fn process(&mut self) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
 
     /// Signal to the controller that the adapter has populated all of its
     /// initial state and the controller can reconcile (i.e. drop) any unclaimed

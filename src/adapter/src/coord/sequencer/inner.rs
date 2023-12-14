@@ -107,6 +107,7 @@ use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
+use crate::statement_logging::StatementLifecycleEvent;
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
@@ -2279,7 +2280,35 @@ impl Coordinator {
         }
 
         let determination = peek_plan.determination.clone();
-
+        let ts = determination.timestamp_context.timestamp_or_default();
+        if let Some(uuid) = ctx.extra().contents() {
+            let mut transitive_storage_deps = BTreeSet::new();
+            let mut transitive_compute_deps = BTreeSet::new();
+            for id in id_bundle
+                .iter()
+                .flat_map(|id| self.catalog.state().transitive_dependencies(id))
+            {
+                match self.catalog.state().get_entry(&id).item() {
+                    CatalogItem::Table(_) | CatalogItem::Source(_) => {
+                        transitive_storage_deps.insert(id);
+                    }
+                    CatalogItem::MaterializedView(_) | CatalogItem::Index(_) => {
+                        transitive_compute_deps.insert(id);
+                    }
+                    _ => {}
+                }
+            }
+            self.controller.install_watch_set(
+                transitive_storage_deps,
+                ts,
+                Box::new((uuid, StatementLifecycleEvent::StorageDependenciesFinished)),
+            );
+            self.controller.install_watch_set(
+                transitive_compute_deps,
+                ts,
+                Box::new((uuid, StatementLifecycleEvent::ComputeDependenciesFinished)),
+            );
+        }
         let max_query_result_size = std::cmp::min(
             ctx.session().vars().max_query_result_size(),
             self.catalog().system_config().max_result_size(),

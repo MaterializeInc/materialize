@@ -32,11 +32,13 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::Command;
 use crate::coord::appends::Deferred;
+use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
     Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
 };
 use crate::session::Session;
+use crate::statement_logging::StatementLifecycleEvent;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
@@ -382,6 +384,14 @@ impl Coordinator {
                         insertions
                     };
                     self.builtin_table_update().background(updates);
+                }
+            }
+            ControllerResponse::WatchSetFinished(sets) => {
+                for set in sets {
+                    let (id, ev) = set
+                        .downcast_ref::<(StatementLoggingId, StatementLifecycleEvent)>()
+                        .expect("we currently log all watch sets with this type");
+                    self.record_statement_lifecycle_event(id, ev);
                 }
             }
         }
