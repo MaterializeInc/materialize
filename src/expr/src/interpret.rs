@@ -455,7 +455,7 @@ pub trait Interpreter {
             let result = mfp_eval.binary(&BinaryFunc::Gte(func::Gte), bound_range, mz_now.clone());
             results.push(result);
         }
-        self.variadic(&VariadicFunc::And, results)
+        mfp_eval.variadic(&VariadicFunc::And, results)
     }
 }
 
