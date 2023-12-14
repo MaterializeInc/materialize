@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use maplit::{btreemap, btreeset};
-use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, MaterializedView, Source, View};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
@@ -160,12 +160,8 @@ impl Coordinator {
             .create_dataflow(instance, dataflow)
             .unwrap_or_terminate("dataflow creation cannot fail");
 
-        self.initialize_compute_read_policies(
-            export_ids,
-            instance,
-            Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-        )
-        .await;
+        self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
+            .await;
     }
 }
 

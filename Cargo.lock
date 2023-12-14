@@ -3531,6 +3531,9 @@ version = "0.0.0"
 dependencies = [
  "mz-ore",
  "mz-repr",
+ "mz-storage-types",
+ "serde",
+ "timely",
  "workspace-hack",
 ]
 
@@ -5641,7 +5644,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "derivative",
  "differential-dataflow",
  "http",
  "itertools",
@@ -5749,6 +5751,7 @@ dependencies = [
  "base64 0.13.1",
  "bytes",
  "dec",
+ "derivative",
  "differential-dataflow",
  "fail",
  "itertools",

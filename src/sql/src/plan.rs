@@ -33,6 +33,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
 use maplit::btreeset;
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
@@ -1545,9 +1546,8 @@ pub enum ExecuteTimeout {
 
 #[derive(Clone, Debug)]
 pub enum IndexOption {
-    /// Configures the logical compaction window for an index. `None` disables
-    /// logical compaction entirely.
-    LogicalCompactionWindow(Option<Duration>),
+    /// Configures the logical compaction window for an index.
+    LogicalCompactionWindow(CompactionWindow),
 }
 
 #[derive(Clone, Debug)]

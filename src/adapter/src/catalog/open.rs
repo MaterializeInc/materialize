@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
+use mz_adapter_types::compaction::CompactionWindow;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tracing::{info, warn, Instrument};
@@ -126,7 +127,7 @@ pub enum CatalogItemRebuilder {
         id: GlobalId,
         sql: String,
         is_retained_metrics_object: bool,
-        custom_logical_compaction_window: Option<Duration>,
+        custom_logical_compaction_window: Option<CompactionWindow>,
     },
 }
 
@@ -557,7 +558,7 @@ impl Catalog {
                                     resolved_ids: ResolvedIds(BTreeSet::new()),
                                     custom_logical_compaction_window: table
                                         .is_retained_metrics_object
-                                        .then(|| state.system_config().metrics_retention()),
+                                        .then(|| state.system_config().metrics_retention().try_into().expect("invalid metrics retention")),
                                     is_retained_metrics_object: table.is_retained_metrics_object,
                                 }),
                                 MZ_SYSTEM_ROLE_ID,
@@ -666,7 +667,7 @@ impl Catalog {
                                     resolved_ids: ResolvedIds(BTreeSet::new()),
                                     custom_logical_compaction_window: coll
                                         .is_retained_metrics_object
-                                        .then(|| state.system_config().metrics_retention()),
+                                        .then(|| state.system_config().metrics_retention().try_into().expect("invalid metrics retention")),
                                     is_retained_metrics_object: coll.is_retained_metrics_object,
                                 }),
                                 MZ_SYSTEM_ROLE_ID,
@@ -785,7 +786,7 @@ impl Catalog {
                             index.create_sql(),
                             None,
                             index.is_retained_metrics_object,
-                            if index.is_retained_metrics_object { Some(state.system_config().metrics_retention()) } else { None },
+                            if index.is_retained_metrics_object { Some(state.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
                         )
                         .unwrap_or_else(|e| {
                             panic!(

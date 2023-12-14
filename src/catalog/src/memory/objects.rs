@@ -12,10 +12,9 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW;
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
@@ -365,7 +364,7 @@ pub struct Table {
     #[serde(skip)]
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
-    pub custom_logical_compaction_window: Option<Duration>,
+    pub custom_logical_compaction_window: Option<CompactionWindow>,
     /// Whether the table's logical compaction window is controlled by
     /// METRICS_RETENTION
     pub is_retained_metrics_object: bool,
@@ -448,7 +447,7 @@ pub struct Source {
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub resolved_ids: ResolvedIds,
-    pub custom_logical_compaction_window: Option<Duration>,
+    pub custom_logical_compaction_window: Option<CompactionWindow>,
     /// Whether the source's logical compaction window is controlled by
     /// METRICS_RETENTION
     pub is_retained_metrics_object: bool,
@@ -466,7 +465,7 @@ impl Source {
         plan: CreateSourcePlan,
         cluster_id: Option<ClusterId>,
         resolved_ids: ResolvedIds,
-        custom_logical_compaction_window: Option<Duration>,
+        custom_logical_compaction_window: Option<CompactionWindow>,
         is_retained_metrics_object: bool,
     ) -> Source {
         Source {
@@ -688,7 +687,7 @@ pub struct Index {
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
-    pub custom_logical_compaction_window: Option<Duration>,
+    pub custom_logical_compaction_window: Option<CompactionWindow>,
     pub is_retained_metrics_object: bool,
 }
 
@@ -1065,7 +1064,7 @@ impl CatalogItem {
     // for objects with `is_retained_metrics_object`. That
     // may not always be true in the future, if we enable user-settable
     // compaction windows.
-    pub fn custom_logical_compaction_window(&self) -> Option<Duration> {
+    pub fn custom_logical_compaction_window(&self) -> Option<CompactionWindow> {
         match self {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
             CatalogItem::Source(source) => source.custom_logical_compaction_window,
@@ -1088,8 +1087,8 @@ impl CatalogItem {
     /// that.  Otherwise, use a sensible default (currently 1s).
     ///
     /// For objects that do not have the concept of compaction window,
-    /// return nothing.
-    pub fn initial_logical_compaction_window(&self) -> Option<Duration> {
+    /// return None.
+    pub fn initial_logical_compaction_window(&self) -> Option<CompactionWindow> {
         let custom_logical_compaction_window = match self {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
@@ -1103,7 +1102,7 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => return None,
         };
-        Some(custom_logical_compaction_window.unwrap_or(DEFAULT_LOGICAL_COMPACTION_WINDOW))
+        Some(custom_logical_compaction_window.unwrap_or(CompactionWindow::Default))
     }
 
     /// Whether the item's logical compaction window

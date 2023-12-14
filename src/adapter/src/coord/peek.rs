@@ -18,6 +18,7 @@ use std::num::NonZeroUsize;
 
 use differential_dataflow::consolidation::consolidate;
 use futures::TryFutureExt;
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::protocol::command::PeekTarget;
@@ -561,9 +562,8 @@ impl crate::coord::Coordinator {
                 self.initialize_compute_read_policies(
                     output_ids,
                     compute_instance,
-                    // Disable compaction by using None as the compaction window so that nothing
-                    // can compact before the peek occurs below.
-                    None,
+                    // Disable compaction so that nothing can compact before the peek occurs below.
+                    CompactionWindow::DisableCompaction,
                 )
                 .await;
 

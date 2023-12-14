@@ -20,27 +20,25 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use itertools::Itertools;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
+use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData, SourceEnvelope};
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::{AntichainRef, MutableAntichain};
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
@@ -541,103 +539,6 @@ pub trait StorageController: Debug {
     /// Returns the timestamp of the latest row for each id in the
     /// privatelink_connection_status_history table seen on startup
     fn get_privatelink_status_table_latest(&self) -> &Option<BTreeMap<GlobalId, DateTime<Utc>>>;
-}
-
-/// Compaction policies for collections maintained by `Controller`.
-///
-/// NOTE(benesch): this might want to live somewhere besides the storage crate,
-/// because it is fundamental to both storage and compute.
-#[derive(Clone, Derivative)]
-#[derivative(Debug)]
-pub enum ReadPolicy<T> {
-    /// No-one has yet requested a `ReadPolicy` from us, which means that we can
-    /// still change the implied_capability/the collection since if we need
-    /// to.
-    NoPolicy { initial_since: Antichain<T> },
-    /// Maintain the collection as valid from this frontier onward.
-    ValidFrom(Antichain<T>),
-    /// Maintain the collection as valid from a function of the write frontier.
-    ///
-    /// This function will only be re-evaluated when the write frontier changes.
-    /// If the intended behavior is to change in response to external signals,
-    /// consider using the `ValidFrom` variant to manually pilot compaction.
-    ///
-    /// The `Arc` makes the function cloneable.
-    LagWriteFrontier(
-        #[derivative(Debug = "ignore")] Arc<dyn Fn(AntichainRef<T>) -> Antichain<T> + Send + Sync>,
-    ),
-    /// Allows one to express multiple read policies, taking the least of
-    /// the resulting frontiers.
-    Multiple(Vec<ReadPolicy<T>>),
-}
-
-impl<T> ReadPolicy<T>
-where
-    T: Timestamp + TimestampManipulation,
-{
-    /// Creates a read policy that lags the write frontier "by one".
-    pub fn step_back() -> Self {
-        Self::LagWriteFrontier(Arc::new(move |upper| {
-            if upper.is_empty() {
-                Antichain::from_elem(Timestamp::minimum())
-            } else {
-                let stepped_back = upper
-                    .to_owned()
-                    .into_iter()
-                    .map(|time| {
-                        if time == T::minimum() {
-                            time
-                        } else {
-                            time.step_back().unwrap()
-                        }
-                    })
-                    .collect_vec();
-                stepped_back.into()
-            }
-        }))
-    }
-}
-
-impl ReadPolicy<mz_repr::Timestamp> {
-    /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to (at most) the specified value.
-    /// The rounding down is done to reduce the number of changes the capability undergoes.
-    pub fn lag_writes_by(lag: mz_repr::Timestamp, max_granularity: mz_repr::Timestamp) -> Self {
-        Self::LagWriteFrontier(Arc::new(move |upper| {
-            if upper.is_empty() {
-                Antichain::from_elem(Timestamp::minimum())
-            } else {
-                // Subtract the lag from the time, and then round down to a multiple of `granularity` to cut chatter.
-                let mut time = upper[0];
-                if lag != mz_repr::Timestamp::default() {
-                    time = time.saturating_sub(lag);
-                    // It makes little sense to refuse to compact if the user genuinely
-                    // sets a smaller compaction window than the default, so honor it here.
-                    let granularity = std::cmp::min(lag, max_granularity);
-                    time = time.saturating_sub(time % granularity);
-                }
-                Antichain::from_elem(time)
-            }
-        }))
-    }
-}
-
-impl<T: Timestamp> ReadPolicy<T> {
-    pub fn frontier(&self, write_frontier: AntichainRef<T>) -> Antichain<T> {
-        match self {
-            ReadPolicy::NoPolicy { initial_since } => initial_since.clone(),
-            ReadPolicy::ValidFrom(frontier) => frontier.clone(),
-            ReadPolicy::LagWriteFrontier(logic) => logic(write_frontier),
-            ReadPolicy::Multiple(policies) => {
-                let mut frontier = Antichain::new();
-                for policy in policies.iter() {
-                    for time in policy.frontier(write_frontier).iter() {
-                        frontier.insert(time.clone());
-                    }
-                }
-                frontier
-            }
-        }
-    }
 }
 
 /// State maintained about individual collections.
