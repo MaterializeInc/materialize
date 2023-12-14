@@ -168,21 +168,27 @@ TEXT_OPERATION_TYPES.append(
     )
 )
 
-TEXT_OPERATION_TYPES.append(
-    DbFunction(
-        "chr",
-        [
-            MaxSignedInt4OperationParam(
-                incompatibilities={
-                    ExpressionCharacteristics.NULL,
-                    ExpressionCharacteristics.MAX_VALUE,
-                    ExpressionCharacteristics.ZERO,
-                }
-            )
-        ],
-        TextReturnTypeSpec(),
-    )
+chr_function = DbFunction(
+    "chr",
+    [
+        MaxSignedInt4OperationParam(
+            incompatibilities={
+                ExpressionCharacteristics.NULL,
+                ExpressionCharacteristics.MAX_VALUE,
+                ExpressionCharacteristics.ZERO,
+            }
+        )
+    ],
+    TextReturnTypeSpec(),
 )
+# may introduce a usage of a new line or a backslash
+chr_function.added_characteristics.add(
+    ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS
+)
+chr_function.added_characteristics.add(
+    ExpressionCharacteristics.TEXT_WITH_BACKSLASH_CHAR
+)
+TEXT_OPERATION_TYPES.append(chr_function)
 
 TEXT_OPERATION_TYPES.append(
     DbFunction(
