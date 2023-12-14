@@ -4093,7 +4093,7 @@ pub const MZ_ACTIVE_PEEKS: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
     sql: "
-SELECT id, index_id, time
+SELECT id, object_id, type, time
 FROM mz_internal.mz_active_peeks_per_worker
 WHERE worker_id = 0",
     sensitivity: DataSensitivity::Public,

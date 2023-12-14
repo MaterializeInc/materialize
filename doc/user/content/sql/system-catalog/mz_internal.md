@@ -853,11 +853,12 @@ Per-worker relations expose the same data as their global counterparts, but have
 The `mz_active_peeks` view describes all read queries ("peeks") that are pending in the [dataflow] layer.
 
 <!-- RELATION_SPEC mz_internal.mz_active_peeks -->
-| Field       | Type               | Meaning                                                                                                                                              |
-| ----------- | ------------------ |------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `id`        | [`uuid`]           | The ID of the peek request.                                                                                                                          |
-| `index_id`  | [`text`]           | The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
-| `time`      | [`mz_timestamp`]   | The timestamp the peek has requested.                                                                                                                |
+| Field       | Type             | Meaning                                                                                                                                                                                                                                                                                                               |
+|-------------|------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `id`        | [`uuid`]         | The ID of the peek request.                                                                                                                                                                                                                                                                                           |
+| `object_id` | [`text`]         | The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
+| `type`      | [`text`]         | The type of the corresponding peek: `index` if targeting an index or temporary dataflow; `persist` for a source, materialized view, or table.                                                                                                                                                                         |
+| `time`      | [`mz_timestamp`] | The timestamp the peek has requested.                                                                                                                                                                                                                                                                                 |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_active_peeks_per_worker -->
 

@@ -461,8 +461,9 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_active_peeks' ORDER BY position
 ----
 1  id  uuid
-2  index_id  text
-3  time  mz_timestamp
+2  object_id  text
+3  type  text
+4  time  mz_timestamp
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_arrangement_sharing' ORDER BY position

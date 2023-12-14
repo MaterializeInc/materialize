@@ -308,6 +308,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                     Datum::Uuid(datum.uuid),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     make_string_datum(datum.id, &mut scratch),
+                    Datum::String(datum.peek_type),
                     Datum::MzTimestamp(datum.time),
                 ])
             }
