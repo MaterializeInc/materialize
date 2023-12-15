@@ -1012,6 +1012,10 @@ impl<'a, T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> Iterator
             self.registers.get(self.register_idx),
         ) {
             (Some((batch_id, batch, batch_ts)), Some((register_id, register_ts))) => {
+                // Intentionally emit registers before batches at the same timestamp. Currently, a
+                // single data shard can't have both a register and a batch at the same timestamp,
+                // so the order doesn't matter, but it might ever we ever allow combining registers
+                // and commits in a single op.
                 if register_ts <= batch_ts {
                     self.register_idx += 1;
                     Some((register_id, Unapplied::Register, register_ts))
