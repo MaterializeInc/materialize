@@ -36,7 +36,7 @@ use timely::progress::Antichain;
 use timely::progress::timestamp::Refines;
 
 use crate::render::RenderTimestamp;
-use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownToken};
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownProbe};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 impl<G> Context<G>
@@ -212,7 +212,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
-                                            self.shutdown_token.clone(),
+                                            self.shutdown_probe.clone(),
                                         )
                                     } else {
                                         build_halfjoin::<_, RowRowAgent<_, _>, _>(
@@ -222,7 +222,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
-                                            self.shutdown_token.clone(),
+                                            self.shutdown_probe.clone(),
                                         )
                                     }
                                 }
@@ -235,7 +235,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
-                                            self.shutdown_token.clone(),
+                                            self.shutdown_probe.clone(),
                                         )
                                     } else {
                                         build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
@@ -245,7 +245,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
-                                            self.shutdown_token.clone(),
+                                            self.shutdown_probe.clone(),
                                         )
                                     }
                                 }
@@ -329,7 +329,7 @@ fn build_halfjoin<G, Tr, CF>(
     prev_thinning: Vec<usize>,
     comparison: CF,
     closure: JoinClosure,
-    shutdown_token: ShutdownToken,
+    shutdown_probe: ShutdownProbe,
 ) -> (
     Collection<G, (Row, G::Timestamp), Diff>,
     Collection<G, DataflowError, Diff>,
@@ -384,7 +384,7 @@ where
             move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
                 // Check the shutdown token to avoid doing unnecessary work when the dataflow is
                 // shutting down.
-                shutdown_token.probe()?;
+                shutdown_probe.probe()?;
 
                 let mut row_builder = SharedRow::get();
                 let temp_storage = RowArena::new();
@@ -430,7 +430,7 @@ where
             move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
                 // Check the shutdown token to avoid doing unnecessary work when the dataflow is
                 // shutting down.
-                shutdown_token.probe()?;
+                shutdown_probe.probe()?;
 
                 let mut row_builder = SharedRow::get();
                 let temp_storage = RowArena::new();
