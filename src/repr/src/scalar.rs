@@ -1678,6 +1678,9 @@ pub trait DatumType<'a, E>: Sized {
     /// Whether this Rust type can represent NULL values
     fn nullable() -> bool;
 
+    /// Whether this Rust type can represent errors
+    fn fallible() -> bool;
+
     /// Try to convert a Result whose Ok variant is a Datum into this native Rust type (Self). If
     /// it fails the error variant will contain the original result.
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>>;
@@ -1700,6 +1703,9 @@ impl<B: AsColumnType> AsColumnType for Option<B> {
 impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Option<B> {
     fn nullable() -> bool {
         true
+    }
+    fn fallible() -> bool {
+        false
     }
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
@@ -1726,6 +1732,9 @@ impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Result<B, E> {
     fn nullable() -> bool {
         B::nullable()
     }
+    fn fallible() -> bool {
+        true
+    }
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         B::try_from_result(res).map(Ok)
     }
@@ -1745,6 +1754,10 @@ macro_rules! impl_datum_type_copy {
 
         impl<$lt, E> DatumType<$lt, E> for $native {
             fn nullable() -> bool {
+                false
+            }
+
+            fn fallible() -> bool {
                 false
             }
 
@@ -1786,6 +1799,10 @@ impl<'a, E> DatumType<'a, E> for Datum<'a> {
         true
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(datum) => Ok(datum),
@@ -1800,6 +1817,10 @@ impl<'a, E> DatumType<'a, E> for Datum<'a> {
 
 impl<'a, E> DatumType<'a, E> for DatumList<'a> {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -1820,6 +1841,10 @@ impl<'a, E> DatumType<'a, E> for DatumMap<'a> {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Map(map)) => Ok(map),
@@ -1837,6 +1862,10 @@ impl<'a, E> DatumType<'a, E> for Range<DatumNested<'a>> {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Range(range)) => Ok(range),
@@ -1851,6 +1880,10 @@ impl<'a, E> DatumType<'a, E> for Range<DatumNested<'a>> {
 
 impl<'a, E> DatumType<'a, E> for Range<Datum<'a>> {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -1876,6 +1909,10 @@ impl AsColumnType for bool {
 
 impl<'a, E> DatumType<'a, E> for bool {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -1907,6 +1944,10 @@ impl<'a, E> DatumType<'a, E> for String {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::String(s)) => Ok(s.to_owned()),
@@ -1927,6 +1968,10 @@ impl AsColumnType for ArrayRustType<String> {
 
 impl<'a, E> DatumType<'a, E> for ArrayRustType<String> {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -1968,6 +2013,10 @@ impl<'a, E> DatumType<'a, E> for Vec<u8> {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Bytes(b)) => Ok(b.to_owned()),
@@ -1991,6 +2040,10 @@ impl<'a, E> DatumType<'a, E> for Numeric {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Numeric(n)) => Ok(n.into_inner()),
@@ -2011,6 +2064,10 @@ impl AsColumnType for PgLegacyChar {
 
 impl<'a, E> DatumType<'a, E> for PgLegacyChar {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -2040,6 +2097,10 @@ impl<'a, E> DatumType<'a, E> for PgLegacyName<&'a str> {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::String(a)) => Ok(PgLegacyName(a)),
@@ -2054,6 +2115,10 @@ impl<'a, E> DatumType<'a, E> for PgLegacyName<&'a str> {
 
 impl<'a, E> DatumType<'a, E> for PgLegacyName<String> {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -2080,6 +2145,10 @@ impl<'a, E> DatumType<'a, E> for Oid {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::UInt32(a)) => Ok(Oid(a)),
@@ -2100,6 +2169,10 @@ impl AsColumnType for RegClass {
 
 impl<'a, E> DatumType<'a, E> for RegClass {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -2126,6 +2199,10 @@ impl<'a, E> DatumType<'a, E> for RegProc {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::UInt32(a)) => Ok(RegProc(a)),
@@ -2146,6 +2223,10 @@ impl AsColumnType for RegType {
 
 impl<'a, E> DatumType<'a, E> for RegType {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -2175,6 +2256,10 @@ impl<'a, E> DatumType<'a, E> for Char<&'a str> {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::String(a)) => Ok(Char(a)),
@@ -2189,6 +2274,10 @@ impl<'a, E> DatumType<'a, E> for Char<&'a str> {
 
 impl<'a, E> DatumType<'a, E> for Char<String> {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -2218,6 +2307,10 @@ impl<'a, E> DatumType<'a, E> for VarChar<&'a str> {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::String(a)) => Ok(VarChar(a)),
@@ -2232,6 +2325,10 @@ impl<'a, E> DatumType<'a, E> for VarChar<&'a str> {
 
 impl<'a, E> DatumType<'a, E> for VarChar<String> {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -2252,6 +2349,10 @@ impl<'a, E> DatumType<'a, E> for Jsonb {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         Ok(JsonbRef::try_from_result(res)?.to_owned())
     }
@@ -2269,6 +2370,10 @@ impl AsColumnType for Jsonb {
 
 impl<'a, E> DatumType<'a, E> for JsonbRef<'a> {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -2309,6 +2414,10 @@ impl<'a, E> DatumType<'a, E> for MzAclItem {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::MzAclItem(mz_acl_item)) => Ok(mz_acl_item),
@@ -2329,6 +2438,10 @@ impl AsColumnType for AclItem {
 
 impl<'a, E> DatumType<'a, E> for AclItem {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 
@@ -2355,6 +2468,10 @@ impl<'a, E> DatumType<'a, E> for CheckedTimestamp<NaiveDateTime> {
         false
     }
 
+    fn fallible() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Timestamp(a)) => Ok(a),
@@ -2375,6 +2492,10 @@ impl AsColumnType for CheckedTimestamp<DateTime<Utc>> {
 
 impl<'a, E> DatumType<'a, E> for CheckedTimestamp<DateTime<Utc>> {
     fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
         false
     }
 

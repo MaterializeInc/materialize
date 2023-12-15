@@ -4268,6 +4268,12 @@ trait LazyUnaryFunc {
     /// Whether this function will produce NULL on non-NULL input.
     fn introduces_nulls(&self) -> bool;
 
+    /// Whether this function might error on non-error input.
+    fn could_error(&self) -> bool {
+        // NB: override this for functions that never error.
+        true
+    }
+
     /// Whether this function preserves uniqueness.
     ///
     /// Uniqueness is preserved when `if f(x) = f(y) then x = y` is true. This
@@ -4385,6 +4391,10 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
 
     fn introduces_nulls(&self) -> bool {
         self.introduces_nulls()
+    }
+
+    fn could_error(&self) -> bool {
+        T::Output::fallible()
     }
 
     fn preserves_uniqueness(&self) -> bool {
@@ -4720,17 +4730,6 @@ impl UnaryFunc {
             UnaryFunc::IsTrue(_) => Some("TRUE"),
             UnaryFunc::IsFalse(_) => Some("FALSE"),
             _ => None,
-        }
-    }
-
-    /// Returns true if the function could introduce an error on non-error input.
-    pub fn could_error(&self) -> bool {
-        match self {
-            UnaryFunc::IsNull(_)
-            | UnaryFunc::CastVarCharToString(_)
-            | UnaryFunc::Not(_)
-            | UnaryFunc::IsLikeMatch(_) => false,
-            _ => true,
         }
     }
 }
@@ -8237,6 +8236,18 @@ mod test {
             let actual = protobuf_roundtrip::<_, ProtoVariadicFunc>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_could_error() {
+        for func in [
+            UnaryFunc::IsNull(IsNull),
+            UnaryFunc::CastVarCharToString(CastVarCharToString),
+            UnaryFunc::Not(Not),
+            UnaryFunc::IsLikeMatch(IsLikeMatch(like_pattern::compile("%hi%", false).unwrap())),
+        ] {
+            assert!(!func.could_error())
         }
     }
 }

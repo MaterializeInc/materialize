@@ -374,6 +374,11 @@ macro_rules! derive_unary {
                     $(Self::$name(f) => LazyUnaryFunc::is_monotone(f),)*
                 }
             }
+            pub fn could_error(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::could_error(f),)*
+                }
+            }
         }
 
         impl fmt::Display for UnaryFunc {
