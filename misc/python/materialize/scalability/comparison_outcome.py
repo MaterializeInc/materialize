@@ -14,6 +14,7 @@ from materialize.scalability.df.df_totals import (
     DfTotalsExtended,
     concat_df_totals_extended,
 )
+from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.scalability_change import (
     Regression,
     ScalabilityChange,
@@ -29,6 +30,7 @@ class ComparisonOutcome:
         self.significant_improvements: list[ScalabilityImprovement] = []
         self.regression_df = DfTotalsExtended()
         self.significant_improvement_df = DfTotalsExtended()
+        self.endpoints_with_regressions: set[Endpoint] = set()
 
     def has_regressions(self) -> bool:
         assert len(self.regressions) == self.regression_df.length()
@@ -81,6 +83,9 @@ class ComparisonOutcome:
         self.significant_improvements.extend(significant_improvements)
         self._append_regression_df(regression_df)
         self._append_significant_improvement_df(significant_improvement_df)
+
+        for regression in regressions:
+            self.endpoints_with_regressions.add(regression.endpoint)
 
     def _append_regression_df(self, regressions_data: DfTotalsExtended) -> None:
         self.regression_df = concat_df_totals_extended(
