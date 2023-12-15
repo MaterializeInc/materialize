@@ -2185,7 +2185,7 @@ where
         //   be called shortly).
         // - That all txn writes through `init_ts` have been applied
         //   (materialized physically in the data shards).
-        let removed = txns
+        let (removed, _tidy) = txns
             .forget_all(init_ts.clone())
             .await
             .map_err(|_| StorageError::InvalidUppers(vec![]))?;

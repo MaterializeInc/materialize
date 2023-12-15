@@ -309,12 +309,15 @@ where
     /// is less_equal to `forget_ts` AND there is no register ts between `F` and
     /// `forget_ts`.
     ///
+    /// As a side effect all txns <= forget_ts are applied, including the
+    /// forget itself.
+    ///
     /// **WARNING!** While a data shard is registered to the txn set, writing to
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
     /// registering it with another txn shard) will lead to incorrectness,
     /// undefined behavior, and (potentially sticky) panics.
     #[instrument(level = "debug", skip_all, fields(ts = ?forget_ts, shard = %data_id))]
-    pub async fn forget(&mut self, forget_ts: T, data_id: ShardId) -> Result<(), T> {
+    pub async fn forget(&mut self, forget_ts: T, data_id: ShardId) -> Result<Tidy, T> {
         let op = &Arc::clone(&self.metrics).forget;
         op.run(async {
             let mut txns_upper = self
@@ -393,20 +396,10 @@ where
                 }
             }
 
-            // We know above that we've applied the latest write, so go ahead and
-            // fill the time between that and forget_ts with empty updates. It's
-            // fine if we get interrupted between the forget CaA and here, we just
-            // won't get around to telling the caller that it's safe to use this
-            // shard directly again. Presumably it will retry at some point.
-            let () = crate::empty_caa(
-                || format!("data {:.9} forget fill", data_id.to_string()),
-                self.datas.get_write(&data_id).await,
-                forget_ts,
-            )
-            .await;
+            let tidy = self.apply_le(&forget_ts).await;
             self.datas.data_write.remove(&data_id);
 
-            Ok(())
+            Ok(tidy)
         })
         .await
     }
@@ -414,7 +407,7 @@ where
     /// Forgets, at the given timestamp, every data shard that is registered.
     /// Returns the ids of the forgotten shards. See [Self::forget].
     #[instrument(level = "debug", skip_all, fields(ts = ?forget_ts))]
-    pub async fn forget_all(&mut self, forget_ts: T) -> Result<Vec<ShardId>, T> {
+    pub async fn forget_all(&mut self, forget_ts: T) -> Result<(Vec<ShardId>, Tidy), T> {
         let op = &Arc::clone(&self.metrics).forget_all;
         op.run(async {
             let mut txns_upper = self
@@ -497,22 +490,12 @@ where
                 }
             };
 
-            // We know above that we've applied the latest write, so go ahead and
-            // fill the time between that and forget_ts with empty updates. It's
-            // fine if we get interrupted between the forget CaA and here, we just
-            // won't get around to telling the caller that it's safe to use this
-            // shard directly again.
             for data_id in registered.iter() {
-                let () = crate::empty_caa(
-                    || format!("data {:.9} forget_all fill", data_id.to_string()),
-                    self.datas.get_write(data_id).await,
-                    forget_ts.clone(),
-                )
-                .await;
                 self.datas.data_write.remove(data_id);
             }
 
-            Ok(registered)
+            let tidy = self.apply_le(&forget_ts).await;
+            Ok((registered, tidy))
         })
         .await
     }
@@ -555,6 +538,14 @@ where
                     let mut ret = Vec::new();
                     for (unapplied, unapplied_ts) in unapplied {
                         match unapplied {
+                            Unapplied::Register => {
+                                let () = crate::empty_caa(
+                                    || format!("data {:.9} register fill", data_id.to_string()),
+                                    &mut data_write,
+                                    unapplied_ts.clone(),
+                                )
+                                .await;
+                            }
                             Unapplied::Batch(batch_raw) => {
                                 crate::apply_caa(&mut data_write, batch_raw, unapplied_ts.clone())
                                     .await;
@@ -563,9 +554,9 @@ where
                                 // it definitely retracts.
                                 ret.push((batch_raw.clone(), (T::encode(unapplied_ts), data_id)));
                             }
-                            Unapplied::Register => {
+                            Unapplied::Forget => {
                                 let () = crate::empty_caa(
-                                    || format!("data {:.9} register fill", data_id.to_string()),
+                                    || format!("data {:.9} forget fill", data_id.to_string()),
                                     &mut data_write,
                                     unapplied_ts.clone(),
                                 )
@@ -589,6 +580,10 @@ where
             self.txns_cache
                 .unapplied_registers
                 .retain(|(_, register_ts)| ts < register_ts);
+            // Remove all the applied forgets.
+            self.txns_cache
+                .unapplied_forgets
+                .retain(|(_, forget_ts)| ts < forget_ts);
 
             debug!("apply_le {:?} success", ts);
             Tidy { retractions }
@@ -743,17 +738,6 @@ where
             )
             .await
             .expect("schema shouldn't change")
-    }
-
-    pub(crate) async fn get_write<'a>(
-        &'a mut self,
-        data_id: &ShardId,
-    ) -> &'a mut WriteHandle<K, V, T, D> {
-        if self.data_write.get(data_id).is_none() {
-            let data_write = self.open_data_write(*data_id).await;
-            assert!(self.data_write.insert(*data_id, data_write).is_none());
-        }
-        self.data_write.get_mut(data_id).expect("inserted above")
     }
 
     pub(crate) async fn take_write(&mut self, data_id: &ShardId) -> WriteHandle<K, V, T, D> {
@@ -922,22 +906,19 @@ mod tests {
         let log = txns.new_log();
 
         // Can forget a data_shard that has not been registered.
-        assert_eq!(txns.forget(1, ShardId::new()).await, Ok(()));
-        txns.apply_le(&1).await;
+        txns.forget(1, ShardId::new()).await.unwrap();
 
         // Can forget a registered shard.
         let d0 = txns.expect_register(2).await;
-        assert_eq!(txns.forget(3, d0).await, Ok(()));
-        txns.apply_le(&3).await;
+        txns.forget(3, d0).await.unwrap();
 
         // Forget is idempotent.
         txns.forget(4, d0).await.unwrap();
-        txns.apply_le(&4).await;
 
         // Cannot forget at an already closed off time. An error is returned
         // with the first time that a registration would succeed.
         let d1 = txns.expect_register(5).await;
-        assert_eq!(txns.forget(5, d1).await, Err(6));
+        assert_eq!(txns.forget(5, d1).await.unwrap_err(), 6);
 
         // Write to txns and to d0 directly.
         let mut d0_write = writer(&client, d0).await;
@@ -954,7 +935,7 @@ mod tests {
         txns.register(7, [writer(&client, d0).await]).await.unwrap();
         let mut forget_expected = vec![d0, d1];
         forget_expected.sort();
-        assert_eq!(txns.forget_all(8).await, Ok(forget_expected));
+        assert_eq!(txns.forget_all(8).await.unwrap().0, forget_expected);
 
         // Close shard to writes
         d0_write
@@ -1248,7 +1229,7 @@ mod tests {
         async fn forget(&mut self, data_id: ShardId) {
             self.retry_ts_err(&mut |w: &mut StressWorker| {
                 debug!("stress forget {:.9} at {}", data_id.to_string(), w.ts);
-                Box::pin(async move { w.txns.forget(w.ts, data_id).await })
+                Box::pin(async move { w.txns.forget(w.ts, data_id).await.map(|_| ()) })
             })
             .await
         }

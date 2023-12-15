@@ -9,7 +9,7 @@
 
 //! A cache of the txn shard contents.
 
-use std::cmp::{min, Reverse};
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
@@ -77,6 +77,7 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     txns_id: ShardId,
     /// Invariant: <= the minimum unapplied batch.
     /// Invariant: <= the minimum unapplied register.
+    /// Invariant: <= the minimum unapplied forget.
     since_ts: T,
     pub(crate) progress_exclusive: T,
 
@@ -96,6 +97,10 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     ///
     /// Invariant: Values are sorted by timestamp.
     pub(crate) unapplied_registers: VecDeque<(ShardId, T)>,
+    /// The forgets needing application as of the current progress.
+    ///
+    /// Invariant: Values are sorted by timestamp.
+    pub(crate) unapplied_forgets: VecDeque<(ShardId, T)>,
 
     /// Invariant: Contains the minimum write time (if any) for each value in
     /// `self.datas`.
@@ -129,6 +134,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             batch_idx: HashMap::new(),
             datas: BTreeMap::new(),
             unapplied_registers: VecDeque::new(),
+            unapplied_forgets: VecDeque::new(),
             datas_min_write_ts: BinaryHeap::new(),
             only_data_id,
         }
@@ -310,13 +316,25 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             .front()
             .map(|(_, ts)| ts)
             .unwrap_or(&self.progress_exclusive);
-        min(min_batch_ts, min_register_ts)
+        let min_forget_ts = self
+            .unapplied_forgets
+            .front()
+            .map(|(_, ts)| ts)
+            .unwrap_or(&self.progress_exclusive);
+        [min_batch_ts, min_register_ts, min_forget_ts]
+            .into_iter()
+            .min()
+            .expect("not empty")
     }
 
     /// Returns the operations needing application as of the current progress.
     pub(crate) fn unapplied(&self) -> impl Iterator<Item = (&ShardId, Unapplied, &T)> {
         assert_eq!(self.only_data_id, None);
-        UnappliedIter::new(&self.unapplied_batches, &self.unapplied_registers)
+        UnappliedIter::new(
+            &self.unapplied_batches,
+            &self.unapplied_registers,
+            &self.unapplied_forgets,
+        )
     }
 
     /// Filters out retractions known to have made it into the txns shard.
@@ -426,6 +444,9 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 data_id.to_string(),
                 ts
             );
+            if ts == compacted_ts {
+                self.unapplied_forgets.push_back((data_id, ts.clone()));
+            }
             let active_reg = self
                 .datas
                 .get_mut(&data_id)
@@ -644,6 +665,17 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 ));
             }
             prev_register_ts = ts.clone();
+        }
+
+        let mut prev_forget_ts = T::minimum();
+        for (_, ts) in self.unapplied_forgets.iter() {
+            if ts < &prev_forget_ts {
+                return Err(format!(
+                    "unapplied forget timestamp {:?} out of order after {:?}",
+                    ts, prev_forget_ts
+                ));
+            }
+            prev_forget_ts = ts.clone();
         }
 
         for (data_id, data_times) in self.datas.iter() {
@@ -968,20 +1000,83 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Unapplied<'a> {
-    Batch(&'a Vec<u8>),
     Register,
+    Batch(&'a Vec<u8>),
+    Forget,
 }
 
+#[derive(Debug)]
+struct UnappliedIterInput<'a, T>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+{
+    unapplieds: Vec<(&'a ShardId, Unapplied<'a>, &'a T)>,
+    idx: usize,
+}
+
+impl<'a, T> UnappliedIterInput<'a, T>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+{
+    fn new(unapplieds: Vec<(&'a ShardId, Unapplied<'a>, &'a T)>) -> UnappliedIterInput<'a, T> {
+        UnappliedIterInput { unapplieds, idx: 0 }
+    }
+
+    fn get(&self) -> Option<&(&ShardId, Unapplied, &T)> {
+        self.unapplieds.get(self.idx)
+    }
+
+    fn ts(&self) -> Option<&T> {
+        self.get().map(|(_, _, ts)| *ts)
+    }
+}
+
+impl<'a, T> PartialEq for UnappliedIterInput<'a, T>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.ts().eq(&other.ts())
+    }
+}
+
+impl<'a, T> Eq for UnappliedIterInput<'a, T> where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64
+{
+}
+
+impl<'a, T> PartialOrd for UnappliedIterInput<'a, T>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a, T> Ord for UnappliedIterInput<'a, T>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.ts(), other.ts()) {
+            (None, _) => Ordering::Greater,
+            (_, None) => Ordering::Less,
+            (Some(self_ts), Some(other_ts)) => self_ts.cmp(other_ts),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct UnappliedIter<'a, T>
 where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
 {
-    batches: Vec<&'a (ShardId, Vec<u8>, T)>,
-    batches_idx: usize,
-    registers: &'a VecDeque<(ShardId, T)>,
-    register_idx: usize,
+    registers: UnappliedIterInput<'a, T>,
+    batches: UnappliedIterInput<'a, T>,
+    forgets: UnappliedIterInput<'a, T>,
 }
 
 impl<'a, T> UnappliedIter<'a, T>
@@ -991,12 +1086,31 @@ where
     fn new(
         batches: &'a BTreeMap<usize, (ShardId, Vec<u8>, T)>,
         registers: &'a VecDeque<(ShardId, T)>,
+        forgets: &'a VecDeque<(ShardId, T)>,
     ) -> UnappliedIter<'a, T> {
+        let registers = UnappliedIterInput::new(
+            registers
+                .iter()
+                .map(|(data_id, ts)| (data_id, Unapplied::Register, ts))
+                .collect(),
+        );
+        let batches = UnappliedIterInput::new(
+            batches
+                .values()
+                .map(|(data_id, batch, ts)| (data_id, Unapplied::Batch(batch), ts))
+                .collect(),
+        );
+        let forgets = UnappliedIterInput::new(
+            forgets
+                .iter()
+                .map(|(data_id, ts)| (data_id, Unapplied::Forget, ts))
+                .collect(),
+        );
+
         UnappliedIter {
-            batches: batches.values().collect(),
-            batches_idx: 0,
+            batches,
             registers,
-            register_idx: 0,
+            forgets,
         }
     }
 }
@@ -1007,33 +1121,19 @@ impl<'a, T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> Iterator
     type Item = (&'a ShardId, Unapplied<'a>, &'a T);
 
     fn next(&mut self) -> Option<Self::Item> {
-        match (
-            self.batches.get(self.batches_idx),
-            self.registers.get(self.register_idx),
-        ) {
-            (Some((batch_id, batch, batch_ts)), Some((register_id, register_ts))) => {
-                // Intentionally emit registers before batches at the same timestamp. Currently, a
-                // single data shard can't have both a register and a batch at the same timestamp,
-                // so the order doesn't matter, but it might ever we ever allow combining registers
-                // and commits in a single op.
-                if register_ts <= batch_ts {
-                    self.register_idx += 1;
-                    Some((register_id, Unapplied::Register, register_ts))
-                } else {
-                    self.batches_idx += 1;
-                    Some((batch_id, Unapplied::Batch(batch), batch_ts))
-                }
-            }
-            (Some((batch_id, batch, batch_ts)), None) => {
-                self.batches_idx += 1;
-                Some((batch_id, Unapplied::Batch(batch), batch_ts))
-            }
-            (None, Some((register_id, register_ts))) => {
-                self.register_idx += 1;
-                Some((register_id, Unapplied::Register, register_ts))
-            }
-            (None, None) => None,
-        }
+        // Intentionally emit registers before batches and batches before forgets at the same
+        // timestamp. Currently, a single data shard can't have multiple unapplied event types at
+        // the same timestamp, so the order doesn't matter, but it might ever we ever allow
+        // combining registers, commits, and forgets in a single op.
+        //
+        // To further optimize this, we could use something like a min-heap here, but with only 3
+        // inputs, this is probably fine.
+        let min_input = [&mut self.registers, &mut self.batches, &mut self.forgets]
+            .into_iter()
+            .min()?;
+        let res = min_input.unapplieds.get(min_input.idx).cloned();
+        min_input.idx += 1;
+        res
     }
 }
 
