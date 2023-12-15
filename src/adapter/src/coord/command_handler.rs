@@ -410,7 +410,7 @@ impl Coordinator {
             .query_total
             .with_label_values(&[session_type, stmt_type])
             .inc();
-        match &stmt {
+        match &*stmt {
             Statement::Subscribe(SubscribeStatement { output, .. })
             | Statement::Copy(CopyStatement {
                 relation: CopyRelation::Subscribe(SubscribeStatement { output, .. }),
@@ -433,7 +433,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self, ctx))]
     pub(crate) async fn handle_execute_inner(
         &mut self,
-        stmt: Statement<Raw>,
+        stmt: Arc<Statement<Raw>>,
         params: Params,
         mut ctx: ExecuteContext,
     ) {
@@ -455,7 +455,7 @@ impl Coordinator {
             // message. Postgres handles this by teaching Started to eagerly commit certain
             // statements that can't be run in a transaction block.
             TransactionStatus::Started(_) => {
-                if let Statement::Declare(_) = stmt {
+                if let Statement::Declare(_) = &*stmt {
                     // Declare is an exception. Although it's not against any spec to execute
                     // it, it will always result in nothing happening, since all portals will be
                     // immediately closed. Users don't know this detail, so this error helps them
@@ -484,7 +484,7 @@ impl Coordinator {
             // something disallowed in explicit transactions did not previously take place
             // in the implicit portion.
             TransactionStatus::InTransactionImplicit(_) | TransactionStatus::InTransaction(_) => {
-                match stmt {
+                match &*stmt {
                     // Statements that are safe in a transaction. We still need to verify that we
                     // don't interleave reads and writes since we can't perform those serializably.
                     Statement::Close(_)
@@ -591,7 +591,7 @@ impl Coordinator {
                             // be run in a special single-statement explicit mode. In this mode (`BEGIN;
                             // <stmt>; COMMIT`), we generate the expected tag from a successful <stmt>, but
                             // delay execution until `COMMIT`.
-                            if let Ok(resp) = ExecuteResponse::try_from(&stmt) {
+                            if let Ok(resp) = ExecuteResponse::try_from(&*stmt) {
                                 if let Err(err) = txn_status
                                     .add_ops(TransactionOps::SingleStatement { stmt, params })
                                 {
@@ -613,8 +613,8 @@ impl Coordinator {
 
         let catalog = self.catalog();
         let catalog = catalog.for_session(ctx.session());
-        let original_stmt = stmt.clone();
-        let (stmt, resolved_ids) = match mz_sql::names::resolve(&catalog, stmt) {
+        let original_stmt = Arc::clone(&stmt);
+        let (stmt, resolved_ids) = match mz_sql::names::resolve(&catalog, (*stmt).clone()) {
             Ok(resolved) => resolved,
             Err(e) => return ctx.retire(Err(e.into())),
         };

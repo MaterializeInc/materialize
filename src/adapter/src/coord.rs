@@ -99,10 +99,10 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::option::OptionExt;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-
 use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
@@ -117,6 +117,7 @@ use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
@@ -226,7 +227,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     ExecuteSingleStatementTransaction {
         ctx: ExecuteContext,
         otel_ctx: OpenTelemetryContext,
-        stmt: Statement<Raw>,
+        stmt: Arc<Statement<Raw>>,
         params: mz_sql::plan::Params,
     },
     PeekStageReady {
@@ -289,7 +290,7 @@ pub struct BackgroundWorkResult<T> {
     pub result: Result<T, AdapterError>,
     pub params: Params,
     pub resolved_ids: ResolvedIds,
-    pub original_stmt: Statement<Raw>,
+    pub original_stmt: Arc<Statement<Raw>>,
     pub otel_ctx: OpenTelemetryContext,
 }
 
@@ -1997,14 +1998,22 @@ impl Coordinator {
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
+        struct LastMessage {
+            kind: &'static str,
+            stmt: Option<Arc<Statement<Raw>>>,
+        }
+
         async move {
             // Watcher that listens for and reports cluster service status changes.
             let mut cluster_events = self.controller.events_stream();
-            let last_message_kind = Arc::new(Mutex::new("none"));
+            let last_message = Arc::new(Mutex::new(LastMessage {
+                kind: "none",
+                stmt: None,
+            }));
 
             let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
             let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
-            let last_message_kind_watchdog = Arc::clone(&last_message_kind);
+            let last_message_watchdog = Arc::clone(&last_message);
 
             spawn(|| "coord watchdog", async move {
                 // Every 5 seconds, attempt to measure how long it takes for the
@@ -2029,12 +2038,16 @@ impl Coordinator {
                     let Ok(maybe_permit) = timeout else {
                         // Only log the error if we're newly stuck, to prevent logging repeatedly.
                         if !coord_stuck {
-                            let last_message = last_message_kind_watchdog
-                                .lock()
-                                .map(|g| *g)
-                                .unwrap_or("poisoned");
+                            let last_message = last_message_watchdog.lock().expect("poisoned");
+                            let last_message_sql = last_message
+                                .stmt
+                                .as_ref()
+                                .map(|stmt| stmt.to_ast_string_redacted())
+                                .display_or("<none>");
                             tracing::error!(
-                                "Coordinator is stuck on {last_message}, did not respond after {duration:?}"
+                                last_message_kind = %last_message.kind,
+                                %last_message_sql,
+                                "coordinator stuck for {duration:?}",
                             );
                         }
                         coord_stuck = true;
@@ -2149,17 +2162,35 @@ impl Coordinator {
                 // All message processing functions trace. Start a parent span
                 // for them to make it easy to find slow messages.
                 let msg_kind = msg.kind();
-                let span = span!(Level::DEBUG, "coordinator processing (handle_message)", kind = msg_kind);
+                let span = span!(
+                    Level::DEBUG,
+                    "coordinator processing (handle_message)",
+                    kind = msg_kind
+                );
                 let otel_context = span.context().span().span_context().clone();
 
-                // Record the last kind of message incase we get stuck.
-                if let Ok(mut guard) = last_message_kind.lock() {
-                    *guard = msg_kind;
-                }
+                // Record the last kind of message in case we get stuck. For
+                // execute commands, we additionally stash the user's SQL,
+                // statement, so we can log it in case we get stuck.
+                *last_message.lock().expect("poisoned") = LastMessage {
+                    kind: msg_kind,
+                    stmt: match &msg {
+                        Message::Command(
+                            _,
+                            Command::Execute {
+                                portal_name,
+                                session,
+                                ..
+                            },
+                        ) => session
+                            .get_portal_unverified(portal_name)
+                            .and_then(|p| p.stmt.as_ref().map(Arc::clone)),
+                        _ => None,
+                    },
+                };
 
                 let start = Instant::now();
-                self.handle_message(span, msg)
-                    .await;
+                self.handle_message(span, msg).await;
                 let duration = start.elapsed();
 
                 // Report slow messages to Prometheus.
