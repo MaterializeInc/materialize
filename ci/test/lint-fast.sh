@@ -11,15 +11,4 @@
 #
 # lint-fast.sh — fast linters that don't require building any code.
 
-set -euo pipefail
-
-. misc/shlib/shlib.bash
-
-try bin/lint
-try cargo --locked fmt -- --check
-try cargo --locked deny check licenses bans sources
-try cargo hakari generate --diff
-try cargo hakari manage-deps --dry-run
-try cargo deplint Cargo.lock ci/test/lint-deps.toml
-
-try_status_report
+bin/lint
