@@ -33,6 +33,7 @@ use mz_expr::{
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::explain::trace_plan;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::{CatalogRole, SessionCatalog};
@@ -42,6 +43,7 @@ use tracing::warn;
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::optimize::{view, Optimize, OptimizeMode, OptimizerConfig, OptimizerError};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::viewable_variables;
 use crate::AdapterError;
@@ -277,6 +279,40 @@ impl<'a> DataflowBuilder<'a> {
             mz_transform::optimize_dataflow(dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
 
         Ok(dataflow_metainfo)
+    }
+
+    // Re-optimize the imported view plans using the current optimizer
+    // configuration if we are running in `EXPLAIN`.
+    pub fn reoptimize_imported_views(
+        &self,
+        df_desc: &mut DataflowDesc,
+        config: &OptimizerConfig,
+    ) -> Result<(), OptimizerError> {
+        if config.mode == OptimizeMode::Explain {
+            for desc in df_desc.objects_to_build.iter_mut().rev() {
+                if matches!(desc.id, GlobalId::Explain | GlobalId::Transient(_)) {
+                    // Skip descriptions that do not reference proper views.
+                    continue;
+                }
+                if let CatalogItem::View(view) = &self.catalog.get_entry(&desc.id).item {
+                    let _span = tracing::span!(
+                        target: "optimizer",
+                        tracing::Level::DEBUG,
+                        "view",
+                        path.segment = desc.id.to_string()
+                    )
+                    .entered();
+
+                    let mut view_optimizer = view::Optimizer::new(config.clone());
+                    desc.plan = view_optimizer.optimize(view.raw_expr.clone())?;
+
+                    // Report the optimized plan under this span.
+                    trace_plan(desc.plan.as_inner());
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Determine the given source's monotonicity.

@@ -59,12 +59,10 @@ pub mod peek;
 pub mod subscribe;
 pub mod view;
 
-use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::OptimizedMirRelationExpr;
-use mz_repr::explain::{trace_plan, ExplainConfig};
-use mz_repr::GlobalId;
+use mz_repr::explain::ExplainConfig;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
 use mz_transform::TransformError;
@@ -201,42 +199,5 @@ impl From<OptimizerError> for AdapterError {
             OptimizerError::AdapterError(err) => err,
             err => AdapterError::Internal(err.to_string()),
         }
-    }
-}
-
-// TODO(dataflows): move to dataflows mod
-impl<'a> dataflows::DataflowBuilder<'a> {
-    // Re-optimize the imported view plans using the current optimizer
-    // configuration if we are running in `EXPLAIN`.
-    pub fn reoptimize_imported_views(
-        &self,
-        df_desc: &mut MirDataflowDescription,
-        config: &OptimizerConfig,
-    ) -> Result<(), OptimizerError> {
-        if config.mode == OptimizeMode::Explain {
-            for desc in df_desc.objects_to_build.iter_mut().rev() {
-                if matches!(desc.id, GlobalId::Explain | GlobalId::Transient(_)) {
-                    // Skip descriptions that do not reference proper views.
-                    continue;
-                }
-                if let CatalogItem::View(view) = &self.catalog.get_entry(&desc.id).item {
-                    let _span = tracing::span!(
-                        target: "optimizer",
-                        tracing::Level::DEBUG,
-                        "view",
-                        path.segment = desc.id.to_string()
-                    )
-                    .entered();
-
-                    let mut view_optimizer = view::Optimizer::new(config.clone());
-                    desc.plan = view_optimizer.optimize(view.raw_expr.clone())?;
-
-                    // Report the optimized plan under this span.
-                    trace_plan(desc.plan.as_inner());
-                }
-            }
-        }
-
-        Ok(())
     }
 }
