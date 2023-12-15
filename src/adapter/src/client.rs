@@ -309,23 +309,22 @@ Issue a SQL query to get started. Need help?
         to_datetime((self.now)())
     }
 
-    pub async fn append_webhook(
+    /// Get a metadata and a channel that can be used to append to a webhook source.
+    pub async fn get_webhook_appender(
         &self,
         database: String,
         schema: String,
         name: String,
         conn_id: ConnectionId,
-        received_at: DateTime<Utc>,
     ) -> Result<AppendWebhookResponse, AdapterError> {
         let (tx, rx) = oneshot::channel();
 
         // Send our request.
-        self.send(Command::AppendWebhook {
+        self.send(Command::GetWebhook {
             database,
             schema,
             name,
             conn_id,
-            received_at,
             tx,
         });
 
@@ -762,7 +761,7 @@ impl SessionClient {
             // - execute reports success of dataflow execution
             match cmd {
                 Command::Execute { .. } => typ = Some("execute"),
-                Command::AppendWebhook { .. } => typ = Some("webhook"),
+                Command::GetWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }

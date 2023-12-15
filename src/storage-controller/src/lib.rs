@@ -1856,7 +1856,7 @@ where
             if let Some(CollectionState { description, .. }) = collection {
                 if description.data_source == DataSource::Webhook && frontier.is_empty() {
                     // Unregister our collection from the manager so writes should no longer occur.
-                    self.collection_manager.unregsiter_collection(id).await;
+                    self.collection_manager.unregister_collection(id).await;
 
                     pending_source_drops.push(id);
                     // Normally `clusterd` will emit this StorageResponse when it knows we can

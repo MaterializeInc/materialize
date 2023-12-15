@@ -157,7 +157,7 @@ use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
-use crate::webhook::WebhookConcurrencyLimiter;
+use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::DurableCatalogState;
@@ -251,7 +251,7 @@ impl Message {
                 Command::Commit { .. } => "command-commit",
                 Command::CancelRequest { .. } => "command-cancel_request",
                 Command::PrivilegedCancelRequest { .. } => "command-privileged_cancel_request",
-                Command::AppendWebhook { .. } => "command-append_webhook",
+                Command::GetWebhook { .. } => "command-get_webhook",
                 Command::GetSystemVars { .. } => "command-get_system_vars",
                 Command::SetSystemVars { .. } => "command-set_system_vars",
                 Command::Terminate { .. } => "command-terminate",
@@ -994,6 +994,8 @@ pub struct Coordinator {
 
     /// A map from active subscribes to the subscribe description.
     active_subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
+    /// A map from active webhooks to their invalidation handle.
+    active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
 
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
@@ -2519,6 +2521,7 @@ pub fn serve(
                     client_pending_peeks: BTreeMap::new(),
                     pending_real_time_recency_timestamp: BTreeMap::new(),
                     active_subscribes: BTreeMap::new(),
+                    active_webhooks: BTreeMap::new(),
                     write_lock: Arc::new(tokio::sync::Mutex::new(())),
                     write_lock_wait_group: VecDeque::new(),
                     pending_writes: Vec::new(),

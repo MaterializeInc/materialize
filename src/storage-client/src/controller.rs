@@ -376,8 +376,8 @@ pub trait StorageController: Debug {
         commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
-    /// Returns a [`MonotonicAppender`] which is a oneshot-esque struct that can be used to
-    /// monotonically append to the specified [`GlobalId`].
+    /// Returns a [`MonotonicAppender`] which is a channel that can be used to  monotonically
+    /// append to the specified [`GlobalId`].
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
@@ -656,11 +656,12 @@ impl<T: Timestamp> ExportState<T> {
         self.read_capability.is_empty()
     }
 }
-/// A "oneshot"-like channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
+/// A channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
 ///
 /// See `CollectionManager::monotonic_appender` to acquire a [`MonotonicAppender`].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MonotonicAppender {
+    /// Channel that sends to a [`tokio::task`] which pushes updates to Persist.
     tx: mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>,
 }
 
@@ -671,7 +672,7 @@ impl MonotonicAppender {
         MonotonicAppender { tx }
     }
 
-    pub async fn append(self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError> {
+    pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError> {
         let (tx, rx) = oneshot::channel();
 
         // Make sure there is space available on the channel.
@@ -694,10 +695,6 @@ impl MonotonicAppender {
         result
     }
 }
-
-// Note(parkmycar): While it technically could be `Clone` we want `MonotonicAppender` to have the
-// same semantics as a oneshot channel, so we specifically don't make it `Clone`.
-static_assertions::assert_not_impl_any!(MonotonicAppender: Clone);
 
 #[cfg(test)]
 mod tests {
