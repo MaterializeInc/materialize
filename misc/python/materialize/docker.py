@@ -47,12 +47,11 @@ def mz_image_tag_exists(image_tag: str) -> bool:
         EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
         return True
     except subprocess.CalledProcessError as e:
-        print(f"Failed to fetch image manifest: {image_name}")
-
         if "no such manifest:" in e.output:
+            print(f"Failed to fetch image manifest '{image_name}' (does not exist)")
             EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
         else:
-            print(f"Error when checking image manifest was: {e.output}")
+            print(f"Failed to fetch image manifest '{image_name}' ({e.output})")
             # do not cache the result of unknown error messages
 
         return False
