@@ -780,6 +780,7 @@ fn generate_rbac_requirements(
         Plan::ExplainTimestamp(plan::ExplainTimestampPlan {
             format: _,
             raw_plan,
+            when: _,
         }) => RbacRequirements {
             privileges: raw_plan
                 .depends_on()

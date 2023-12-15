@@ -368,12 +368,10 @@ impl<'a> Parser<'a> {
                 | Token::Keyword(VALUES)
                 | Token::Keyword(TABLE) => {
                     self.prev_token();
-                    Ok(Statement::Select(SelectStatement {
-                        query: self.parse_query().map_parser_err(StatementKind::Select)?,
-                        as_of: self
-                            .parse_optional_as_of()
+                    Ok(Statement::Select(
+                        self.parse_select_statement()
                             .map_parser_err(StatementKind::Select)?,
-                    }))
+                    ))
                 }
                 Token::Keyword(CREATE) => Ok(self.parse_create()?),
                 Token::Keyword(DISCARD) => Ok(self
@@ -5727,6 +5725,14 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    /// Parses a SELECT (or WITH, VALUES, TABLE) statement with optional AS OF.
+    fn parse_select_statement(&mut self) -> Result<SelectStatement<Raw>, ParserError> {
+        Ok(SelectStatement {
+            query: self.parse_query()?,
+            as_of: self.parse_optional_as_of()?,
+        })
+    }
+
     /// Parse a query expression, i.e. a `SELECT` statement optionally
     /// preceded with some `WITH` CTE declarations and optionally followed
     /// by `ORDER BY`. Unlike some other parse_... methods, this one doesn't
@@ -7157,8 +7163,8 @@ impl<'a> Parser<'a> {
                 Explainee::CreateIndex(Box::new(stmt), broken)
             } else {
                 // Parse: `BROKEN? query`
-                let query = self.parse_query()?;
-                Explainee::Query(Box::new(query), broken)
+                let query = self.parse_select_statement()?;
+                Explainee::Select(Box::new(query), broken)
             }
         };
 
@@ -7186,11 +7192,11 @@ impl<'a> Parser<'a> {
 
         self.expect_keyword(FOR)?;
 
-        let query = self.parse_query()?;
+        let query = self.parse_select_statement()?;
 
         Ok(Statement::ExplainTimestamp(ExplainTimestampStatement {
             format,
-            query,
+            select: query,
         }))
     }
     /// Parse an `EXPLAIN [KEY|VALUE] SCHEMA` statement assuming that the `EXPLAIN` token

@@ -846,10 +846,11 @@ pub enum Explainee {
 #[enum_kind(ExplaineeStatementKind)]
 pub enum ExplaineeStatement {
     /// The object to be explained is a SELECT statement.
-    Query {
+    Select {
         raw_plan: HirRelationExpr,
         row_set_finishing: RowSetFinishing,
         desc: RelationDesc,
+        when: QueryWhen,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
     },
@@ -875,7 +876,7 @@ pub enum ExplaineeStatement {
 impl ExplaineeStatement {
     pub fn depends_on(&self) -> BTreeSet<GlobalId> {
         match self {
-            Self::Query { raw_plan, .. } => raw_plan.depends_on(),
+            Self::Select { raw_plan, .. } => raw_plan.depends_on(),
             Self::CreateMaterializedView { raw_plan, .. } => raw_plan.depends_on(),
             Self::CreateIndex { index, .. } => btreeset! {index.on},
         }
@@ -893,7 +894,7 @@ impl ExplaineeStatement {
     /// This is useful when debugging queries that cause panics.
     pub fn broken(&self) -> bool {
         match self {
-            Self::Query { broken, .. } => *broken,
+            Self::Select { broken, .. } => *broken,
             Self::CreateMaterializedView { broken, .. } => *broken,
             Self::CreateIndex { broken, .. } => *broken,
         }
@@ -901,7 +902,7 @@ impl ExplaineeStatement {
 
     pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
         match self {
-            Self::Query {
+            Self::Select {
                 row_set_finishing,
                 desc,
                 ..
@@ -929,7 +930,7 @@ impl ExplaineeStatementKind {
     pub fn supports(&self, stage: &ExplainStage) -> bool {
         use ExplainStage::*;
         match self {
-            Self::Query => true,
+            Self::Select => true,
             Self::CreateMaterializedView => true,
             Self::CreateIndex => ![RawPlan, DecorrelatedPlan].contains(stage),
         }
@@ -939,7 +940,7 @@ impl ExplaineeStatementKind {
 impl std::fmt::Display for ExplaineeStatementKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Query => write!(f, "QUERY"),
+            Self::Select => write!(f, "SELECT"),
             Self::CreateMaterializedView => write!(f, "CREATE MATERIALIZED VIEW"),
             Self::CreateIndex => write!(f, "CREATE INDEX"),
         }
@@ -950,6 +951,7 @@ impl std::fmt::Display for ExplaineeStatementKind {
 pub struct ExplainTimestampPlan {
     pub format: ExplainFormat,
     pub raw_plan: HirRelationExpr,
+    pub when: QueryWhen,
 }
 
 #[derive(Debug)]

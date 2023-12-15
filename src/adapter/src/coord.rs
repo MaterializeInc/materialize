@@ -320,6 +320,7 @@ pub enum RealTimeRecencyContext {
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
+        when: QueryWhen,
     },
     Peek {
         ctx: ExecuteContext,

@@ -53,7 +53,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
             },
         ),
         Plan::ExplainPlan(ExplainPlanPlan {
-            explainee: Explainee::Statement(ExplaineeStatement::Query { raw_plan, .. }),
+            explainee: Explainee::Statement(ExplaineeStatement::Select { raw_plan, .. }),
             ..
         }) => (
             raw_plan.depends_on(),
