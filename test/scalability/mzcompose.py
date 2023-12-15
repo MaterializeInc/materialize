@@ -302,7 +302,7 @@ def report_regression_result(
 
     baseline_desc = endpoint_name_to_description(baseline_endpoint.try_load_version())
 
-    if outcome.has_regressions() or outcome.has_significant_improvements():
+    if outcome.has_scalability_changes():
         print(
             f"{'ERROR' if outcome.has_regressions() else 'INFO'}: "
             f"The following scalability changes were detected "
