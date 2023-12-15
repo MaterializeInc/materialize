@@ -2879,13 +2879,8 @@ Explained Query:
       Project (#0..=#2) // { arity: 3 }
         Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
           implementation
-<<<<<<< HEAD
-            %1[#0..=#2]UKKKA » %0:l11[#0..=#2]UKKK
-          ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-=======
             %0:l11[#0..=#2]UKKKA » %1[#0..=#2]UKKKA
           ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
->>>>>>> 4f524c077a (correct counting, rewriting for reasons i do not understand)
             Get l11 // { arity: 3 }
           ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
             Distinct project=[#0..=#2] // { arity: 3 }
@@ -4025,13 +4020,8 @@ Explained Query:
                           Map (false) // { arity: 7 }
                             Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
                               implementation
-<<<<<<< HEAD
-                                %1:l2[#0..=#2]UKKK » %0[#0..=#2]KKK
-                              ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-=======
                                 %1:l2[#0..=#2]UKKKA » %0[#0..=#2]KKKA
                               ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
->>>>>>> 4f524c077a (correct counting, rewriting for reasons i do not understand)
                                 Union // { arity: 3 }
                                   Negate // { arity: 3 }
                                     Get l3 // { arity: 3 }
@@ -4640,13 +4630,8 @@ Explained Query:
                         Map (false) // { arity: 7 }
                           Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
                             implementation
-<<<<<<< HEAD
-                              %1:l5[#0..=#2]UKKK » %0[#0..=#2]KKK
-                            ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-=======
                               %1:l5[#0..=#2]UKKKA » %0[#0..=#2]KKKA
                             ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
->>>>>>> 4f524c077a (correct counting, rewriting for reasons i do not understand)
                               Union // { arity: 3 }
                                 Negate // { arity: 3 }
                                   Get l6 // { arity: 3 }
