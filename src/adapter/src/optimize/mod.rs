@@ -69,8 +69,6 @@ use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
 use mz_transform::TransformError;
 
-use crate::AdapterError;
-
 /// A trait that represents an optimization stage.
 ///
 /// The trait is implemented by structs that encapsulate the context needed to
@@ -183,9 +181,6 @@ type LirDataflowDescription = DataflowDescription<Plan>;
 /// Error types that can be generated during optimization.
 #[derive(Debug, thiserror::Error)]
 pub enum OptimizerError {
-    // TODO: change dataflows.rs error types and reverse this ownership.
-    #[error("{0}")]
-    AdapterError(#[from] AdapterError),
     #[error("{0}")]
     PlanError(#[from] PlanError),
     #[error("{0}")]
@@ -234,15 +229,5 @@ impl From<TimestampError> for OptimizerError {
 impl From<anyhow::Error> for OptimizerError {
     fn from(value: anyhow::Error) -> Self {
         OptimizerError::Internal(value.to_string())
-    }
-}
-
-// TODO: create a dedicated AdapterError::OptimizerError variant.
-impl From<OptimizerError> for AdapterError {
-    fn from(value: OptimizerError) -> Self {
-        match value {
-            OptimizerError::AdapterError(err) => err,
-            err => AdapterError::Internal(err.to_string()),
-        }
     }
 }

@@ -124,7 +124,6 @@ use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
-use mz_transform::Optimizer;
 use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
 use timely::PartialOrder;

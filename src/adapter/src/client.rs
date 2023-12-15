@@ -36,7 +36,6 @@ use mz_sql::session::user::{User, SUPPORT_USER};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::StatementKind;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
-use mz_transform::Optimizer;
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -51,6 +50,7 @@ use crate::command::{
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
+use crate::optimize::{self, Optimize};
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
@@ -659,20 +659,22 @@ impl SessionClient {
         rows: Vec<Row>,
         ctx_extra: ExecuteContextExtra,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let catalog = self.catalog_snapshot().await;
         // TODO: Remove this clone once we always have the session. It's currently needed because
         // self.session returns a mut ref, so we can't call it twice.
         let pcx = self.session().pcx().clone();
+
+        let catalog = self.catalog_snapshot().await;
         let conn_catalog = catalog.for_session(self.session());
+
+        // Collect optimizer parameters.
+        let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
+        // Build an optimizer for this VIEW.
+        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+
         let result: Result<_, AdapterError> =
             mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, columns, rows)
                 .err_into()
-                .and_then(|values| values.lower(conn_catalog.system_vars()).err_into())
-                .and_then(|values| {
-                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context())
-                        .optimize(values)
-                        .err_into()
-                })
+                .and_then(|values| optimizer.optimize(values).err_into())
                 .and_then(|values| {
                     // Copied rows must always be constants.
                     Coordinator::insert_constant(&catalog, self.session(), id, values.into_inner())
